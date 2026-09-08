@@ -1,5 +1,6 @@
 .rig/
 .agents/
+AGENTS.md
 __pycache__/
 *.pyc
 
