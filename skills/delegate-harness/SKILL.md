@@ -26,13 +26,31 @@ Check with `rig status` or `rig doctor`.
 
 ## Route
 
-- Small local change: parent or cheap same-CLI worker (Codex `explorer` / `worker` / `bulk`; Grok `explore`).
+- Small local change: parent or cheap same-CLI worker (Codex `explorer` / `worker` / `bulk`; Grok `explore`). Record it (below).
 - Implement, and Grok is effective: Grok child via `run-worker.sh`.
-- Review: a different vendor than the writer. If none is effective, cheap same-CLI reviewer.
-- No extra CLIs installed: cheap same-CLI workers. Stop there.
+- Review: a different vendor than the writer. If none is effective, cheap same-CLI reviewer. Record that too.
+- No extra CLIs installed: cheap same-CLI workers. Record them. That is success.
 - Never spawn Sol, Astra, or Fable as a child. Profile `astra` is parent-only.
 
 Writer does not review its own diff.
+
+## Record cheap same-CLI workers
+
+Codex `explorer` / `worker` / `bulk` / `reviewer` and Grok `explore` do not go through `run-worker.sh`. Still write a job so `.rig/jobs` and `rig status` show them:
+
+```bash
+id=$(rig job start --worker codex --role explorer)
+# spawn the native cheap agent, wait for it
+rig job finish "$id" --status ok --summary "one-line result"
+```
+
+One-shot after a finished native spawn:
+
+```bash
+rig job record --worker codex --role explorer --status ok --summary "one-line result"
+```
+
+`--worker` is the CLI that did the work (`codex` if Astra spawned explorer). `--role` is `explorer`, `worker`, `bulk`, `reviewer`, or `parent`.
 
 ## Call another CLI
 

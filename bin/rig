@@ -27,6 +27,9 @@ usage: rig <command> [args]
   workers grok=on|off claude=on|off codex=on|off
   prune
   run "prompt"
+  job start [--worker NAME] [--role ROLE] [id]
+  job finish <id> [--status ok|fail] [--summary TEXT]
+  job record [--worker NAME] [--role ROLE] [--status ok|fail] [--summary TEXT] [id]
 
 Stay in Codex or Grok. They can invoke Claude or each other.
 EOF
@@ -238,6 +241,8 @@ Use the `delegate-harness` skill (`.agents/skills/delegate-harness/SKILL.md`) fo
 Read `.rig/harness.toml` and `.rig/MEMORY.md`.
 Claude is never the parent.
 If a worker binary is missing, use cheaper same-CLI workers. That is success.
+Cheap same-CLI spawn (Codex explorer/worker/bulk/reviewer, Grok explore): record it.
+`rig job start --worker codex --role explorer` then `rig job finish <id> --status ok --summary "..."`.
 When calling another CLI, write `.rig/jobs/<id>/brief.md` then run:
 `RIG_LIVE=1 "$HOME/.rig/scripts/run-worker.sh" <grok|codex|claude> <id> .rig/jobs/<id>/brief.md`
 Wait for `.rig/jobs/<id>/result.json`. Do not parse a TUI.
@@ -528,6 +533,185 @@ Overwritten each run.
 EOF
 }
 
+write_job_files() {
+  local job_dir="$1"
+  mkdir -p "$job_dir"
+  RESULT_JOB_ID="${2}" \
+  RESULT_WORKER="${3}" \
+  RESULT_ROLE="${4}" \
+  RESULT_STATUS="${5}" \
+  RESULT_EXIT="${6}" \
+  RESULT_STARTED="${7}" \
+  RESULT_ENDED="${8}" \
+  RESULT_SUMMARY="${9}" \
+  RESULT_KIND="${10:-native}" \
+  python3 - "$job_dir" <<'PY'
+import json, os, pathlib, sys
+job_dir = pathlib.Path(sys.argv[1])
+obj = {
+    "job_id": os.environ["RESULT_JOB_ID"],
+    "worker": os.environ["RESULT_WORKER"],
+    "role": os.environ["RESULT_ROLE"],
+    "status": os.environ["RESULT_STATUS"],
+    "exit_code": int(os.environ["RESULT_EXIT"]),
+    "started_at": os.environ["RESULT_STARTED"],
+    "ended_at": os.environ["RESULT_ENDED"],
+    "summary": os.environ["RESULT_SUMMARY"],
+    "files_changed": [],
+    "next": "",
+    "kind": os.environ.get("RESULT_KIND", "native"),
+}
+for name in ("meta.json", "result.json"):
+    path = job_dir / name
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(obj, indent=2) + "\n")
+    tmp.replace(path)
+PY
+}
+
+new_job_id() {
+  printf '%s-%s\n' "$(date -u +%Y%m%dT%H%M%SZ)" "$$"
+}
+
+parse_job_flags() {
+  JOB_WORKER=""
+  JOB_ROLE="worker"
+  JOB_ROLE_SET=0
+  JOB_STATUS="ok"
+  JOB_SUMMARY=""
+  JOB_ID=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --worker)
+        JOB_WORKER="${2:-}"
+        shift 2
+        ;;
+      --role)
+        JOB_ROLE="${2:-}"
+        JOB_ROLE_SET=1
+        shift 2
+        ;;
+      --status)
+        JOB_STATUS="${2:-}"
+        shift 2
+        ;;
+      --summary)
+        JOB_SUMMARY="${2:-}"
+        shift 2
+        ;;
+      --help|-h)
+        echo "usage: rig job start|finish|record [--worker NAME] [--role ROLE] [--status ok|fail] [--summary TEXT] [id]" >&2
+        exit 2
+        ;;
+      --*)
+        echo "rig job: unknown flag $1" >&2
+        exit 2
+        ;;
+      *)
+        if [[ -n "$JOB_ID" ]]; then
+          echo "rig job: extra arg $1" >&2
+          exit 2
+        fi
+        JOB_ID="$1"
+        shift
+        ;;
+    esac
+  done
+}
+
+cmd_job() {
+  local sub="${1:-}"
+  shift || true
+  case "$sub" in
+    start|finish|record) ;;
+    *)
+      echo "usage: rig job start|finish|record [--worker NAME] [--role ROLE] [--status ok|fail] [--summary TEXT] [id]" >&2
+      exit 2
+      ;;
+  esac
+  parse_job_flags "$@"
+  local root harness
+  root="$(repo_root)"
+  harness="$(harness_path)"
+  if [[ ! -f "$harness" ]]; then
+    echo "rig job: missing $harness — run: rig init" >&2
+    exit 1
+  fi
+  local job_dir_early=""
+  if [[ -n "$JOB_ID" ]]; then
+    job_dir_early="$(repo_root)/.rig/jobs/$JOB_ID"
+  fi
+  if [[ -z "$JOB_WORKER" && -f "${job_dir_early}/meta.json" ]]; then
+    JOB_WORKER="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("worker",""))' "$job_dir_early/meta.json" 2>/dev/null || true)"
+  fi
+  if [[ "$JOB_ROLE_SET" -eq 0 && -f "${job_dir_early}/meta.json" && "$sub" == "finish" ]]; then
+    local existing_role
+    existing_role="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("role",""))' "$job_dir_early/meta.json" 2>/dev/null || true)"
+    [[ -n "$existing_role" ]] && JOB_ROLE="$existing_role"
+  fi
+  if [[ -z "$JOB_WORKER" ]]; then
+    JOB_WORKER="$(live_parent)"
+    if [[ -z "$JOB_WORKER" ]]; then
+      JOB_WORKER="$(preferred_parent)"
+    fi
+  fi
+  case "$JOB_WORKER" in
+    grok|codex|claude|parent) ;;
+    *)
+      echo "rig job: worker must be grok|codex|claude|parent" >&2
+      exit 2
+      ;;
+  esac
+  case "$JOB_STATUS" in
+    ok|fail|timeout|running) ;;
+    *)
+      echo "rig job: status must be ok|fail|timeout|running" >&2
+      exit 2
+      ;;
+  esac
+
+  if [[ "$sub" == "finish" && -z "$JOB_ID" ]]; then
+    echo "usage: rig job finish <id> [--status ok|fail] [--summary TEXT]" >&2
+    exit 2
+  fi
+  if [[ -z "$JOB_ID" ]]; then
+    JOB_ID="$(new_job_id)"
+  fi
+  if [[ ! "$JOB_ID" =~ ^[A-Za-z0-9._-]+$ ]]; then
+    echo "rig job: invalid job id '$JOB_ID'" >&2
+    exit 2
+  fi
+
+  local job_dir now
+  job_dir="$root/.rig/jobs/$JOB_ID"
+  now="$(iso_now)"
+  mkdir -p "$job_dir"
+
+  if [[ "$sub" == "start" ]]; then
+    write_job_files "$job_dir" "$JOB_ID" "$JOB_WORKER" "$JOB_ROLE" "running" "0" "$now" "" "$JOB_SUMMARY" "native"
+    printf '%s\n' "$now" > "$job_dir/started_at"
+    write_state "$JOB_ID" "$JOB_WORKER" "running" "$JOB_SUMMARY"
+    echo "job $JOB_ID worker=$JOB_WORKER role=$JOB_ROLE status=running" >&2
+    printf '%s\n' "$JOB_ID"
+    return 0
+  fi
+
+  local started="$now"
+  if [[ -f "$job_dir/started_at" ]]; then
+    started="$(cat "$job_dir/started_at")"
+  elif [[ -f "$job_dir/meta.json" ]]; then
+    started="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("started_at",""))' "$job_dir/meta.json" 2>/dev/null || true)"
+    [[ -n "$started" ]] || started="$now"
+  fi
+  local exit_code=0
+  [[ "$JOB_STATUS" == "ok" ]] || exit_code=1
+  [[ "$JOB_STATUS" == "timeout" ]] && exit_code=124
+  write_job_files "$job_dir" "$JOB_ID" "$JOB_WORKER" "$JOB_ROLE" "$JOB_STATUS" "$exit_code" "$started" "$now" "$JOB_SUMMARY" "native"
+  write_state "$JOB_ID" "$JOB_WORKER" "$JOB_STATUS" "$JOB_SUMMARY"
+  echo "job $JOB_ID worker=$JOB_WORKER role=$JOB_ROLE status=$JOB_STATUS"
+  echo "$job_dir/result.json"
+}
+
 cmd_run() {
   local prompt="${*:-}"
   if [[ -z "$prompt" ]]; then
@@ -596,6 +780,7 @@ main() {
     workers) cmd_workers "$@" ;;
     prune) cmd_prune "$@" ;;
     run) cmd_run "$@" ;;
+    job) cmd_job "$@" ;;
     -h|--help|help|"") usage ;;
     *)
       echo "rig: unknown command '$cmd'" >&2

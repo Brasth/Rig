@@ -50,6 +50,7 @@ rig parent sol|astra
 rig workers grok=on|off claude=on|off codex=on|off
 rig prune
 rig run "prompt"
+rig job start|finish|record
 ```
 
 `rig parent astra` records a parent-only profile. Never spawn Astra as a child.
@@ -59,6 +60,12 @@ Default project workers: Grok on, Claude on, Codex off. Live parent is whichever
 ## Workers
 
 Cross-CLI jobs go through `~/.rig/scripts/run-worker.sh`. The parent waits on `.rig/jobs/<id>/result.json`.
+
+Cheap same-CLI spawns (Codex explorer/worker, Grok explore) do not use that wrapper. Record them so they still show under `.rig/jobs/`:
+
+```bash
+rig job record --worker codex --role explorer --status ok --summary "traced remaining gates"
+```
 
 Default `run-worker.sh` is dry-run (prints the command, writes `result.json`). Live child:
 
