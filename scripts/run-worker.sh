@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# run-worker.sh <grok|codex|claude> <job-id> <brief-file>
+# run-worker.sh <grok|codex|claude|cursor> <job-id> <brief-file>
 set -euo pipefail
 
 _DETECT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/detect-binaries.sh"
@@ -7,7 +7,7 @@ _DETECT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/detect-binaries.sh"
 source "$_DETECT"
 
 usage() {
-  echo "usage: run-worker.sh <grok|codex|claude> <job-id> <brief-file>" >&2
+  echo "usage: run-worker.sh <grok|codex|claude|cursor> <job-id> <brief-file>" >&2
   exit 2
 }
 
@@ -22,7 +22,7 @@ TIMEOUT_SECS="${RIG_TIMEOUT:-1200}"
 ROUTE_PY="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/route.py"
 
 case "$WORKER" in
-  grok|codex|claude) ;;
+  grok|codex|claude|cursor) ;;
   *)
     echo "run-worker: unknown worker '$WORKER'" >&2
     exit 2
@@ -65,7 +65,7 @@ rm -f "$_BRIEF_SRC"
 
 LIVE="$(live_parent)"
 FLAG="$(worker_flag "$WORKER")"
-BIN="$(find_bin "$WORKER")"
+BIN="$(find_worker_bin "$WORKER")"
 STARTED="$(iso_now)"
 
 write_json() {
@@ -292,6 +292,21 @@ PY
       CMD+=(--append-system-prompt-file "$CLAUDE_WORKER_MD")
     fi
     [[ -n "$EFFORT" ]] && CMD+=(--effort "$EFFORT")
+    ;;
+  cursor)
+    CURSOR_BIN="${BIN:-cursor-agent}"
+    CMD=(
+      "$CURSOR_BIN" -p "$BRIEF_TEXT"
+      --workspace "$REPO"
+      --output-format stream-json
+      --stream-partial-output
+      --force
+      --trust
+    )
+    [[ -n "$MODEL" ]] && CMD+=(--model "$MODEL")
+    case "$ROLE" in
+      explore|mini) CMD+=(--mode=ask) ;;
+    esac
     ;;
 esac
 CMD_STR="$(shell_join "${CMD[@]}")"

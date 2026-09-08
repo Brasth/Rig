@@ -17,6 +17,7 @@ import ask as rig_ask  # noqa: E402
 PREAMBLE_MARKERS = (
     "you are a worker, not the orchestrator",
     "do not spawn codex, grok, or claude",
+    "do not spawn codex, grok, claude, or cursor",
 )
 INPUT_KEYS = (
     "path",
@@ -179,9 +180,61 @@ def _is_settings_noise(line: str) -> bool:
     return any(marker in low for marker in SETTINGS_NOISE)
 
 
+def _cursor_tool_line(obj: dict) -> str | None:
+    tc = obj.get("tool_call")
+    if not isinstance(tc, dict):
+        return None
+    if obj.get("subtype") == "completed":
+        return None
+    for key, val in tc.items():
+        if not isinstance(val, dict):
+            continue
+        name = str(key).replace("ToolCall", "").replace("toolCall", "")
+        name = name[:1].lower() + name[1:] if name else "tool"
+        args = val.get("args") if isinstance(val.get("args"), dict) else {}
+        detail = _input_detail(args)
+        return f"{name} {detail}".strip()
+    return None
+
+
+def _assistant_text(obj: dict) -> str | None:
+    msg = obj.get("message") or {}
+    content = msg.get("content") if isinstance(msg, dict) else None
+    if isinstance(content, list):
+        bits = []
+        for block in content:
+            if not isinstance(block, dict):
+                continue
+            if block.get("type") in ("text", "thinking") and block.get("text"):
+                bits.append(str(block["text"]))
+        if bits:
+            return "".join(bits)
+    if isinstance(content, str) and content.strip():
+        return content
+    return None
+
+
+def _assistant_tools(obj: dict) -> list[str]:
+    msg = obj.get("message") or {}
+    content = msg.get("content") if isinstance(msg, dict) else None
+    out: list[str] = []
+    if isinstance(content, list):
+        for block in content:
+            if not isinstance(block, dict):
+                continue
+            if block.get("type") == "tool_use":
+                out.append(
+                    f"{block.get('name', 'tool')} {_input_detail(block.get('input') or {})}".strip()
+                )
+    return out
+
+
 def activity_from_event(obj: dict) -> str | None:
     kind = obj.get("type")
     if kind == "tool_call":
+        cursor = _cursor_tool_line(obj)
+        if cursor:
+            return cursor
         name = str(obj.get("toolName") or obj.get("title") or obj.get("kind") or "tool")
         detail = _input_detail(obj.get("rawInput") or obj.get("input") or {})
         status = obj.get("status") or ""
@@ -204,23 +257,12 @@ def activity_from_event(obj: dict) -> str | None:
             return "error: " + _first_line(str(obj.get("subtype") or "result"), 140)
         return None
     if kind == "assistant":
-        msg = obj.get("message") or {}
-        content = msg.get("content") if isinstance(msg, dict) else None
-        if isinstance(content, list):
-            bits = []
-            for block in content:
-                if not isinstance(block, dict):
-                    continue
-                if block.get("type") == "tool_use":
-                    bits.append(
-                        f"{block.get('name', 'tool')} {_input_detail(block.get('input') or {})}".strip()
-                    )
-                elif block.get("type") in ("text", "thinking") and block.get("text"):
-                    bits.append(_first_line(str(block["text"]), 140))
-            if bits:
-                return bits[-1]
-        if isinstance(content, str) and content.strip():
-            return _first_line(content, 140)
+        tools = _assistant_tools(obj)
+        if tools:
+            return tools[-1]
+        text = _assistant_text(obj)
+        if text and text.strip():
+            return _first_line(text, 140)
     return None
 
 
@@ -268,6 +310,14 @@ def _decode_json_lines(json_lines: list[str]) -> list[str]:
             buf_kind = kind
             buf.append(data)
             continue
+        if kind == "assistant" and obj.get("timestamp_ms") is not None and not obj.get("model_call_id"):
+            text = _assistant_text(obj) or ""
+            if text:
+                if buf_kind not in (None, "text"):
+                    _flush_stream(buf_kind, buf, lines)
+                buf_kind = "text"
+                buf.append(text)
+                continue
         _flush_stream(buf_kind, buf, lines)
         buf_kind = None
         if kind in ("tool_call", "error", "assistant", "result"):

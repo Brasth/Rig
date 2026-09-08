@@ -13,8 +13,48 @@ iso_now() {
   date -u +%Y-%m-%dT%H:%M:%SZ
 }
 
+RIG_WORKERS=(grok claude codex cursor)
+
 find_bin() {
   command -v "$1" 2>/dev/null || true
+}
+
+# cursor → cursor-agent, else `agent` only if it is Cursor's binary.
+find_worker_bin() {
+  local name="$1" p real
+  case "$name" in
+    grok|claude|codex)
+      find_bin "$name"
+      ;;
+    cursor)
+      p="$(find_bin cursor-agent)"
+      if [[ -n "$p" ]]; then
+        printf '%s\n' "$p"
+        return 0
+      fi
+      p="$(find_bin agent)"
+      [[ -n "$p" ]] || return 0
+      real="$(readlink "$p" 2>/dev/null || true)"
+      if [[ "$p" == *cursor-agent* || "$real" == *cursor-agent* ]]; then
+        printf '%s\n' "$p"
+      fi
+      ;;
+    *)
+      find_bin "$name"
+      ;;
+  esac
+}
+
+find_app() {
+  local name="$1" p=""
+  case "$name" in
+    grok-bot) p="/Applications/Grok Bot.app" ;;
+    cursor) p="/Applications/Cursor.app" ;;
+    *) return 0 ;;
+  esac
+  if [[ -d "$p" ]]; then
+    printf '%s\n' "$p"
+  fi
 }
 
 repo_root() {
@@ -34,7 +74,7 @@ harness_path() {
   printf '%s\n' "$(repo_root)/.rig/harness.toml"
 }
 
-# Sets HARNESS_PARENT, HARNESS_PROFILE, HARNESS_WORKER_{CODEX,GROK,CLAUDE}.
+# Sets HARNESS_PARENT, HARNESS_PROFILE, HARNESS_WORKER_{CODEX,GROK,CLAUDE,CURSOR}.
 parse_harness() {
   local file="${1:-$(harness_path)}"
   HARNESS_PARENT="codex"
@@ -42,6 +82,7 @@ parse_harness() {
   HARNESS_WORKER_CODEX="false"
   HARNESS_WORKER_GROK="true"
   HARNESS_WORKER_CLAUDE="true"
+  HARNESS_WORKER_CURSOR="false"
   HARNESS_FILE="$file"
   [[ -f "$file" ]] || return 0
 
@@ -79,6 +120,7 @@ parse_harness() {
             codex) HARNESS_WORKER_CODEX="$val" ;;
             grok) HARNESS_WORKER_GROK="$val" ;;
             claude) HARNESS_WORKER_CLAUDE="$val" ;;
+            cursor) HARNESS_WORKER_CURSOR="$val" ;;
           esac
           ;;
       esac
@@ -103,6 +145,7 @@ worker_flag() {
     codex) printf '%s\n' "$HARNESS_WORKER_CODEX" ;;
     grok) printf '%s\n' "$HARNESS_WORKER_GROK" ;;
     claude) printf '%s\n' "$HARNESS_WORKER_CLAUDE" ;;
+    cursor) printf '%s\n' "$HARNESS_WORKER_CURSOR" ;;
     *) printf '%s\n' "false" ;;
   esac
 }
@@ -115,10 +158,14 @@ _ps_ppid() {
   ps -o ppid= -p "$1" 2>/dev/null | tr -d ' '
 }
 
+_ps_command() {
+  ps -o command= -p "$1" 2>/dev/null
+}
+
 live_parent() {
   local forced="${RIG_PARENT:-}"
   case "$forced" in
-    grok|codex|claude)
+    grok|codex|claude|cursor)
       printf '%s\n' "$forced"
       return 0
       ;;
@@ -130,7 +177,7 @@ live_parent() {
   fi
 
   local pid="${1:-$PPID}"
-  local i=0 comm
+  local i=0 comm cmd
   while [[ "$i" -lt 8 && -n "$pid" && "$pid" != "0" && "$pid" != "1" ]]; do
     comm="$(_ps_comm "$pid")"
     comm="${comm##*/}"
@@ -148,6 +195,17 @@ live_parent() {
         printf '%s\n' "claude"
         return 0
         ;;
+      cursor-agent|cursor-agent-*)
+        printf '%s\n' "cursor"
+        return 0
+        ;;
+      agent|agent-*)
+        cmd="$(_ps_command "$pid")"
+        if [[ "$cmd" == *cursor-agent* ]]; then
+          printf '%s\n' "cursor"
+          return 0
+        fi
+        ;;
     esac
     pid="$(_ps_ppid "$pid")"
     i=$((i + 1))
@@ -161,7 +219,7 @@ effective_worker() {
   local live flag bin
   live="$(live_parent)"
   flag="$(worker_flag "$name")"
-  bin="$(find_bin "$name")"
+  bin="$(find_worker_bin "$name")"
   [[ "$flag" == "true" ]] || return 1
   [[ -n "$bin" ]] || return 1
   [[ "$name" != "$live" ]] || return 1
@@ -327,12 +385,12 @@ PY
 rig_ensure_codex_child_sandbox() {
   local file="$1"
   [[ -f "$file" ]] || return 0
-  python3 - "$file" "$HOME/.grok" "$HOME/.claude" <<'PY'
+  python3 - "$file" "$HOME/.grok" "$HOME/.claude" "$HOME/.cursor" <<'PY'
 import sys
 from pathlib import Path
 
 path = Path(sys.argv[1])
-needed = [sys.argv[2], sys.argv[3]]
+needed = sys.argv[2:]
 text = path.read_text()
 changed = []
 
@@ -465,4 +523,4 @@ else:
 PY
 }
 
-WORKER_PREAMBLE='You are a worker, not the orchestrator. Do not spawn codex, grok, or claude. Do not drive the user desktop or chrome profile unless the brief says so. Write code, fix, review, SSH/debug, or gather facts. Print a short summary. Stop.'
+WORKER_PREAMBLE='You are a worker, not the orchestrator. Do not spawn codex, grok, claude, or cursor. Do not drive the user desktop or chrome profile unless the brief says so. Write code, fix, review, SSH/debug, or gather facts. Print a short summary. Stop.'

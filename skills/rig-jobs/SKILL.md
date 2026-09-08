@@ -29,7 +29,7 @@ A new Grok/Codex thread does not start a new job board. Jobs live in `.rig/jobs/
 
 ## What to report
 
-- agent (grok / codex / claude)
+- agent (grok / codex / claude / cursor)
 - role (implement, review, explorer, …)
 - status (`running`, `ask`, `ok`, `fail`, `timeout`, `stale`)
 - task (from the brief)

@@ -43,6 +43,12 @@ MODELS = {
     ("claude", "implement"): ("claude-sonnet-5", "medium"),
     ("claude", "hard"): ("claude-opus-5", "high"),
     ("claude", "review"): ("claude-opus-5", "high"),
+    ("cursor", "explore"): ("composer-2.5-fast", ""),
+    ("cursor", "mini"): ("composer-2.5-fast", ""),
+    ("cursor", "bulk"): ("composer-2.5-fast", ""),
+    ("cursor", "implement"): ("composer-2.5", ""),
+    ("cursor", "hard"): ("cursor-grok-4.6-high", ""),
+    ("cursor", "review"): ("claude-opus-5-thinking-high", ""),
 }
 
 NATIVE = {
@@ -107,7 +113,11 @@ def choose_worker(kind: str, effective: list[str], live: str) -> tuple[str, str]
         return live, "stay"
     if kind in {"explore", "mini", "bulk"} and live in {"codex", "grok"}:
         return live, "native"
-    order = ("claude", "grok", "codex") if kind == "review" else ("grok", "claude", "codex")
+    order = (
+        ("claude", "grok", "cursor", "codex")
+        if kind == "review"
+        else ("grok", "claude", "cursor", "codex")
+    )
     for worker in order:
         if worker in effective:
             return worker, "run-worker"

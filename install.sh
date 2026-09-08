@@ -40,7 +40,7 @@ install_file() {
 }
 
 copy_into_home() {
-  mkdir -p "$RIG_HOME"/{bin,scripts,skills,adapters/codex/agents,adapters/grok,adapters/claude,templates}
+  mkdir -p "$RIG_HOME"/{bin,scripts,skills,adapters/codex/agents,adapters/grok,adapters/claude,adapters/cursor,templates}
   install_file "$SRC/bin/rig" "$RIG_HOME/bin/rig"
   local f skill
   for f in "$SRC/scripts/"*; do
@@ -60,6 +60,9 @@ copy_into_home() {
   done
   install_file "$SRC/adapters/grok/config.toml.snippet" "$RIG_HOME/adapters/grok/config.toml.snippet"
   install_file "$SRC/adapters/claude/CLAUDE.worker.md" "$RIG_HOME/adapters/claude/CLAUDE.worker.md"
+  if [[ -f "$SRC/adapters/cursor/CURSOR.worker.md" ]]; then
+    install_file "$SRC/adapters/cursor/CURSOR.worker.md" "$RIG_HOME/adapters/cursor/CURSOR.worker.md"
+  fi
   for f in "$SRC/templates/"*; do
     [[ -f "$f" ]] || continue
     install_file "$f" "$RIG_HOME/templates/$(basename "$f")"

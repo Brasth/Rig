@@ -9,3 +9,4 @@ profile = "sol"
 codex = false
 grok = true
 claude = true
+cursor = false

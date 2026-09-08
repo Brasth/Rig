@@ -115,6 +115,50 @@ class TaskAndLog(unittest.TestCase):
         )
         self.assertEqual(jobs.decode_log_text(raw), [])
 
+    def test_cursor_stream_json_tools(self):
+        raw = "\n".join(
+            [
+                json.dumps({"type": "system", "subtype": "init", "model": "composer-2.5"}),
+                json.dumps(
+                    {
+                        "type": "tool_call",
+                        "subtype": "started",
+                        "tool_call": {"readToolCall": {"args": {"path": "src/app.ts"}}},
+                    }
+                ),
+                json.dumps(
+                    {
+                        "type": "tool_call",
+                        "subtype": "completed",
+                        "tool_call": {
+                            "readToolCall": {"result": {"success": {"totalLines": 10}}}
+                        },
+                    }
+                ),
+                json.dumps(
+                    {
+                        "type": "assistant",
+                        "timestamp_ms": 1,
+                        "message": {"content": [{"type": "text", "text": "I will "}]},
+                    }
+                ),
+                json.dumps(
+                    {
+                        "type": "assistant",
+                        "timestamp_ms": 2,
+                        "message": {"content": [{"type": "text", "text": "edit app.ts"}]},
+                    }
+                ),
+                json.dumps({"type": "result", "duration_ms": 1200, "result": "done"}),
+            ]
+        )
+        acts = jobs.decode_log_text(raw)
+        self.assertTrue(any(a.startswith("read") and "app.ts" in a for a in acts), acts)
+        self.assertFalse(any("system" in a for a in acts))
+        joined = " ".join(acts)
+        self.assertIn("I will", joined)
+        self.assertIn("edit app.ts", joined)
+
     def test_claude_result_event(self):
         acts = jobs.decode_log_text(
             json.dumps({"type": "result", "result": "Updated the shared container utility."})

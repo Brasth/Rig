@@ -24,7 +24,7 @@ usage: rig <command> [args]
   status
   use codex|grok
   parent sol|astra
-  workers grok=on|off claude=on|off codex=on|off
+  workers grok=on|off claude=on|off codex=on|off cursor=on|off
   prune
   run "prompt"
   jobs [--json] [--thread [ID]]
@@ -40,7 +40,7 @@ usage: rig <command> [args]
   job deny [id] [--reason TEXT]
   pick [explore|mini|bulk|implement|hard|review|stay] [--case TEXT] [--json]
 
-Stay in Codex or Grok. They can invoke Claude or each other.
+Stay in Codex or Grok. They can invoke Claude, Cursor, or each other.
 EOF
   exit 2
 }
@@ -69,7 +69,7 @@ install_file() {
 
 copy_rig_tree() {
   local src="$1" dest="$2"
-  mkdir -p "$dest"/{bin,scripts,skills,adapters/codex/agents,adapters/grok,adapters/claude,templates}
+  mkdir -p "$dest"/{bin,scripts,skills,adapters/codex/agents,adapters/grok,adapters/claude,adapters/cursor,templates}
   if [[ "$(cd "$src" && pwd)" != "$(cd "$dest" && pwd)" ]]; then
     # mv onto dest so a running bin/rig keeps its old inode
     install_file "$src/bin/rig" "$dest/bin/rig"
@@ -91,6 +91,9 @@ copy_rig_tree() {
     done
     install_file "$src/adapters/grok/config.toml.snippet" "$dest/adapters/grok/config.toml.snippet"
     install_file "$src/adapters/claude/CLAUDE.worker.md" "$dest/adapters/claude/CLAUDE.worker.md"
+    if [[ -f "$src/adapters/cursor/CURSOR.worker.md" ]]; then
+      install_file "$src/adapters/cursor/CURSOR.worker.md" "$dest/adapters/cursor/CURSOR.worker.md"
+    fi
     for f in "$src/templates/"*; do
       [[ -f "$f" ]] || continue
       install_file "$f" "$dest/templates/$(basename "$f")"
@@ -181,7 +184,7 @@ cmd_setup() {
     fi
     sandbox_fix="$(rig_ensure_codex_child_sandbox "$codex_cfg")"
     if [[ "$sandbox_fix" != "keep" ]]; then
-      echo "set ~/.codex/config.toml [sandbox_workspace_write] ($sandbox_fix) so Grok/Claude children can write sessions"
+      echo "set ~/.codex/config.toml [sandbox_workspace_write] ($sandbox_fix) so Grok/Claude/Cursor children can write sessions"
     fi
   fi
 
@@ -248,15 +251,32 @@ cmd_init() {
   fi
 
   mkdir -p "$root/.rig/jobs"
-  local f
+  local f harness harness_new=0
+  harness="$root/.rig/harness.toml"
   for f in harness.toml MEMORY.md STATE.md; do
     if [[ -f "$root/.rig/$f" ]]; then
       printf 'keep %s\n' "$root/.rig/$f"
     else
       cp "$templates/$f" "$root/.rig/$f"
       printf 'wrote %s\n' "$root/.rig/$f"
+      [[ "$f" == "harness.toml" ]] && harness_new=1
     fi
   done
+  if [[ "$harness_new" -eq 1 ]]; then
+    local name flag
+    for name in grok claude cursor; do
+      if [[ -n "$(find_worker_bin "$name")" ]]; then
+        flag=true
+      else
+        flag=false
+      fi
+      rig_set_toml_key "$harness" "workers" "$name" "$flag"
+    done
+    echo "workers from PATH: grok=$(worker_flag grok) claude=$(worker_flag claude) cursor=$(worker_flag cursor)"
+  elif [[ -f "$harness" ]] && ! rig_has_section_key "$harness" "workers" "cursor"; then
+    rig_set_toml_key "$harness" "workers" "cursor" "false"
+    echo "appended cursor = false (existing harness; run: rig workers cursor=on)"
+  fi
 
   # Codex loads repo skills from .agents/skills. Refresh SKILL.md on each init.
   local skill_name skill_src dest_skill
@@ -305,8 +325,9 @@ Spawn for: write code, fix bugs, review, SSH/debug, gather repo or server facts.
    Wait for `.rig/jobs/<id>/result.json`. Do not parse a TUI.
 
 Live parent is this CLI, not the `parent` key (`rig use grok|codex` is only the preferred default).
-Claude Code is never the parent. Worker on only if flag + binary + not live parent. Missing binary: that worker is off. Cheap same-CLI is success.
-Pin Claude IDs: `claude-haiku-4-5-20251001` cheap, `claude-sonnet-5` implement, `claude-opus-5` hard/review. Never Sol/Astra/Fable as a child. Opus is allowed.
+Claude Code and Cursor CLI are never the parent. Worker on only if flag + binary + not live parent. Cursor binary is `cursor-agent`. Missing binary: that worker is off. Cheap same-CLI is success.
+Pin Claude IDs: `claude-haiku-4-5-20251001` cheap, `claude-sonnet-5` implement, `claude-opus-5` hard/review. Cursor: `composer-2.5-fast` cheap, `composer-2.5` implement, `cursor-grok-4.6-high` hard, `claude-opus-5-thinking-high` review. Never Sol/Astra/Fable as a child. Opus is allowed.
+Grok Bot.app is not a worker. Do not spawn it.
 Watch: `rig jobs` / `rig job show` / `rig job log <id>` / `rig tui` / `/rig`.
 If a job is ask: you answer for the Claude child. `rig job allow <id>` or `rig job deny <id>`. Safe worker work (read/edit/test/ssh gather/git) → allow. Destructive/prod/secrets → deny or ask the user.
 After a run: `rig memory add "one standing fact"` if there is one. No transcripts.
@@ -339,7 +360,7 @@ worker_reason() {
   local name="$1"
   local flag bin live
   flag="$(worker_flag "$name")"
-  bin="$(find_bin "$name")"
+  bin="$(find_worker_bin "$name")"
   live="$(live_parent)"
   if [[ "$flag" != "true" ]]; then
     printf '%s\n' "flag"
@@ -382,9 +403,9 @@ cmd_doctor() {
   echo
   echo "Workers"
   local name flag bin reason eff
-  for name in grok claude codex; do
+  for name in grok claude codex cursor; do
     flag="$(worker_flag "$name")"
-    bin="$(find_bin "$name")"
+    bin="$(find_worker_bin "$name")"
     reason="$(worker_reason "$name")"
     if [[ -z "$reason" ]]; then
       eff="on"
@@ -398,6 +419,17 @@ cmd_doctor() {
     fi
     printf '\n'
   done
+  echo
+  echo "Apps (not spawnable)"
+  local app
+  app="$(find_app grok-bot)"
+  printf '  %-8s %s\n' "grok-bot" "${app:-(missing)}"
+  app="$(find_app cursor)"
+  printf '  %-8s %s\n' "cursor" "${app:-(missing)}"
+  if [[ -z "$(find_worker_bin cursor)" ]]; then
+    echo "  Cursor GUI cannot be spawned. Install CLI:"
+    echo "  curl https://cursor.com/install -fsS | bash"
+  fi
   echo
   echo "Skill"
   local p proj_skill
@@ -442,7 +474,7 @@ cmd_status() {
   pref="$HARNESS_PARENT"
   profile="$HARNESS_PROFILE"
   effs=""
-  for name in grok claude codex; do
+  for name in grok claude codex cursor; do
     if effective_worker "$name"; then
       effs+="$name "
     fi
@@ -514,7 +546,7 @@ cmd_tui() {
 
 effective_csv() {
   local name out=""
-  for name in grok claude codex; do
+  for name in grok claude codex cursor; do
     if effective_worker "$name"; then
       out+="${out:+,}$name"
     fi
@@ -583,7 +615,7 @@ cmd_parent() {
 
 cmd_workers() {
   [[ $# -ge 1 ]] || {
-    echo "usage: rig workers grok=on|off claude=on|off codex=on|off" >&2
+    echo "usage: rig workers grok=on|off claude=on|off codex=on|off cursor=on|off" >&2
     exit 2
   }
   ensure_harness
@@ -592,7 +624,7 @@ cmd_workers() {
     name="${spec%%=*}"
     val="${spec#*=}"
     case "$name" in
-      grok|claude|codex) ;;
+      grok|claude|codex|cursor) ;;
       *)
         echo "rig workers: unknown worker '$name'" >&2
         exit 2
@@ -670,7 +702,7 @@ pick_worker() {
     live="$(preferred_parent)"
   fi
   if is_review_prompt "$prompt"; then
-    for name in grok claude codex; do
+    for name in grok claude cursor codex; do
       if [[ "$name" == "$live" ]]; then
         continue
       fi
@@ -686,7 +718,7 @@ pick_worker() {
     printf '%s\n' "grok"
     return 0
   fi
-  for name in claude codex; do
+  for name in claude cursor codex; do
     if [[ "$name" == "$live" ]]; then
       continue
     fi
@@ -880,9 +912,9 @@ cmd_job() {
     fi
   fi
   case "$JOB_WORKER" in
-    grok|codex|claude|parent) ;;
+    grok|codex|claude|cursor|parent) ;;
     *)
-      echo "rig job: worker must be grok|codex|claude|parent" >&2
+      echo "rig job: worker must be grok|codex|claude|cursor|parent" >&2
       exit 2
       ;;
   esac

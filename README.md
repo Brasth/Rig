@@ -1,4 +1,4 @@
-Stay in Codex or Grok. They MUST invoke Claude or each other as workers for code, review, fix, SSH, and gather. The parent keeps plan, vision, computer-use, and chrome-profile.
+Stay in Codex or Grok. They MUST invoke Claude, Cursor, or each other as workers for code, review, fix, SSH, and gather. The parent keeps plan, vision, computer-use, and chrome-profile.
 
 # Rig
 
@@ -46,7 +46,7 @@ rig doctor
 rig status
 rig use codex|grok
 rig parent sol|astra
-rig workers grok=on|off claude=on|off codex=on|off
+rig workers grok=on|off claude=on|off codex=on|off cursor=on|off
 rig prune
 rig run "prompt"
 rig jobs [--json] [--thread [ID]]
@@ -59,7 +59,7 @@ rig pick [explore|mini|bulk|implement|hard|review|stay] [--case TEXT]
 
 `rig parent astra` records a parent-only profile. Never spawn Astra as a child.
 
-Default project workers: Grok on, Claude on, Codex off. Live parent is whichever CLI you opened (`rig status`), not the `parent` key. `rig use grok` only records the preferred default — open Grok to make it live. A worker that equals the live parent is off for that session (Grok parent → no Grok child; Claude/Codex can still run if their flags are on). Claude Code is never the parent; `rig workers claude=on` turns it on as a worker. Pin full model IDs (aliases drift): `claude-haiku-4-5-20251001` low for explore/bulk, `claude-sonnet-5` medium for implement, `claude-opus-5` high for hard/review. Never Fable as a child.
+New `rig init` turns a worker on only if its CLI is on PATH (Grok, Claude, Cursor). Codex stays off as the preferred parent. Existing `.rig/harness.toml` flags are never flipped; missing `cursor` is appended as off (`rig workers cursor=on` to enable). Live parent is whichever CLI you opened (`rig status`), not the `parent` key. `rig use grok` only records the preferred default — open Grok to make it live. A worker that equals the live parent is off for that session. Claude Code and Cursor CLI are never the parent. Cursor binary is `cursor-agent` (`rig workers cursor=on`). Pin full model IDs (aliases drift): Claude `claude-haiku-4-5-20251001` cheap, `claude-sonnet-5` implement, `claude-opus-5` hard/review. Cursor `composer-2.5-fast` cheap, `composer-2.5` implement, `cursor-grok-4.6-high` hard, `claude-opus-5-thinking-high` review. Never Fable/Sol/Astra as a child. Grok Bot.app is not a worker.
 
 The parent manages. It plans, checks, does vision, computer-use, and chrome-profile. Workers write code, fix bugs, review, SSH/debug, and gather facts for the parent. If this CLI cannot do computer-use or chrome-profile, spawn a worker. Do not ask the user.
 
@@ -97,6 +97,8 @@ RIG_LIVE=1 ~/.rig/scripts/run-worker.sh grok <job-id> <brief-file>
 If the binary is missing, the wrapper prints the command it would have run and exits non-zero.
 
 A Claude Code child uses print-mode `stream-json` so the TUI can show tools while it runs. It does **not** use `--bare` (that drops OAuth) or `--dangerously-skip-permissions` (org policy can forbid bypass). Anthropic remote settings may print `Bash(eval $(wget*))` mismatched-parentheses warnings; those rules are skipped by Claude and hidden by `rig jobs` / `rig tui`.
+
+A Cursor child is `cursor-agent -p` with `stream-json`, `--force`, `--trust`, and `--workspace` set to the repo. It does **not** use `--worktree` (edits would leave the repo). `rig doctor` mentions Grok Bot.app and Cursor.app when they exist; those GUIs cannot be spawned.
 
 Claude has no TTY as a child. When it needs permission, the job status becomes `ask`. The **parent agent** answers, same as an interaction:
 

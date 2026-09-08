@@ -99,13 +99,36 @@ class Pick(unittest.TestCase):
 
     def test_refuse_parent_models(self):
         self.assertIsNotNone(route.assert_child_model("gpt-5.6-sol"))
+        self.assertIsNotNone(route.assert_child_model("gpt-5.6-sol-high"))
         self.assertIsNotNone(route.assert_child_model("gpt-6-astra"))
         self.assertIsNone(route.assert_child_model("gpt-5.6-luna"))
         self.assertIsNone(route.assert_child_model("gpt-5.3-codex-mini"))
         self.assertIsNone(route.assert_child_model("claude-opus-5"))
         self.assertIsNone(route.assert_child_model("claude-sonnet-5"))
         self.assertIsNone(route.assert_child_model("claude-haiku-4-5-20251001"))
+        self.assertIsNone(route.assert_child_model("composer-2.5"))
+        self.assertIsNone(route.assert_child_model("cursor-grok-4.6-high"))
         self.assertIsNotNone(route.assert_child_model("claude-fable-5"))
+
+    def test_cursor_when_only_effective(self):
+        c = route.pick("grok", ["cursor"], "implement", "add a header")
+        self.assertEqual(c["worker"], "cursor")
+        self.assertEqual(c["spawn"], "run-worker")
+        self.assertEqual(c["model"], "composer-2.5")
+        self.assertEqual(c["effort"], "")
+
+    def test_grok_still_beats_cursor(self):
+        c = route.pick("codex", ["grok", "cursor"], "implement", "add a header")
+        self.assertEqual(c["worker"], "grok")
+
+    def test_cursor_review_model(self):
+        c = route.pick("grok", ["cursor"], "review", "review the writer diff")
+        self.assertEqual(c["worker"], "cursor")
+        self.assertEqual(c["model"], "claude-opus-5-thinking-high")
+
+    def test_cursor_explore_model(self):
+        self.assertEqual(route.model_for("cursor", "explore"), ("composer-2.5-fast", ""))
+        self.assertEqual(route.model_for("cursor", "hard"), ("cursor-grok-4.6-high", ""))
 
 
 if __name__ == "__main__":
