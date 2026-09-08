@@ -117,9 +117,10 @@ cmd_setup() {
     exit 1
   fi
   copy_rig_tree "$src" "$dest"
-  mkdir -p "$HOME/.agents/skills" "$HOME/.grok/skills" "$HOME/.codex/agents"
+  mkdir -p "$HOME/.agents/skills" "$HOME/.grok/skills" "$HOME/.codex/agents" "$HOME/.codex/skills"
   ensure_skill_link "$HOME/.agents/skills/delegate-harness" "$dest/skills/delegate-harness"
   ensure_skill_link "$HOME/.grok/skills/delegate-harness" "$dest/skills/delegate-harness"
+  ensure_skill_link "$HOME/.codex/skills/delegate-harness" "$dest/skills/delegate-harness"
 
   local name
   for name in explorer worker bulk reviewer; do
@@ -205,6 +206,19 @@ cmd_init() {
     fi
   done
 
+  # Codex loads repo skills from .agents/skills. Refresh SKILL.md on each init.
+  local skill_src dest_skill
+  skill_src="$(rig_home)/skills/delegate-harness/SKILL.md"
+  if [[ ! -f "$skill_src" ]]; then
+    skill_src="$(rig_source_root)/skills/delegate-harness/SKILL.md"
+  fi
+  dest_skill="$root/.agents/skills/delegate-harness"
+  mkdir -p "$dest_skill"
+  if [[ -f "$skill_src" ]]; then
+    cp "$skill_src" "$dest_skill/SKILL.md"
+    printf 'wrote %s\n' "$dest_skill/SKILL.md"
+  fi
+
   local gi="$root/.gitignore" frag=".rig/jobs/"
   if [[ -f "$gi" ]]; then
     if command grep -qxF "$frag" "$gi" 2>/dev/null; then
@@ -217,25 +231,22 @@ cmd_init() {
 
   if [[ "$patch_agents" -eq 1 ]]; then
     local agents="$root/AGENTS.md"
-    local block
+    local block action
     block="$(cat <<'EOF'
 <!-- rig:start -->
-Read .rig/harness.toml and .rig/MEMORY.md.
+Use the `delegate-harness` skill (`.agents/skills/delegate-harness/SKILL.md`) for implement, review, explore, or split work across CLIs.
+Read `.rig/harness.toml` and `.rig/MEMORY.md`.
 Claude is never the parent.
-If a worker binary is missing, use cheaper same-CLI workers.
-When calling another CLI, use the Rig run-worker script and wait for .rig/jobs/<id>/result.json.
+If a worker binary is missing, use cheaper same-CLI workers. That is success.
+When calling another CLI, write `.rig/jobs/<id>/brief.md` then run:
+`RIG_LIVE=1 "$HOME/.rig/scripts/run-worker.sh" <grok|codex|claude> <id> .rig/jobs/<id>/brief.md`
+Wait for `.rig/jobs/<id>/result.json`. Do not parse a TUI.
+Implement and Grok is effective: Grok child. Review: a different vendor than the writer.
 <!-- rig:end -->
 EOF
 )"
-    if [[ -f "$agents" ]] && command grep -q '<!-- rig:start -->' "$agents" && command grep -q '<!-- rig:end -->' "$agents"; then
-      echo "keep $agents (Rig block present)"
-    elif [[ -f "$agents" ]]; then
-      printf '\n%s\n' "$block" >> "$agents"
-      echo "appended Rig block to $agents"
-    else
-      printf '%s\n' "$block" > "$agents"
-      echo "wrote $agents"
-    fi
+    action="$(rig_upsert_marked_block "$agents" "<!-- rig:start -->" "<!-- rig:end -->" "$block")"
+    echo "$action $agents"
   fi
 
   if [[ "$patch_claude" -eq 1 ]]; then
@@ -321,8 +332,14 @@ cmd_doctor() {
   done
   echo
   echo "Skill"
-  local p
-  for p in "$HOME/.agents/skills/delegate-harness" "$HOME/.grok/skills/delegate-harness"; do
+  local p proj_skill
+  proj_skill="$(repo_root)/.agents/skills/delegate-harness/SKILL.md"
+  if [[ -f "$proj_skill" ]]; then
+    echo "  project: $proj_skill"
+  else
+    echo "  project: $proj_skill (missing — run: rig init)"
+  fi
+  for p in "$HOME/.agents/skills/delegate-harness" "$HOME/.grok/skills/delegate-harness" "$HOME/.codex/skills/delegate-harness"; do
     if [[ -L "$p" ]]; then
       echo "  $p -> $(readlink "$p")"
     elif [[ -e "$p" ]]; then

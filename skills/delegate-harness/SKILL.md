@@ -1,8 +1,9 @@
 ---
 name: delegate-harness
 description: >
-  Delegate implement, review, explore, or split work across Codex, Grok, and Claude CLIs
-  via Rig. Use when implementing, reviewing, exploring, or splitting work across CLIs.
+  Delegate implement, review, explore, or split work across Codex, Grok, and Claude via Rig
+  run-worker.sh. Use when implementing, reviewing, exploring, splitting work across CLIs,
+  or when .rig/harness.toml exists and another CLI should do the work.
 ---
 
 # Delegate harness

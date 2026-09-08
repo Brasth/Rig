@@ -28,20 +28,15 @@ export PATH="$HOME/.local/bin:$PATH"
 
 ```bash
 cd your-repo
-rig init
+rig init --patch-agents
 rig doctor
 ```
 
-Optional:
-
-```bash
-rig init --patch-agents --patch-claude
-```
-
-`--patch-agents` appends a marked block to `AGENTS.md` if the markers are missing. It never replaces the file.
+`rig init` writes `.rig/` and copies the `delegate-harness` skill into `.agents/skills/` so Codex can load it.
+`--patch-agents` inserts or refreshes a marked block in `AGENTS.md` that names that skill and the `run-worker.sh` command. It never replaces the whole file.
 `--patch-claude` writes `CLAUDE.md` only if that file is missing.
 
-Open Codex or Grok in that repo and type normally.
+Then open a **new** Codex or Grok thread in that repo and type normally. An already-open session will not pick up the new block.
 
 ## Commands
 
