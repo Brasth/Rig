@@ -1,0 +1,11 @@
+parent = "codex"
+# parent = "grok"
+
+[parent]
+profile = "sol"
+# profile = "astra"
+
+[workers]
+codex = false
+grok = true
+claude = true

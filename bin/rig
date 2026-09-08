@@ -1,0 +1,590 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+_RIG_BIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+_RIG_DETECT=""
+if [[ -f "$_RIG_BIN_DIR/../scripts/detect-binaries.sh" ]]; then
+  _RIG_DETECT="$(cd "$_RIG_BIN_DIR/../scripts" && pwd)/detect-binaries.sh"
+elif [[ -f "${RIG_HOME:-$HOME/.rig}/scripts/detect-binaries.sh" ]]; then
+  _RIG_DETECT="${RIG_HOME:-$HOME/.rig}/scripts/detect-binaries.sh"
+else
+  echo "rig: cannot find scripts/detect-binaries.sh" >&2
+  exit 1
+fi
+# shellcheck source=../scripts/detect-binaries.sh
+source "$_RIG_DETECT"
+
+usage() {
+  cat <<'EOF'
+usage: rig <command> [args]
+
+  setup
+  init [--patch-agents] [--patch-claude]
+  doctor
+  status
+  use codex|grok
+  parent sol|astra
+  workers grok=on|off claude=on|off codex=on|off
+  prune
+  run "prompt"
+
+Stay in Codex or Grok. They can invoke Claude or each other.
+EOF
+  exit 2
+}
+
+rig_source_root() {
+  if [[ -n "${RIG_SRC:-}" && -f "$RIG_SRC/bin/rig" ]]; then
+    printf '%s\n' "$RIG_SRC"
+    return 0
+  fi
+  local root
+  root="$(cd "$_RIG_BIN_DIR/.." && pwd)"
+  if [[ -f "$root/skills/delegate-harness/SKILL.md" ]]; then
+    printf '%s\n' "$root"
+    return 0
+  fi
+  printf '%s\n' "$(rig_home)"
+}
+
+install_file() {
+  local srcf="$1" destf="$2"
+  local tmp
+  tmp="$(mktemp "${destf}.XXXXXX")"
+  cp "$srcf" "$tmp"
+  mv "$tmp" "$destf"
+}
+
+copy_rig_tree() {
+  local src="$1" dest="$2"
+  mkdir -p "$dest"/{bin,scripts,skills/delegate-harness,adapters/codex/agents,adapters/grok,adapters/claude,templates}
+  if [[ "$(cd "$src" && pwd)" != "$(cd "$dest" && pwd)" ]]; then
+    # mv onto dest so a running bin/rig keeps its old inode
+    install_file "$src/bin/rig" "$dest/bin/rig"
+    install_file "$src/scripts/detect-binaries.sh" "$dest/scripts/detect-binaries.sh"
+    install_file "$src/scripts/run-worker.sh" "$dest/scripts/run-worker.sh"
+    install_file "$src/skills/delegate-harness/SKILL.md" "$dest/skills/delegate-harness/SKILL.md"
+    local f
+    for f in "$src/adapters/codex/agents/"*.toml; do
+      install_file "$f" "$dest/adapters/codex/agents/$(basename "$f")"
+    done
+    install_file "$src/adapters/grok/config.toml.snippet" "$dest/adapters/grok/config.toml.snippet"
+    install_file "$src/adapters/claude/CLAUDE.worker.md" "$dest/adapters/claude/CLAUDE.worker.md"
+    for f in "$src/templates/"*; do
+      install_file "$f" "$dest/templates/$(basename "$f")"
+    done
+  fi
+  chmod +x "$dest/bin/rig" "$dest/scripts/"*.sh
+  if git -C "$src" rev-parse --short HEAD >/dev/null 2>&1; then
+    printf 'v1 %s\n' "$(git -C "$src" rev-parse --short HEAD)" > "$dest/VERSION"
+  else
+    printf 'v1\n' > "$dest/VERSION"
+  fi
+}
+
+ensure_skill_link() {
+  local dest="$1" src="$2"
+  mkdir -p "$(dirname "$dest")"
+  if [[ -L "$dest" ]]; then
+    ln -sfn "$src" "$dest"
+    printf 'linked %s\n' "$dest"
+  elif [[ -e "$dest" ]]; then
+    printf 'skip %s (exists, not a symlink)\n' "$dest"
+  else
+    ln -sfn "$src" "$dest"
+    printf 'linked %s\n' "$dest"
+  fi
+}
+
+maybe_copy_codex_agent() {
+  local src="$1" dest="$2"
+  if [[ -e "$dest" ]]; then
+    printf 'skip %s (exists)\n' "$dest"
+    return 0
+  fi
+  mkdir -p "$(dirname "$dest")"
+  cp "$src" "$dest"
+  printf 'wrote %s\n' "$dest"
+}
+
+cmd_setup() {
+  local src dest
+  src="$(rig_source_root)"
+  dest="$(rig_home)"
+  if [[ ! -f "$src/bin/rig" || ! -f "$src/skills/delegate-harness/SKILL.md" ]]; then
+    echo "rig setup: source tree not found at $src" >&2
+    echo "set RIG_SRC to the Rig clone and retry" >&2
+    exit 1
+  fi
+  copy_rig_tree "$src" "$dest"
+  mkdir -p "$HOME/.agents/skills" "$HOME/.grok/skills" "$HOME/.codex/agents"
+  ensure_skill_link "$HOME/.agents/skills/delegate-harness" "$dest/skills/delegate-harness"
+  ensure_skill_link "$HOME/.grok/skills/delegate-harness" "$dest/skills/delegate-harness"
+
+  local name
+  for name in explorer worker bulk reviewer; do
+    maybe_copy_codex_agent \
+      "$dest/adapters/codex/agents/${name}.toml" \
+      "$HOME/.codex/agents/${name}.toml"
+  done
+
+  local codex_cfg="$HOME/.codex/config.toml"
+  if [[ -f "$codex_cfg" ]]; then
+    if ! rig_has_top_key "$codex_cfg" "model"; then
+      rig_set_toml_key "$codex_cfg" "" "model" '"gpt-5.6-sol"'
+      echo "set ~/.codex/config.toml model = \"gpt-5.6-sol\" (was missing)"
+    fi
+    if ! rig_has_section_key "$codex_cfg" "agents" "default_subagent_model"; then
+      rig_set_toml_key "$codex_cfg" "agents" "default_subagent_model" '"gpt-5.6-terra"'
+      echo "set ~/.codex/config.toml [agents] default_subagent_model = \"gpt-5.6-terra\" (was missing)"
+    fi
+  fi
+
+  local grok_cfg="$HOME/.grok/config.toml"
+  if [[ -f "$grok_cfg" ]]; then
+    if ! rig_has_section_key "$grok_cfg" "subagents.models" "explore"; then
+      rig_set_toml_key "$grok_cfg" "subagents.models" "explore" '"grok-4.5"'
+      echo "set ~/.grok/config.toml [subagents.models] explore = \"grok-4.5\" (was missing)"
+    fi
+  fi
+
+  echo "setup ok  RIG_HOME=$dest"
+  echo "next: in a repo, run: rig init && rig doctor"
+}
+
+ensure_harness() {
+  local root templates harness
+  root="$(repo_root)"
+  templates="$(rig_home)/templates"
+  if [[ ! -d "$templates" ]]; then
+    templates="$(rig_source_root)/templates"
+  fi
+  mkdir -p "$root/.rig/jobs"
+  harness="$root/.rig/harness.toml"
+  if [[ ! -f "$harness" ]]; then
+    if [[ ! -f "$templates/harness.toml" ]]; then
+      echo "rig: templates not found; run: rig setup" >&2
+      exit 1
+    fi
+    cp "$templates/harness.toml" "$harness"
+  fi
+}
+
+cmd_init() {
+  local patch_agents=0 patch_claude=0 arg
+  for arg in "$@"; do
+    case "$arg" in
+      --patch-agents) patch_agents=1 ;;
+      --patch-claude) patch_claude=1 ;;
+      *)
+        echo "rig init: unknown flag $arg" >&2
+        usage
+        ;;
+    esac
+  done
+
+  local root templates
+  root="$(repo_root)"
+  templates="$(rig_home)/templates"
+  if [[ ! -f "$templates/harness.toml" ]]; then
+    templates="$(rig_source_root)/templates"
+  fi
+  if [[ ! -f "$templates/harness.toml" ]]; then
+    echo "rig init: templates not found; run: rig setup" >&2
+    exit 1
+  fi
+
+  mkdir -p "$root/.rig/jobs"
+  local f
+  for f in harness.toml MEMORY.md STATE.md; do
+    if [[ -f "$root/.rig/$f" ]]; then
+      printf 'keep %s\n' "$root/.rig/$f"
+    else
+      cp "$templates/$f" "$root/.rig/$f"
+      printf 'wrote %s\n' "$root/.rig/$f"
+    fi
+  done
+
+  local gi="$root/.gitignore" frag=".rig/jobs/"
+  if [[ -f "$gi" ]]; then
+    if command grep -qxF "$frag" "$gi" 2>/dev/null; then
+      printf 'keep %s (%s)\n' "$gi" "$frag"
+    else
+      printf '\n%s\n' "$frag" >> "$gi"
+      printf 'appended %s to %s\n' "$frag" "$gi"
+    fi
+  fi
+
+  if [[ "$patch_agents" -eq 1 ]]; then
+    local agents="$root/AGENTS.md"
+    local block
+    block="$(cat <<'EOF'
+<!-- rig:start -->
+Read .rig/harness.toml and .rig/MEMORY.md.
+Claude is never the parent.
+If a worker binary is missing, use cheaper same-CLI workers.
+When calling another CLI, use the Rig run-worker script and wait for .rig/jobs/<id>/result.json.
+<!-- rig:end -->
+EOF
+)"
+    if [[ -f "$agents" ]] && command grep -q '<!-- rig:start -->' "$agents" && command grep -q '<!-- rig:end -->' "$agents"; then
+      echo "keep $agents (Rig block present)"
+    elif [[ -f "$agents" ]]; then
+      printf '\n%s\n' "$block" >> "$agents"
+      echo "appended Rig block to $agents"
+    else
+      printf '%s\n' "$block" > "$agents"
+      echo "wrote $agents"
+    fi
+  fi
+
+  if [[ "$patch_claude" -eq 1 ]]; then
+    local claude="$root/CLAUDE.md"
+    local stub
+    stub="$(rig_home)/adapters/claude/CLAUDE.worker.md"
+    if [[ ! -f "$stub" ]]; then
+      stub="$(rig_source_root)/adapters/claude/CLAUDE.worker.md"
+    fi
+    if [[ -f "$claude" ]]; then
+      echo "keep $claude (exists)"
+    else
+      cp "$stub" "$claude"
+      echo "wrote $claude"
+    fi
+  fi
+
+  echo "init ok  $root/.rig"
+}
+
+worker_reason() {
+  local name="$1"
+  local flag bin live
+  flag="$(worker_flag "$name")"
+  bin="$(find_bin "$name")"
+  live="$(live_parent)"
+  if [[ "$flag" != "true" ]]; then
+    printf '%s\n' "flag"
+  elif [[ -z "$bin" ]]; then
+    printf '%s\n' "no binary"
+  elif [[ "$name" == "$live" ]]; then
+    printf '%s\n' "is live parent"
+  else
+    printf '%s\n' ""
+  fi
+}
+
+cmd_doctor() {
+  local dest root harness live pref profile runw
+  dest="$(rig_home)"
+  root="$(repo_root)"
+  harness="$(harness_path)"
+  live="$(live_parent)"
+  parse_harness "$harness"
+  pref="$HARNESS_PARENT"
+  profile="$HARNESS_PROFILE"
+  runw="$dest/scripts/run-worker.sh"
+  if [[ ! -f "$runw" ]]; then
+    runw="$(rig_source_root)/scripts/run-worker.sh"
+  fi
+
+  echo "Rig doctor"
+  echo "  RIG_HOME: $dest"
+  echo "  repo:     $root"
+  if [[ -f "$harness" ]]; then
+    echo "  harness:  $harness"
+  else
+    echo "  harness:  $harness (missing — run: rig init)"
+  fi
+  echo
+  echo "Parent"
+  echo "  live:      ${live:-(none)}"
+  echo "  preferred: $pref"
+  echo "  profile:   $profile"
+  echo
+  echo "Workers"
+  local name flag bin reason eff
+  for name in grok claude codex; do
+    flag="$(worker_flag "$name")"
+    bin="$(find_bin "$name")"
+    reason="$(worker_reason "$name")"
+    if [[ -z "$reason" ]]; then
+      eff="on"
+    else
+      eff="off"
+    fi
+    printf '  %-7s flag=%-5s bin=%-42s effective=%s' \
+      "$name" "$flag" "${bin:-(missing)}" "$eff"
+    if [[ -n "$reason" ]]; then
+      printf ' (%s)' "$reason"
+    fi
+    printf '\n'
+  done
+  echo
+  echo "Skill"
+  local p
+  for p in "$HOME/.agents/skills/delegate-harness" "$HOME/.grok/skills/delegate-harness"; do
+    if [[ -L "$p" ]]; then
+      echo "  $p -> $(readlink "$p")"
+    elif [[ -e "$p" ]]; then
+      echo "  $p (present, not a symlink)"
+    else
+      echo "  $p (missing — run: rig setup)"
+    fi
+  done
+  echo
+  echo "Scripts"
+  if [[ -x "$runw" || -f "$runw" ]]; then
+    echo "  run-worker: $runw (ok)"
+  else
+    echo "  run-worker: $runw (missing)"
+    echo "Rig itself is broken. Re-run: rig setup" >&2
+    exit 1
+  fi
+}
+
+cmd_status() {
+  local live pref profile name effs jobs
+  parse_harness "$(harness_path)"
+  live="$(live_parent)"
+  pref="$HARNESS_PARENT"
+  profile="$HARNESS_PROFILE"
+  effs=""
+  for name in grok claude codex; do
+    if effective_worker "$name"; then
+      effs+="$name "
+    fi
+  done
+  jobs=0
+  if [[ -d "$(repo_root)/.rig/jobs" ]]; then
+    jobs="$(command find "$(repo_root)/.rig/jobs" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l | tr -d ' ')"
+  fi
+  echo "parent live=${live:-(none)} preferred=$pref profile=$profile"
+  echo "effective: ${effs:-none}"
+  echo "jobs: $jobs"
+}
+
+cmd_use() {
+  local who="${1:-}"
+  case "$who" in
+    codex|grok) ;;
+    *)
+      echo "usage: rig use codex|grok" >&2
+      exit 2
+      ;;
+  esac
+  ensure_harness
+  rig_set_toml_key "$(harness_path)" "" "parent" "\"$who\""
+  echo "preferred parent = $who"
+}
+
+cmd_parent() {
+  local who="${1:-}"
+  case "$who" in
+    sol|astra) ;;
+    *)
+      echo "usage: rig parent sol|astra" >&2
+      exit 2
+      ;;
+  esac
+  ensure_harness
+  rig_set_toml_key "$(harness_path)" "parent" "profile" "\"$who\""
+  echo "parent profile = $who"
+  if [[ "$who" == "astra" ]]; then
+    echo "astra is parent-only. Never spawn it as a child. Start that CLI yourself."
+  fi
+}
+
+cmd_workers() {
+  [[ $# -ge 1 ]] || {
+    echo "usage: rig workers grok=on|off claude=on|off codex=on|off" >&2
+    exit 2
+  }
+  ensure_harness
+  local spec name val bool
+  for spec in "$@"; do
+    name="${spec%%=*}"
+    val="${spec#*=}"
+    case "$name" in
+      grok|claude|codex) ;;
+      *)
+        echo "rig workers: unknown worker '$name'" >&2
+        exit 2
+        ;;
+    esac
+    case "$val" in
+      on|true) bool="true" ;;
+      off|false) bool="false" ;;
+      *)
+        echo "rig workers: use on|off (got $val)" >&2
+        exit 2
+        ;;
+    esac
+    rig_set_toml_key "$(harness_path)" "workers" "$name" "$bool"
+    echo "$name = $bool"
+  done
+}
+
+cmd_prune() {
+  local jobs
+  jobs="$(repo_root)/.rig/jobs"
+  if [[ ! -d "$jobs" ]]; then
+    echo "no jobs dir"
+    return 0
+  fi
+  python3 - "$jobs" <<'PY'
+import pathlib
+import shutil
+import sys
+import time
+
+root = pathlib.Path(sys.argv[1])
+now = time.time()
+removed = 0
+for p in list(root.iterdir()):
+    if p.is_dir() and now - p.stat().st_mtime > 7 * 86400:
+        shutil.rmtree(p)
+        removed += 1
+dirs = [p for p in root.iterdir() if p.is_dir()]
+dirs.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+for p in dirs[20:]:
+    shutil.rmtree(p)
+    removed += 1
+print(f"prune ok  removed={removed} kept={len([p for p in root.iterdir() if p.is_dir()])}")
+PY
+}
+
+is_review_prompt() {
+  local p="$1"
+  [[ "$p" =~ ^[Rr]eview([[:space:]]|$) ]] || [[ "$p" =~ [[:space:]][Rr]eview[[:space:]] ]]
+}
+
+pick_worker() {
+  local prompt="$1"
+  local live name
+  live="$(live_parent)"
+  if [[ -z "$live" ]]; then
+    live="$(preferred_parent)"
+  fi
+  if is_review_prompt "$prompt"; then
+    for name in grok claude codex; do
+      if [[ "$name" == "$live" ]]; then
+        continue
+      fi
+      if effective_worker "$name"; then
+        printf '%s\n' "$name"
+        return 0
+      fi
+    done
+    printf '%s\n' ""
+    return 0
+  fi
+  if [[ "$live" != "grok" ]] && effective_worker grok; then
+    printf '%s\n' "grok"
+    return 0
+  fi
+  for name in claude codex; do
+    if [[ "$name" == "$live" ]]; then
+      continue
+    fi
+    if effective_worker "$name"; then
+      printf '%s\n' "$name"
+      return 0
+    fi
+  done
+  printf '%s\n' ""
+}
+
+write_state() {
+  local job="$1" worker="$2" status="$3" summary="$4"
+  local state
+  state="$(repo_root)/.rig/STATE.md"
+  mkdir -p "$(dirname "$state")"
+  cat > "$state" <<EOF
+# STATE
+
+Overwritten each run.
+
+- last_job: $job
+- worker: $worker
+- status: $status
+- summary: $summary
+EOF
+}
+
+cmd_run() {
+  local prompt="${*:-}"
+  if [[ -z "$prompt" ]]; then
+    echo "usage: rig run \"prompt\"" >&2
+    exit 2
+  fi
+  local root harness
+  root="$(repo_root)"
+  harness="$(harness_path)"
+  if [[ ! -f "$harness" ]]; then
+    echo "rig run: missing $harness — run: rig init" >&2
+    exit 1
+  fi
+  parse_harness "$harness"
+  local worker job brief wrapper
+  worker="$(pick_worker "$prompt")"
+  job="$(date -u +%Y%m%dT%H%M%SZ)-$$"
+  mkdir -p "$root/.rig/jobs/$job"
+  brief="$root/.rig/jobs/$job/brief.md"
+  {
+    printf '%s\n\n' "$WORKER_PREAMBLE"
+    printf '%s\n' "$prompt"
+  } > "$brief"
+
+  if [[ -z "$worker" ]]; then
+    echo "no effective cross-CLI worker. Use cheaper same-CLI workers. That is success."
+    write_state "$job" "none" "ok" "no effective cross-CLI worker; use cheap same-CLI workers"
+    exit 0
+  fi
+
+  wrapper="$(rig_home)/scripts/run-worker.sh"
+  if [[ ! -f "$wrapper" ]]; then
+    wrapper="$(rig_source_root)/scripts/run-worker.sh"
+  fi
+  if is_review_prompt "$prompt"; then
+    export RIG_ROLE="review"
+  else
+    export RIG_ROLE="implement"
+  fi
+  local rc=0
+  set +e
+  "$wrapper" "$worker" "$job" "$brief"
+  rc=$?
+  set -e
+  local result="$root/.rig/jobs/$job/result.json" status="unknown" summary=""
+  if [[ -f "$result" ]] && command -v python3 >/dev/null 2>&1; then
+    status="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("status",""))' "$result")"
+    summary="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("summary",""))' "$result")"
+  fi
+  write_state "$job" "$worker" "$status" "$summary"
+  echo "job $job worker=$worker status=$status"
+  echo "result: $result"
+  exit "$rc"
+}
+
+main() {
+  local cmd="${1:-}"
+  shift || true
+  case "$cmd" in
+    setup) cmd_setup "$@" ;;
+    init) cmd_init "$@" ;;
+    doctor) cmd_doctor "$@" ;;
+    status) cmd_status "$@" ;;
+    use) cmd_use "$@" ;;
+    parent) cmd_parent "$@" ;;
+    workers) cmd_workers "$@" ;;
+    prune) cmd_prune "$@" ;;
+    run) cmd_run "$@" ;;
+    -h|--help|help|"") usage ;;
+    *)
+      echo "rig: unknown command '$cmd'" >&2
+      usage
+      ;;
+  esac
+}
+
+main "$@"
