@@ -1,1 +1,5 @@
-.rig/jobs/
+.rig/
+.agents/
+__pycache__/
+*.pyc
+

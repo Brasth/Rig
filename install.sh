@@ -40,21 +40,31 @@ install_file() {
 }
 
 copy_into_home() {
-  mkdir -p "$RIG_HOME"/{bin,scripts,skills/delegate-harness,adapters/codex/agents,adapters/grok,adapters/claude,templates}
+  mkdir -p "$RIG_HOME"/{bin,scripts,skills,adapters/codex/agents,adapters/grok,adapters/claude,templates}
   install_file "$SRC/bin/rig" "$RIG_HOME/bin/rig"
-  install_file "$SRC/scripts/detect-binaries.sh" "$RIG_HOME/scripts/detect-binaries.sh"
-  install_file "$SRC/scripts/run-worker.sh" "$RIG_HOME/scripts/run-worker.sh"
-  install_file "$SRC/skills/delegate-harness/SKILL.md" "$RIG_HOME/skills/delegate-harness/SKILL.md"
-  local f
+  local f skill
+  for f in "$SRC/scripts/"*; do
+    [[ -f "$f" ]] || continue
+    install_file "$f" "$RIG_HOME/scripts/$(basename "$f")"
+  done
+  for skill in "$SRC/skills/"*; do
+    [[ -d "$skill" ]] || continue
+    mkdir -p "$RIG_HOME/skills/$(basename "$skill")"
+    for f in "$skill/"*; do
+      [[ -f "$f" ]] || continue
+      install_file "$f" "$RIG_HOME/skills/$(basename "$skill")/$(basename "$f")"
+    done
+  done
   for f in "$SRC/adapters/codex/agents/"*.toml; do
     install_file "$f" "$RIG_HOME/adapters/codex/agents/$(basename "$f")"
   done
   install_file "$SRC/adapters/grok/config.toml.snippet" "$RIG_HOME/adapters/grok/config.toml.snippet"
   install_file "$SRC/adapters/claude/CLAUDE.worker.md" "$RIG_HOME/adapters/claude/CLAUDE.worker.md"
   for f in "$SRC/templates/"*; do
+    [[ -f "$f" ]] || continue
     install_file "$f" "$RIG_HOME/templates/$(basename "$f")"
   done
-  chmod +x "$RIG_HOME/bin/rig" "$RIG_HOME/scripts/"*.sh
+  chmod +x "$RIG_HOME/bin/rig" "$RIG_HOME/scripts/"*.sh "$RIG_HOME/scripts/"*.py 2>/dev/null || true
 }
 
 copy_into_home

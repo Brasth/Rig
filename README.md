@@ -50,27 +50,31 @@ rig parent sol|astra
 rig workers grok=on|off claude=on|off codex=on|off
 rig prune
 rig run "prompt"
-rig job start|finish|record
+rig jobs [--json]
+rig tui
+rig job start|finish|record|show|log
 ```
 
 `rig parent astra` records a parent-only profile. Never spawn Astra as a child.
 
-Default project workers: Grok on, Claude on, Codex off. Live parent is whichever CLI you opened. A worker that equals the live parent is off for that session.
+Default project workers: Grok on, Claude on, Codex off. Live parent is whichever CLI you opened (`rig status`), not the `parent` key. `rig use grok` only records the preferred default — open Grok to make it live. A worker that equals the live parent is off for that session (Grok parent → no Grok child; Claude/Codex can still run if their flags are on). Claude is never the parent; `rig workers claude=on` makes it a haiku worker.
 
 ## Workers
 
 Cross-CLI jobs go through `~/.rig/scripts/run-worker.sh`. The parent waits on `.rig/jobs/<id>/result.json`.
 
-A Grok child is **headless**. Codex will not show its TUI. While it runs:
+A Grok child is **headless**. Codex will not show its TUI. While it runs, both you and the parent agent can see **which agent, which task, status, and the log**:
 
 ```bash
-rig status
-rig job show <id>
-cd your-repo && grok -r <session-id>
-tail -f .rig/jobs/<id>/stdout.log
+rig tui                 # jobs board (agent / task / status / live log)
+rig jobs                # same data as a table (agents use this)
+rig job show            # running job, or latest
+rig job log <id> -f     # decoded activity (tools + text)
 ```
 
-The job folder also has `WATCH.md`.
+In Grok or Codex type `/rig`. Grok also gets a bottom status line after `rig setup` (restart Grok once). MCP tools: `rig_jobs`, `rig_job_show`, `rig_job_log`.
+
+Open the Grok child TUI: `grok -r <session-id>` or `grok dashboard`. The job folder has `WATCH.md`.
 
 Cheap same-CLI spawns (Codex explorer/worker, Grok explore) do not use that wrapper. Record them so they still show under `.rig/jobs/`:
 

@@ -168,7 +168,8 @@ write_watch() {
       echo "- open Grok: \`cd $REPO && grok -r $SESSION_ID\`"
       echo "- dashboard: \`grok dashboard\`"
     fi
-    echo "- live log: \`tail -f $JOB_DIR/stdout.log\`"
+    echo "- live log: \`rig job log $JOB_ID -f\`"
+    echo "- board: \`rig tui\`  or  \`rig jobs\`"
     echo "- status: \`rig status\`"
   } > "$watch"
 }

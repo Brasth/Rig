@@ -27,10 +27,13 @@ usage: rig <command> [args]
   workers grok=on|off claude=on|off codex=on|off
   prune
   run "prompt"
+  jobs [--json]
+  tui
   job start [--worker NAME] [--role ROLE] [id]
   job finish <id> [--status ok|fail] [--summary TEXT]
   job record [--worker NAME] [--role ROLE] [--status ok|fail] [--summary TEXT] [id]
   job show [id]
+  job log [id] [-f] [-n N]
 
 Stay in Codex or Grok. They can invoke Claude or each other.
 EOF
@@ -61,29 +64,49 @@ install_file() {
 
 copy_rig_tree() {
   local src="$1" dest="$2"
-  mkdir -p "$dest"/{bin,scripts,skills/delegate-harness,adapters/codex/agents,adapters/grok,adapters/claude,templates}
+  mkdir -p "$dest"/{bin,scripts,skills,adapters/codex/agents,adapters/grok,adapters/claude,templates}
   if [[ "$(cd "$src" && pwd)" != "$(cd "$dest" && pwd)" ]]; then
     # mv onto dest so a running bin/rig keeps its old inode
     install_file "$src/bin/rig" "$dest/bin/rig"
-    install_file "$src/scripts/detect-binaries.sh" "$dest/scripts/detect-binaries.sh"
-    install_file "$src/scripts/run-worker.sh" "$dest/scripts/run-worker.sh"
-    install_file "$src/skills/delegate-harness/SKILL.md" "$dest/skills/delegate-harness/SKILL.md"
-    local f
+    local f skill
+    for f in "$src/scripts/"*; do
+      [[ -f "$f" ]] || continue
+      install_file "$f" "$dest/scripts/$(basename "$f")"
+    done
+    for skill in "$src/skills/"*; do
+      [[ -d "$skill" ]] || continue
+      mkdir -p "$dest/skills/$(basename "$skill")"
+      for f in "$skill/"*; do
+        [[ -f "$f" ]] || continue
+        install_file "$f" "$dest/skills/$(basename "$skill")/$(basename "$f")"
+      done
+    done
     for f in "$src/adapters/codex/agents/"*.toml; do
       install_file "$f" "$dest/adapters/codex/agents/$(basename "$f")"
     done
     install_file "$src/adapters/grok/config.toml.snippet" "$dest/adapters/grok/config.toml.snippet"
     install_file "$src/adapters/claude/CLAUDE.worker.md" "$dest/adapters/claude/CLAUDE.worker.md"
     for f in "$src/templates/"*; do
+      [[ -f "$f" ]] || continue
       install_file "$f" "$dest/templates/$(basename "$f")"
     done
   fi
-  chmod +x "$dest/bin/rig" "$dest/scripts/"*.sh
+  chmod +x "$dest/bin/rig" "$dest/scripts/"*.sh "$dest/scripts/"*.py 2>/dev/null || true
   if git -C "$src" rev-parse --short HEAD >/dev/null 2>&1; then
     printf 'v1 %s\n' "$(git -C "$src" rev-parse --short HEAD)" > "$dest/VERSION"
   else
     printf 'v1\n' > "$dest/VERSION"
   fi
+}
+
+py_script() {
+  local name="$1" p
+  p="$(rig_home)/scripts/$name"
+  if [[ -f "$p" ]]; then
+    printf '%s\n' "$p"
+    return 0
+  fi
+  printf '%s\n' "$(rig_source_root)/scripts/$name"
 }
 
 ensure_skill_link() {
@@ -122,9 +145,12 @@ cmd_setup() {
   fi
   copy_rig_tree "$src" "$dest"
   mkdir -p "$HOME/.agents/skills" "$HOME/.grok/skills" "$HOME/.codex/agents" "$HOME/.codex/skills"
-  ensure_skill_link "$HOME/.agents/skills/delegate-harness" "$dest/skills/delegate-harness"
-  ensure_skill_link "$HOME/.grok/skills/delegate-harness" "$dest/skills/delegate-harness"
-  ensure_skill_link "$HOME/.codex/skills/delegate-harness" "$dest/skills/delegate-harness"
+  local skill
+  for skill in delegate-harness rig-jobs; do
+    ensure_skill_link "$HOME/.agents/skills/$skill" "$dest/skills/$skill"
+    ensure_skill_link "$HOME/.grok/skills/$skill" "$dest/skills/$skill"
+    ensure_skill_link "$HOME/.codex/skills/$skill" "$dest/skills/$skill"
+  done
 
   local name
   for name in explorer worker bulk reviewer; do
@@ -157,7 +183,14 @@ cmd_setup() {
     fi
   fi
 
+  local ui_py
+  ui_py="$(py_script install-ui.py)"
+  if [[ -f "$ui_py" ]]; then
+    python3 "$ui_py" "$dest"
+  fi
+
   echo "setup ok  RIG_HOME=$dest"
+  echo "watch: rig tui   |   rig jobs   |   /rig in Grok or Codex"
   echo "next: in a repo, run: rig init && rig doctor"
 }
 
@@ -215,17 +248,19 @@ cmd_init() {
   done
 
   # Codex loads repo skills from .agents/skills. Refresh SKILL.md on each init.
-  local skill_src dest_skill
-  skill_src="$(rig_home)/skills/delegate-harness/SKILL.md"
-  if [[ ! -f "$skill_src" ]]; then
-    skill_src="$(rig_source_root)/skills/delegate-harness/SKILL.md"
-  fi
-  dest_skill="$root/.agents/skills/delegate-harness"
-  mkdir -p "$dest_skill"
-  if [[ -f "$skill_src" ]]; then
-    cp "$skill_src" "$dest_skill/SKILL.md"
-    printf 'wrote %s\n' "$dest_skill/SKILL.md"
-  fi
+  local skill_name skill_src dest_skill
+  for skill_name in delegate-harness rig-jobs; do
+    skill_src="$(rig_home)/skills/${skill_name}/SKILL.md"
+    if [[ ! -f "$skill_src" ]]; then
+      skill_src="$(rig_source_root)/skills/${skill_name}/SKILL.md"
+    fi
+    dest_skill="$root/.agents/skills/${skill_name}"
+    mkdir -p "$dest_skill"
+    if [[ -f "$skill_src" ]]; then
+      cp "$skill_src" "$dest_skill/SKILL.md"
+      printf 'wrote %s\n' "$dest_skill/SKILL.md"
+    fi
+  done
 
   local gi="$root/.gitignore" frag=".rig/jobs/"
   if [[ -f "$gi" ]]; then
@@ -243,15 +278,18 @@ cmd_init() {
     block="$(cat <<'EOF'
 <!-- rig:start -->
 Use the `delegate-harness` skill (`.agents/skills/delegate-harness/SKILL.md`) for implement, review, explore, or split work across CLIs.
-Read `.rig/harness.toml` and `.rig/MEMORY.md`.
-Claude is never the parent.
-If a worker binary is missing, use cheaper same-CLI workers. That is success.
+Read `.rig/harness.toml` and `.rig/MEMORY.md`. Run `rig status` before spawning.
+Live parent is this CLI, not the `parent` key. That key is only the preferred default (`rig use grok|codex`). Opening Grok or Codex is what makes it live.
+Claude is never the parent. If `[workers].claude` is true and `claude` is on PATH, Claude is a worker (haiku), including when Grok is the parent.
+A worker is on only when its flag is true, its binary exists, and it is not the live parent. Missing binary: that worker is off. Use cheaper same-CLI workers. That is success.
+Implement: Grok child if Grok is effective. If Grok is the live parent (or off), next effective worker (Claude, then Codex). Else cheap same-CLI.
+Review: a different vendor than the writer.
 Cheap same-CLI spawn (Codex explorer/worker/bulk/reviewer, Grok explore): record it.
-`rig job start --worker codex --role explorer` then `rig job finish <id> --status ok --summary "..."`.
+`rig job start --worker <codex|grok|claude> --role explorer` then `rig job finish <id> --status ok --summary "..."`.
 When calling another CLI, write `.rig/jobs/<id>/brief.md` then run:
 `RIG_LIVE=1 "$HOME/.rig/scripts/run-worker.sh" <grok|codex|claude> <id> .rig/jobs/<id>/brief.md`
 Wait for `.rig/jobs/<id>/result.json`. Do not parse a TUI.
-Implement and Grok is effective: Grok child. Review: a different vendor than the writer.
+Watch children: `rig jobs` / `rig job show` / `rig job log <id>` / `rig tui` / `/rig`.
 <!-- rig:end -->
 EOF
 )"
@@ -367,6 +405,12 @@ cmd_doctor() {
     echo "Rig itself is broken. Re-run: rig setup" >&2
     exit 1
   fi
+  echo
+  echo "Watch"
+  echo "  board:  rig tui"
+  echo "  list:   rig jobs"
+  echo "  log:    rig job log [id] -f"
+  echo "  slash:  /rig"
 }
 
 cmd_status() {
@@ -388,31 +432,19 @@ cmd_status() {
   echo "parent live=${live:-(none)} preferred=$pref profile=$profile"
   echo "effective: ${effs:-none}"
   echo "jobs: $jobs"
-  local jobs_dir meta
-  jobs_dir="$(repo_root)/.rig/jobs"
-  if [[ -d "$jobs_dir" ]]; then
-    python3 - "$jobs_dir" <<'PY' 2>/dev/null || true
-import json, pathlib, sys
-root = pathlib.Path(sys.argv[1])
-running = []
-for meta in sorted(root.glob("*/meta.json")):
-    try:
-        obj = json.loads(meta.read_text())
-    except Exception:
-        continue
-    if obj.get("status") != "running":
-        continue
-    line = f"  {obj.get('job_id')}  {obj.get('worker')} {obj.get('role','')} pid={obj.get('pid','?')}"
-    if obj.get("open"):
-        line += f"\n    open: {obj['open']}"
-    if obj.get("watch"):
-        line += f"\n    log:  {obj['watch']}"
-    running.append(line)
-if running:
-    print("running:")
-    print("\n".join(running))
-PY
+  local jp
+  jp="$(py_script jobs.py)"
+  if [[ -f "$jp" ]]; then
+    python3 "$jp" list
   fi
+}
+
+cmd_jobs() {
+  python3 "$(py_script jobs.py)" list "$@"
+}
+
+cmd_tui() {
+  python3 "$(py_script rig_tui.py)" "$@"
 }
 
 cmd_use() {
@@ -610,6 +642,8 @@ parse_job_flags() {
   JOB_STATUS="ok"
   JOB_SUMMARY=""
   JOB_ID=""
+  JOB_FOLLOW=0
+  JOB_LINES=""
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --worker)
@@ -629,8 +663,16 @@ parse_job_flags() {
         JOB_SUMMARY="${2:-}"
         shift 2
         ;;
+      -f|--follow)
+        JOB_FOLLOW=1
+        shift
+        ;;
+      -n|--lines)
+        JOB_LINES="${2:-}"
+        shift 2
+        ;;
       --help|-h)
-        echo "usage: rig job start|finish|record [--worker NAME] [--role ROLE] [--status ok|fail] [--summary TEXT] [id]" >&2
+        echo "usage: rig job start|finish|record|show|log [--worker NAME] [--role ROLE] [--status ok|fail] [--summary TEXT] [id] [-f] [-n N]" >&2
         exit 2
         ;;
       --*)
@@ -653,9 +695,9 @@ cmd_job() {
   local sub="${1:-}"
   shift || true
   case "$sub" in
-    start|finish|record|show) ;;
+    start|finish|record|show|log) ;;
     *)
-      echo "usage: rig job start|finish|record|show [--worker NAME] [--role ROLE] [--status ok|fail] [--summary TEXT] [id]" >&2
+      echo "usage: rig job start|finish|record|show|log [--worker NAME] [--role ROLE] [--status ok|fail] [--summary TEXT] [id] [-f] [-n N]" >&2
       exit 2
       ;;
   esac
@@ -701,40 +743,19 @@ cmd_job() {
   esac
 
   if [[ "$sub" == "show" ]]; then
-    local jobs_dir show
-    jobs_dir="$(repo_root)/.rig/jobs"
-    show="${JOB_ID:-}"
-    if [[ -z "$show" ]]; then
-      python3 - "$jobs_dir" <<'PY'
-import json, pathlib, sys
-root = pathlib.Path(sys.argv[1])
-if not root.exists():
-    raise SystemExit("no jobs")
-for meta in sorted(root.glob("*/meta.json")):
-    obj = json.loads(meta.read_text())
-    print(f"{obj.get('job_id')}  {obj.get('status')}  {obj.get('worker')} {obj.get('role','')}")
-    if obj.get("open"):
-        print(f"  {obj['open']}")
-PY
-      return 0
-    fi
-    local watch="$jobs_dir/$show/WATCH.md" meta="$jobs_dir/$show/meta.json"
-    if [[ -f "$watch" ]]; then
-      cat "$watch"
-    elif [[ -f "$meta" ]]; then
-      python3 - "$meta" <<'PY'
-import json, sys
-obj = json.load(open(sys.argv[1]))
-print(json.dumps(obj, indent=2))
-if obj.get("open"):
-    print("\nopen:", obj["open"])
-if obj.get("watch"):
-    print("log: ", obj["watch"])
-PY
+    if [[ -n "$JOB_ID" ]]; then
+      python3 "$(py_script jobs.py)" show "$JOB_ID"
     else
-      echo "rig job show: no such job $show" >&2
-      exit 1
+      python3 "$(py_script jobs.py)" show
     fi
+    return 0
+  fi
+  if [[ "$sub" == "log" ]]; then
+    local log_args=()
+    [[ "$JOB_FOLLOW" -eq 1 ]] && log_args+=(-f)
+    [[ -n "$JOB_LINES" ]] && log_args+=(-n "$JOB_LINES")
+    [[ -n "$JOB_ID" ]] && log_args+=("$JOB_ID")
+    python3 "$(py_script jobs.py)" log "${log_args[@]}"
     return 0
   fi
 
@@ -848,6 +869,8 @@ main() {
     workers) cmd_workers "$@" ;;
     prune) cmd_prune "$@" ;;
     run) cmd_run "$@" ;;
+    jobs) cmd_jobs "$@" ;;
+    tui) cmd_tui "$@" ;;
     job) cmd_job "$@" ;;
     -h|--help|help|"") usage ;;
     *)

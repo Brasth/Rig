@@ -9,8 +9,8 @@ description: >
 # Delegate harness
 
 Read `.rig/harness.toml` and `.rig/MEMORY.md` first.
-Live parent is this CLI, not the `parent` key in toml. That key is only the preferred default.
-Claude is never the parent.
+Live parent is this CLI, not the `parent` key in toml. That key is only the preferred default (`rig use grok|codex`). Switching preferred parent does not move the session — open that CLI.
+Claude is never the parent. It is a worker when `[workers].claude = true` and `claude` is on PATH (`rig workers claude=on`). Child model is haiku.
 
 ## Effective workers
 
@@ -20,15 +20,15 @@ A worker is on only when all of these hold:
 2. The binary is on PATH (`grok`, `codex`, or `claude`)
 3. The worker is not the live parent
 
-Missing binary: that worker is off for this session, not an error. Use cheaper same-CLI workers. That is success.
+So: Codex parent → Grok/Claude can be children. Grok parent → Grok child is off; Claude and Codex can be children. Missing binary: that worker is off for this session, not an error. Use cheaper same-CLI workers. That is success.
 
-Check with `rig status` or `rig doctor`.
+Check with `rig status`, `rig jobs`, or `/rig`. Live child: `rig tui` in another pane, or `rig job log <id> -f`.
 
 ## Route
 
 - Small local change: parent or cheap same-CLI worker (Codex `explorer` / `worker` / `bulk`; Grok `explore`). Record it (below).
-- Implement, and Grok is effective: Grok child via `run-worker.sh`.
-- Review: a different vendor than the writer. If none is effective, cheap same-CLI reviewer. Record that too.
+- Implement: Grok child via `run-worker.sh` if Grok is effective. If Grok is the live parent or off, use the next effective worker (Claude, then Codex). Else cheap same-CLI.
+- Review: a different vendor than the writer (Claude is valid here). If none is effective, cheap same-CLI reviewer. Record that too.
 - No extra CLIs installed: cheap same-CLI workers. Record them. That is success.
 - Never spawn Sol, Astra, or Fable as a child. Profile `astra` is parent-only.
 
