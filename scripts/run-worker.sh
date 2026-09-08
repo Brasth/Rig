@@ -19,6 +19,7 @@ JOB_ID="$2"
 BRIEF_IN="$3"
 ROLE="${RIG_ROLE:-worker}"
 TIMEOUT_SECS="${RIG_TIMEOUT:-1200}"
+ROUTE_PY="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/route.py"
 
 case "$WORKER" in
   grok|codex|claude) ;;
@@ -82,6 +83,8 @@ write_json() {
   RESULT_SUMMARY="$summary" \
   RESULT_FILES="${RESULT_FILES:-}" \
   RESULT_NEXT="${RESULT_NEXT:-}" \
+  RESULT_MODEL="${MODEL:-}" \
+  RESULT_EFFORT="${EFFORT:-}" \
   RESULT_OUT="$RESULT_OUT" \
   RESULT_META="$RESULT_META" \
   RESULT_REPO="$REPO" \
@@ -101,6 +104,8 @@ obj = {
     "summary": os.environ["RESULT_SUMMARY"],
     "files_changed": files,
     "next": os.environ.get("RESULT_NEXT", ""),
+    "model": os.environ.get("RESULT_MODEL", ""),
+    "effort": os.environ.get("RESULT_EFFORT", ""),
 }
 path = pathlib.Path(os.environ["RESULT_OUT"])
 tmp = path.with_name(path.name + ".tmp")
@@ -128,7 +133,7 @@ PY
 write_meta() {
   local status="$1"
   META_OUT="$JOB_DIR/meta.json"
-  python3 - "$META_OUT" "$JOB_ID" "$WORKER" "$ROLE" "$status" "$STARTED" "$REPO" "$BIN" "${CHILD:-}" "${SESSION_ID:-}" "$JOB_DIR" <<'PY'
+  python3 - "$META_OUT" "$JOB_ID" "$WORKER" "$ROLE" "$status" "$STARTED" "$REPO" "$BIN" "${CHILD:-}" "${SESSION_ID:-}" "$JOB_DIR" "${MODEL:-}" "${EFFORT:-}" <<'PY'
 import json, pathlib, sys
 path = pathlib.Path(sys.argv[1])
 obj = {
@@ -141,11 +146,16 @@ obj = {
     "bin": sys.argv[8],
 }
 pid, session_id, job_dir = sys.argv[9], sys.argv[10], sys.argv[11]
+model, effort = sys.argv[12], sys.argv[13]
 if pid:
     obj["pid"] = int(pid)
 if session_id:
     obj["session_id"] = session_id
     obj["open"] = f"grok -r {session_id}"
+if model:
+    obj["model"] = model
+if effort:
+    obj["effort"] = effort
 obj["watch"] = f"tail -f {job_dir}/stdout.log"
 tmp = path.with_name(path.name + ".tmp")
 tmp.write_text(json.dumps(obj, indent=2) + "\n")
@@ -161,6 +171,8 @@ write_watch() {
     echo "The child is headless. Codex cannot show its TUI."
     echo
     echo "- worker: \`$WORKER\`"
+    [[ -n "${MODEL:-}" ]] && echo "- model: \`$MODEL\`"
+    [[ -n "${EFFORT:-}" ]] && echo "- effort: \`$EFFORT\`"
     echo "- status: running"
     [[ -n "${CHILD:-}" ]] && echo "- pid: \`$CHILD\`"
     if [[ -n "${SESSION_ID:-}" ]]; then
@@ -183,18 +195,34 @@ shell_join() {
 }
 
 BRIEF_TEXT="$(cat "$BRIEF")"
+if [[ -z "${RIG_MODEL:-}" && -f "$ROUTE_PY" ]]; then
+  eval "$(python3 "$ROUTE_PY" env --worker "$WORKER" --role "$ROLE")"
+  ROLE="${RIG_ROLE:-$ROLE}"
+fi
+MODEL="${RIG_MODEL:-}"
+EFFORT="${RIG_EFFORT:-}"
+if [[ -f "$ROUTE_PY" ]]; then
+  python3 "$ROUTE_PY" allow --model "$MODEL" || exit 1
+fi
+
 SESSION_ID=""
 CMD=()
 case "$WORKER" in
   grok)
     SESSION_ID="$(uuidgen | tr 'A-Z' 'a-z')"
     CMD=(grok --no-auto-update --prompt-file "$BRIEF" --cwd "$REPO" --output-format streaming-json --session-id "$SESSION_ID" --always-approve --max-turns 40)
+    [[ -n "$MODEL" ]] && CMD+=(-m "$MODEL")
+    [[ -n "$EFFORT" ]] && CMD+=(--effort "$EFFORT")
     ;;
   codex)
-    CMD=(codex exec --ephemeral -s workspace-write -C "$REPO" -c 'model="gpt-5.6-terra"' "$BRIEF_TEXT")
+    CMD=(codex exec --ephemeral -s workspace-write -C "$REPO")
+    [[ -n "$MODEL" ]] && CMD+=(-m "$MODEL")
+    [[ -n "$EFFORT" ]] && CMD+=(-c "model_reasoning_effort=\"$EFFORT\"")
+    CMD+=("$BRIEF_TEXT")
     ;;
   claude)
-    CMD=(claude -p "$BRIEF_TEXT" --model haiku --output-format json --permission-mode acceptEdits --allowedTools "Read,Grep,Glob,Bash,Edit")
+    CMD=(claude -p "$BRIEF_TEXT" --model "${MODEL:-claude-sonnet-5}" --output-format json --permission-mode acceptEdits --allowedTools "Read,Grep,Glob,Bash,Edit")
+    [[ -n "$EFFORT" ]] && CMD+=(--effort "$EFFORT")
     ;;
 esac
 CMD_STR="$(shell_join "${CMD[@]}")"

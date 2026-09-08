@@ -230,6 +230,8 @@ def load_job(job_path: Path) -> dict | None:
         "pid": pid_i,
         "alive": alive,
         "session_id": str(obj.get("session_id") or ""),
+        "model": str(obj.get("model") or ""),
+        "effort": str(obj.get("effort") or ""),
         "open": str(obj.get("open") or ""),
         "watch": str(obj.get("watch") or ""),
         "summary": str(obj.get("summary") or ""),
@@ -300,6 +302,11 @@ def format_show(job: dict, log_lines: int = 24) -> str:
         f"agent   {job['worker']}",
         f"role    {job['role'] or '-'}",
         f"status  {job['effective']}",
+    ]
+    if job.get("model"):
+        extra = f"  effort {job['effort']}" if job.get("effort") else ""
+        lines.append(f"model   {job['model']}{extra}")
+    lines += [
         f"task    {job['task']}",
     ]
     if job["doing"]:

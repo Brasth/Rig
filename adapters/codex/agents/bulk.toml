@@ -1,6 +1,7 @@
 name = "bulk"
 description = "Bulk edit worker for repetitive mechanical changes across many files."
 model = "gpt-5.6-luna"
+model_reasoning_effort = "low"
 sandbox_mode = "workspace-write"
 
 developer_instructions = """

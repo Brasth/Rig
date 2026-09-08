@@ -53,11 +53,14 @@ rig run "prompt"
 rig jobs [--json]
 rig tui
 rig job start|finish|record|show|log
+rig pick [explore|mini|bulk|implement|hard|review] [--case TEXT]
 ```
 
 `rig parent astra` records a parent-only profile. Never spawn Astra as a child.
 
-Default project workers: Grok on, Claude on, Codex off. Live parent is whichever CLI you opened (`rig status`), not the `parent` key. `rig use grok` only records the preferred default — open Grok to make it live. A worker that equals the live parent is off for that session (Grok parent → no Grok child; Claude/Codex can still run if their flags are on). Claude is never the parent; `rig workers claude=on` makes it a haiku worker.
+Default project workers: Grok on, Claude on, Codex off. Live parent is whichever CLI you opened (`rig status`), not the `parent` key. `rig use grok` only records the preferred default — open Grok to make it live. A worker that equals the live parent is off for that session (Grok parent → no Grok child; Claude/Codex can still run if their flags are on). Claude Code is never the parent; `rig workers claude=on` turns it on as a worker. Pin full model IDs (aliases drift): `claude-haiku-4-5-20251001` low for explore/bulk, `claude-sonnet-5` medium for implement, `claude-opus-5` high for hard/review. Never Fable as a child.
+
+The parent agent picks worker **and** model/reasoning from the case. Do not ask the user. `rig pick --case "<task>"` is the lookup. Codex cheap default is `gpt-5.6-luna` with low thinking; tiny explore uses `gpt-5.3-codex-mini`. Hard Codex work can use `gpt-5.6-terra` medium. Grok implement is `grok-4.6` high; Grok explore is `grok-4.5`. Never spawn Sol, Astra, or Fable as children. Opus is allowed.
 
 ## Workers
 

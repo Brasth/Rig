@@ -34,6 +34,7 @@ usage: rig <command> [args]
   job record [--worker NAME] [--role ROLE] [--status ok|fail] [--summary TEXT] [id]
   job show [id]
   job log [id] [-f] [-n N]
+  pick [role] [--case TEXT] [--json]
 
 Stay in Codex or Grok. They can invoke Claude or each other.
 EOF
@@ -280,10 +281,11 @@ cmd_init() {
 Use the `delegate-harness` skill (`.agents/skills/delegate-harness/SKILL.md`) for implement, review, explore, or split work across CLIs.
 Read `.rig/harness.toml` and `.rig/MEMORY.md`. Run `rig status` before spawning.
 Live parent is this CLI, not the `parent` key. That key is only the preferred default (`rig use grok|codex`). Opening Grok or Codex is what makes it live.
-Claude is never the parent. If `[workers].claude` is true and `claude` is on PATH, Claude is a worker (haiku), including when Grok is the parent.
+Claude Code is never the parent. If `[workers].claude` is true and `claude` is on PATH, it is a worker. Pin full IDs: `claude-haiku-4-5-20251001` cheap, `claude-sonnet-5` implement, `claude-opus-5` hard/review. Never Fable as a child.
 A worker is on only when its flag is true, its binary exists, and it is not the live parent. Missing binary: that worker is off. Use cheaper same-CLI workers. That is success.
-Implement: Grok child if Grok is effective. If Grok is the live parent (or off), next effective worker (Claude, then Codex). Else cheap same-CLI.
-Review: a different vendor than the writer.
+Do not ask the user which model. Run `rig pick --case "<task>"` and pass `RIG_MODEL` / `RIG_EFFORT` into `run-worker.sh`.
+Implement: Grok child if Grok is effective. If Grok is the live parent (or off), next effective worker (Claude Code `claude-sonnet-5`, then Codex luna/low). Else cheap same-CLI.
+Review: a different vendor than the writer. Never spawn Sol, Astra, or Fable as a child. Opus is allowed.
 Cheap same-CLI spawn (Codex explorer/worker/bulk/reviewer, Grok explore): record it.
 `rig job start --worker <codex|grok|claude> --role explorer` then `rig job finish <id> --status ok --summary "..."`.
 When calling another CLI, write `.rig/jobs/<id>/brief.md` then run:
@@ -411,6 +413,7 @@ cmd_doctor() {
   echo "  list:   rig jobs"
   echo "  log:    rig job log [id] -f"
   echo "  slash:  /rig"
+  echo "  pick:   rig pick --case \"task\"   (agent chooses model; do not ask the user)"
 }
 
 cmd_status() {
@@ -445,6 +448,44 @@ cmd_jobs() {
 
 cmd_tui() {
   python3 "$(py_script rig_tui.py)" "$@"
+}
+
+effective_csv() {
+  local name out=""
+  for name in grok claude codex; do
+    if effective_worker "$name"; then
+      out+="${out:+,}$name"
+    fi
+  done
+  printf '%s\n' "$out"
+}
+
+cmd_pick() {
+  local role="implement" case_text="" json=0 arg
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --json) json=1; shift ;;
+      --case)
+        case_text="${2:-}"
+        shift 2
+        ;;
+      --help|-h)
+        echo "usage: rig pick [explore|mini|bulk|implement|hard|review] [--case TEXT] [--json]" >&2
+        exit 2
+        ;;
+      --*)
+        echo "rig pick: unknown flag $1" >&2
+        exit 2
+        ;;
+      *)
+        role="$1"
+        shift
+        ;;
+    esac
+  done
+  local args=(pick --live "$(live_parent)" --effective "$(effective_csv)" --role "$role" --case "$case_text")
+  [[ "$json" -eq 1 ]] && args+=(--json)
+  python3 "$(py_script route.py)" "${args[@]}"
 }
 
 cmd_use() {
@@ -815,8 +856,7 @@ cmd_run() {
     exit 1
   fi
   parse_harness "$harness"
-  local worker job brief wrapper
-  worker="$(pick_worker "$prompt")"
+  local job brief wrapper choice worker
   job="$(date -u +%Y%m%dT%H%M%SZ)-$$"
   mkdir -p "$root/.rig/jobs/$job"
   brief="$root/.rig/jobs/$job/brief.md"
@@ -825,8 +865,17 @@ cmd_run() {
     printf '%s\n' "$prompt"
   } > "$brief"
 
-  if [[ -z "$worker" ]]; then
+  choice="$(python3 "$(py_script route.py)" pick --live "$(live_parent)" --effective "$(effective_csv)" --role implement --case "$prompt" --json)"
+  local spawn model effort kind
+  worker="$(printf '%s\n' "$choice" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("worker",""))')"
+  spawn="$(printf '%s\n' "$choice" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("spawn",""))')"
+  model="$(printf '%s\n' "$choice" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("model",""))')"
+  effort="$(printf '%s\n' "$choice" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("effort",""))')"
+  kind="$(printf '%s\n' "$choice" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("kind",""))')"
+
+  if [[ "$spawn" != "run-worker" || -z "$worker" ]]; then
     echo "no effective cross-CLI worker. Use cheaper same-CLI workers. That is success."
+    echo "$choice"
     write_state "$job" "none" "ok" "no effective cross-CLI worker; use cheap same-CLI workers"
     exit 0
   fi
@@ -835,11 +884,9 @@ cmd_run() {
   if [[ ! -f "$wrapper" ]]; then
     wrapper="$(rig_source_root)/scripts/run-worker.sh"
   fi
-  if is_review_prompt "$prompt"; then
-    export RIG_ROLE="review"
-  else
-    export RIG_ROLE="implement"
-  fi
+  export RIG_ROLE="${kind:-implement}"
+  export RIG_MODEL="$model"
+  export RIG_EFFORT="$effort"
   local rc=0
   set +e
   "$wrapper" "$worker" "$job" "$brief"
@@ -872,6 +919,7 @@ main() {
     jobs) cmd_jobs "$@" ;;
     tui) cmd_tui "$@" ;;
     job) cmd_job "$@" ;;
+    pick) cmd_pick "$@" ;;
     -h|--help|help|"") usage ;;
     *)
       echo "rig: unknown command '$cmd'" >&2

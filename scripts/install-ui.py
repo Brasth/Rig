@@ -100,6 +100,48 @@ def install_mcp(cfg: Path, script: Path, label: str) -> str:
     return f"set {label} [mcp_servers.rig]  (new session to load tools)"
 
 
+def refresh_codex_agents() -> str:
+    agents = Path.home() / ".codex" / "agents"
+    wanted = {
+        "explorer.toml": ("gpt-5.3-codex-mini", "low"),
+        "worker.toml": ("gpt-5.6-luna", "low"),
+        "bulk.toml": ("gpt-5.6-luna", "low"),
+    }
+    changed = []
+    for name, (model, effort) in wanted.items():
+        path = agents / name
+        if not path.is_file():
+            continue
+        text = path.read_text()
+        if "You are a Rig" not in text:
+            continue
+        lines = text.splitlines()
+        out = []
+        has_effort = False
+        for line in lines:
+            s = line.strip()
+            if s.startswith("model ="):
+                line = f'model = "{model}"'
+            if s.startswith("model_reasoning_effort"):
+                line = f'model_reasoning_effort = "{effort}"'
+                has_effort = True
+            out.append(line)
+        if not has_effort:
+            inserted = []
+            for line in out:
+                inserted.append(line)
+                if line.strip().startswith("model ="):
+                    inserted.append(f'model_reasoning_effort = "{effort}"')
+            out = inserted
+        new = "\n".join(out) + "\n"
+        if new != text:
+            path.write_text(new)
+            changed.append(name)
+    if changed:
+        return "updated ~/.codex/agents " + ", ".join(changed)
+    return "keep ~/.codex/agents models"
+
+
 def main() -> int:
     rig_home = Path(sys.argv[1] if len(sys.argv) > 1 else os.environ.get("RIG_HOME", Path.home() / ".rig"))
     grok_home = Path(os.environ.get("GROK_HOME") or (Path.home() / ".grok"))
@@ -107,6 +149,7 @@ def main() -> int:
     print(install_statusline(rig_home, grok_home))
     print(install_mcp(grok_home / "config.toml", mcp, "grok"))
     print(install_mcp(Path.home() / ".codex" / "config.toml", mcp, "codex"))
+    print(refresh_codex_agents())
     return 0
 
 
