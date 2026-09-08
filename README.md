@@ -1,4 +1,4 @@
-Stay in Codex or Grok. They can invoke Claude or each other.
+Stay in Codex or Grok. They MUST invoke Claude or each other as workers for code, review, fix, SSH, and gather. The parent keeps plan, vision, computer-use, and chrome-profile.
 
 # Rig
 
@@ -28,15 +28,14 @@ export PATH="$HOME/.local/bin:$PATH"
 
 ```bash
 cd your-repo
-rig init --patch-agents
+rig init
 rig doctor
 ```
 
 `rig init` writes `.rig/` and copies the `delegate-harness` skill into `.agents/skills/` so Codex can load it.
-`--patch-agents` inserts or refreshes a marked block in `AGENTS.md` that names that skill and the `run-worker.sh` command. It never replaces the whole file.
-`--patch-claude` writes `CLAUDE.md` only if that file is missing.
+It puts a **MUST use Rig** block at the **top** of `AGENTS.md` (never replaces the rest). `--no-patch-agents` skips that. `--patch-claude` writes `CLAUDE.md` only if that file is missing.
 
-Then open a **new** Codex or Grok thread in that repo and type normally. An already-open session will not pick up the new block.
+The parent must spawn workers for code, review, fix, SSH, and gather. It keeps plan, vision, computer-use, and chrome-profile. Open a **new** Codex or Grok thread after init. An already-open session will not pick up the block.
 
 ## Commands
 

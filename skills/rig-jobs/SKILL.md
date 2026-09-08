@@ -11,7 +11,7 @@ argument-hint: "[job-id]"
 # Rig jobs
 
 Show the user which Rig worker is running, the task, status, and a readable log.
-Do not guess. Run the commands. The parent checks this board; workers do the code, review, SSH, and gather.
+Do not guess. Run the commands. The parent checks this board and MUST spawn workers for code, review, SSH, and gather — it does not do that work itself.
 
 ## Commands
 

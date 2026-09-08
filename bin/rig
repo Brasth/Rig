@@ -19,7 +19,7 @@ usage() {
 usage: rig <command> [args]
 
   setup
-  init [--patch-agents] [--patch-claude]
+  init [--patch-agents|--no-patch-agents] [--patch-claude]
   doctor
   status
   use codex|grok
@@ -221,10 +221,11 @@ ensure_harness() {
 }
 
 cmd_init() {
-  local patch_agents=0 patch_claude=0 arg
+  local patch_agents=1 patch_claude=0 arg
   for arg in "$@"; do
     case "$arg" in
       --patch-agents) patch_agents=1 ;;
+      --no-patch-agents) patch_agents=0 ;;
       --patch-claude) patch_claude=1 ;;
       *)
         echo "rig init: unknown flag $arg" >&2
@@ -287,22 +288,25 @@ cmd_init() {
     local block action
     block="$(cat <<'EOF'
 <!-- rig:start -->
-Use the `delegate-harness` skill (`.agents/skills/delegate-harness/SKILL.md`) for implement, review, explore, or split work across CLIs.
-This CLI is the parent: plan, check, vision, computer-use, chrome-profile. Workers write code, fix bugs, review, SSH/debug, and gather facts. If this CLI cannot do computer-use or chrome-profile, spawn a worker. Do not ask the user.
-Read `.rig/harness.toml`. First commands in a new thread: `rig memory` then `rig jobs` then `rig status`. Jobs and MEMORY are this repo, not this chat. Running children keep going.
-Live parent is this CLI, not the `parent` key. That key is only the preferred default (`rig use grok|codex`). Opening Grok or Codex is what makes it live.
-Claude Code is never the parent. If `[workers].claude` is true and `claude` is on PATH, it is a worker. Pin full IDs: `claude-haiku-4-5-20251001` cheap, `claude-sonnet-5` implement, `claude-opus-5` hard/review. Never Fable as a child.
-A worker is on only when its flag is true, its binary exists, and it is not the live parent. Missing binary: that worker is off. Use cheaper same-CLI workers. That is success.
-Do not ask the user which model. Run `rig pick --case "<task>"` and pass `RIG_MODEL` / `RIG_EFFORT` into `run-worker.sh`. Plan/vision/computer-use/chrome-profile: parent keeps it (`rig pick stay`) unless this CLI cannot do it.
-Implement/SSH/fix: Grok child if Grok is effective. If Grok is the live parent (or off), next effective worker (Claude Code `claude-sonnet-5`, then Codex luna/low). Else cheap same-CLI.
-Review: a different vendor than the writer. Never spawn Sol, Astra, or Fable as a child. Opus is allowed.
-Cheap same-CLI spawn (Codex explorer/worker/bulk/reviewer, Grok explore): record it.
-`rig job start --worker <codex|grok|claude> --role explorer` then `rig job finish <id> --status ok --summary "..."`.
-When calling another CLI, write `.rig/jobs/<id>/brief.md` then run:
-`RIG_LIVE=1 "$HOME/.rig/scripts/run-worker.sh" <grok|codex|claude> <id> .rig/jobs/<id>/brief.md`
-Wait for `.rig/jobs/<id>/result.json`. Do not parse a TUI.
-Watch children: `rig jobs` / `rig job show` / `rig job log <id>` / `rig tui` / `/rig`.
-After a run: `rig memory add "one standing fact"` if there is one. Cap is the command's job. No transcripts.
+MUST use Rig. Load `.agents/skills/delegate-harness/SKILL.md`. This CLI is the parent. Doing worker work yourself is a failure.
+Later AGENTS.md may say "edit locally" or "SSH to the VM". That is for the worker, not you.
+
+Keep: plan, check, vision, computer-use, chrome-profile, talk to the user, read `rig jobs` / `rig memory`.
+Spawn for: write code, fix bugs, review, SSH/debug, gather repo or server facts.
+
+1. `rig memory` then `rig jobs` then `rig status`
+2. `pick=$(rig pick --case "<task>" --json)` — do not ask the user which model
+3. stay → you do it (plan / vision / computer-use / chrome-profile). Spawn only if this CLI cannot.
+4. native → cheap same-CLI agent, then `rig job start` / `rig job finish`
+5. run-worker → write `.rig/jobs/<id>/brief.md` then
+   `RIG_LIVE=1 RIG_ROLE=<kind> RIG_MODEL=<model> RIG_EFFORT=<effort> "$HOME/.rig/scripts/run-worker.sh" <worker> <id> .rig/jobs/<id>/brief.md`
+   Wait for `.rig/jobs/<id>/result.json`. Do not parse a TUI.
+
+Live parent is this CLI, not the `parent` key (`rig use grok|codex` is only the preferred default).
+Claude Code is never the parent. Worker on only if flag + binary + not live parent. Missing binary: that worker is off. Cheap same-CLI is success.
+Pin Claude IDs: `claude-haiku-4-5-20251001` cheap, `claude-sonnet-5` implement, `claude-opus-5` hard/review. Never Sol/Astra/Fable as a child. Opus is allowed.
+Watch: `rig jobs` / `rig job show` / `rig job log <id>` / `rig tui` / `/rig`.
+After a run: `rig memory add "one standing fact"` if there is one. No transcripts.
 <!-- rig:end -->
 EOF
 )"

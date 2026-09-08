@@ -421,9 +421,9 @@ else:
 PY
 }
 
-# Replace the interior of a marked block, or append the block if missing.
+# Replace a marked block and keep it at the top of the file.
 # Args: FILE START_MARKER END_MARKER BLOCK_TEXT
-# Prints: updated | appended | wrote
+# Prints: updated | moved | prepended | wrote
 rig_upsert_marked_block() {
   local file="$1" start="$2" end="$3" block="$4"
   if ! command -v python3 >/dev/null 2>&1; then
@@ -443,22 +443,24 @@ start = os.environ["RIG_UPSERT_START"]
 end = os.environ["RIG_UPSERT_END"]
 block = os.environ["RIG_UPSERT_BLOCK"].strip() + "\n"
 text = path.read_text() if path.exists() else ""
+path.parent.mkdir(parents=True, exist_ok=True)
 if start in text and end in text:
     i = text.find(start)
     j = text.find(end, i)
     if j == -1:
         raise SystemExit("markers out of order")
     j += len(end)
-    new = text[:i] + block + text[j:]
+    rest = (text[:i] + text[j:]).strip("\n")
+    new = block if not rest else block.rstrip() + "\n\n" + rest + "\n"
     path.write_text(new if new.endswith("\n") else new + "\n")
-    print("updated")
+    print("moved" if i > 0 else "updated")
 elif text:
-    extra = "" if text.endswith("\n") else "\n"
-    path.write_text(text + extra + "\n" + block)
-    print("appended")
+    rest = text.strip("\n")
+    new = block.rstrip() + "\n\n" + rest + "\n"
+    path.write_text(new)
+    print("prepended")
 else:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(block)
+    path.write_text(block if block.endswith("\n") else block + "\n")
     print("wrote")
 PY
 }

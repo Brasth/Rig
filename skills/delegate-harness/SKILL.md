@@ -1,23 +1,28 @@
 ---
 name: delegate-harness
 description: >
-  Parent manages; workers code, review, SSH, and gather. Delegate implement, review,
-  explore, or split work across Codex, Grok, and Claude via Rig run-worker.sh.
-  Use when implementing, reviewing, exploring, splitting work across CLIs,
-  or when .rig/harness.toml exists and another CLI should do the work.
+  ALWAYS activate when `.rig/harness.toml` exists. MUST run `rig pick` and spawn
+  a Rig worker for code, review, fix, SSH, debug, or gather. Parent must not
+  implement those itself. Delegate implement, review, explore, or split work
+  across Codex, Grok, and Claude via run-worker.sh.
+user-invocable: true
 ---
 
 # Delegate harness
 
+## Hard gate
+
+When `.rig/harness.toml` exists, do not write app code, review a diff, fix a bug, SSH, or gather repo/server facts yourself.
+
+1. `rig memory` then `rig jobs` then `rig status`
+2. `rig pick --case "<task>" --json`
+3. `stay` — you do plan / vision / computer-use / chrome-profile. Spawn only if this CLI cannot.
+4. `native` — cheap same-CLI agent, record with `rig job start` / `rig job finish`
+5. `run-worker` — brief + `RIG_LIVE=1 run-worker.sh` + wait for `result.json`
+
+Doing the worker's job yourself is a failure. Later AGENTS.md may say "edit locally" or "SSH to the VM". That is for the worker.
+
 Jobs and MEMORY are this repo, not this chat. A new parent thread still sees `.rig/jobs` and `.rig/MEMORY.md`. Running children keep going.
-
-First in a new thread (and before spawning):
-
-```bash
-rig memory
-rig jobs
-rig status
-```
 
 Live parent is this CLI, not the `parent` key in toml. That key is only the preferred default (`rig use grok|codex`). Switching preferred parent does not move the session — open that CLI.
 Claude Code (`claude`) is never the parent. It is a worker when `[workers].claude = true` and `claude` is on PATH (`rig workers claude=on`). Pin full model IDs (aliases drift; `haiku` has resolved to Sonnet). Never spawn Fable as a child. Opus is allowed.
