@@ -90,14 +90,18 @@ def install_statusline(rig_home: Path, grok_home: Path) -> str:
 def install_mcp(cfg: Path, script: Path, label: str) -> str:
     if not cfg.is_file():
         return f"skip {label} mcp (no config)"
+    launcher = script.with_name("rig-mcp.sh")
+    if not launcher.is_file():
+        launcher = script
     text = cfg.read_text()
-    if section_value(text, "mcp_servers.rig", "command"):
-        set_key(cfg, "mcp_servers.rig", "args", f'["{script}"]')
-        return f"keep {label} mcp_servers.rig (refreshed args)"
-    set_key(cfg, "mcp_servers.rig", "command", '"python3"')
-    set_key(cfg, "mcp_servers.rig", "args", f'["{script}"]')
+    existed = bool(section_value(text, "mcp_servers.rig", "command"))
+    set_key(cfg, "mcp_servers.rig", "command", f'"{launcher}"')
+    set_key(cfg, "mcp_servers.rig", "args", "[]")
     set_key(cfg, "mcp_servers.rig", "enabled", "true")
-    return f"set {label} [mcp_servers.rig]  (new session to load tools)"
+    set_key(cfg, "mcp_servers.rig", "startup_timeout_sec", "8")
+    if existed:
+        return f"keep {label} mcp_servers.rig (refreshed launcher)"
+    return f"set {label} [mcp_servers.rig]  (fully quit {label} to load tools)"
 
 
 def refresh_codex_agents() -> str:

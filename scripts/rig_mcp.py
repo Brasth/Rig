@@ -96,26 +96,41 @@ def call_tool(name: str, args: dict) -> dict:
         return _err(str(exc))
 
 
+_FRAMING = "lsp"
+
+
 def read_message() -> dict | None:
+    global _FRAMING
+    line = sys.stdin.buffer.readline()
+    if not line:
+        return None
+    stripped = line.lstrip()
+    if stripped.startswith(b"{"):
+        _FRAMING = "ndjson"
+        return json.loads(stripped)
     headers: dict[str, str] = {}
     while True:
-        line = sys.stdin.buffer.readline()
-        if not line:
-            return None
         if line in (b"\r\n", b"\n"):
             break
         key, _, val = line.decode("utf-8", errors="replace").partition(":")
         headers[key.strip().lower()] = val.strip()
+        line = sys.stdin.buffer.readline()
+        if not line:
+            return None
     n = int(headers.get("content-length") or "0")
     if n <= 0:
         return None
+    _FRAMING = "lsp"
     body = sys.stdin.buffer.read(n)
     return json.loads(body.decode("utf-8"))
 
 
 def write_message(msg: dict) -> None:
     raw = json.dumps(msg, ensure_ascii=False).encode("utf-8")
-    sys.stdout.buffer.write(f"Content-Length: {len(raw)}\r\n\r\n".encode("ascii") + raw)
+    if _FRAMING == "ndjson":
+        sys.stdout.buffer.write(raw + b"\n")
+    else:
+        sys.stdout.buffer.write(f"Content-Length: {len(raw)}\r\n\r\n".encode("ascii") + raw)
     sys.stdout.buffer.flush()
 
 
@@ -123,12 +138,14 @@ def handle(msg: dict) -> dict | None:
     method = msg.get("method")
     mid = msg.get("id")
     if method == "initialize":
+        params = msg.get("params") if isinstance(msg.get("params"), dict) else {}
+        proto = str(params.get("protocolVersion") or "2024-11-05")
         return {
             "jsonrpc": "2.0",
             "id": mid,
             "result": {
-                "protocolVersion": "2024-11-05",
-                "capabilities": {"tools": {}},
+                "protocolVersion": proto,
+                "capabilities": {"tools": {"listChanged": False}},
                 "serverInfo": {"name": "rig", "version": "1"},
             },
         }

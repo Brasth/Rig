@@ -160,6 +160,46 @@ class McpTools(unittest.TestCase):
         self.assertIn("read_file", log["content"][0]["text"])
         td.cleanup()
 
+    def test_ndjson_initialize_replies(self):
+        import select
+        import subprocess
+        import time
+
+        script = ROOT / "scripts" / "rig_mcp.py"
+        init = json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": "2025-03-26",
+                    "capabilities": {},
+                    "clientInfo": {"name": "t", "version": "1"},
+                },
+            }
+        )
+        p = subprocess.Popen(
+            ["python3", "-u", str(script)],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        assert p.stdin and p.stdout
+        p.stdin.write(init.encode() + b"\n")
+        p.stdin.flush()
+        buf = b""
+        deadline = time.time() + 2
+        while time.time() < deadline and b"\n" not in buf:
+            ready, _, _ = select.select([p.stdout], [], [], 0.2)
+            if ready:
+                buf += p.stdout.read1(4096)
+            if p.poll() is not None:
+                break
+        p.kill()
+        p.wait(timeout=2)
+        self.assertIn(b'"protocolVersion": "2025-03-26"', buf)
+        self.assertIn(b'"name": "rig"', buf)
+
 
 if __name__ == "__main__":
     unittest.main()
