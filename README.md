@@ -53,7 +53,7 @@ rig jobs [--json] [--thread [ID]]
 rig tui
 rig memory [show]
 rig memory add "standing fact"
-rig job start|finish|record|show|log|allow|deny
+rig job start|finish|record|show|log|allow|deny|wait
 rig pick [explore|mini|bulk|implement|hard|review|stay] [--case TEXT]
 ```
 
@@ -67,18 +67,19 @@ The parent agent picks worker **and** model/reasoning from the case. Do not ask 
 
 ## Workers
 
-Cross-CLI jobs go through `~/.rig/scripts/run-worker.sh`. The parent waits on `.rig/jobs/<id>/result.json`.
+Cross-CLI jobs go through `~/.rig/scripts/run-worker.sh`. Start the wrapper in the background. The parent loops `rig job wait <id>` until `.rig/jobs/<id>/result.json`. Do not block the parent turn on `run-worker.sh`.
 
 A Grok child is **headless**. Codex will not show its TUI. While it runs, both you and the parent agent can see **which agent, which task, status, and the log**:
 
 ```bash
 rig tui                 # jobs board (agent / task / status / live log)
 rig jobs                # same data as a table (agents use this)
+rig job wait <id>       # poll until ask (exit 2) or result
 rig job show            # running job, or latest
 rig job log <id> -f     # decoded activity (tools + text)
 ```
 
-In Grok or Codex type `/rig`. Grok also gets a bottom status line after `rig setup` (restart Grok once). MCP tools: `rig_jobs`, `rig_job_show`, `rig_job_log`, `rig_memory`, `rig_memory_add`.
+In Grok or Codex type `/rig`. Grok also gets a bottom status line after `rig setup` (restart Grok once). MCP tools: `rig_jobs`, `rig_job_show`, `rig_job_log`, `rig_job_wait`, `rig_job_allow`, `rig_job_deny`, `rig_memory`, `rig_memory_add`.
 
 Open the Grok child TUI: `grok -r <session-id>` or `grok dashboard`. The job folder has `WATCH.md`.
 
@@ -100,14 +101,15 @@ A Claude Code child uses print-mode `stream-json` so the TUI can show tools whil
 
 A Cursor child is `cursor-agent -p` with `stream-json`, `--force`, `--trust`, and `--workspace` set to the repo. It does **not** use `--worktree` (edits would leave the repo). `rig doctor` mentions Grok Bot.app and Cursor.app when they exist; those GUIs cannot be spawned.
 
-Claude has no TTY as a child. When it needs permission, the job status becomes `ask`. The **parent agent** answers, same as an interaction:
+Claude has no TTY as a child. When it needs permission, the job status becomes `ask` and `rig job wait` exits 2. The **parent agent** answers, same as an interaction. Do not ignore it, kill the job, or spawn another worker — allow/deny so the same Claude child can continue:
 
 ```bash
+rig job wait <id>
 rig job allow <id>
 rig job deny <id> --reason "prod deploy"
 ```
 
-Safe worker work → allow. Destructive / prod / secrets → deny or ask the user. TUI keys: `y` / `n`. MCP: `rig_job_allow` / `rig_job_deny`.
+Safe worker work → allow. Destructive / prod / secrets → deny or ask the user. TUI keys: `y` / `n`. MCP: `rig_job_wait` / `rig_job_allow` / `rig_job_deny`.
 
 Jobs are this repo, not this chat. A new Grok or Codex thread still sees `.rig/jobs`. Running children keep going. First commands in a new thread: `rig memory` then `rig jobs`.
 

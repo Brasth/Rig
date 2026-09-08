@@ -159,6 +159,16 @@ class InitPresence(unittest.TestCase):
         )
         self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
 
+    def test_init_agents_tells_parent_to_answer_ask(self):
+        proc = run_rig(self.repo, "init", env={"PATH": _stub_path()})
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        text = (self.repo / "AGENTS.md").read_text()
+        self.assertIn("rig job wait", text)
+        self.assertIn("rig job allow", text)
+        self.assertIn("Never kill", text)
+        self.assertIn("Never spawn another worker", text)
+        self.assertIn("background", text)
+
 
 if __name__ == "__main__":
     unittest.main()

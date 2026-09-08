@@ -370,16 +370,26 @@ write_meta "running"
 write_watch
 ELAPSED=0
 TIMED_OUT=0
+ASK_NOTIFIED=0
 while kill -0 "$CHILD" 2>/dev/null; do
-  if [[ "$ELAPSED" -ge "$TIMEOUT_SECS" ]]; then
-    TIMED_OUT=1
-    kill_tree "$CHILD"
-    sleep 1
-    kill -KILL "$CHILD" 2>/dev/null || true
-    break
+  if [[ -f "$JOB_DIR/ask.json" && ! -f "$JOB_DIR/ask-reply.json" ]]; then
+    if [[ "$ASK_NOTIFIED" -eq 0 ]]; then
+      echo "run-worker: ASK — parent must answer: rig job allow $JOB_ID" >&2
+      echo "run-worker: do not kill this job; do not spawn another worker" >&2
+      ASK_NOTIFIED=1
+    fi
+  else
+    ASK_NOTIFIED=0
+    if [[ "$ELAPSED" -ge "$TIMEOUT_SECS" ]]; then
+      TIMED_OUT=1
+      kill_tree "$CHILD"
+      sleep 1
+      kill -KILL "$CHILD" 2>/dev/null || true
+      break
+    fi
+    ELAPSED=$((ELAPSED + 1))
   fi
   sleep 1
-  ELAPSED=$((ELAPSED + 1))
 done
 wait "$CHILD" 2>/dev/null
 CHILD_RC=$?

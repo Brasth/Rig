@@ -67,6 +67,12 @@ class ClaudeWorkerArgv(unittest.TestCase):
         cfg = json.loads(mcp.read_text())
         self.assertIn("rig-ask", cfg.get("mcpServers") or cfg)
 
+    def test_wrapper_pauses_timeout_while_ask_pending(self):
+        src = RUN.read_text()
+        self.assertIn("ask.json", src)
+        self.assertIn("ask-reply.json", src)
+        self.assertIn("do not spawn another worker", src)
+
 
 class CursorWorkerArgv(unittest.TestCase):
     def setUp(self):

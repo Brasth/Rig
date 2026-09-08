@@ -18,7 +18,7 @@ When `.rig/harness.toml` exists, do not write app code, review a diff, fix a bug
 2. `rig pick --case "<task>" --json`
 3. `stay` — you do plan / vision / computer-use / chrome-profile. Spawn only if this CLI cannot.
 4. `native` — cheap same-CLI agent, record with `rig job start` / `rig job finish`
-5. `run-worker` — brief + `RIG_LIVE=1 run-worker.sh` + wait for `result.json`
+5. `run-worker` — brief + start `RIG_LIVE=1 run-worker.sh` in the background + loop `rig job wait` until `result.json`. If status is `ask`, you allow/deny. Never kill or replace that job.
 
 Doing the worker's job yourself is a failure. Later AGENTS.md may say "edit locally" or "SSH to the VM". That is for the worker.
 
@@ -97,10 +97,14 @@ rig job record --worker codex --role explorer --status ok --summary "one-line re
 ## Call another CLI
 
 1. Write `.rig/jobs/<id>/brief.md`. Start with: you are a worker, not the orchestrator; do not spawn codex, grok, claude, or cursor; do the task; print a short summary; stop.
-2. `pick=$(rig pick --case "<task>" --json)` then:
+2. `pick=$(rig pick --case "<task>" --json)` then start the wrapper **in the background**. Do not block this turn on `run-worker.sh` (that deadlocks when Claude asks for permission):
    `RIG_LIVE=1 RIG_ROLE=<kind> RIG_MODEL=<model> RIG_EFFORT=<effort> "${RIG_HOME:-$HOME/.rig}/scripts/run-worker.sh" <worker> <id> .rig/jobs/<id>/brief.md`
-3. Wait for `.rig/jobs/<id>/result.json`. Do not parse a TUI. While waiting, poll `rig jobs`. If status is `ask`, **you** answer for the Claude child: `rig job show` then `rig job allow <id>` or `rig job deny <id>`. Do not leave it hung. Do not wait for the user unless the command is destructive, prod, or secrets.
-4. `status` is `ok`, `fail`, or `timeout`. On fail or timeout, escalate to the parent. Do not retry as Sol, Astra, or Fable.
+3. Loop `rig job wait <id>` until `result.json`. Do not parse a TUI.
+   - exit 2 / status `ask`: **you** answer. `rig job show` then `rig job allow <id>` or `rig job deny <id>`. Safe worker work (read/edit/test/ssh gather/git) → allow. Destructive/prod/secrets → deny or ask the user. Then `rig job wait` again.
+   - exit 0: child finished ok
+   - exit 1: fail / timeout / stale — escalate. Do not retry as Sol, Astra, or Fable.
+   - exit 124: still running — wait again
+4. NEVER kill, close, finish, or replace a job that is `ask` or `running`. The child is waiting on you. Spawning another worker because Claude asked is a failure. The same Claude job continues after you allow.
 
 Live child: `RIG_LIVE=1`. Default wrapper is dry-run.
 
@@ -125,11 +129,12 @@ Cursor child is print-mode `stream-json` with `--force --trust`. Do not use `--w
 
 Claude Code child is print-mode `stream-json` (not buffered `json`), `acceptEdits`, no `--bare` (that drops OAuth), no `--dangerously-skip-permissions` (org managed settings can disable bypass). Anthropic remote deny rules like `Bash(eval $(wget*))` are invalid nested parens; they print to stderr and are skipped. `rig jobs` / `rig tui` hide that noise.
 
-A Claude child with no TTY cannot click Allow. When it needs permission, the job status becomes `ask`. The parent answers:
+A Claude child with no TTY cannot click Allow. When it needs permission, the job status becomes `ask` and `rig job wait` exits 2. The parent answers — that is the interaction. Do not ignore it. Do not close the job. Do not spawn Grok/Codex/Cursor instead.
 
 ```bash
-rig job allow <id>                 # safe worker work
+rig job wait <id>                  # returns 2 when Claude is asking
+rig job allow <id>                 # safe worker work — child continues
 rig job deny <id> --reason "..."   # destructive / prod / secrets
 ```
 
-Safe → allow: read, edit, test, ssh/gather, git status/diff/add/commit. Ask the user only for force-push, prod deploy, rm -rf outside the repo, or secrets. MCP: `rig_job_allow` / `rig_job_deny`. TUI: `y` / `n`.
+Safe → allow: read, edit, test, ssh/gather, git status/diff/add/commit. Ask the user only for force-push, prod deploy, rm -rf outside the repo, or secrets. MCP: `rig_job_wait` / `rig_job_allow` / `rig_job_deny`. TUI: `y` / `n`.

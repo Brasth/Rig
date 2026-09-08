@@ -18,6 +18,7 @@ Do not guess. Run the commands. The parent checks this board and MUST spawn work
 ```bash
 rig memory            # standing facts; run this on a new thread
 rig jobs              # every job in this repo (survives a new parent thread)
+rig job wait [id]     # poll until ask (exit 2) or result
 rig job show          # running job, or latest
 rig job show <id>
 rig job log <id>      # decoded activity
@@ -37,15 +38,16 @@ A new Grok/Codex thread does not start a new job board. Jobs live in `.rig/jobs/
 - how to watch: `rig job log <id> -f` or `rig tui` in another pane
 - Grok child: `open` line is `grok -r <session-id>`
 
-If status is `ask`, the Claude child is waiting on a permission prompt. **You answer it** — that is the interaction:
+If status is `ask`, the Claude child is waiting on a permission prompt. **You answer it** — that is the interaction. Do not kill the job. Do not spawn another worker.
 
 ```bash
+rig job wait <id>                  # exit 2 = ASK
 rig job allow <id>
 rig job deny <id> --reason "why"
 ```
 
-Safe worker work (read/edit/test/ssh gather/git) → allow. Destructive/prod/secrets → deny or ask the user. Do not leave `ask` hanging.
+Safe worker work (read/edit/test/ssh gather/git) → allow. Destructive/prod/secrets → deny or ask the user. Do not leave `ask` hanging. After allow, loop `rig job wait` so the same child can continue.
 
 Headless children are not a native Codex/Grok agent row. The board, `/rig`, statusline, and these commands are the UI.
 
-MCP tools if present: `rig_jobs`, `rig_job_show`, `rig_job_log`, `rig_job_allow`, `rig_job_deny`. Same data.
+MCP tools if present: `rig_jobs`, `rig_job_show`, `rig_job_log`, `rig_job_wait`, `rig_job_allow`, `rig_job_deny`. Same data.

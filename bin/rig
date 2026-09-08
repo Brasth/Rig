@@ -38,6 +38,7 @@ usage: rig <command> [args]
   job log [id] [-f] [-n N]
   job allow [id]
   job deny [id] [--reason TEXT]
+  job wait [id] [--timeout SECS]
   pick [explore|mini|bulk|implement|hard|review|stay] [--case TEXT] [--json]
 
 Stay in Codex or Grok. They can invoke Claude, Cursor, or each other.
@@ -320,16 +321,17 @@ Spawn for: write code, fix bugs, review, SSH/debug, gather repo or server facts.
 2. `pick=$(rig pick --case "<task>" --json)` — do not ask the user which model
 3. stay → you do it (plan / vision / computer-use / chrome-profile). Spawn only if this CLI cannot.
 4. native → cheap same-CLI agent, then `rig job start` / `rig job finish`
-5. run-worker → write `.rig/jobs/<id>/brief.md` then
+5. run-worker → write `.rig/jobs/<id>/brief.md` then start the wrapper in the background (do not block this turn on it):
    `RIG_LIVE=1 RIG_ROLE=<kind> RIG_MODEL=<model> RIG_EFFORT=<effort> "$HOME/.rig/scripts/run-worker.sh" <worker> <id> .rig/jobs/<id>/brief.md`
-   Wait for `.rig/jobs/<id>/result.json`. Do not parse a TUI.
+   Loop `rig job wait <id>` until result.json. Do not parse a TUI.
+   wait exit 2 / status ask: YOU answer `rig job allow <id>` or `rig job deny <id>`. Safe worker work (read/edit/test/ssh gather/git) → allow. Destructive/prod/secrets → deny or ask the user.
+   Never kill, close, or finish an asking job. Never spawn another worker because the child asked. The child is waiting on you.
 
 Live parent is this CLI, not the `parent` key (`rig use grok|codex` is only the preferred default).
 Claude Code and Cursor CLI are never the parent. Worker on only if flag + binary + not live parent. Cursor binary is `cursor-agent`. Missing binary: that worker is off. Cheap same-CLI is success.
 Pin Claude IDs: `claude-haiku-4-5-20251001` cheap, `claude-sonnet-5` implement, `claude-opus-5` hard/review. Cursor: `composer-2.5-fast` cheap, `composer-2.5` implement, `cursor-grok-4.6-high` hard, `claude-opus-5-thinking-high` review. Never Sol/Astra/Fable as a child. Opus is allowed.
 Grok Bot.app is not a worker. Do not spawn it.
-Watch: `rig jobs` / `rig job show` / `rig job log <id>` / `rig tui` / `/rig`.
-If a job is ask: you answer for the Claude child. `rig job allow <id>` or `rig job deny <id>`. Safe worker work (read/edit/test/ssh gather/git) → allow. Destructive/prod/secrets → deny or ask the user.
+Watch: `rig jobs` / `rig job wait <id>` / `rig job show` / `rig job log <id>` / `rig tui` / `/rig`.
 After a run: `rig memory add "one standing fact"` if there is one. No transcripts.
 <!-- rig:end -->
 EOF
@@ -461,6 +463,7 @@ cmd_doctor() {
   echo "Watch"
   echo "  board:  rig tui"
   echo "  list:   rig jobs"
+  echo "  wait:   rig job wait [id]   (exit 2 = ASK — you allow/deny)"
   echo "  log:    rig job log [id] -f"
   echo "  memory: rig memory   |   rig memory add \"fact\""
   echo "  slash:  /rig"
@@ -824,6 +827,7 @@ parse_job_flags() {
   JOB_FOLLOW=0
   JOB_LINES=""
   JOB_REASON=""
+  JOB_TIMEOUT=""
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --worker)
@@ -855,8 +859,12 @@ parse_job_flags() {
         JOB_REASON="${2:-}"
         shift 2
         ;;
+      --timeout)
+        JOB_TIMEOUT="${2:-}"
+        shift 2
+        ;;
       --help|-h)
-        echo "usage: rig job start|finish|record|show|log|allow|deny [--worker NAME] [--role ROLE] [--status ok|fail] [--summary TEXT] [--reason TEXT] [id] [-f] [-n N]" >&2
+        echo "usage: rig job start|finish|record|show|log|allow|deny|wait [--worker NAME] [--role ROLE] [--status ok|fail] [--summary TEXT] [--reason TEXT] [--timeout SECS] [id] [-f] [-n N]" >&2
         exit 2
         ;;
       --*)
@@ -879,9 +887,9 @@ cmd_job() {
   local sub="${1:-}"
   shift || true
   case "$sub" in
-    start|finish|record|show|log|allow|deny) ;;
+    start|finish|record|show|log|allow|deny|wait) ;;
     *)
-      echo "usage: rig job start|finish|record|show|log|allow|deny [--worker NAME] [--role ROLE] [--status ok|fail] [--summary TEXT] [--reason TEXT] [id] [-f] [-n N]" >&2
+      echo "usage: rig job start|finish|record|show|log|allow|deny|wait [--worker NAME] [--role ROLE] [--status ok|fail] [--summary TEXT] [--reason TEXT] [--timeout SECS] [id] [-f] [-n N]" >&2
       exit 2
       ;;
   esac
@@ -947,6 +955,13 @@ cmd_job() {
     [[ -n "$JOB_ID" ]] && ask_args+=("$JOB_ID")
     [[ -n "$JOB_REASON" ]] && ask_args+=(--reason "$JOB_REASON")
     python3 "$(py_script jobs.py)" "${ask_args[@]}"
+    return $?
+  fi
+  if [[ "$sub" == "wait" ]]; then
+    local wait_args=(wait)
+    [[ -n "$JOB_ID" ]] && wait_args+=("$JOB_ID")
+    [[ -n "$JOB_TIMEOUT" ]] && wait_args+=(--timeout "$JOB_TIMEOUT")
+    python3 "$(py_script jobs.py)" "${wait_args[@]}"
     return $?
   fi
 

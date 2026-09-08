@@ -19,7 +19,8 @@ TOOLS = [
         "description": (
             "List Rig worker jobs in this project: which agent is running, "
             "the task, status, and what it is doing now. Status ask means the "
-            "Claude child is waiting: you MUST call rig_job_allow or rig_job_deny."
+            "Claude child is waiting: you MUST call rig_job_allow or rig_job_deny. "
+            "Do not kill that job. Do not spawn another worker for the same task."
         ),
         "inputSchema": {
             "type": "object",
@@ -60,11 +61,31 @@ TOOLS = [
         },
     },
     {
+        "name": "rig_job_wait",
+        "description": (
+            "Poll a Rig job until it asks for permission or finishes. "
+            "If the text starts with ASK, you MUST call rig_job_allow or rig_job_deny next "
+            "so the child can continue. Do not kill the job. Do not spawn another worker."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "id": {"type": "string", "description": "Job id. Default: asking, else running."},
+                "repo": {"type": "string"},
+                "timeout": {
+                    "type": "number",
+                    "description": "Seconds to poll. Default 30. Returns immediately on ask or result.",
+                },
+            },
+        },
+    },
+    {
         "name": "rig_job_allow",
         "description": (
             "Allow the Claude child's pending permission prompt. "
-            "Call this when rig_jobs shows status ask and the command is safe worker work "
-            "(read, edit, test, ssh gather, git status/diff/add/commit)."
+            "Call this when rig_jobs or rig_job_wait shows status ask and the command is safe worker work "
+            "(read, edit, test, ssh gather, git status/diff/add/commit). "
+            "This is how the child continues. Do not close the job instead."
         ),
         "inputSchema": {
             "type": "object",
@@ -157,6 +178,16 @@ def call_tool(name: str, args: dict) -> dict:
             except (TypeError, ValueError):
                 n = 40
             return _ok(rig_jobs.format_log(job, n))
+        if name == "rig_job_wait":
+            timeout = args.get("timeout")
+            try:
+                timeout_s = float(timeout) if timeout is not None else 30.0
+            except (TypeError, ValueError):
+                timeout_s = 30.0
+            code, text = rig_jobs.wait_job(repo, args.get("id"), timeout_s)
+            if code == 1:
+                return _err(text)
+            return _ok(text)
         if name == "rig_job_allow":
             job = rig_jobs.resolve_job(repo, args.get("id"))
             text = rig_jobs.answer_pending(job, "allow")

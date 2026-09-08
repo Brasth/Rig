@@ -123,6 +123,45 @@ class AskJobBoard(unittest.TestCase):
         text = jobs.answer_pending(job, "allow")
         self.assertIn("not waiting", text)
 
+    def test_wait_exits_ask(self):
+        code, text = jobs.wait_job(self.repo, "claude-ask", timeout=0)
+        self.assertEqual(code, 2)
+        self.assertIn("ASK claude-ask", text)
+        self.assertIn("rig job allow claude-ask", text)
+        self.assertIn("Do not kill this job", text)
+        self.assertIn("Do not spawn another worker", text)
+
+    def test_wait_exits_ok_when_finished(self):
+        ask.consume_ask(self.d)
+        meta = json.loads((self.d / "meta.json").read_text())
+        meta["status"] = "ok"
+        meta["summary"] = "done"
+        (self.d / "meta.json").write_text(json.dumps(meta))
+        (self.d / "result.json").write_text(json.dumps({"status": "ok"}))
+        code, text = jobs.wait_job(self.repo, "claude-ask", timeout=0)
+        self.assertEqual(code, 0)
+        self.assertIn("claude-ask", text)
+
+    def test_wait_running_times_out(self):
+        ask.consume_ask(self.d)
+        code, text = jobs.wait_job(self.repo, "claude-ask", timeout=0)
+        self.assertEqual(code, 124)
+        self.assertIn("RUNNING claude-ask", text)
+
+    def test_show_tells_parent_not_to_replace(self):
+        job = jobs.load_job(self.d)
+        shown = jobs.format_show(job)
+        self.assertIn("do not kill this job", shown)
+        self.assertIn("do not spawn a replacement", shown)
+
+    def test_mcp_wait_ask(self):
+        out = rig_mcp.call_tool(
+            "rig_job_wait",
+            {"repo": str(self.repo), "id": "claude-ask", "timeout": 0},
+        )
+        self.assertIn("ASK", out["content"][0]["text"])
+        self.assertNotIn("isError", out)
+
 
 if __name__ == "__main__":
     unittest.main()

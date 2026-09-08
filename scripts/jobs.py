@@ -546,6 +546,54 @@ def answer_pending(job: dict, behavior: str, message: str = "") -> str:
     return f"{behavior} {job['job_id']}  {preview}"
 
 
+def format_wait(job: dict) -> str:
+    job_id = job["job_id"]
+    eff = job.get("effective")
+    if eff == "ask":
+        pending = job.get("ask") if isinstance(job.get("ask"), dict) else {}
+        preview = str(pending.get("preview") or pending.get("tool_name") or "tool")
+        return "\n".join(
+            [
+                f"ASK {job_id}",
+                f"agent   {job.get('worker') or '?'}",
+                f"preview {preview}",
+                f"answer  rig job allow {job_id}",
+                f"        rig job deny {job_id}",
+                "You must answer this prompt so the child can continue.",
+                "Do not kill this job. Do not spawn another worker for this task.",
+            ]
+        )
+    if eff == "running":
+        doing = job.get("doing") or "running"
+        return "\n".join(
+            [
+                f"RUNNING {job_id}",
+                f"agent   {job.get('worker') or '?'}",
+                f"doing   {doing}",
+                f"next    rig job wait {job_id}",
+            ]
+        )
+    return format_show(job)
+
+
+def wait_job(repo: Path, job_id: str | None, timeout: float = 30.0) -> tuple[int, str]:
+    try:
+        timeout_s = float(timeout)
+    except (TypeError, ValueError):
+        timeout_s = 30.0
+    deadline = time.time() + max(0.0, timeout_s)
+    while True:
+        job = resolve_job(repo, job_id)
+        eff = job.get("effective")
+        if eff == "ask":
+            return 2, format_wait(job)
+        if eff in {"ok", "fail", "timeout", "stale"}:
+            return (0 if eff == "ok" else 1), format_wait(job)
+        if time.time() >= deadline:
+            return 124, format_wait(job)
+        time.sleep(0.4)
+
+
 def format_table(jobs: list[dict]) -> str:
     if not jobs:
         return "no jobs  (cross-CLI children and recorded cheap workers show up here)"
@@ -592,6 +640,7 @@ def format_show(job: dict, log_lines: int = 24) -> str:
     if job.get("effective") == "ask":
         lines.append(f"answer  rig job allow {job['job_id']}")
         lines.append(f"        rig job deny {job['job_id']}")
+        lines.append("keep    do not kill this job; do not spawn a replacement")
     if job["pid"]:
         lines.append(f"pid     {job['pid']} ({'alive' if job['alive'] else 'dead'})")
     if job.get("thread"):
@@ -709,13 +758,14 @@ def main() -> int:
         "cmd",
         nargs="?",
         default="list",
-        choices=["list", "show", "log", "statusline", "thread", "allow", "deny"],
+        choices=["list", "show", "log", "statusline", "thread", "allow", "deny", "wait"],
     )
     parser.add_argument("job_id", nargs="?")
     parser.add_argument("--repo")
     parser.add_argument("--json", action="store_true")
     parser.add_argument("-f", "--follow", action="store_true")
     parser.add_argument("-n", "--lines", type=int, default=40)
+    parser.add_argument("--timeout", type=float, default=30.0)
     parser.add_argument(
         "--thread",
         nargs="?",
@@ -754,6 +804,10 @@ def main() -> int:
         text = answer_pending(job, args.cmd, args.reason)
         print(text)
         return 0 if text.startswith(args.cmd) else 1
+    if args.cmd == "wait":
+        code, text = wait_job(repo, args.job_id, args.timeout)
+        print(text)
+        return code
     raw = sys.stdin.read() if not sys.stdin.isatty() else "{}"
     try:
         payload = json.loads(raw or "{}")
