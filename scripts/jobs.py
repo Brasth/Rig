@@ -8,6 +8,12 @@ import sys
 import time
 from pathlib import Path
 
+HERE = Path(__file__).resolve().parent
+if str(HERE) not in sys.path:
+    sys.path.insert(0, str(HERE))
+
+import ask as rig_ask  # noqa: E402
+
 PREAMBLE_MARKERS = (
     "you are a worker, not the orchestrator",
     "do not spawn codex, grok, or claude",
@@ -158,6 +164,21 @@ def _wrap_words(text: str, width: int) -> list[str]:
     return lines
 
 
+SETTINGS_NOISE = (
+    "invalid permission rule",
+    "mismatched parentheses",
+    "managed settings contain invalid",
+    "remaining valid policies are still enforced",
+    "remote managed settings",
+    "ensure all opening parentheses",
+)
+
+
+def _is_settings_noise(line: str) -> bool:
+    low = line.lower()
+    return any(marker in low for marker in SETTINGS_NOISE)
+
+
 def activity_from_event(obj: dict) -> str | None:
     kind = obj.get("type")
     if kind == "tool_call":
@@ -175,6 +196,13 @@ def activity_from_event(obj: dict) -> str | None:
             return prefix + _first_line(data, 140)
     if kind == "error":
         return "error: " + _first_line(str(obj.get("message") or obj), 140)
+    if kind == "result":
+        blob = obj.get("result") or obj.get("error") or ""
+        if isinstance(blob, str) and blob.strip():
+            return _first_line(blob, 140)
+        if obj.get("is_error"):
+            return "error: " + _first_line(str(obj.get("subtype") or "result"), 140)
+        return None
     if kind == "assistant":
         msg = obj.get("message") or {}
         content = msg.get("content") if isinstance(msg, dict) else None
@@ -217,68 +245,85 @@ def _flush_stream(buf_kind: str | None, buf: list[str], out: list[str]) -> None:
             out.append(_first_line(s, 160))
 
 
+def _decode_json_lines(json_lines: list[str]) -> list[str]:
+    lines: list[str] = []
+    buf_kind: str | None = None
+    buf: list[str] = []
+    for line in json_lines:
+        try:
+            obj = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(obj, dict):
+            continue
+        kind = obj.get("type")
+        if kind in ("system", "user", "stream_event", "tool_call_update", "end"):
+            continue
+        if kind in ("thought", "text"):
+            data = obj.get("data") or obj.get("text") or ""
+            if not isinstance(data, str) or not data:
+                continue
+            if buf_kind not in (None, kind):
+                _flush_stream(buf_kind, buf, lines)
+            buf_kind = kind
+            buf.append(data)
+            continue
+        _flush_stream(buf_kind, buf, lines)
+        buf_kind = None
+        if kind in ("tool_call", "error", "assistant", "result"):
+            act = activity_from_event(obj)
+            if act and (not lines or lines[-1] != act):
+                lines.append(act)
+            continue
+        blob = obj.get("text") or obj.get("result") or ""
+        if isinstance(blob, str) and blob.strip():
+            lines.append(_first_line(blob, 160))
+    _flush_stream(buf_kind, buf, lines)
+    return lines
+
+
 def decode_log_text(raw: str) -> list[str]:
     text = raw.strip()
     if not text:
         return []
-    if text.startswith("{") and "\n{" in text:
-        lines: list[str] = []
-        buf_kind: str | None = None
-        buf: list[str] = []
-        for line in text.splitlines():
-            line = line.strip()
-            if not line.startswith("{"):
-                continue
-            try:
-                obj = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if not isinstance(obj, dict):
-                continue
-            kind = obj.get("type")
-            if kind in ("thought", "text"):
-                data = obj.get("data") or obj.get("text") or ""
-                if not isinstance(data, str) or not data:
-                    continue
-                if buf_kind not in (None, kind):
-                    _flush_stream(buf_kind, buf, lines)
-                buf_kind = kind
-                buf.append(data)
-                continue
-            _flush_stream(buf_kind, buf, lines)
-            buf_kind = None
-            if kind == "tool_call":
-                act = activity_from_event(obj)
-                if act and (not lines or lines[-1] != act):
-                    lines.append(act)
-                continue
-            if kind == "error":
-                act = activity_from_event(obj)
-                if act:
-                    lines.append(act)
-        _flush_stream(buf_kind, buf, lines)
-        if lines:
-            return lines[-120:]
-    if text.startswith("{"):
-        try:
-            obj = json.loads(text)
-        except json.JSONDecodeError:
-            # incomplete json blob (buffered until child exits)
+    json_lines: list[str] = []
+    text_lines: list[str] = []
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line or _is_settings_noise(line):
+            continue
+        if line.startswith("{"):
+            json_lines.append(line)
+        else:
+            text_lines.append(line)
+    if json_lines:
+        decoded = _decode_json_lines(json_lines)
+        if decoded:
+            return decoded[-120:]
+        last = json_lines[-1]
+        if last.startswith("{") and not last.endswith("}"):
             return ["waiting for child json (buffered until exit)"]
-        if isinstance(obj, dict):
-            if obj.get("type") == "error":
-                return [activity_from_event(obj) or str(obj)]
-            blob = obj.get("text") or obj.get("result") or obj.get("message") or ""
-            if isinstance(blob, str) and blob.strip():
-                out = []
-                for para in blob.split("\n"):
-                    s = para.strip()
-                    if s:
-                        out.append(_first_line(s, 160))
-                return out[-80:] or [_first_line(blob, 160)]
-            act = activity_from_event(obj)
-            return [act] if act else []
-    return [_first_line(line, 160) for line in text.splitlines() if line.strip()][-80:]
+        if len(json_lines) == 1:
+            try:
+                obj = json.loads(json_lines[0])
+            except json.JSONDecodeError:
+                return ["waiting for child json (buffered until exit)"]
+            if isinstance(obj, dict):
+                if obj.get("type") == "error":
+                    return [activity_from_event(obj) or str(obj)]
+                blob = obj.get("text") or obj.get("result") or ""
+                if isinstance(blob, str) and blob.strip():
+                    out = [
+                        _first_line(para, 160)
+                        for para in blob.split("\n")
+                        if para.strip()
+                    ]
+                    return out[-80:] or [_first_line(blob, 160)]
+                act = activity_from_event(obj)
+                return [act] if act else []
+    if text_lines:
+        return [_first_line(line, 160) for line in text_lines][-80:]
+    return []
 
 
 def read_log_tail(path: Path, nbytes: int = 120_000) -> str:
@@ -322,13 +367,21 @@ def load_job(job_path: Path) -> dict | None:
     status = str(obj.get("status") or "unknown")
     alive = pid_alive(pid_i)
     effective = status
+    pending_ask = rig_ask.load_ask(job_path) if status == "running" else None
     if status == "running" and pid_i and not alive:
         effective = "stale"
+    elif pending_ask and (alive or not pid_i):
+        effective = "ask"
     log_path = job_path / "stdout.log"
     activities = decode_log_text(read_log_tail(log_path))
     kind = str(obj.get("kind") or "")
     doing = ""
-    if effective == "running":
+    if effective == "ask" and pending_ask:
+        doing = (
+            f"ASK {pending_ask.get('preview') or pending_ask.get('tool_name') or 'tool'}  "
+            f"→  rig job allow {job_id}"
+        )
+    elif effective == "running":
         if activities:
             doing = next((a for a in reversed(activities) if not a.startswith("think")), activities[-1])
         elif kind == "native":
@@ -377,6 +430,7 @@ def load_job(job_path: Path) -> dict | None:
         "ended_at": str(obj.get("ended_at") or ""),
         "task": task,
         "doing": doing,
+        "ask": pending_ask,
         "activities": activities,
         "dir": str(job_path),
         "log": str(log_path),
@@ -395,7 +449,14 @@ def list_jobs(repo: Path, thread: str | None = None) -> list[dict]:
             job = load_job(path)
             if job:
                 jobs.append(job)
-    jobs.sort(key=lambda j: (0 if j["effective"] == "running" else 1, -j["mtime"]))
+    def _rank(job: dict) -> int:
+        if job["effective"] == "ask":
+            return 0
+        if job["effective"] == "running":
+            return 1
+        return 2
+
+    jobs.sort(key=lambda j: (_rank(j), -j["mtime"]))
     if thread:
         jobs = [j for j in jobs if j.get("thread") == thread]
     return jobs
@@ -409,11 +470,30 @@ def resolve_job(repo: Path, job_id: str | None) -> dict:
                 return job
         raise SystemExit(f"rig: no such job {job_id}")
     for job in jobs:
+        if job["effective"] == "ask":
+            return job
+    for job in jobs:
         if job["effective"] == "running":
             return job
     if jobs:
         return jobs[0]
     raise SystemExit("rig: no jobs")
+
+
+def answer_pending(job: dict, behavior: str, message: str = "") -> str:
+    if behavior not in {"allow", "deny"}:
+        return "rig: behavior must be allow or deny"
+    if job.get("effective") != "ask":
+        return f"rig: job {job['job_id']} is not waiting (status {job.get('effective')})"
+    pending = job.get("ask") if isinstance(job.get("ask"), dict) else {}
+    rig_ask.write_reply(
+        Path(job["dir"]),
+        behavior,
+        message,
+        str(pending.get("tool_use_id") or ""),
+    )
+    preview = str(pending.get("preview") or pending.get("tool_name") or "tool")
+    return f"{behavior} {job['job_id']}  {preview}"
 
 
 def format_table(jobs: list[dict]) -> str:
@@ -433,9 +513,11 @@ def format_table(jobs: list[dict]) -> str:
             extras.append(f"          thread {job['thread']}")
         if job["doing"]:
             extras.append(f"          doing  {job['doing']}")
+        if job["effective"] == "ask":
+            extras.append(f"          answer rig job allow {job['job_id']}  |  rig job deny {job['job_id']}")
         if job["effective"] == "running" and job.get("open"):
             extras.append(f"          open   {job['open']}")
-        if job["effective"] == "running":
+        if job["effective"] in {"running", "ask"}:
             extras.append(f"          log    rig job log {job['job_id']} -f")
         rows.extend(extras)
     running = sum(1 for j in jobs if j["effective"] == "running")
@@ -457,6 +539,9 @@ def format_show(job: dict, log_lines: int = 24) -> str:
     ]
     if job["doing"]:
         lines.append(f"doing   {job['doing']}")
+    if job.get("effective") == "ask":
+        lines.append(f"answer  rig job allow {job['job_id']}")
+        lines.append(f"        rig job deny {job['job_id']}")
     if job["pid"]:
         lines.append(f"pid     {job['pid']} ({'alive' if job['alive'] else 'dead'})")
     if job.get("thread"):
@@ -493,6 +578,8 @@ def format_show(job: dict, log_lines: int = 24) -> str:
 def format_log(job: dict, n: int = 40) -> str:
     acts = job.get("activities") or decode_log_text(read_log_tail(Path(job["log"])))
     if not acts:
+        if job["effective"] == "ask":
+            return f"ASK — parent must answer: rig job allow {job['job_id']}  |  rig job deny {job['job_id']}"
         if job["effective"] == "running":
             return "log empty (child still running; json is buffered until exit)"
         if job.get("log_pruned"):
@@ -538,19 +625,26 @@ def format_statusline(payload: dict) -> str:
         jobs = list_jobs(repo_root(str(repo)))
     except OSError:
         jobs = []
+    asking = [j for j in jobs if j["effective"] == "ask"]
     running = [j for j in jobs if j["effective"] == "running"]
-    green, reset = "\033[32m", "\033[0m"
-    if not running:
+    green, yellow, reset = "\033[32m", "\033[33m", "\033[0m"
+    if asking:
+        job = asking[0]
+        extra = f" +{len(asking) - 1}" if len(asking) > 1 else ""
+        line2 = f"{yellow}rig · {job['worker']} ASK{extra} · {job['task']}{reset}"
+        line3 = job["doing"] if job.get("doing") else f"rig job allow {job['job_id']}"
+    elif not running:
         return f"{line1}\nrig · idle"
-    job = running[0]
-    extra = f" +{len(running) - 1}" if len(running) > 1 else ""
-    spec = " ".join(x for x in [job.get("model"), job.get("effort")] if x)
-    line2 = (
-        f"{green}rig · {job['worker']} {job['role'] or 'worker'} running{extra}"
-        + (f" · {spec}" if spec else "")
-        + f" · {job['task']}{reset}"
-    )
-    line3 = job["doing"] if job.get("doing") else ""
+    else:
+        job = running[0]
+        extra = f" +{len(running) - 1}" if len(running) > 1 else ""
+        spec = " ".join(x for x in [job.get("model"), job.get("effort")] if x)
+        line2 = (
+            f"{green}rig · {job['worker']} {job['role'] or 'worker'} running{extra}"
+            + (f" · {spec}" if spec else "")
+            + f" · {job['task']}{reset}"
+        )
+        line3 = job["doing"] if job.get("doing") else ""
     out = [line1, line2]
     if line3:
         out.append(line3[:160])
@@ -562,7 +656,10 @@ def main() -> int:
 
     parser = argparse.ArgumentParser(prog="jobs.py")
     parser.add_argument(
-        "cmd", nargs="?", default="list", choices=["list", "show", "log", "statusline", "thread"]
+        "cmd",
+        nargs="?",
+        default="list",
+        choices=["list", "show", "log", "statusline", "thread", "allow", "deny"],
     )
     parser.add_argument("job_id", nargs="?")
     parser.add_argument("--repo")
@@ -575,6 +672,7 @@ def main() -> int:
         const="this",
         help="Filter by parent thread id. Bare --thread uses the current parent thread.",
     )
+    parser.add_argument("--reason", default="")
     args = parser.parse_args()
     repo = repo_root(args.repo)
     if args.cmd == "thread":
@@ -601,6 +699,11 @@ def main() -> int:
             return 0
         print(format_log(job, args.lines))
         return 0
+    if args.cmd in {"allow", "deny"}:
+        job = resolve_job(repo, args.job_id)
+        text = answer_pending(job, args.cmd, args.reason)
+        print(text)
+        return 0 if text.startswith(args.cmd) else 1
     raw = sys.stdin.read() if not sys.stdin.isatty() else "{}"
     try:
         payload = json.loads(raw or "{}")

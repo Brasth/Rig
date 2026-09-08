@@ -53,7 +53,7 @@ rig jobs [--json] [--thread [ID]]
 rig tui
 rig memory [show]
 rig memory add "standing fact"
-rig job start|finish|record|show|log
+rig job start|finish|record|show|log|allow|deny
 rig pick [explore|mini|bulk|implement|hard|review|stay] [--case TEXT]
 ```
 
@@ -95,6 +95,17 @@ RIG_LIVE=1 ~/.rig/scripts/run-worker.sh grok <job-id> <brief-file>
 ```
 
 If the binary is missing, the wrapper prints the command it would have run and exits non-zero.
+
+A Claude Code child uses print-mode `stream-json` so the TUI can show tools while it runs. It does **not** use `--bare` (that drops OAuth) or `--dangerously-skip-permissions` (org policy can forbid bypass). Anthropic remote settings may print `Bash(eval $(wget*))` mismatched-parentheses warnings; those rules are skipped by Claude and hidden by `rig jobs` / `rig tui`.
+
+Claude has no TTY as a child. When it needs permission, the job status becomes `ask`. The **parent agent** answers, same as an interaction:
+
+```bash
+rig job allow <id>
+rig job deny <id> --reason "prod deploy"
+```
+
+Safe worker work → allow. Destructive / prod / secrets → deny or ask the user. TUI keys: `y` / `n`. MCP: `rig_job_allow` / `rig_job_deny`.
 
 Jobs are this repo, not this chat. A new Grok or Codex thread still sees `.rig/jobs`. Running children keep going. First commands in a new thread: `rig memory` then `rig jobs`.
 

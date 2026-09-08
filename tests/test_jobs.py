@@ -80,6 +80,77 @@ class TaskAndLog(unittest.TestCase):
         acts = jobs.decode_log_text('{"text": "still going')
         self.assertEqual(acts, ["waiting for child json (buffered until exit)"])
 
+    def test_claude_managed_settings_noise_hidden(self):
+        raw = "\n".join(
+            [
+                'remote managed settings (permissions.deny): Invalid permission rule "Bash(eval $(wget*))" was skipped: Mismatched parentheses. Ensure all opening parentheses have matching closing parentheses.',
+                "Managed settings contain invalid entries (remaining valid policies are still enforced):",
+                'remote managed settings (permissions.deny): Invalid permission rule "Bash(bash <(curl*))" was skipped: Mismatched parentheses.',
+                'remote managed settings (permissions.deny): Invalid permission rule "Bash(eval $(curl*))" was skipped: Mismatched parentheses.',
+                json.dumps(
+                    {
+                        "type": "assistant",
+                        "message": {
+                            "content": [
+                                {
+                                    "type": "tool_use",
+                                    "name": "Read",
+                                    "input": {"file_path": "apps/next/src/container.ts"},
+                                }
+                            ]
+                        },
+                    }
+                ),
+            ]
+        )
+        acts = jobs.decode_log_text(raw)
+        self.assertEqual(acts, ["Read src/container.ts"])
+        self.assertFalse(any("wget" in a.lower() or "mismatched" in a.lower() for a in acts))
+
+    def test_claude_settings_noise_only_is_empty(self):
+        raw = (
+            'remote managed settings (permissions.deny): Invalid permission rule "Bash(eval $(wget*))" '
+            "was skipped: Mismatched parentheses.\n"
+            "Managed settings contain invalid entries (remaining valid policies are still enforced):\n"
+        )
+        self.assertEqual(jobs.decode_log_text(raw), [])
+
+    def test_claude_result_event(self):
+        acts = jobs.decode_log_text(
+            json.dumps({"type": "result", "result": "Updated the shared container utility."})
+        )
+        self.assertEqual(acts, ["Updated the shared container utility."])
+
+    def test_running_job_hides_claude_settings_noise(self):
+        import tempfile
+
+        td = tempfile.TemporaryDirectory()
+        repo = Path(td.name)
+        d = repo / ".rig" / "jobs" / "claude-noise"
+        d.mkdir(parents=True)
+        (d / "brief.md").write_text("Fix the shared container utility.\n")
+        (d / "meta.json").write_text(
+            json.dumps(
+                {
+                    "job_id": "claude-noise",
+                    "worker": "claude",
+                    "role": "implement",
+                    "status": "running",
+                    "pid": os.getpid(),
+                    "model": "claude-sonnet-5",
+                    "effort": "medium",
+                }
+            )
+        )
+        (d / "stdout.log").write_text(
+            'remote managed settings (permissions.deny): Invalid permission rule "Bash(eval $(wget*))" '
+            "was skipped: Mismatched parentheses.\n"
+        )
+        job = jobs.load_job(d)
+        self.assertEqual(job["doing"], "running (no log yet)")
+        self.assertEqual(job["activities"], [])
+        td.cleanup()
+
 
 class JobBoard(unittest.TestCase):
     def setUp(self):

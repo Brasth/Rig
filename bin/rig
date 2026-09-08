@@ -36,6 +36,8 @@ usage: rig <command> [args]
   job record [--worker NAME] [--role ROLE] [--status ok|fail] [--summary TEXT] [id]
   job show [id]
   job log [id] [-f] [-n N]
+  job allow [id]
+  job deny [id] [--reason TEXT]
   pick [explore|mini|bulk|implement|hard|review|stay] [--case TEXT] [--json]
 
 Stay in Codex or Grok. They can invoke Claude or each other.
@@ -306,6 +308,7 @@ Live parent is this CLI, not the `parent` key (`rig use grok|codex` is only the 
 Claude Code is never the parent. Worker on only if flag + binary + not live parent. Missing binary: that worker is off. Cheap same-CLI is success.
 Pin Claude IDs: `claude-haiku-4-5-20251001` cheap, `claude-sonnet-5` implement, `claude-opus-5` hard/review. Never Sol/Astra/Fable as a child. Opus is allowed.
 Watch: `rig jobs` / `rig job show` / `rig job log <id>` / `rig tui` / `/rig`.
+If a job is ask: you answer for the Claude child. `rig job allow <id>` or `rig job deny <id>`. Safe worker work (read/edit/test/ssh gather/git) → allow. Destructive/prod/secrets → deny or ask the user.
 After a run: `rig memory add "one standing fact"` if there is one. No transcripts.
 <!-- rig:end -->
 EOF
@@ -788,6 +791,7 @@ parse_job_flags() {
   JOB_ID=""
   JOB_FOLLOW=0
   JOB_LINES=""
+  JOB_REASON=""
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --worker)
@@ -815,8 +819,12 @@ parse_job_flags() {
         JOB_LINES="${2:-}"
         shift 2
         ;;
+      --reason)
+        JOB_REASON="${2:-}"
+        shift 2
+        ;;
       --help|-h)
-        echo "usage: rig job start|finish|record|show|log [--worker NAME] [--role ROLE] [--status ok|fail] [--summary TEXT] [id] [-f] [-n N]" >&2
+        echo "usage: rig job start|finish|record|show|log|allow|deny [--worker NAME] [--role ROLE] [--status ok|fail] [--summary TEXT] [--reason TEXT] [id] [-f] [-n N]" >&2
         exit 2
         ;;
       --*)
@@ -839,9 +847,9 @@ cmd_job() {
   local sub="${1:-}"
   shift || true
   case "$sub" in
-    start|finish|record|show|log) ;;
+    start|finish|record|show|log|allow|deny) ;;
     *)
-      echo "usage: rig job start|finish|record|show|log [--worker NAME] [--role ROLE] [--status ok|fail] [--summary TEXT] [id] [-f] [-n N]" >&2
+      echo "usage: rig job start|finish|record|show|log|allow|deny [--worker NAME] [--role ROLE] [--status ok|fail] [--summary TEXT] [--reason TEXT] [id] [-f] [-n N]" >&2
       exit 2
       ;;
   esac
@@ -901,6 +909,13 @@ cmd_job() {
     [[ -n "$JOB_ID" ]] && log_args+=("$JOB_ID")
     python3 "$(py_script jobs.py)" log "${log_args[@]}"
     return 0
+  fi
+  if [[ "$sub" == "allow" || "$sub" == "deny" ]]; then
+    local ask_args=("$sub")
+    [[ -n "$JOB_ID" ]] && ask_args+=("$JOB_ID")
+    [[ -n "$JOB_REASON" ]] && ask_args+=(--reason "$JOB_REASON")
+    python3 "$(py_script jobs.py)" "${ask_args[@]}"
+    return $?
   fi
 
   if [[ "$sub" == "finish" && -z "$JOB_ID" ]]; then

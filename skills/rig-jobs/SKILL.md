@@ -31,12 +31,21 @@ A new Grok/Codex thread does not start a new job board. Jobs live in `.rig/jobs/
 
 - agent (grok / codex / claude)
 - role (implement, review, explorer, …)
-- status (`running`, `ok`, `fail`, `timeout`, `stale`)
+- status (`running`, `ask`, `ok`, `fail`, `timeout`, `stale`)
 - task (from the brief)
 - doing (last decoded log line: tool + path, or waiting for json)
 - how to watch: `rig job log <id> -f` or `rig tui` in another pane
 - Grok child: `open` line is `grok -r <session-id>`
 
+If status is `ask`, the Claude child is waiting on a permission prompt. **You answer it** — that is the interaction:
+
+```bash
+rig job allow <id>
+rig job deny <id> --reason "why"
+```
+
+Safe worker work (read/edit/test/ssh gather/git) → allow. Destructive/prod/secrets → deny or ask the user. Do not leave `ask` hanging.
+
 Headless children are not a native Codex/Grok agent row. The board, `/rig`, statusline, and these commands are the UI.
 
-MCP tools if present: `rig_jobs`, `rig_job_show`, `rig_job_log`. Same data.
+MCP tools if present: `rig_jobs`, `rig_job_show`, `rig_job_log`, `rig_job_allow`, `rig_job_deny`. Same data.

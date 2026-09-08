@@ -199,6 +199,7 @@ write_watch() {
       echo "- dashboard: \`grok dashboard\`"
     fi
     echo "- live log: \`rig job log $JOB_ID -f\`"
+    echo "- if it asks: \`rig job allow $JOB_ID\`  or  \`rig job deny $JOB_ID\`"
     echo "- board: \`rig tui\`  or  \`rig jobs\`"
     echo "- status: \`rig status\`"
   } > "$watch"
@@ -246,7 +247,50 @@ case "$WORKER" in
     CMD+=("$BRIEF_TEXT")
     ;;
   claude)
-    CMD=(claude -p "$BRIEF_TEXT" --model "${MODEL:-claude-sonnet-5}" --output-format json --permission-mode acceptEdits --allowedTools "Read,Grep,Glob,Bash,Edit")
+    # Print-mode must stream. json buffers until exit, so Anthropic's
+    # invalid remote deny rules (Bash(eval $(wget*))) fill the TUI as
+    # "doing" and the job looks stuck. Do not use --bare (drops OAuth)
+    # or --dangerously-skip-permissions (org policy can disable bypass).
+    CLAUDE_WORKER_MD="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../adapters/claude/CLAUDE.worker.md"
+    CLAUDE_ASK_PY="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/claude-ask.py"
+    CLAUDE_MCP="$JOB_DIR/mcp.json"
+    python3 - "$CLAUDE_MCP" "$CLAUDE_ASK_PY" "$JOB_DIR" <<'PY'
+import json, pathlib, sys
+path, script, job_dir = map(pathlib.Path, sys.argv[1:])
+path.write_text(
+    json.dumps(
+        {
+            "mcpServers": {
+                "rig-ask": {
+                    "command": "python3",
+                    "args": [str(script)],
+                    "env": {"RIG_JOB_DIR": str(job_dir)},
+                }
+            }
+        },
+        indent=2,
+    )
+    + "\n"
+)
+PY
+    CMD=(
+      claude -p "$BRIEF_TEXT"
+      --model "${MODEL:-claude-sonnet-5}"
+      --output-format stream-json
+      --verbose
+      --permission-mode acceptEdits
+      --allowedTools "Read,Grep,Glob,Bash,Edit,Write"
+      --tools "Bash,Edit,Read,Grep,Glob,Write"
+      --mcp-config "$CLAUDE_MCP"
+      --permission-prompt-tool mcp__rig-ask__permission_prompt
+      --strict-mcp-config
+      --disable-slash-commands
+      --no-session-persistence
+      --setting-sources=
+    )
+    if [[ -f "$CLAUDE_WORKER_MD" ]]; then
+      CMD+=(--append-system-prompt-file "$CLAUDE_WORKER_MD")
+    fi
     [[ -n "$EFFORT" ]] && CMD+=(--effort "$EFFORT")
     ;;
 esac
@@ -302,7 +346,10 @@ kill_tree() {
 }
 
 set +e
-"${CMD[@]}" >"$LOG" 2>&1 &
+(
+  cd "$REPO" || exit 1
+  "${CMD[@]}"
+) >"$LOG" 2>&1 &
 CHILD=$!
 write_meta "running"
 write_watch

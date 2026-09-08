@@ -15,7 +15,7 @@ if str(HERE) not in sys.path:
 import jobs as rig_jobs  # noqa: E402
 
 
-HELP = "j/k select   l log   o open   r refresh   q quit"
+HELP = "j/k select   y allow   n deny   l log   o open   r refresh   q quit"
 
 
 def _elide(text: str, width: int) -> str:
@@ -43,6 +43,8 @@ def _paint(stdscr, repo: Path) -> None:
     def color_for(status: str) -> int:
         if status == "running":
             return curses.color_pair(1) | curses.A_BOLD
+        if status == "ask":
+            return curses.color_pair(3) | curses.A_BOLD
         if status in {"fail", "stale"}:
             return curses.color_pair(2)
         if status == "timeout":
@@ -61,7 +63,8 @@ def _paint(stdscr, repo: Path) -> None:
         h, w = stdscr.getmaxyx()
         stdscr.erase()
         running = sum(1 for j in listing if j["effective"] == "running")
-        title = f" Rig  {running} running / {len(listing)} jobs   {repo} "
+        asking = sum(1 for j in listing if j["effective"] == "ask")
+        title = f" Rig  {asking} ask / {running} running / {len(listing)} jobs   {repo} "
         stdscr.addnstr(0, 0, title[:w], w, curses.A_REVERSE)
         if h < 8 or w < 40:
             stdscr.addnstr(1, 0, "terminal too small", w)
@@ -141,6 +144,12 @@ def _paint(stdscr, repo: Path) -> None:
             if listing:
                 job = listing[selected]
                 footer = job.get("open") or f"no session for {job['job_id']}"
+        elif ch in (ord("y"), ord("n")):
+            if listing:
+                job = listing[selected]
+                behavior = "allow" if ch == ord("y") else "deny"
+                footer = rig_jobs.answer_pending(job, behavior)
+                last = 0
         elif ch == ord("l"):
             if not listing:
                 continue

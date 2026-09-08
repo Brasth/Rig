@@ -99,7 +99,7 @@ rig job record --worker codex --role explorer --status ok --summary "one-line re
 1. Write `.rig/jobs/<id>/brief.md`. Start with: you are a worker, not the orchestrator; do not spawn codex, grok, or claude; do the task; print a short summary; stop.
 2. `pick=$(rig pick --case "<task>" --json)` then:
    `RIG_LIVE=1 RIG_ROLE=<kind> RIG_MODEL=<model> RIG_EFFORT=<effort> "${RIG_HOME:-$HOME/.rig}/scripts/run-worker.sh" <worker> <id> .rig/jobs/<id>/brief.md`
-3. Wait for `.rig/jobs/<id>/result.json`. Do not parse a TUI.
+3. Wait for `.rig/jobs/<id>/result.json`. Do not parse a TUI. While waiting, poll `rig jobs`. If status is `ask`, **you** answer for the Claude child: `rig job show` then `rig job allow <id>` or `rig job deny <id>`. Do not leave it hung. Do not wait for the user unless the command is destructive, prod, or secrets.
 4. `status` is `ok`, `fail`, or `timeout`. On fail or timeout, escalate to the parent. Do not retry as Sol, Astra, or Fable.
 
 Live child: `RIG_LIVE=1`. Default wrapper is dry-run.
@@ -120,3 +120,14 @@ Skip if there is no fact. The command drops duplicates and caps the file at abou
 ## Child commands
 
 Exact argv lives in `run-worker.sh`. Pass `RIG_MODEL` and `RIG_EFFORT` from `rig pick`. Defaults if unset: Codex `gpt-5.6-luna` low, Grok `grok-4.6` high, Claude Code `claude-sonnet-5` medium. Explore/mini: Codex `gpt-5.3-codex-mini` low, Claude Code `claude-haiku-4-5-20251001` low. Hard/review Claude Code: `claude-opus-5` high.
+
+Claude Code child is print-mode `stream-json` (not buffered `json`), `acceptEdits`, no `--bare` (that drops OAuth), no `--dangerously-skip-permissions` (org managed settings can disable bypass). Anthropic remote deny rules like `Bash(eval $(wget*))` are invalid nested parens; they print to stderr and are skipped. `rig jobs` / `rig tui` hide that noise.
+
+A Claude child with no TTY cannot click Allow. When it needs permission, the job status becomes `ask`. The parent answers:
+
+```bash
+rig job allow <id>                 # safe worker work
+rig job deny <id> --reason "..."   # destructive / prod / secrets
+```
+
+Safe → allow: read, edit, test, ssh/gather, git status/diff/add/commit. Ask the user only for force-push, prod deploy, rm -rf outside the repo, or secrets. MCP: `rig_job_allow` / `rig_job_deny`. TUI: `y` / `n`.

@@ -18,7 +18,8 @@ TOOLS = [
         "name": "rig_jobs",
         "description": (
             "List Rig worker jobs in this project: which agent is running, "
-            "the task, status, and what it is doing now."
+            "the task, status, and what it is doing now. Status ask means the "
+            "Claude child is waiting: you MUST call rig_job_allow or rig_job_deny."
         ),
         "inputSchema": {
             "type": "object",
@@ -55,6 +56,36 @@ TOOLS = [
                 "id": {"type": "string"},
                 "repo": {"type": "string"},
                 "lines": {"type": "integer", "default": 40},
+            },
+        },
+    },
+    {
+        "name": "rig_job_allow",
+        "description": (
+            "Allow the Claude child's pending permission prompt. "
+            "Call this when rig_jobs shows status ask and the command is safe worker work "
+            "(read, edit, test, ssh gather, git status/diff/add/commit)."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "id": {"type": "string", "description": "Job id. Default: the asking job."},
+                "repo": {"type": "string"},
+            },
+        },
+    },
+    {
+        "name": "rig_job_deny",
+        "description": (
+            "Deny the Claude child's pending permission prompt. "
+            "Use for destructive, prod, or secrets commands. Optional reason is shown to the child."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "id": {"type": "string"},
+                "repo": {"type": "string"},
+                "reason": {"type": "string"},
             },
         },
     },
@@ -126,6 +157,14 @@ def call_tool(name: str, args: dict) -> dict:
             except (TypeError, ValueError):
                 n = 40
             return _ok(rig_jobs.format_log(job, n))
+        if name == "rig_job_allow":
+            job = rig_jobs.resolve_job(repo, args.get("id"))
+            text = rig_jobs.answer_pending(job, "allow")
+            return _ok(text) if text.startswith("allow") else _err(text)
+        if name == "rig_job_deny":
+            job = rig_jobs.resolve_job(repo, args.get("id"))
+            text = rig_jobs.answer_pending(job, "deny", str(args.get("reason") or ""))
+            return _ok(text) if text.startswith("deny") else _err(text)
         if name == "rig_memory":
             return _ok(rig_memory.show_memory(repo))
         if name == "rig_memory_add":
