@@ -61,6 +61,17 @@ Default project workers: Grok on, Claude on, Codex off. Live parent is whichever
 
 Cross-CLI jobs go through `~/.rig/scripts/run-worker.sh`. The parent waits on `.rig/jobs/<id>/result.json`.
 
+A Grok child is **headless**. Codex will not show its TUI. While it runs:
+
+```bash
+rig status
+rig job show <id>
+cd your-repo && grok -r <session-id>
+tail -f .rig/jobs/<id>/stdout.log
+```
+
+The job folder also has `WATCH.md`.
+
 Cheap same-CLI spawns (Codex explorer/worker, Grok explore) do not use that wrapper. Record them so they still show under `.rig/jobs/`:
 
 ```bash

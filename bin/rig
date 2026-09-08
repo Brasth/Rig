@@ -30,6 +30,7 @@ usage: rig <command> [args]
   job start [--worker NAME] [--role ROLE] [id]
   job finish <id> [--status ok|fail] [--summary TEXT]
   job record [--worker NAME] [--role ROLE] [--status ok|fail] [--summary TEXT] [id]
+  job show [id]
 
 Stay in Codex or Grok. They can invoke Claude or each other.
 EOF
@@ -387,6 +388,31 @@ cmd_status() {
   echo "parent live=${live:-(none)} preferred=$pref profile=$profile"
   echo "effective: ${effs:-none}"
   echo "jobs: $jobs"
+  local jobs_dir meta
+  jobs_dir="$(repo_root)/.rig/jobs"
+  if [[ -d "$jobs_dir" ]]; then
+    python3 - "$jobs_dir" <<'PY' 2>/dev/null || true
+import json, pathlib, sys
+root = pathlib.Path(sys.argv[1])
+running = []
+for meta in sorted(root.glob("*/meta.json")):
+    try:
+        obj = json.loads(meta.read_text())
+    except Exception:
+        continue
+    if obj.get("status") != "running":
+        continue
+    line = f"  {obj.get('job_id')}  {obj.get('worker')} {obj.get('role','')} pid={obj.get('pid','?')}"
+    if obj.get("open"):
+        line += f"\n    open: {obj['open']}"
+    if obj.get("watch"):
+        line += f"\n    log:  {obj['watch']}"
+    running.append(line)
+if running:
+    print("running:")
+    print("\n".join(running))
+PY
+  fi
 }
 
 cmd_use() {
@@ -627,9 +653,9 @@ cmd_job() {
   local sub="${1:-}"
   shift || true
   case "$sub" in
-    start|finish|record) ;;
+    start|finish|record|show) ;;
     *)
-      echo "usage: rig job start|finish|record [--worker NAME] [--role ROLE] [--status ok|fail] [--summary TEXT] [id]" >&2
+      echo "usage: rig job start|finish|record|show [--worker NAME] [--role ROLE] [--status ok|fail] [--summary TEXT] [id]" >&2
       exit 2
       ;;
   esac
@@ -673,6 +699,44 @@ cmd_job() {
       exit 2
       ;;
   esac
+
+  if [[ "$sub" == "show" ]]; then
+    local jobs_dir show
+    jobs_dir="$(repo_root)/.rig/jobs"
+    show="${JOB_ID:-}"
+    if [[ -z "$show" ]]; then
+      python3 - "$jobs_dir" <<'PY'
+import json, pathlib, sys
+root = pathlib.Path(sys.argv[1])
+if not root.exists():
+    raise SystemExit("no jobs")
+for meta in sorted(root.glob("*/meta.json")):
+    obj = json.loads(meta.read_text())
+    print(f"{obj.get('job_id')}  {obj.get('status')}  {obj.get('worker')} {obj.get('role','')}")
+    if obj.get("open"):
+        print(f"  {obj['open']}")
+PY
+      return 0
+    fi
+    local watch="$jobs_dir/$show/WATCH.md" meta="$jobs_dir/$show/meta.json"
+    if [[ -f "$watch" ]]; then
+      cat "$watch"
+    elif [[ -f "$meta" ]]; then
+      python3 - "$meta" <<'PY'
+import json, sys
+obj = json.load(open(sys.argv[1]))
+print(json.dumps(obj, indent=2))
+if obj.get("open"):
+    print("\nopen:", obj["open"])
+if obj.get("watch"):
+    print("log: ", obj["watch"])
+PY
+    else
+      echo "rig job show: no such job $show" >&2
+      exit 1
+    fi
+    return 0
+  fi
 
   if [[ "$sub" == "finish" && -z "$JOB_ID" ]]; then
     echo "usage: rig job finish <id> [--status ok|fail] [--summary TEXT]" >&2

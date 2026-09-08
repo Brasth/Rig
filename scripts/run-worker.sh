@@ -128,7 +128,7 @@ PY
 write_meta() {
   local status="$1"
   META_OUT="$JOB_DIR/meta.json"
-  python3 - "$META_OUT" "$JOB_ID" "$WORKER" "$ROLE" "$status" "$STARTED" "$REPO" "$BIN" <<'PY'
+  python3 - "$META_OUT" "$JOB_ID" "$WORKER" "$ROLE" "$status" "$STARTED" "$REPO" "$BIN" "${CHILD:-}" "${SESSION_ID:-}" "$JOB_DIR" <<'PY'
 import json, pathlib, sys
 path = pathlib.Path(sys.argv[1])
 obj = {
@@ -140,10 +140,37 @@ obj = {
     "repo": sys.argv[7],
     "bin": sys.argv[8],
 }
+pid, session_id, job_dir = sys.argv[9], sys.argv[10], sys.argv[11]
+if pid:
+    obj["pid"] = int(pid)
+if session_id:
+    obj["session_id"] = session_id
+    obj["open"] = f"grok -r {session_id}"
+obj["watch"] = f"tail -f {job_dir}/stdout.log"
 tmp = path.with_name(path.name + ".tmp")
 tmp.write_text(json.dumps(obj, indent=2) + "\n")
 tmp.replace(path)
 PY
+}
+
+write_watch() {
+  local watch="$JOB_DIR/WATCH.md"
+  {
+    echo "# Rig job $JOB_ID"
+    echo
+    echo "The child is headless. Codex cannot show its TUI."
+    echo
+    echo "- worker: \`$WORKER\`"
+    echo "- status: running"
+    [[ -n "${CHILD:-}" ]] && echo "- pid: \`$CHILD\`"
+    if [[ -n "${SESSION_ID:-}" ]]; then
+      echo "- session: \`$SESSION_ID\`"
+      echo "- open Grok: \`cd $REPO && grok -r $SESSION_ID\`"
+      echo "- dashboard: \`grok dashboard\`"
+    fi
+    echo "- live log: \`tail -f $JOB_DIR/stdout.log\`"
+    echo "- status: \`rig status\`"
+  } > "$watch"
 }
 
 shell_join() {
@@ -155,10 +182,12 @@ shell_join() {
 }
 
 BRIEF_TEXT="$(cat "$BRIEF")"
+SESSION_ID=""
 CMD=()
 case "$WORKER" in
   grok)
-    CMD=(grok --no-auto-update --prompt-file "$BRIEF" --cwd "$REPO" --output-format json --always-approve --max-turns 40)
+    SESSION_ID="$(uuidgen | tr 'A-Z' 'a-z')"
+    CMD=(grok --no-auto-update --prompt-file "$BRIEF" --cwd "$REPO" --output-format streaming-json --session-id "$SESSION_ID" --always-approve --max-turns 40)
     ;;
   codex)
     CMD=(codex exec --ephemeral -s workspace-write -C "$REPO" -c 'model="gpt-5.6-terra"' "$BRIEF_TEXT")
@@ -221,6 +250,8 @@ kill_tree() {
 set +e
 "${CMD[@]}" >"$LOG" 2>&1 &
 CHILD=$!
+write_meta "running"
+write_watch
 ELAPSED=0
 TIMED_OUT=0
 while kill -0 "$CHILD" 2>/dev/null; do
