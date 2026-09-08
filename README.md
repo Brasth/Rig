@@ -99,4 +99,4 @@ Local only.
 
 - `.rig/MEMORY.md` — durable bullets, about 120 lines. No transcripts.
 - `.rig/STATE.md` — overwritten each run.
-- `.rig/jobs/` — gitignored. `rig prune` drops jobs older than 7 days and keeps the last 20.
+- `.rig/jobs/` — gitignored. `rig prune` drops jobs older than 7 days and keeps the last 20. Successful jobs delete `stdout.log` after `result.json` is written; fail/timeout logs stay for debug.

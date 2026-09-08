@@ -338,6 +338,7 @@ if [[ "$TIMED_OUT" == "1" ]]; then
 fi
 if [[ "$CHILD_RC" -eq 0 ]]; then
   write_json "ok" 0 "${SUMMARY:-ok}" "$ENDED"
+  rm -f "$LOG"
   exit 0
 fi
 write_json "fail" "$CHILD_RC" "${SUMMARY:-child exited $CHILD_RC}" "$ENDED"

@@ -65,7 +65,8 @@ def _paint(stdscr, repo: Path) -> None:
             job = listing[selected] if listing else None
             for i, item in enumerate(listing[: h - 3]):
                 mark = "●" if item["effective"] == "running" else "○"
-                label = f"{mark} {item['worker']:<6} {item['effective']:<8} {item['job_id']}"
+                spec = "/".join(x for x in [item.get("model"), item.get("effort")] if x)
+                label = f"{mark} {item['worker']:<6} {item['effective']:<8} {spec or item['job_id']}"
                 attr = color_for(item["effective"])
                 if i == selected:
                     attr |= curses.A_REVERSE
@@ -81,6 +82,8 @@ def _paint(stdscr, repo: Path) -> None:
                         job["job_id"],
                         f"agent  {job['worker']}   role {job['role'] or '-'}",
                         f"status {job['effective']}",
+                        f"model  {job.get('model') or '-'}",
+                        f"reasoning  {job.get('effort') or '-'}",
                         f"task   {job['task']}",
                     ]
                     if job.get("doing"):

@@ -22,7 +22,7 @@ A worker is on only when all of these hold:
 
 So: Codex parent → Grok/Claude can be children. Grok parent → Grok child is off; Claude and Codex can be children. Missing binary: that worker is off for this session, not an error. Use cheaper same-CLI workers. That is success.
 
-Check with `rig status`, `rig jobs`, or `/rig`. Live child: `rig tui` in another pane, or `rig job log <id> -f`.
+Check with `rig status`, `rig jobs`, or `/rig`. Those show the worker **model** and **reasoning** level. Live child: `rig tui` in another pane, or `rig job log <id> -f`.
 
 ## Route
 

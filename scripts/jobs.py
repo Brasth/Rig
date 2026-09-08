@@ -221,6 +221,18 @@ def load_job(job_path: Path) -> dict | None:
         mtime = job_path.stat().st_mtime
     except OSError:
         pass
+    model = str(obj.get("model") or "").strip()
+    effort = str(obj.get("effort") or "").strip()
+    inferred = False
+    if not model:
+        try:
+            import route as rig_route
+
+            kind = rig_route.classify(str(obj.get("role") or "implement"), "")
+            model, effort = rig_route.model_for(str(obj.get("worker") or "codex"), kind)
+            inferred = True
+        except Exception:
+            model, effort = "", ""
     return {
         "job_id": job_id,
         "worker": str(obj.get("worker") or "?"),
@@ -230,8 +242,9 @@ def load_job(job_path: Path) -> dict | None:
         "pid": pid_i,
         "alive": alive,
         "session_id": str(obj.get("session_id") or ""),
-        "model": str(obj.get("model") or ""),
-        "effort": str(obj.get("effort") or ""),
+        "model": model,
+        "effort": effort,
+        "model_inferred": inferred,
         "open": str(obj.get("open") or ""),
         "watch": str(obj.get("watch") or ""),
         "summary": str(obj.get("summary") or ""),
@@ -242,6 +255,7 @@ def load_job(job_path: Path) -> dict | None:
         "activities": activities,
         "dir": str(job_path),
         "log": str(log_path),
+        "log_pruned": status == "ok" and not log_path.is_file(),
         "mtime": mtime,
     }
 
@@ -284,6 +298,10 @@ def format_table(jobs: list[dict]) -> str:
             f"{job['effective']:<9} {job['worker']:<8} {job['role']:<10} {job['job_id']:<32} {job['task']}"
         )
         extras = []
+        if job.get("model") or job.get("effort"):
+            extras.append(
+                f"          model  {job.get('model') or '-'}   reasoning {job.get('effort') or '-'}"
+            )
         if job["doing"]:
             extras.append(f"          doing  {job['doing']}")
         if job["effective"] == "running" and job.get("open"):
@@ -303,9 +321,8 @@ def format_show(job: dict, log_lines: int = 24) -> str:
         f"role    {job['role'] or '-'}",
         f"status  {job['effective']}",
     ]
-    if job.get("model"):
-        extra = f"  effort {job['effort']}" if job.get("effort") else ""
-        lines.append(f"model   {job['model']}{extra}")
+    lines.append(f"model      {job.get('model') or '-'}")
+    lines.append(f"reasoning  {job.get('effort') or '-'}")
     lines += [
         f"task    {job['task']}",
     ]
@@ -332,7 +349,10 @@ def format_show(job: dict, log_lines: int = 24) -> str:
             lines.append(f"  {act}")
     else:
         lines.append("")
-        lines.append("log     (empty — json children buffer until exit; streaming-json writes live)")
+        if job.get("log_pruned"):
+            lines.append("log     pruned after success (summary kept in result.json)")
+        else:
+            lines.append("log     (empty — json children buffer until exit; streaming-json writes live)")
     lines.append("")
     lines.append(f"follow  rig job log {job['job_id']} -f")
     lines.append("board   rig tui")
@@ -344,13 +364,15 @@ def format_log(job: dict, n: int = 40) -> str:
     if not acts:
         if job["effective"] == "running":
             return "log empty (child still running; json is buffered until exit)"
+        if job.get("log_pruned"):
+            return "log pruned after success"
         return "log empty"
     return "\n".join(acts[-n:])
 
 
 def follow_log(job: dict) -> None:
     print(
-        f"# {job['job_id']}  {job['worker']}  {job['effective']}  {job['task']}",
+        f"# {job['job_id']}  {job['worker']}  {job.get('model') or '-'}  reasoning={job.get('effort') or '-'}  {job['effective']}  {job['task']}",
         flush=True,
     )
     seen = 0
@@ -385,7 +407,12 @@ def format_statusline(payload: dict) -> str:
         return f"{line1}\nrig · idle"
     job = running[0]
     extra = f" +{len(running) - 1}" if len(running) > 1 else ""
-    line2 = f"{green}rig · {job['worker']} {job['role'] or 'worker'} running{extra} · {job['task']}{reset}"
+    spec = " ".join(x for x in [job.get("model"), job.get("effort")] if x)
+    line2 = (
+        f"{green}rig · {job['worker']} {job['role'] or 'worker'} running{extra}"
+        + (f" · {spec}" if spec else "")
+        + f" · {job['task']}{reset}"
+    )
     line3 = job["doing"] if job.get("doing") else ""
     out = [line1, line2]
     if line3:

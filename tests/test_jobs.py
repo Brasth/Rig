@@ -120,6 +120,21 @@ class JobBoard(unittest.TestCase):
         shown = jobs.format_show(listing[0])
         self.assertIn("agent   grok", shown)
         self.assertIn("read_file", shown)
+        self.assertIn("model", shown)
+        self.assertIn("reasoning", shown)
+        table = jobs.format_table(listing)
+        self.assertIn("model", table)
+        self.assertIn("reasoning", table)
+
+    def test_ok_job_without_log_is_pruned(self):
+        d = self.repo / ".rig" / "jobs" / "done-ok"
+        d.mkdir()
+        (d / "meta.json").write_text(
+            json.dumps({"job_id": "done-ok", "worker": "grok", "role": "implement", "status": "ok"})
+        )
+        job = jobs.load_job(d)
+        self.assertTrue(job["log_pruned"])
+        self.assertIn("pruned after success", jobs.format_log(job))
 
     def test_statusline(self):
         text = jobs.format_statusline(

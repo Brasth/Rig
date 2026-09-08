@@ -557,6 +557,7 @@ cmd_prune() {
     return 0
   fi
   python3 - "$jobs" <<'PY'
+import json
 import pathlib
 import shutil
 import sys
@@ -565,6 +566,7 @@ import time
 root = pathlib.Path(sys.argv[1])
 now = time.time()
 removed = 0
+logs = 0
 for p in list(root.iterdir()):
     if p.is_dir() and now - p.stat().st_mtime > 7 * 86400:
         shutil.rmtree(p)
@@ -574,7 +576,22 @@ dirs.sort(key=lambda p: p.stat().st_mtime, reverse=True)
 for p in dirs[20:]:
     shutil.rmtree(p)
     removed += 1
-print(f"prune ok  removed={removed} kept={len([p for p in root.iterdir() if p.is_dir()])}")
+for p in root.iterdir():
+    if not p.is_dir():
+        continue
+    meta, log = p / "meta.json", p / "stdout.log"
+    if not log.is_file():
+        continue
+    status = ""
+    if meta.is_file():
+        try:
+            status = json.loads(meta.read_text()).get("status", "")
+        except Exception:
+            continue
+    if status == "ok":
+        log.unlink()
+        logs += 1
+print(f"prune ok  removed={removed} logs_dropped={logs} kept={len([p for p in root.iterdir() if p.is_dir()])}")
 PY
 }
 
@@ -639,6 +656,12 @@ EOF
 write_job_files() {
   local job_dir="$1"
   mkdir -p "$job_dir"
+  local model="${RESULT_MODEL:-}" effort="${RESULT_EFFORT:-}" envout
+  if [[ -z "$model" ]]; then
+    envout="$(python3 "$(py_script route.py)" env --worker "$3" --role "$4" 2>/dev/null || true)"
+    model="$(printf '%s\n' "$envout" | sed -n 's/^RIG_MODEL=//p')"
+    effort="$(printf '%s\n' "$envout" | sed -n 's/^RIG_EFFORT=//p')"
+  fi
   RESULT_JOB_ID="${2}" \
   RESULT_WORKER="${3}" \
   RESULT_ROLE="${4}" \
@@ -648,6 +671,8 @@ write_job_files() {
   RESULT_ENDED="${8}" \
   RESULT_SUMMARY="${9}" \
   RESULT_KIND="${10:-native}" \
+  RESULT_MODEL="$model" \
+  RESULT_EFFORT="$effort" \
   python3 - "$job_dir" <<'PY'
 import json, os, pathlib, sys
 job_dir = pathlib.Path(sys.argv[1])
@@ -663,6 +688,8 @@ obj = {
     "files_changed": [],
     "next": "",
     "kind": os.environ.get("RESULT_KIND", "native"),
+    "model": os.environ.get("RESULT_MODEL", ""),
+    "effort": os.environ.get("RESULT_EFFORT", ""),
 }
 for name in ("meta.json", "result.json"):
     path = job_dir / name
@@ -838,6 +865,9 @@ cmd_job() {
   [[ "$JOB_STATUS" == "timeout" ]] && exit_code=124
   write_job_files "$job_dir" "$JOB_ID" "$JOB_WORKER" "$JOB_ROLE" "$JOB_STATUS" "$exit_code" "$started" "$now" "$JOB_SUMMARY" "native"
   write_state "$JOB_ID" "$JOB_WORKER" "$JOB_STATUS" "$JOB_SUMMARY"
+  if [[ "$JOB_STATUS" == "ok" ]]; then
+    rm -f "$job_dir/stdout.log"
+  fi
   echo "job $JOB_ID worker=$JOB_WORKER role=$JOB_ROLE status=$JOB_STATUS"
   echo "$job_dir/result.json"
 }
