@@ -37,6 +37,45 @@ def jobs_dir(repo: Path) -> Path:
     return repo / ".rig" / "jobs"
 
 
+THREAD_ENV = (
+    "RIG_THREAD",
+    "GROK_SESSION_ID",
+    "CODEX_THREAD_ID",
+    "CODEX_SESSION_ID",
+)
+
+
+def thread_file(repo: Path) -> Path:
+    return repo / ".rig" / "thread"
+
+
+def remember_thread(repo: Path, session_id: str) -> None:
+    sid = (session_id or "").strip()
+    if not sid:
+        return
+    path = thread_file(repo)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(sid + "\n")
+    tmp.replace(path)
+
+
+def current_thread(repo: Path | None = None) -> str:
+    for key in THREAD_ENV:
+        val = (os.environ.get(key) or "").strip()
+        if val:
+            return val
+    if repo is None:
+        repo = repo_root()
+    path = thread_file(repo)
+    if path.is_file():
+        try:
+            return path.read_text(errors="replace").strip().splitlines()[0].strip()
+        except OSError:
+            return ""
+    return ""
+
+
 def pid_alive(pid: int | None) -> bool:
     if not pid:
         return False
@@ -67,26 +106,56 @@ def task_from_brief(text: str, job_id: str) -> str:
     if lines:
         return _first_line(" ".join(lines[:2]))
     slug = job_id.split("-", 1)
-    if len(slug) == 2 and slug[0][:6].isdigit():
+    # 20260908T071315Z-4994 is a timestamp-pid id, not a task slug.
+    if len(slug) == 2 and slug[0][:6].isdigit() and not slug[1].isdigit():
         return slug[1].replace("-", " ")
     return job_id
 
 
+def _short_path(val: str) -> str:
+    s = val.strip()
+    if "/" in s or s.startswith("."):
+        parts = [p for p in s.split("/") if p]
+        if len(parts) >= 2:
+            return "/".join(parts[-2:])
+        return parts[-1] if parts else s
+    return s
+
+
 def _input_detail(inp: object) -> str:
     if isinstance(inp, str) and inp.strip():
-        return _first_line(inp, 120)
+        return _first_line(_short_path(inp), 120)
     if not isinstance(inp, dict):
         return ""
     for key in INPUT_KEYS:
         val = inp.get(key)
         if isinstance(val, str) and val.strip():
-            return _first_line(val, 120)
+            return _first_line(_short_path(val), 120)
         if isinstance(val, list) and val:
             return _first_line(" ".join(str(x) for x in val[:4]), 120)
     for val in inp.values():
         if isinstance(val, str) and 1 < len(val) < 200:
-            return _first_line(val, 120)
+            return _first_line(_short_path(val), 120)
     return ""
+
+
+def _wrap_words(text: str, width: int) -> list[str]:
+    words = text.split()
+    if not words:
+        return []
+    lines: list[str] = []
+    cur = ""
+    for word in words:
+        if not cur:
+            cur = word
+        elif len(cur) + 1 + len(word) <= width:
+            cur += " " + word
+        else:
+            lines.append(cur)
+            cur = word
+    if cur:
+        lines.append(cur)
+    return lines
 
 
 def activity_from_event(obj: dict) -> str | None:
@@ -127,12 +196,35 @@ def activity_from_event(obj: dict) -> str | None:
     return None
 
 
+def _flush_stream(buf_kind: str | None, buf: list[str], out: list[str]) -> None:
+    if not buf or not buf_kind:
+        return
+    text = "".join(buf).strip()
+    buf.clear()
+    if not text:
+        return
+    if buf_kind == "thought":
+        wrapped = _wrap_words(" ".join(text.split()), 120)
+        if not wrapped:
+            return
+        out.append("think  " + wrapped[0])
+        for extra in wrapped[1:]:
+            out.append("       " + extra)
+        return
+    for para in text.split("\n"):
+        s = para.strip()
+        if s:
+            out.append(_first_line(s, 160))
+
+
 def decode_log_text(raw: str) -> list[str]:
     text = raw.strip()
     if not text:
         return []
     if text.startswith("{") and "\n{" in text:
-        lines = []
+        lines: list[str] = []
+        buf_kind: str | None = None
+        buf: list[str] = []
         for line in text.splitlines():
             line = line.strip()
             if not line.startswith("{"):
@@ -141,12 +233,32 @@ def decode_log_text(raw: str) -> list[str]:
                 obj = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            if isinstance(obj, dict):
+            if not isinstance(obj, dict):
+                continue
+            kind = obj.get("type")
+            if kind in ("thought", "text"):
+                data = obj.get("data") or obj.get("text") or ""
+                if not isinstance(data, str) or not data:
+                    continue
+                if buf_kind not in (None, kind):
+                    _flush_stream(buf_kind, buf, lines)
+                buf_kind = kind
+                buf.append(data)
+                continue
+            _flush_stream(buf_kind, buf, lines)
+            buf_kind = None
+            if kind == "tool_call":
+                act = activity_from_event(obj)
+                if act and (not lines or lines[-1] != act):
+                    lines.append(act)
+                continue
+            if kind == "error":
                 act = activity_from_event(obj)
                 if act:
                     lines.append(act)
+        _flush_stream(buf_kind, buf, lines)
         if lines:
-            return lines
+            return lines[-120:]
     if text.startswith("{"):
         try:
             obj = json.loads(text)
@@ -199,6 +311,9 @@ def load_job(job_path: Path) -> dict | None:
         except OSError:
             brief = ""
     task = str(obj.get("task") or "").strip() or task_from_brief(brief, job_id)
+    summary = str(obj.get("summary") or "").strip()
+    if (not brief.strip()) and summary:
+        task = _first_line(summary)
     pid = obj.get("pid")
     try:
         pid_i = int(pid) if pid not in (None, "") else None
@@ -211,11 +326,19 @@ def load_job(job_path: Path) -> dict | None:
         effective = "stale"
     log_path = job_path / "stdout.log"
     activities = decode_log_text(read_log_tail(log_path))
+    kind = str(obj.get("kind") or "")
     doing = ""
     if effective == "running":
-        doing = activities[-1] if activities else "running (no log yet)"
+        if activities:
+            doing = next((a for a in reversed(activities) if not a.startswith("think")), activities[-1])
+        elif kind == "native":
+            doing = "native spawn (no stdout.log — finish with rig job finish)"
+        else:
+            doing = "running (no log yet)"
     elif activities:
-        doing = activities[-1]
+        doing = next((a for a in reversed(activities) if not a.startswith("think")), activities[-1])
+    elif summary:
+        doing = _first_line(summary)
     mtime = 0.0
     try:
         mtime = job_path.stat().st_mtime
@@ -228,8 +351,8 @@ def load_job(job_path: Path) -> dict | None:
         try:
             import route as rig_route
 
-            kind = rig_route.classify(str(obj.get("role") or "implement"), "")
-            model, effort = rig_route.model_for(str(obj.get("worker") or "codex"), kind)
+            route_kind = rig_route.classify(str(obj.get("role") or "implement"), "")
+            model, effort = rig_route.model_for(str(obj.get("worker") or "codex"), route_kind)
             inferred = True
         except Exception:
             model, effort = "", ""
@@ -237,11 +360,13 @@ def load_job(job_path: Path) -> dict | None:
         "job_id": job_id,
         "worker": str(obj.get("worker") or "?"),
         "role": str(obj.get("role") or ""),
+        "kind": kind,
         "status": status,
         "effective": effective,
         "pid": pid_i,
         "alive": alive,
         "session_id": str(obj.get("session_id") or ""),
+        "thread": str(obj.get("thread") or ""),
         "model": model,
         "effort": effort,
         "model_inferred": inferred,
@@ -260,7 +385,7 @@ def load_job(job_path: Path) -> dict | None:
     }
 
 
-def list_jobs(repo: Path) -> list[dict]:
+def list_jobs(repo: Path, thread: str | None = None) -> list[dict]:
     root = jobs_dir(repo)
     if not root.is_dir():
         return []
@@ -271,6 +396,8 @@ def list_jobs(repo: Path) -> list[dict]:
             if job:
                 jobs.append(job)
     jobs.sort(key=lambda j: (0 if j["effective"] == "running" else 1, -j["mtime"]))
+    if thread:
+        jobs = [j for j in jobs if j.get("thread") == thread]
     return jobs
 
 
@@ -302,6 +429,8 @@ def format_table(jobs: list[dict]) -> str:
             extras.append(
                 f"          model  {job.get('model') or '-'}   reasoning {job.get('effort') or '-'}"
             )
+        if job.get("thread"):
+            extras.append(f"          thread {job['thread']}")
         if job["doing"]:
             extras.append(f"          doing  {job['doing']}")
         if job["effective"] == "running" and job.get("open"):
@@ -330,6 +459,8 @@ def format_show(job: dict, log_lines: int = 24) -> str:
         lines.append(f"doing   {job['doing']}")
     if job["pid"]:
         lines.append(f"pid     {job['pid']} ({'alive' if job['alive'] else 'dead'})")
+    if job.get("thread"):
+        lines.append(f"thread  {job['thread']}")
     if job["session_id"]:
         lines.append(f"session {job['session_id']}")
     if job["open"]:
@@ -392,6 +523,12 @@ def format_statusline(payload: dict) -> str:
     ctx = payload.get("context_window") if isinstance(payload.get("context_window"), dict) else {}
     cwd = ws.get("current_dir") or payload.get("cwd") or ""
     repo = Path(ws.get("repo_root") or cwd or os.getcwd())
+    sid = str(payload.get("session_id") or "").strip()
+    if sid:
+        try:
+            remember_thread(repo_root(str(repo)), sid)
+        except OSError:
+            pass
     name = Path(str(cwd)).name if cwd else repo.name
     model_name = str(model.get("display_name") or "")
     pct = ctx.get("used_percentage")
@@ -424,16 +561,30 @@ def main() -> int:
     import argparse
 
     parser = argparse.ArgumentParser(prog="jobs.py")
-    parser.add_argument("cmd", nargs="?", default="list", choices=["list", "show", "log", "statusline"])
+    parser.add_argument(
+        "cmd", nargs="?", default="list", choices=["list", "show", "log", "statusline", "thread"]
+    )
     parser.add_argument("job_id", nargs="?")
     parser.add_argument("--repo")
     parser.add_argument("--json", action="store_true")
     parser.add_argument("-f", "--follow", action="store_true")
     parser.add_argument("-n", "--lines", type=int, default=40)
+    parser.add_argument(
+        "--thread",
+        nargs="?",
+        const="this",
+        help="Filter by parent thread id. Bare --thread uses the current parent thread.",
+    )
     args = parser.parse_args()
     repo = repo_root(args.repo)
+    if args.cmd == "thread":
+        print(current_thread(repo))
+        return 0
     if args.cmd == "list":
-        listing = list_jobs(repo)
+        want_thread = args.thread
+        if want_thread == "this":
+            want_thread = current_thread(repo) or None
+        listing = list_jobs(repo, thread=want_thread)
         if args.json:
             dump = [{k: v for k, v in j.items() if k != "activities"} for j in listing]
             print(json.dumps(dump, indent=2))

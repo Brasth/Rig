@@ -11,6 +11,7 @@ if str(HERE) not in sys.path:
     sys.path.insert(0, str(HERE))
 
 import jobs as rig_jobs  # noqa: E402
+import memory as rig_memory  # noqa: E402
 
 TOOLS = [
     {
@@ -26,6 +27,10 @@ TOOLS = [
                 "status": {
                     "type": "string",
                     "description": "Filter: running, ok, fail, timeout, stale",
+                },
+                "thread": {
+                    "type": "string",
+                    "description": "Filter by parent thread id. Omit to list every job in this repo (new threads still see running work).",
                 },
             },
         },
@@ -53,6 +58,37 @@ TOOLS = [
             },
         },
     },
+    {
+        "name": "rig_memory",
+        "description": (
+            "Show standing project facts in .rig/MEMORY.md. "
+            "Call this at the start of a new thread."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "repo": {"type": "string"},
+            },
+        },
+    },
+    {
+        "name": "rig_memory_add",
+        "description": (
+            "Save one standing project fact to .rig/MEMORY.md. "
+            "One short bullet. No transcripts. Duplicates and the 120-line cap are handled."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "fact": {
+                    "type": "string",
+                    "description": "One durable fact, not a transcript or job log.",
+                },
+                "repo": {"type": "string"},
+            },
+            "required": ["fact"],
+        },
+    },
 ]
 
 
@@ -73,7 +109,8 @@ def call_tool(name: str, args: dict) -> dict:
     try:
         repo = _repo(args)
         if name == "rig_jobs":
-            listing = rig_jobs.list_jobs(repo)
+            want_thread = str(args.get("thread") or "").strip() or None
+            listing = rig_jobs.list_jobs(repo, thread=want_thread)
             want = str(args.get("status") or "").strip()
             if want:
                 listing = [j for j in listing if j["effective"] == want or j["status"] == want]
@@ -89,6 +126,13 @@ def call_tool(name: str, args: dict) -> dict:
             except (TypeError, ValueError):
                 n = 40
             return _ok(rig_jobs.format_log(job, n))
+        if name == "rig_memory":
+            return _ok(rig_memory.show_memory(repo))
+        if name == "rig_memory_add":
+            fact = str(args.get("fact") or "")
+            if not rig_memory.normalize_fact(fact):
+                return _err("rig_memory_add needs fact")
+            return _ok(rig_memory.add_memory(repo, fact))
         return _err(f"unknown tool {name}")
     except SystemExit as exc:
         return _err(str(exc) or "rig error")

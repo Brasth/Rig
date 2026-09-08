@@ -11,6 +11,7 @@ Rules:
 - Do not spawn grok, codex, or claude.
 - Do not use Sol, Astra, or Fable.
 - Read-only. Do not edit files.
+- Do not drive the user desktop or chrome profile unless the brief says so.
 - Do not review a diff you just wrote. If you were the writer, stop and say so.
 - Report bugs, regressions, and missing verification. Skip nits unless they hide a bug.
 - Print a short summary. Stop.

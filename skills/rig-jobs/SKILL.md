@@ -11,19 +11,21 @@ argument-hint: "[job-id]"
 # Rig jobs
 
 Show the user which Rig worker is running, the task, status, and a readable log.
-Do not guess. Run the commands.
+Do not guess. Run the commands. The parent checks this board; workers do the code, review, SSH, and gather.
 
 ## Commands
 
 ```bash
-rig jobs
+rig memory            # standing facts; run this on a new thread
+rig jobs              # every job in this repo (survives a new parent thread)
 rig job show          # running job, or latest
 rig job show <id>
 rig job log <id>      # decoded activity
 rig tui               # interactive board (user terminal; do not launch inside this TUI)
+rig memory add "fact" # one standing bullet after a useful run
 ```
 
-If the user named an id, show that job. Otherwise list jobs, then show the running one.
+A new Grok/Codex thread does not start a new job board. Jobs live in `.rig/jobs/`. If the user named an id, show that job. Otherwise list jobs, then show the running one.
 
 ## What to report
 

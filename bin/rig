@@ -27,14 +27,16 @@ usage: rig <command> [args]
   workers grok=on|off claude=on|off codex=on|off
   prune
   run "prompt"
-  jobs [--json]
+  jobs [--json] [--thread [ID]]
   tui
+  memory [show]
+  memory add "standing fact"
   job start [--worker NAME] [--role ROLE] [id]
   job finish <id> [--status ok|fail] [--summary TEXT]
   job record [--worker NAME] [--role ROLE] [--status ok|fail] [--summary TEXT] [id]
   job show [id]
   job log [id] [-f] [-n N]
-  pick [role] [--case TEXT] [--json]
+  pick [explore|mini|bulk|implement|hard|review|stay] [--case TEXT] [--json]
 
 Stay in Codex or Grok. They can invoke Claude or each other.
 EOF
@@ -126,11 +128,16 @@ ensure_skill_link() {
 
 maybe_copy_codex_agent() {
   local src="$1" dest="$2"
+  mkdir -p "$(dirname "$dest")"
   if [[ -e "$dest" ]]; then
-    printf 'skip %s (exists)\n' "$dest"
+    if command grep -q "You are a Rig" "$dest" 2>/dev/null; then
+      install_file "$src" "$dest"
+      printf 'refreshed %s\n' "$dest"
+      return 0
+    fi
+    printf 'skip %s (exists, not a Rig agent)\n' "$dest"
     return 0
   fi
-  mkdir -p "$(dirname "$dest")"
   cp "$src" "$dest"
   printf 'wrote %s\n' "$dest"
 }
@@ -263,15 +270,17 @@ cmd_init() {
     fi
   done
 
-  local gi="$root/.gitignore" frag=".rig/jobs/"
-  if [[ -f "$gi" ]]; then
-    if command grep -qxF "$frag" "$gi" 2>/dev/null; then
-      printf 'keep %s (%s)\n' "$gi" "$frag"
-    else
-      printf '\n%s\n' "$frag" >> "$gi"
-      printf 'appended %s to %s\n' "$frag" "$gi"
+  local gi="$root/.gitignore" frag
+  for frag in ".rig/jobs/" ".rig/thread"; do
+    if [[ -f "$gi" ]]; then
+      if command grep -qxF "$frag" "$gi" 2>/dev/null; then
+        printf 'keep %s (%s)\n' "$gi" "$frag"
+      else
+        printf '\n%s\n' "$frag" >> "$gi"
+        printf 'appended %s to %s\n' "$frag" "$gi"
+      fi
     fi
-  fi
+  done
 
   if [[ "$patch_agents" -eq 1 ]]; then
     local agents="$root/AGENTS.md"
@@ -279,12 +288,13 @@ cmd_init() {
     block="$(cat <<'EOF'
 <!-- rig:start -->
 Use the `delegate-harness` skill (`.agents/skills/delegate-harness/SKILL.md`) for implement, review, explore, or split work across CLIs.
-Read `.rig/harness.toml` and `.rig/MEMORY.md`. Run `rig status` before spawning.
+This CLI is the parent: plan, check, vision, computer-use, chrome-profile. Workers write code, fix bugs, review, SSH/debug, and gather facts. If this CLI cannot do computer-use or chrome-profile, spawn a worker. Do not ask the user.
+Read `.rig/harness.toml`. First commands in a new thread: `rig memory` then `rig jobs` then `rig status`. Jobs and MEMORY are this repo, not this chat. Running children keep going.
 Live parent is this CLI, not the `parent` key. That key is only the preferred default (`rig use grok|codex`). Opening Grok or Codex is what makes it live.
 Claude Code is never the parent. If `[workers].claude` is true and `claude` is on PATH, it is a worker. Pin full IDs: `claude-haiku-4-5-20251001` cheap, `claude-sonnet-5` implement, `claude-opus-5` hard/review. Never Fable as a child.
 A worker is on only when its flag is true, its binary exists, and it is not the live parent. Missing binary: that worker is off. Use cheaper same-CLI workers. That is success.
-Do not ask the user which model. Run `rig pick --case "<task>"` and pass `RIG_MODEL` / `RIG_EFFORT` into `run-worker.sh`.
-Implement: Grok child if Grok is effective. If Grok is the live parent (or off), next effective worker (Claude Code `claude-sonnet-5`, then Codex luna/low). Else cheap same-CLI.
+Do not ask the user which model. Run `rig pick --case "<task>"` and pass `RIG_MODEL` / `RIG_EFFORT` into `run-worker.sh`. Plan/vision/computer-use/chrome-profile: parent keeps it (`rig pick stay`) unless this CLI cannot do it.
+Implement/SSH/fix: Grok child if Grok is effective. If Grok is the live parent (or off), next effective worker (Claude Code `claude-sonnet-5`, then Codex luna/low). Else cheap same-CLI.
 Review: a different vendor than the writer. Never spawn Sol, Astra, or Fable as a child. Opus is allowed.
 Cheap same-CLI spawn (Codex explorer/worker/bulk/reviewer, Grok explore): record it.
 `rig job start --worker <codex|grok|claude> --role explorer` then `rig job finish <id> --status ok --summary "..."`.
@@ -292,6 +302,7 @@ When calling another CLI, write `.rig/jobs/<id>/brief.md` then run:
 `RIG_LIVE=1 "$HOME/.rig/scripts/run-worker.sh" <grok|codex|claude> <id> .rig/jobs/<id>/brief.md`
 Wait for `.rig/jobs/<id>/result.json`. Do not parse a TUI.
 Watch children: `rig jobs` / `rig job show` / `rig job log <id>` / `rig tui` / `/rig`.
+After a run: `rig memory add "one standing fact"` if there is one. Cap is the command's job. No transcripts.
 <!-- rig:end -->
 EOF
 )"
@@ -412,6 +423,7 @@ cmd_doctor() {
   echo "  board:  rig tui"
   echo "  list:   rig jobs"
   echo "  log:    rig job log [id] -f"
+  echo "  memory: rig memory   |   rig memory add \"fact\""
   echo "  slash:  /rig"
   echo "  pick:   rig pick --case \"task\"   (agent chooses model; do not ask the user)"
 }
@@ -435,8 +447,21 @@ cmd_status() {
   echo "parent live=${live:-(none)} preferred=$pref profile=$profile"
   echo "effective: ${effs:-none}"
   echo "jobs: $jobs"
-  local jp
+  local jp mp thread last
   jp="$(py_script jobs.py)"
+  if [[ -f "$jp" ]]; then
+    thread="$(python3 "$jp" thread 2>/dev/null || true)"
+    [[ -n "$thread" ]] && echo "thread: $thread"
+  fi
+  mp="$(py_script memory.py)"
+  if [[ -f "$mp" ]]; then
+    echo "memory: $(python3 "$mp" count 2>/dev/null || echo 0) facts"
+  fi
+  last="$(repo_root)/.rig/STATE.md"
+  if [[ -f "$last" ]]; then
+    echo "state:"
+    command grep -E '^- (last_job|worker|status|summary):' "$last" | sed 's/^/  /'
+  fi
   if [[ -f "$jp" ]]; then
     python3 "$jp" list
   fi
@@ -444,6 +469,36 @@ cmd_status() {
 
 cmd_jobs() {
   python3 "$(py_script jobs.py)" list "$@"
+}
+
+cmd_memory() {
+  local sub="${1:-show}"
+  if [[ $# -gt 0 ]]; then
+    shift
+  fi
+  case "$sub" in
+    show|count)
+      python3 "$(py_script memory.py)" "$sub"
+      ;;
+    add)
+      local fact="$*"
+      if [[ -z "$fact" && ! -t 0 ]]; then
+        fact="$(cat)"
+      fi
+      if [[ -z "$fact" ]]; then
+        echo "usage: rig memory add \"standing fact\"" >&2
+        exit 2
+      fi
+      python3 "$(py_script memory.py)" add "$fact"
+      ;;
+    -h|--help|help)
+      echo "usage: rig memory [show|add \"standing fact\"]" >&2
+      exit 2
+      ;;
+    *)
+      python3 "$(py_script memory.py)" add "$sub $*"
+      ;;
+  esac
 }
 
 cmd_tui() {
@@ -470,7 +525,7 @@ cmd_pick() {
         shift 2
         ;;
       --help|-h)
-        echo "usage: rig pick [explore|mini|bulk|implement|hard|review] [--case TEXT] [--json]" >&2
+        echo "usage: rig pick [explore|mini|bulk|implement|hard|review|stay] [--case TEXT] [--json]" >&2
         exit 2
         ;;
       --*)
@@ -673,9 +728,20 @@ write_job_files() {
   RESULT_KIND="${10:-native}" \
   RESULT_MODEL="$model" \
   RESULT_EFFORT="$effort" \
+  RESULT_THREAD="${RESULT_THREAD:-}" \
   python3 - "$job_dir" <<'PY'
 import json, os, pathlib, sys
 job_dir = pathlib.Path(sys.argv[1])
+keep = ("thread", "session_id", "pid", "open", "watch", "kind", "model", "effort")
+old = {}
+meta_path = job_dir / "meta.json"
+if meta_path.is_file():
+    try:
+        loaded = json.loads(meta_path.read_text())
+        if isinstance(loaded, dict):
+            old = loaded
+    except Exception:
+        old = {}
 obj = {
     "job_id": os.environ["RESULT_JOB_ID"],
     "worker": os.environ["RESULT_WORKER"],
@@ -691,6 +757,12 @@ obj = {
     "model": os.environ.get("RESULT_MODEL", ""),
     "effort": os.environ.get("RESULT_EFFORT", ""),
 }
+for key in keep:
+    if not obj.get(key) and old.get(key) not in (None, ""):
+        obj[key] = old[key]
+thread = os.environ.get("RESULT_THREAD", "")
+if thread:
+    obj["thread"] = thread
 for name in ("meta.json", "result.json"):
     path = job_dir / name
     tmp = path.with_name(path.name + ".tmp")
@@ -843,6 +915,11 @@ cmd_job() {
   job_dir="$root/.rig/jobs/$JOB_ID"
   now="$(iso_now)"
   mkdir -p "$job_dir"
+  RESULT_THREAD="${RIG_THREAD:-}"
+  if [[ -z "$RESULT_THREAD" ]]; then
+    RESULT_THREAD="$(python3 "$(py_script jobs.py)" thread --repo "$root" 2>/dev/null || true)"
+  fi
+  export RESULT_THREAD
 
   if [[ "$sub" == "start" ]]; then
     write_job_files "$job_dir" "$JOB_ID" "$JOB_WORKER" "$JOB_ROLE" "running" "0" "$now" "" "$JOB_SUMMARY" "native"
@@ -903,6 +980,12 @@ cmd_run() {
   effort="$(printf '%s\n' "$choice" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("effort",""))')"
   kind="$(printf '%s\n' "$choice" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("kind",""))')"
 
+  if [[ "$spawn" == "stay" ]]; then
+    echo "parent keeps this (plan / vision / computer-use / chrome-profile). Do it here, or spawn a worker if this CLI cannot."
+    echo "$choice"
+    write_state "$job" "${worker:-parent}" "ok" "parent keeps this; spawn a worker only if this CLI cannot"
+    exit 0
+  fi
   if [[ "$spawn" != "run-worker" || -z "$worker" ]]; then
     echo "no effective cross-CLI worker. Use cheaper same-CLI workers. That is success."
     echo "$choice"
@@ -948,6 +1031,7 @@ main() {
     run) cmd_run "$@" ;;
     jobs) cmd_jobs "$@" ;;
     tui) cmd_tui "$@" ;;
+    memory) cmd_memory "$@" ;;
     job) cmd_job "$@" ;;
     pick) cmd_pick "$@" ;;
     -h|--help|help|"") usage ;;

@@ -1,16 +1,48 @@
 ---
 name: delegate-harness
 description: >
-  Delegate implement, review, explore, or split work across Codex, Grok, and Claude via Rig
-  run-worker.sh. Use when implementing, reviewing, exploring, splitting work across CLIs,
+  Parent manages; workers code, review, SSH, and gather. Delegate implement, review,
+  explore, or split work across Codex, Grok, and Claude via Rig run-worker.sh.
+  Use when implementing, reviewing, exploring, splitting work across CLIs,
   or when .rig/harness.toml exists and another CLI should do the work.
 ---
 
 # Delegate harness
 
-Read `.rig/harness.toml` and `.rig/MEMORY.md` first.
+Jobs and MEMORY are this repo, not this chat. A new parent thread still sees `.rig/jobs` and `.rig/MEMORY.md`. Running children keep going.
+
+First in a new thread (and before spawning):
+
+```bash
+rig memory
+rig jobs
+rig status
+```
+
 Live parent is this CLI, not the `parent` key in toml. That key is only the preferred default (`rig use grok|codex`). Switching preferred parent does not move the session — open that CLI.
 Claude Code (`claude`) is never the parent. It is a worker when `[workers].claude = true` and `claude` is on PATH (`rig workers claude=on`). Pin full model IDs (aliases drift; `haiku` has resolved to Sonnet). Never spawn Fable as a child. Opus is allowed.
+
+## Parent vs worker
+
+This CLI is the parent. It manages. It does not sit on write/review/SSH when a worker is effective.
+
+**Parent keeps**
+
+- plan, check, decide, talk to the user
+- vision (screenshots, Figma, images)
+- computer use (desktop)
+- chrome profile (real browser, the user's cookies)
+- read worker results, `rig jobs`, `rig memory`
+
+**Worker does**
+
+- write code
+- fix bugs
+- review (different vendor than the writer)
+- SSH / remote debug
+- gather repo or server facts for the parent (explore, logs, grep)
+
+If this CLI cannot do computer-use, chrome-profile, or vision well (no tool, no skill, no profile), spawn a worker that can. Do not ask the user. `rig pick --case "<task>"` still decides worker and model.
 
 ## Effective workers
 
@@ -28,9 +60,10 @@ Check with `rig status`, `rig jobs`, or `/rig`. Those show the worker **model** 
 
 Never ask the user which model or reasoning to use. They will not know. Run `rig pick` (or `rig pick --case "<task>" --json`) and follow it.
 
-- Small / locate / trace: cheap same-CLI (`rig pick explore` or `mini`). Codex explorer is `gpt-5.3-codex-mini` low. Grok explore is `grok-4.5`. Claude Code explore is `claude-haiku-4-5-20251001` low.
+- Plan / vision / computer-use / chrome-profile: parent keeps it (`rig pick stay`). Spawn a worker only if this CLI cannot do it.
+- Small / locate / trace / gather facts: cheap same-CLI (`rig pick explore` or `mini`). Codex explorer is `gpt-5.3-codex-mini` low. Grok explore is `grok-4.5`. Claude Code explore is `claude-haiku-4-5-20251001` low.
 - Mechanical bulk: `rig pick bulk`. Codex `gpt-5.6-luna` low. Claude Code `claude-haiku-4-5-20251001` low.
-- Implement: `rig pick implement --case "<task>"`. Grok child `grok-4.6` high if Grok is effective. If Grok is the live parent or off: Claude Code `claude-sonnet-5` medium, else Codex `gpt-5.6-luna` low.
+- Write code / fix bugs / SSH / remote debug: `rig pick implement --case "<task>"`. Grok child `grok-4.6` high if Grok is effective. If Grok is the live parent or off: Claude Code `claude-sonnet-5` medium, else Codex `gpt-5.6-luna` low.
 - Hard / architecture / security / multi-file: `rig pick hard`. Grok `grok-4.6` high, Claude Code `claude-opus-5` high, or Codex `gpt-5.6-terra` medium.
 - Review: different vendor than the writer. `rig pick review`. Claude Code review is `claude-opus-5` high.
 - No extra CLIs: cheap same-CLI. Record them. That is success.
@@ -71,7 +104,13 @@ Codex sandbox must allow writing `$HOME/.grok` (and `$HOME/.claude` if used) plu
 ## After a run
 
 Overwrite `.rig/STATE.md` with job id, worker, status, summary.
-If there is one standing fact, append a bullet to `.rig/MEMORY.md`. Cap about 120 lines. No transcripts.
+If there is one standing fact, save it. Do not edit MEMORY.md by hand:
+
+```bash
+rig memory add "one standing fact"
+```
+
+Skip if there is no fact. The command drops duplicates and caps the file at about 120 lines. No transcripts.
 
 ## Child commands
 

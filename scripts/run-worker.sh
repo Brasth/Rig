@@ -85,6 +85,7 @@ write_json() {
   RESULT_NEXT="${RESULT_NEXT:-}" \
   RESULT_MODEL="${MODEL:-}" \
   RESULT_EFFORT="${EFFORT:-}" \
+  RESULT_THREAD="${PARENT_THREAD:-}" \
   RESULT_OUT="$RESULT_OUT" \
   RESULT_META="$RESULT_META" \
   RESULT_REPO="$REPO" \
@@ -93,6 +94,16 @@ write_json() {
   python3 - <<'PY'
 import json, os, pathlib
 files = [f for f in os.environ.get("RESULT_FILES", "").split("\n") if f]
+keep = ("thread", "session_id", "pid", "open", "watch", "kind")
+old = {}
+mpath = pathlib.Path(os.environ["RESULT_META"])
+if mpath.is_file():
+    try:
+        loaded = json.loads(mpath.read_text())
+        if isinstance(loaded, dict):
+            old = loaded
+    except Exception:
+        old = {}
 obj = {
     "job_id": os.environ["RESULT_JOB_ID"],
     "worker": os.environ["RESULT_WORKER"],
@@ -107,6 +118,12 @@ obj = {
     "model": os.environ.get("RESULT_MODEL", ""),
     "effort": os.environ.get("RESULT_EFFORT", ""),
 }
+for key in keep:
+    if not obj.get(key) and old.get(key) not in (None, ""):
+        obj[key] = old[key]
+thread = os.environ.get("RESULT_THREAD", "")
+if thread:
+    obj["thread"] = thread
 path = pathlib.Path(os.environ["RESULT_OUT"])
 tmp = path.with_name(path.name + ".tmp")
 tmp.write_text(json.dumps(obj, indent=2) + "\n")
@@ -114,7 +131,6 @@ tmp.replace(path)
 meta = dict(obj)
 meta["repo"] = os.environ.get("RESULT_REPO", "")
 meta["bin"] = os.environ.get("RESULT_BIN", "")
-mpath = pathlib.Path(os.environ["RESULT_META"])
 mtmp = mpath.with_name(mpath.name + ".tmp")
 mtmp.write_text(json.dumps(meta, indent=2) + "\n")
 mtmp.replace(mpath)
@@ -133,7 +149,7 @@ PY
 write_meta() {
   local status="$1"
   META_OUT="$JOB_DIR/meta.json"
-  python3 - "$META_OUT" "$JOB_ID" "$WORKER" "$ROLE" "$status" "$STARTED" "$REPO" "$BIN" "${CHILD:-}" "${SESSION_ID:-}" "$JOB_DIR" "${MODEL:-}" "${EFFORT:-}" <<'PY'
+  python3 - "$META_OUT" "$JOB_ID" "$WORKER" "$ROLE" "$status" "$STARTED" "$REPO" "$BIN" "${CHILD:-}" "${SESSION_ID:-}" "$JOB_DIR" "${MODEL:-}" "${EFFORT:-}" "${PARENT_THREAD:-}" <<'PY'
 import json, pathlib, sys
 path = pathlib.Path(sys.argv[1])
 obj = {
@@ -146,7 +162,7 @@ obj = {
     "bin": sys.argv[8],
 }
 pid, session_id, job_dir = sys.argv[9], sys.argv[10], sys.argv[11]
-model, effort = sys.argv[12], sys.argv[13]
+model, effort, thread = sys.argv[12], sys.argv[13], sys.argv[14]
 if pid:
     obj["pid"] = int(pid)
 if session_id:
@@ -156,6 +172,8 @@ if model:
     obj["model"] = model
 if effort:
     obj["effort"] = effort
+if thread:
+    obj["thread"] = thread
 obj["watch"] = f"tail -f {job_dir}/stdout.log"
 tmp = path.with_name(path.name + ".tmp")
 tmp.write_text(json.dumps(obj, indent=2) + "\n")
@@ -203,6 +221,13 @@ MODEL="${RIG_MODEL:-}"
 EFFORT="${RIG_EFFORT:-}"
 if [[ -f "$ROUTE_PY" ]]; then
   python3 "$ROUTE_PY" allow --model "$MODEL" || exit 1
+fi
+PARENT_THREAD="${RIG_THREAD:-}"
+if [[ -z "$PARENT_THREAD" ]]; then
+  JOBS_PY="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/jobs.py"
+  if [[ -f "$JOBS_PY" ]]; then
+    PARENT_THREAD="$(python3 "$JOBS_PY" thread --repo "$REPO" 2>/dev/null || true)"
+  fi
 fi
 
 SESSION_ID=""

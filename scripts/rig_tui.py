@@ -18,6 +18,12 @@ import jobs as rig_jobs  # noqa: E402
 HELP = "j/k select   l log   o open   r refresh   q quit"
 
 
+def _elide(text: str, width: int) -> str:
+    if width <= 1 or len(text) <= width:
+        return text
+    return "…" + text[-(width - 1) :]
+
+
 def _paint(stdscr, repo: Path) -> None:
     curses.curs_set(0)
     curses.use_default_colors()
@@ -65,8 +71,9 @@ def _paint(stdscr, repo: Path) -> None:
             job = listing[selected] if listing else None
             for i, item in enumerate(listing[: h - 3]):
                 mark = "●" if item["effective"] == "running" else "○"
-                spec = "/".join(x for x in [item.get("model"), item.get("effort")] if x)
-                label = f"{mark} {item['worker']:<6} {item['effective']:<8} {spec or item['job_id']}"
+                prefix = f"{mark} {item['worker']:<6} {item['effective']:<8} "
+                rest = left_w - len(prefix)
+                label = prefix + _elide(item["job_id"], max(rest, 4))
                 attr = color_for(item["effective"])
                 if i == selected:
                     attr |= curses.A_REVERSE
@@ -86,6 +93,8 @@ def _paint(stdscr, repo: Path) -> None:
                         f"reasoning  {job.get('effort') or '-'}",
                         f"task   {job['task']}",
                     ]
+                    if job.get("thread"):
+                        detail.append(f"thread {job['thread']}")
                     if job.get("doing"):
                         detail.append(f"doing  {job['doing']}")
                     if job.get("pid"):

@@ -11,6 +11,7 @@ Rules:
 - Do not spawn grok, codex, or claude.
 - Do not use Sol, Astra, or Fable.
 - Read-only. Do not edit files.
-- Do the explore task. Cite file paths.
+- Gather repo or log facts for the parent. Cite file paths.
+- Do not drive the user desktop or chrome profile unless the brief says so.
 - Print a short summary. Stop.
 """

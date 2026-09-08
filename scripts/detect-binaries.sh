@@ -463,4 +463,4 @@ else:
 PY
 }
 
-WORKER_PREAMBLE='You are a worker, not the orchestrator. Do not spawn codex, grok, or claude. Do the task. Print a short summary. Stop.'
+WORKER_PREAMBLE='You are a worker, not the orchestrator. Do not spawn codex, grok, or claude. Do not drive the user desktop or chrome profile unless the brief says so. Write code, fix, review, SSH/debug, or gather facts. Print a short summary. Stop.'

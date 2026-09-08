@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import json
+import os
 import sys
 import unittest
 from pathlib import Path
@@ -41,10 +42,35 @@ class TaskAndLog(unittest.TestCase):
             "opencode session fix",
         )
 
+    def test_timestamp_pid_id_is_not_a_task(self):
+        self.assertEqual(
+            jobs.task_from_brief("", "20260908T071315Z-4994"),
+            "20260908T071315Z-4994",
+        )
+
     def test_decode_streaming_json_doing(self):
         acts = jobs.decode_log_text(STREAM)
         self.assertTrue(any("read_file" in a and "opencode-go-client.ts" in a for a in acts))
         self.assertEqual(acts[-1], "I will add a session header")
+
+    def test_thought_tokens_coalesce(self):
+        raw = "\n".join(
+            json.dumps({"type": "thought", "data": chunk})
+            for chunk in ("The", " user", " wants", " a", " review")
+        )
+        raw += "\n" + json.dumps(
+            {
+                "type": "tool_call",
+                "toolName": "read_file",
+                "rawInput": {"target_file": "apps/ai-agent/src/providers/opencode-go-client.ts"},
+            }
+        )
+        acts = jobs.decode_log_text(raw)
+        think_lines = [a for a in acts if a.startswith("think")]
+        self.assertEqual(len(think_lines), 1)
+        self.assertIn("The user wants a review", think_lines[0])
+        self.assertTrue(any(a.startswith("read_file") for a in acts))
+        self.assertNotIn("think The", "\n".join(acts))
 
     def test_decode_json_blob(self):
         acts = jobs.decode_log_text(JSON_BLOB)
@@ -126,6 +152,27 @@ class JobBoard(unittest.TestCase):
         self.assertIn("model", table)
         self.assertIn("reasoning", table)
 
+    def test_native_job_uses_summary_as_task(self):
+        d = self.repo / ".rig" / "jobs" / "20260908T071315Z-4994"
+        d.mkdir()
+        (d / "meta.json").write_text(
+            json.dumps(
+                {
+                    "job_id": "20260908T071315Z-4994",
+                    "worker": "codex",
+                    "role": "worker",
+                    "status": "ok",
+                    "kind": "native",
+                    "summary": "Implemented bounded enrichment deadlines",
+                    "model": "gpt-5.6-luna",
+                    "effort": "low",
+                }
+            )
+        )
+        job = jobs.load_job(d)
+        self.assertIn("enrichment deadlines", job["task"])
+        self.assertNotEqual(job["task"], "4994")
+
     def test_ok_job_without_log_is_pruned(self):
         d = self.repo / ".rig" / "jobs" / "done-ok"
         d.mkdir()
@@ -135,6 +182,58 @@ class JobBoard(unittest.TestCase):
         job = jobs.load_job(d)
         self.assertTrue(job["log_pruned"])
         self.assertIn("pruned after success", jobs.format_log(job))
+
+    def test_thread_tag_and_filter(self):
+        meta = self.repo / ".rig" / "jobs" / "260908-opencode-session-fix" / "meta.json"
+        obj = json.loads(meta.read_text())
+        obj["thread"] = "parent-thread-a"
+        meta.write_text(json.dumps(obj))
+        other = self.repo / ".rig" / "jobs" / "other-thread"
+        other.mkdir()
+        (other / "meta.json").write_text(
+            json.dumps(
+                {
+                    "job_id": "other-thread",
+                    "worker": "codex",
+                    "role": "worker",
+                    "status": "ok",
+                    "thread": "parent-thread-b",
+                    "summary": "done in another thread",
+                }
+            )
+        )
+        all_jobs = jobs.list_jobs(self.repo)
+        self.assertEqual({j["job_id"] for j in all_jobs}, {"260908-opencode-session-fix", "other-thread"})
+        only_a = jobs.list_jobs(self.repo, thread="parent-thread-a")
+        self.assertEqual([j["job_id"] for j in only_a], ["260908-opencode-session-fix"])
+        table = jobs.format_table(all_jobs)
+        self.assertIn("parent-thread-a", table)
+        shown = jobs.format_show(only_a[0])
+        self.assertIn("thread  parent-thread-a", shown)
+
+    def test_remember_thread_from_statusline(self):
+        saved = {k: os.environ.pop(k, None) for k in jobs.THREAD_ENV}
+        try:
+            text = jobs.format_statusline(
+                {
+                    "cwd": str(self.repo),
+                    "session_id": "sess-parent-9",
+                    "workspace": {"current_dir": str(self.repo), "repo_root": str(self.repo)},
+                    "model": {"display_name": "Grok 4.6"},
+                }
+            )
+            self.assertIn("grok", text)
+            self.assertEqual(jobs.current_thread(self.repo), "sess-parent-9")
+            self.assertEqual((self.repo / ".rig" / "thread").read_text().strip(), "sess-parent-9")
+            os.environ["RIG_THREAD"] = "env-wins"
+            self.assertEqual(jobs.current_thread(self.repo), "env-wins")
+        finally:
+            os.environ.pop("RIG_THREAD", None)
+            for key, val in saved.items():
+                if val is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = val
 
     def test_statusline(self):
         text = jobs.format_statusline(
@@ -173,6 +272,14 @@ class McpTools(unittest.TestCase):
         self.assertIn("agent   grok", shown["content"][0]["text"])
         log = rig_mcp.call_tool("rig_job_log", {"repo": str(repo), "id": "j1"})
         self.assertIn("read_file", log["content"][0]["text"])
+        mem = rig_mcp.call_tool("rig_memory", {"repo": str(repo)})
+        self.assertIn("no memory yet", mem["content"][0]["text"])
+        added = rig_mcp.call_tool(
+            "rig_memory_add", {"repo": str(repo), "fact": "Jobs survive a new parent thread"}
+        )
+        self.assertEqual(added["content"][0]["text"], "added")
+        shown = rig_mcp.call_tool("rig_memory", {"repo": str(repo)})
+        self.assertIn("Jobs survive a new parent thread", shown["content"][0]["text"])
         td.cleanup()
 
     def test_ndjson_initialize_replies(self):

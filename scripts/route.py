@@ -57,12 +57,25 @@ NATIVE = {
 }
 
 KEYWORDS = (
+    (
+        "stay",
+        (
+            "computer use",
+            "computer-use",
+            "chrome profile",
+            "chrome-profile",
+            "real chrome",
+            "live desktop",
+        ),
+    ),
     ("review", ("review", "audit", "nitpick")),
     ("explore", ("explor", "scout", "locate", "trace", "where is", "find file", "read-only")),
     ("bulk", ("bulk", "rename-only", "mechanical", "format-only")),
     ("mini", ("typo", "comment-only", "one-line", "tiny", "trivial")),
     ("hard", ("architect", "security", "multi-file", "cross-module", "hard refactor")),
 )
+
+STAY_ROLES = frozenset({"stay", "parent", "vision", "computer-use", "chrome", "chrome-profile"})
 
 
 def classify(role: str, case: str) -> str:
@@ -71,6 +84,8 @@ def classify(role: str, case: str) -> str:
         if any(w in text for w in words):
             return kind
     role = (role or "implement").lower().strip()
+    if role in STAY_ROLES:
+        return "stay"
     if role in {"explorer", "explore"}:
         return "explore"
     if role in {"worker", "implement"}:
@@ -87,7 +102,9 @@ def model_for(worker: str, kind: str) -> tuple[str, str]:
 
 
 def choose_worker(kind: str, effective: list[str], live: str) -> tuple[str, str]:
-    """Return (worker, spawn) where spawn is run-worker or native."""
+    """Return (worker, spawn) where spawn is run-worker, native, or stay."""
+    if kind == "stay":
+        return live, "stay"
     if kind in {"explore", "mini", "bulk"} and live in {"codex", "grok"}:
         return live, "native"
     order = ("claude", "grok", "codex") if kind == "review" else ("grok", "claude", "codex")
@@ -102,6 +119,19 @@ def choose_worker(kind: str, effective: list[str], live: str) -> tuple[str, str]
 def pick(live: str, effective: list[str], role: str, case: str) -> dict:
     kind = classify(role, case)
     worker, spawn = choose_worker(kind, effective, live)
+    if spawn == "stay":
+        return {
+            "kind": kind,
+            "worker": worker or live,
+            "spawn": "stay",
+            "model": "",
+            "effort": "",
+            "native_agent": "",
+            "reason": (
+                "parent keeps plan / vision / computer-use / chrome-profile. "
+                "spawn a worker only if this CLI cannot do it."
+            ),
+        }
     if not worker:
         return {
             "kind": kind,

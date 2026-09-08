@@ -23,6 +23,15 @@ class Classify(unittest.TestCase):
     def test_default_implement(self):
         self.assertEqual(route.classify("worker", "add session header"), "implement")
 
+    def test_stay_computer_use_and_chrome(self):
+        self.assertEqual(route.classify("", "open chrome profile and check admin"), "stay")
+        self.assertEqual(route.classify("implement", "use computer-use to click the dialog"), "stay")
+        self.assertEqual(route.classify("stay", "look at the live desktop"), "stay")
+
+    def test_ssh_and_fix_go_to_workers(self):
+        self.assertEqual(route.classify("worker", "ssh to staging and pull nginx logs"), "implement")
+        self.assertEqual(route.classify("", "fix the auth bug in login.ts"), "implement")
+
 
 class Pick(unittest.TestCase):
     def test_implement_prefers_grok(self):
@@ -77,6 +86,16 @@ class Pick(unittest.TestCase):
         c = route.pick("codex", [], "implement", "add a header")
         self.assertEqual(c["spawn"], "native")
         self.assertEqual(c["worker"], "codex")
+
+    def test_stay_does_not_spawn(self):
+        c = route.pick("grok", ["claude", "codex"], "stay", "chrome profile login")
+        self.assertEqual(c["spawn"], "stay")
+        self.assertEqual(c["worker"], "grok")
+        self.assertEqual(c["kind"], "stay")
+        self.assertIn("parent keeps", c["reason"])
+        c = route.pick("codex", ["grok"], "implement", "open chrome profile and check admin")
+        self.assertEqual(c["spawn"], "stay")
+        self.assertEqual(c["kind"], "stay")
 
     def test_refuse_parent_models(self):
         self.assertIsNotNone(route.assert_child_model("gpt-5.6-sol"))
