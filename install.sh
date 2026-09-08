@@ -1,17 +1,33 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Piped `curl | bash` has an empty BASH_SOURCE. Do not treat CWD as the source.
+_SRC_FILE="${BASH_SOURCE[0]:-}"
+HERE=""
+if [[ -n "$_SRC_FILE" && -f "$_SRC_FILE" ]]; then
+  HERE="$(cd "$(dirname "$_SRC_FILE")" && pwd)"
+fi
+
 RIG_HOME="${RIG_HOME:-$HOME/.rig}"
-REPO_URL="${RIG_REPO_URL:-https://github.com/Brasth/Rig.git}"
+REPO_SLUG="${RIG_REPO_SLUG:-Brasth/Rig}"
+REPO_URL="${RIG_REPO_URL:-https://github.com/${REPO_SLUG}.git}"
 CLEANUP=""
 
-if [[ -f "$HERE/bin/rig" && -f "$HERE/scripts/detect-binaries.sh" && -f "$HERE/skills/delegate-harness/SKILL.md" ]]; then
+clone_source() {
+  local dest="$1"
+  if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
+    gh repo clone "$REPO_SLUG" "$dest" -- --depth 1
+  else
+    git clone --depth 1 "$REPO_URL" "$dest"
+  fi
+}
+
+if [[ -n "$HERE" && -f "$HERE/bin/rig" && -f "$HERE/scripts/detect-binaries.sh" && -f "$HERE/skills/delegate-harness/SKILL.md" ]]; then
   SRC="$HERE"
 else
   TMP="$(mktemp -d)"
   CLEANUP="$TMP"
-  git clone --depth 1 "$REPO_URL" "$TMP/Rig"
+  clone_source "$TMP/Rig"
   SRC="$TMP/Rig"
 fi
 

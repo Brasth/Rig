@@ -7,10 +7,18 @@ Type a normal prompt in one parent CLI. The parent may call the other CLIs as wo
 ## Install
 
 ```bash
-git clone https://github.com/Brasth/Rig.git
-cd Rig
-./install.sh
+gh api -H 'Accept: application/vnd.github.raw' repos/Brasth/Rig/contents/install.sh | bash
 ```
+
+That pipes `install.sh` and clones the rest with your GitHub login. No local clone to keep.
+
+If the repo is public:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Brasth/Rig/main/install.sh | bash
+```
+
+From a checkout: `./install.sh`
 
 `install.sh` is idempotent. It updates the skill and scripts. It does not overwrite project `.rig/harness.toml` or `.rig/MEMORY.md`.
 
