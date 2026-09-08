@@ -142,6 +142,10 @@ cmd_setup() {
       rig_set_toml_key "$codex_cfg" "agents" "default_subagent_model" '"gpt-5.6-terra"'
       echo "set ~/.codex/config.toml [agents] default_subagent_model = \"gpt-5.6-terra\" (was missing)"
     fi
+    sandbox_fix="$(rig_ensure_codex_child_sandbox "$codex_cfg")"
+    if [[ "$sandbox_fix" != "keep" ]]; then
+      echo "set ~/.codex/config.toml [sandbox_workspace_write] ($sandbox_fix) so Grok/Claude children can write sessions"
+    fi
   fi
 
   local grok_cfg="$HOME/.grok/config.toml"

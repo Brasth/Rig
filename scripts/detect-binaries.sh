@@ -322,6 +322,105 @@ sys.exit(1)
 PY
 }
 
+# Let Codex-spawned Grok/Claude children write sessions and use the network.
+# Only inserts missing keys. Does not shrink an existing writable_roots list.
+rig_ensure_codex_child_sandbox() {
+  local file="$1"
+  [[ -f "$file" ]] || return 0
+  python3 - "$file" "$HOME/.grok" "$HOME/.claude" <<'PY'
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+needed = [sys.argv[2], sys.argv[3]]
+text = path.read_text()
+changed = []
+
+if "network_access" not in text:
+    if not text.endswith("\n"):
+        text += "\n"
+    if "[sandbox_workspace_write]" not in text:
+        text += "\n[sandbox_workspace_write]\n"
+    # append after the section header
+    lines = text.splitlines()
+    out = []
+    inserted = False
+    for i, line in enumerate(lines):
+        out.append(line)
+        if line.strip() == "[sandbox_workspace_write]" and not inserted:
+            out.append("network_access = true")
+            inserted = True
+    if not inserted:
+        out.append("")
+        out.append("[sandbox_workspace_write]")
+        out.append("network_access = true")
+    text = "\n".join(out) + "\n"
+    changed.append("network_access=true")
+
+# writable_roots
+missing = [p for p in needed if p not in text]
+if missing:
+    lines = text.splitlines()
+    out = []
+    i = 0
+    done = False
+    while i < len(lines):
+        line = lines[i]
+        stripped = line.strip()
+        if stripped.startswith("writable_roots") and "=" in stripped and not done:
+            # extend existing array: writable_roots = ["a"]
+            rest = stripped.split("=", 1)[1].strip()
+            extras = ", ".join(f'"{p}"' for p in missing)
+            if rest.startswith("["):
+                if rest.rstrip().endswith("]"):
+                    inner = rest[1:-1].strip()
+                    if inner:
+                        line = f"writable_roots = [{inner}, {extras}]"
+                    else:
+                        line = f"writable_roots = [{extras}]"
+                    out.append(line)
+                    done = True
+                    i += 1
+                    continue
+        out.append(line)
+        if stripped == "[sandbox_workspace_write]" and not done:
+            # peek: if next lines don't define writable_roots, add after header/network
+            j = i + 1
+            has_roots = False
+            while j < len(lines):
+                s = lines[j].strip()
+                if s.startswith("[") and s.endswith("]"):
+                    break
+                if s.startswith("writable_roots"):
+                    has_roots = True
+                    break
+                j += 1
+            if not has_roots:
+                extras = ", ".join(f'"{p}"' for p in missing)
+                out.append(f"writable_roots = [{extras}]")
+                done = True
+        i += 1
+    if not done:
+        extras = ", ".join(f'"{p}"' for p in missing)
+        if "[sandbox_workspace_write]" not in "\n".join(out):
+            out.append("")
+            out.append("[sandbox_workspace_write]")
+        out.append(f"writable_roots = [{extras}]")
+    text = "\n".join(out)
+    if not text.endswith("\n"):
+        text += "\n"
+    changed.append("writable_roots")
+
+if changed:
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(text)
+    tmp.replace(path)
+    print(",".join(changed))
+else:
+    print("keep")
+PY
+}
+
 # Replace the interior of a marked block, or append the block if missing.
 # Args: FILE START_MARKER END_MARKER BLOCK_TEXT
 # Prints: updated | appended | wrote

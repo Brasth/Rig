@@ -61,6 +61,8 @@ rig job record --worker codex --role explorer --status ok --summary "one-line re
 
 Live child: `RIG_LIVE=1`. Default wrapper is dry-run.
 
+Codex sandbox must allow writing `$HOME/.grok` (and `$HOME/.claude` if used) plus outbound network, or the child fails with `FS_PERMISSION_DENIED` creating a session. `rig setup` adds those writable roots.
+
 ## After a run
 
 Overwrite `.rig/STATE.md` with job id, worker, status, summary.

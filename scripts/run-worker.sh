@@ -70,6 +70,8 @@ STARTED="$(iso_now)"
 write_json() {
   local status="$1" exit_code="$2" summary="$3" ended="$4"
   RESULT_OUT="$JOB_DIR/result.json"
+  RESULT_META="$JOB_DIR/meta.json"
+  RESULT_STATE="$(repo_root)/.rig/STATE.md"
   RESULT_JOB_ID="$JOB_ID" \
   RESULT_WORKER="$WORKER" \
   RESULT_ROLE="$ROLE" \
@@ -81,6 +83,10 @@ write_json() {
   RESULT_FILES="${RESULT_FILES:-}" \
   RESULT_NEXT="${RESULT_NEXT:-}" \
   RESULT_OUT="$RESULT_OUT" \
+  RESULT_META="$RESULT_META" \
+  RESULT_REPO="$REPO" \
+  RESULT_BIN="$BIN" \
+  RESULT_STATE="$RESULT_STATE" \
   python3 - <<'PY'
 import json, os, pathlib
 files = [f for f in os.environ.get("RESULT_FILES", "").split("\n") if f]
@@ -100,6 +106,22 @@ path = pathlib.Path(os.environ["RESULT_OUT"])
 tmp = path.with_name(path.name + ".tmp")
 tmp.write_text(json.dumps(obj, indent=2) + "\n")
 tmp.replace(path)
+meta = dict(obj)
+meta["repo"] = os.environ.get("RESULT_REPO", "")
+meta["bin"] = os.environ.get("RESULT_BIN", "")
+mpath = pathlib.Path(os.environ["RESULT_META"])
+mtmp = mpath.with_name(mpath.name + ".tmp")
+mtmp.write_text(json.dumps(meta, indent=2) + "\n")
+mtmp.replace(mpath)
+state = pathlib.Path(os.environ["RESULT_STATE"])
+state.parent.mkdir(parents=True, exist_ok=True)
+state.write_text(
+    "# STATE\n\nOverwritten each run.\n\n"
+    f"- last_job: {obj['job_id']}\n"
+    f"- worker: {obj['worker']}\n"
+    f"- status: {obj['status']}\n"
+    f"- summary: {obj['summary']}\n"
+)
 PY
 }
 
