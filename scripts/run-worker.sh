@@ -414,14 +414,22 @@ write_watch
 ELAPSED=0
 TIMED_OUT=0
 ASK_NOTIFIED=0
+IN_ASK=0
 while kill -0 "$CHILD" 2>/dev/null; do
   if [[ -f "$JOB_DIR/ask.json" && ! -f "$JOB_DIR/ask-reply.json" ]]; then
+    IN_ASK=1
     if [[ "$ASK_NOTIFIED" -eq 0 ]]; then
       echo "run-worker: ASK — parent must answer: rig job allow $JOB_ID" >&2
       echo "run-worker: do not kill this job; do not spawn another worker" >&2
       ASK_NOTIFIED=1
     fi
   else
+    if [[ "$IN_ASK" -eq 1 ]]; then
+      # Parent answered. Restart the work clock so a slow allow cannot
+      # immediately timeout a job that already used most of RIG_TIMEOUT.
+      ELAPSED=0
+      IN_ASK=0
+    fi
     ASK_NOTIFIED=0
     if [[ "$ELAPSED" -ge "$TIMEOUT_SECS" ]]; then
       TIMED_OUT=1

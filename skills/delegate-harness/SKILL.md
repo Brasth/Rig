@@ -131,7 +131,7 @@ OpenCode child is `opencode run --format json --dir $REPO --auto`. OMP child is 
 
 Claude Code child is print-mode `stream-json` (not buffered `json`), `acceptEdits`, no `--bare` (that drops OAuth), no `--dangerously-skip-permissions` (org managed settings can disable bypass). Anthropic remote deny rules like `Bash(eval $(wget*))` are invalid nested parens; they print to stderr and are skipped. `rig jobs` / `rig tui` hide that noise.
 
-A Claude child with no TTY cannot click Allow. When it needs permission, the job status becomes `ask` and `rig job wait` exits 2. The parent answers — that is the interaction. Do not ignore it. Do not close the job. Do not spawn Grok/Codex/Cursor/OpenCode/OMP/Pi instead.
+A Claude child with no TTY cannot click Allow. When it needs permission, the job status becomes `ask` and `rig job wait` exits 2. The parent answers — that is the interaction. Do not ignore it. Do not close the job. Do not spawn Grok/Codex/Cursor/OpenCode/OMP/Pi instead. The work timeout pauses during `ask` and restarts after allow, so a slow allow does not kill the child.
 
 ```bash
 rig job wait <id>                  # returns 2 when Claude is asking

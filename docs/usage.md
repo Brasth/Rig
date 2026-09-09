@@ -369,7 +369,7 @@ rig job allow <id>
 rig job deny <id> --reason "prod deploy"
 ```
 
-Safe worker work → allow. Destructive / prod / secrets → deny or ask the user. TUI keys: `y` / `n`. MCP: `rig_job_wait` / `rig_job_allow` / `rig_job_deny`.
+Safe worker work → allow. Destructive / prod / secrets → deny or ask the user. TUI keys: `y` / `n`. MCP: `rig_job_wait` / `rig_job_allow` / `rig_job_deny`. The child work timeout pauses while status is `ask` and restarts after allow, so a slow parent answer does not immediately timeout the job.
 
 Jobs are this repo, not this chat. A new Grok or Codex thread still sees `.rig/jobs`. Running children keep going. First commands in a new thread: `rig memory` then `rig jobs` then `rig status`.
 
@@ -416,6 +416,10 @@ Read the reason in `rig doctor`:
 - `flag` → `rig workers <name>=on`
 - `no binary` → install that CLI so `grok` / `claude` / `codex` / `cursor-agent` is on PATH
 - `is live parent` → expected (Grok parent cannot spawn Grok). Use another worker or cheap same-CLI
+
+**Claude child `timeout` right after you allow**
+
+The work clock used to keep counting the minutes spent waiting for allow. It now pauses during `ask` and restarts after allow. Update Rig (`./install.sh` from a checkout, or the same curl install) so `~/.rig/scripts/run-worker.sh` has that restart. Do not kill an asking job; allow/deny and wait.
 
 **Parent not spawning / ignoring Rig**
 

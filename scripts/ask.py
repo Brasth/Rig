@@ -106,14 +106,21 @@ def write_reply(job_dir: Path, behavior: str, message: str = "", tool_use_id: st
 
 
 def wait_reply(job_dir: Path, timeout: float | None = None) -> dict:
+    """Wait for the parent allow/deny. Default is forever.
+
+    Do not share RIG_TIMEOUT (the child's work budget). A slow parent allow
+    must not auto-deny. Tests and operators may set timeout or RIG_ASK_TIMEOUT.
+    """
     if timeout is None:
-        try:
-            timeout = float(os.environ.get("RIG_ASK_TIMEOUT") or os.environ.get("RIG_TIMEOUT") or 1200)
-        except ValueError:
-            timeout = 1200.0
-    deadline = time.time() + max(1.0, timeout)
+        raw = os.environ.get("RIG_ASK_TIMEOUT")
+        if raw not in (None, ""):
+            try:
+                timeout = float(raw)
+            except ValueError:
+                timeout = None
+    deadline = None if timeout is None else time.time() + max(0.0, timeout)
     want = str((_read_json(ask_path(job_dir)) or {}).get("tool_use_id") or "")
-    while time.time() < deadline:
+    while deadline is None or time.time() < deadline:
         reply = _read_json(reply_path(job_dir))
         if reply:
             got = str(reply.get("tool_use_id") or "")

@@ -72,6 +72,8 @@ class ClaudeWorkerArgv(unittest.TestCase):
         self.assertIn("ask.json", src)
         self.assertIn("ask-reply.json", src)
         self.assertIn("do not spawn another worker", src)
+        self.assertIn("IN_ASK", src)
+        self.assertIn("Restart the work clock", src)
 
 
 class CursorWorkerArgv(unittest.TestCase):

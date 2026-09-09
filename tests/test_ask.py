@@ -68,6 +68,31 @@ class AskProtocol(unittest.TestCase):
         self.assertEqual(reply["behavior"], "deny")
         self.assertIn("did not answer", reply["message"])
 
+    def test_wait_reply_default_ignores_wrapper_timeout(self):
+        prev_timeout = os.environ.get("RIG_TIMEOUT")
+        prev_ask = os.environ.get("RIG_ASK_TIMEOUT")
+        os.environ["RIG_TIMEOUT"] = "0.2"
+        os.environ.pop("RIG_ASK_TIMEOUT", None)
+        ask.write_ask(self.job, "Bash", {"command": "git status"}, "t3")
+
+        def later():
+            time.sleep(0.5)
+            ask.write_reply(self.job, "allow", "", "t3")
+
+        try:
+            threading.Thread(target=later, daemon=True).start()
+            reply = ask.wait_reply(self.job)
+            self.assertEqual(reply["behavior"], "allow")
+        finally:
+            if prev_timeout is None:
+                os.environ.pop("RIG_TIMEOUT", None)
+            else:
+                os.environ["RIG_TIMEOUT"] = prev_timeout
+            if prev_ask is None:
+                os.environ.pop("RIG_ASK_TIMEOUT", None)
+            else:
+                os.environ["RIG_ASK_TIMEOUT"] = prev_ask
+
 
 class AskJobBoard(unittest.TestCase):
     def setUp(self):
