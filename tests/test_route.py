@@ -142,6 +142,33 @@ class Pick(unittest.TestCase):
         self.assertEqual(route.model_for("cursor", "explore"), ("composer-2.5-fast", ""))
         self.assertEqual(route.model_for("cursor", "hard"), ("cursor-grok-4.6-high", ""))
 
+    def test_same_cli_beats_opencode_omp_pi(self):
+        c = route.pick("grok", ["opencode", "omp", "pi", "cursor", "codex"], "implement", "add a header")
+        self.assertEqual(c["spawn"], "native")
+        self.assertEqual(c["worker"], "grok")
+        self.assertEqual(c["model"], "grok-4.6")
+
+    def test_omp_beats_pi_when_both_effective(self):
+        c = route.pick("", ["pi", "omp"], "implement", "add a header")
+        self.assertEqual(c["worker"], "omp")
+        self.assertEqual(c["spawn"], "run-worker")
+        self.assertEqual(c["model"], "")
+
+    def test_opencode_last_resort_when_parent_cannot_native(self):
+        c = route.pick("", ["opencode"], "implement", "add a header")
+        self.assertEqual(c["worker"], "opencode")
+        self.assertEqual(c["spawn"], "run-worker")
+        self.assertEqual(c["model"], "")
+
+    def test_grok_still_beats_opencode(self):
+        c = route.pick("codex", ["grok", "opencode"], "implement", "add a header")
+        self.assertEqual(c["worker"], "grok")
+
+    def test_opencode_omp_pi_default_model_empty(self):
+        self.assertEqual(route.model_for("opencode", "implement"), ("", ""))
+        self.assertEqual(route.model_for("omp", "hard"), ("", ""))
+        self.assertEqual(route.model_for("pi", "review"), ("", ""))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# run-worker.sh <grok|codex|claude|cursor> <job-id> <brief-file>
+# run-worker.sh <grok|codex|claude|cursor|opencode|omp|pi> <job-id> <brief-file>
 set -euo pipefail
 
 _DETECT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/detect-binaries.sh"
@@ -7,7 +7,7 @@ _DETECT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/detect-binaries.sh"
 source "$_DETECT"
 
 usage() {
-  echo "usage: run-worker.sh <grok|codex|claude|cursor> <job-id> <brief-file>" >&2
+  echo "usage: run-worker.sh <grok|codex|claude|cursor|opencode|omp|pi> <job-id> <brief-file>" >&2
   exit 2
 }
 
@@ -22,7 +22,7 @@ TIMEOUT_SECS="${RIG_TIMEOUT:-1200}"
 ROUTE_PY="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/route.py"
 
 case "$WORKER" in
-  grok|codex|claude|cursor) ;;
+  grok|codex|claude|cursor|opencode|omp|pi) ;;
   *)
     echo "run-worker: unknown worker '$WORKER'" >&2
     exit 2
@@ -307,6 +307,49 @@ PY
     case "$ROLE" in
       explore|mini) CMD+=(--mode=ask) ;;
     esac
+    ;;
+  opencode)
+    CMD=(
+      opencode run
+      --format json
+      --dir "$REPO"
+      --title "rig $JOB_ID"
+      --auto
+    )
+    [[ -n "$MODEL" ]] && CMD+=(-m "$MODEL")
+    [[ -n "$EFFORT" ]] && CMD+=(--variant "$EFFORT")
+    CMD+=("$BRIEF_TEXT")
+    ;;
+  omp)
+    OMP_WORKER_MD="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../adapters/omp/OMP.worker.md"
+    CMD=(
+      omp -p
+      --mode json
+      --cwd "$REPO"
+      --no-session
+      --approval-mode write
+    )
+    if [[ -f "$OMP_WORKER_MD" ]]; then
+      CMD+=(--append-system-prompt "$OMP_WORKER_MD")
+    fi
+    [[ -n "$MODEL" ]] && CMD+=(--model "$MODEL")
+    [[ -n "$EFFORT" ]] && CMD+=(--thinking "$EFFORT")
+    CMD+=("$BRIEF_TEXT")
+    ;;
+  pi)
+    PI_WORKER_MD="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../adapters/pi/PI.worker.md"
+    CMD=(
+      pi -p
+      --mode json
+      --no-session
+      --approve
+    )
+    if [[ -f "$PI_WORKER_MD" ]]; then
+      CMD+=(--append-system-prompt "$PI_WORKER_MD")
+    fi
+    [[ -n "$MODEL" ]] && CMD+=(--model "$MODEL")
+    [[ -n "$EFFORT" ]] && CMD+=(--thinking "$EFFORT")
+    CMD+=("$BRIEF_TEXT")
     ;;
 esac
 CMD_STR="$(shell_join "${CMD[@]}")"

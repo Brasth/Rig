@@ -118,7 +118,7 @@ def choose_worker(kind: str, effective: list[str], live: str) -> tuple[str, str]
     # Cross-CLI first: Grok (when not live), then Claude. Cursor/Codex are last
     # resort — a Grok parent with Cursor on PATH was always spawning Cursor.
     if kind == "review":
-        order = ("claude", "grok", "cursor", "codex")
+        order = ("claude", "grok", "cursor", "opencode", "omp", "pi", "codex")
     else:
         order = ("grok", "claude")
     for worker in order:
@@ -126,7 +126,7 @@ def choose_worker(kind: str, effective: list[str], live: str) -> tuple[str, str]
             return worker, "run-worker"
     if kind in {"implement", "hard"} and live in {"codex", "grok"}:
         return live, "native"
-    for worker in ("cursor", "codex"):
+    for worker in ("cursor", "opencode", "omp", "pi", "codex"):
         if worker in effective:
             return worker, "run-worker"
     if live in {"codex", "grok"}:

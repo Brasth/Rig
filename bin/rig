@@ -24,7 +24,7 @@ usage: rig <command> [args]
   status
   use codex|grok
   parent sol|astra
-  workers grok=on|off claude=on|off codex=on|off cursor=on|off
+  workers grok=on|off claude=on|off codex=on|off cursor=on|off opencode=on|off omp=on|off pi=on|off
   prune
   run "prompt"
   jobs [--json] [--thread [ID]]
@@ -41,7 +41,7 @@ usage: rig <command> [args]
   job wait [id] [--timeout SECS]
   pick [explore|mini|bulk|implement|hard|review|stay] [--case TEXT] [--json]
 
-Stay in Codex or Grok. They can invoke Claude, Cursor, or each other.
+Stay in Codex or Grok. They can invoke Claude, Cursor, OpenCode, OMP, Pi, or each other.
 EOF
   exit 2
 }
@@ -70,7 +70,7 @@ install_file() {
 
 copy_rig_tree() {
   local src="$1" dest="$2"
-  mkdir -p "$dest"/{bin,scripts,skills,adapters/codex/agents,adapters/grok,adapters/claude,adapters/cursor,templates}
+  mkdir -p "$dest"/{bin,scripts,skills,adapters/codex/agents,adapters/grok,adapters/claude,adapters/cursor,adapters/opencode,adapters/omp,adapters/pi,templates}
   if [[ "$(cd "$src" && pwd)" != "$(cd "$dest" && pwd)" ]]; then
     # mv onto dest so a running bin/rig keeps its old inode
     install_file "$src/bin/rig" "$dest/bin/rig"
@@ -94,6 +94,15 @@ copy_rig_tree() {
     install_file "$src/adapters/claude/CLAUDE.worker.md" "$dest/adapters/claude/CLAUDE.worker.md"
     if [[ -f "$src/adapters/cursor/CURSOR.worker.md" ]]; then
       install_file "$src/adapters/cursor/CURSOR.worker.md" "$dest/adapters/cursor/CURSOR.worker.md"
+    fi
+    if [[ -f "$src/adapters/opencode/OPENCODE.worker.md" ]]; then
+      install_file "$src/adapters/opencode/OPENCODE.worker.md" "$dest/adapters/opencode/OPENCODE.worker.md"
+    fi
+    if [[ -f "$src/adapters/omp/OMP.worker.md" ]]; then
+      install_file "$src/adapters/omp/OMP.worker.md" "$dest/adapters/omp/OMP.worker.md"
+    fi
+    if [[ -f "$src/adapters/pi/PI.worker.md" ]]; then
+      install_file "$src/adapters/pi/PI.worker.md" "$dest/adapters/pi/PI.worker.md"
     fi
     for f in "$src/templates/"*; do
       [[ -f "$f" ]] || continue
@@ -185,7 +194,7 @@ cmd_setup() {
     fi
     sandbox_fix="$(rig_ensure_codex_child_sandbox "$codex_cfg")"
     if [[ "$sandbox_fix" != "keep" ]]; then
-      echo "set ~/.codex/config.toml [sandbox_workspace_write] ($sandbox_fix) so Grok/Claude/Cursor children can write sessions"
+      echo "set ~/.codex/config.toml [sandbox_workspace_write] ($sandbox_fix) so Grok/Claude/Cursor/OpenCode/OMP/Pi children can write sessions"
     fi
   fi
 
@@ -265,7 +274,8 @@ cmd_init() {
   done
   if [[ "$harness_new" -eq 1 ]]; then
     local name flag
-    for name in grok claude cursor; do
+    for name in "${RIG_WORKERS[@]}"; do
+      [[ "$name" == "codex" ]] && continue
       if [[ -n "$(find_worker_bin "$name")" ]]; then
         flag=true
       else
@@ -273,10 +283,15 @@ cmd_init() {
       fi
       rig_set_toml_key "$harness" "workers" "$name" "$flag"
     done
-    echo "workers from PATH: grok=$(worker_flag grok) claude=$(worker_flag claude) cursor=$(worker_flag cursor)"
-  elif [[ -f "$harness" ]] && ! rig_has_section_key "$harness" "workers" "cursor"; then
-    rig_set_toml_key "$harness" "workers" "cursor" "false"
-    echo "appended cursor = false (existing harness; run: rig workers cursor=on)"
+    echo "workers from PATH: grok=$(worker_flag grok) claude=$(worker_flag claude) cursor=$(worker_flag cursor) opencode=$(worker_flag opencode) omp=$(worker_flag omp) pi=$(worker_flag pi)"
+  elif [[ -f "$harness" ]]; then
+    local name
+    for name in "${RIG_WORKERS[@]}"; do
+      if ! rig_has_section_key "$harness" "workers" "$name"; then
+        rig_set_toml_key "$harness" "workers" "$name" "false"
+        echo "appended $name = false (existing harness; run: rig workers $name=on)"
+      fi
+    done
   fi
 
   # Codex loads repo skills from .agents/skills. Refresh SKILL.md on each init.
@@ -328,9 +343,9 @@ Spawn for: write code, fix bugs, review, SSH/debug, gather repo or server facts.
    Never kill, close, or finish an asking job. Never spawn another worker because the child asked. The child is waiting on you.
 
 Live parent is this CLI, not the `parent` key (`rig use grok|codex` is only the preferred default).
-Claude Code and Cursor CLI are never the parent. Worker on only if flag + binary + not live parent. Cursor binary is `cursor-agent`. Missing binary: that worker is off. Cheap same-CLI is success.
-Implement: Grok child if effective. If this CLI is Grok: Claude if effective, else cheap same-CLI. Do not spawn Cursor/Codex just because their CLI is on PATH.
-Pin Claude IDs: `claude-haiku-4-5-20251001` cheap, `claude-sonnet-5` implement, `claude-opus-5` hard/review. Cursor: `composer-2.5-fast` cheap, `composer-2.5` implement, `cursor-grok-4.6-high` hard, `claude-opus-5-thinking-high` review. Never Sol/Astra/Fable as a child. Opus is allowed.
+Claude Code, Cursor CLI, OpenCode, OMP, and Pi are never the parent. Worker on only if flag + binary + not live parent. Cursor binary is `cursor-agent`. Missing binary: that worker is off. Cheap same-CLI is success.
+Implement: Grok child if effective. If this CLI is Grok: Claude if effective, else cheap same-CLI. Do not spawn Cursor/Codex/OpenCode/OMP/Pi just because their CLI is on PATH. If both OMP and Pi are on, pick OMP.
+Pin Claude IDs: `claude-haiku-4-5-20251001` cheap, `claude-sonnet-5` implement, `claude-opus-5` hard/review. Cursor: `composer-2.5-fast` cheap, `composer-2.5` implement, `cursor-grok-4.6-high` hard, `claude-opus-5-thinking-high` review. OpenCode/OMP/Pi omit --model unless RIG_MODEL is set. Never Sol/Astra/Fable as a child. Opus is allowed.
 Grok Bot.app is not a worker. Do not spawn it.
 Watch: `rig jobs` / `rig job wait <id>` / `rig job show` / `rig job log <id>` / `rig tui` / `/rig`.
 After a run: `rig memory add "one standing fact"` if there is one. No transcripts.
@@ -406,7 +421,7 @@ cmd_doctor() {
   echo
   echo "Workers"
   local name flag bin reason eff
-  for name in grok claude codex cursor; do
+  for name in "${RIG_WORKERS[@]}"; do
     flag="$(worker_flag "$name")"
     bin="$(find_worker_bin "$name")"
     reason="$(worker_reason "$name")"
@@ -415,7 +430,7 @@ cmd_doctor() {
     else
       eff="off"
     fi
-    printf '  %-7s flag=%-5s bin=%-42s effective=%s' \
+    printf '  %-8s flag=%-5s bin=%-42s effective=%s' \
       "$name" "$flag" "${bin:-(missing)}" "$eff"
     if [[ -n "$reason" ]]; then
       printf ' (%s)' "$reason"
@@ -432,6 +447,18 @@ cmd_doctor() {
   if [[ -z "$(find_worker_bin cursor)" ]]; then
     echo "  Cursor GUI cannot be spawned. Install CLI:"
     echo "  curl https://cursor.com/install -fsS | bash"
+  fi
+  if [[ -z "$(find_worker_bin opencode)" ]]; then
+    echo "  OpenCode CLI missing:"
+    echo "  curl -fsSL https://opencode.ai/install | bash"
+  fi
+  if [[ -z "$(find_worker_bin omp)" ]]; then
+    echo "  OMP CLI missing:"
+    echo "  curl -fsSL https://omp.sh/install | sh"
+  fi
+  if [[ -z "$(find_worker_bin pi)" ]]; then
+    echo "  Pi CLI missing:"
+    echo "  npm install -g @earendil-works/pi-coding-agent"
   fi
   echo
   echo "Skill"
@@ -493,7 +520,7 @@ cmd_status() {
   pref="$HARNESS_PARENT"
   profile="$HARNESS_PROFILE"
   effs=""
-  for name in grok claude codex cursor; do
+  for name in "${RIG_WORKERS[@]}"; do
     if effective_worker "$name"; then
       effs+="$name "
     fi
@@ -565,7 +592,7 @@ cmd_tui() {
 
 effective_csv() {
   local name out=""
-  for name in grok claude codex cursor; do
+  for name in "${RIG_WORKERS[@]}"; do
     if effective_worker "$name"; then
       out+="${out:+,}$name"
     fi
@@ -634,7 +661,7 @@ cmd_parent() {
 
 cmd_workers() {
   [[ $# -ge 1 ]] || {
-    echo "usage: rig workers grok=on|off claude=on|off codex=on|off cursor=on|off" >&2
+    echo "usage: rig workers grok=on|off claude=on|off codex=on|off cursor=on|off opencode=on|off omp=on|off pi=on|off" >&2
     exit 2
   }
   ensure_harness
@@ -643,7 +670,7 @@ cmd_workers() {
     name="${spec%%=*}"
     val="${spec#*=}"
     case "$name" in
-      grok|claude|codex|cursor) ;;
+      grok|claude|codex|cursor|opencode|omp|pi) ;;
       *)
         echo "rig workers: unknown worker '$name'" >&2
         exit 2
@@ -721,7 +748,7 @@ pick_worker() {
     live="$(preferred_parent)"
   fi
   if is_review_prompt "$prompt"; then
-    for name in grok claude cursor codex; do
+    for name in claude grok cursor opencode omp pi codex; do
       if [[ "$name" == "$live" ]]; then
         continue
       fi
@@ -737,7 +764,7 @@ pick_worker() {
     printf '%s\n' "grok"
     return 0
   fi
-  for name in claude cursor codex; do
+  for name in claude cursor opencode omp pi codex; do
     if [[ "$name" == "$live" ]]; then
       continue
     fi
@@ -936,9 +963,9 @@ cmd_job() {
     fi
   fi
   case "$JOB_WORKER" in
-    grok|codex|claude|cursor|parent) ;;
+    grok|codex|claude|cursor|opencode|omp|pi|parent) ;;
     *)
-      echo "rig job: worker must be grok|codex|claude|cursor|parent" >&2
+      echo "rig job: worker must be grok|codex|claude|cursor|opencode|omp|pi|parent" >&2
       exit 2
       ;;
   esac

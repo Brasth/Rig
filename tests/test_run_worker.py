@@ -132,5 +132,83 @@ class CursorWorkerArgv(unittest.TestCase):
         self.assertIn("--mode=ask", out, out)
 
 
+class OpenCodeOmpPiWorkerArgv(unittest.TestCase):
+    def setUp(self):
+        self.td = tempfile.TemporaryDirectory()
+        self.repo = Path(self.td.name)
+        (self.repo / ".git").mkdir()
+        (self.repo / ".rig").mkdir()
+        (self.repo / ".rig" / "harness.toml").write_text(
+            'parent = "codex"\n\n[workers]\ncodex = false\ngrok = false\nclaude = false\n'
+            "cursor = false\nopencode = true\nomp = true\npi = true\n"
+        )
+        jobs = self.repo / ".rig" / "jobs" / "print-stream"
+        jobs.mkdir(parents=True)
+        self.brief = jobs / "brief.md"
+        self.brief.write_text("You are a worker, not the orchestrator.\nFix the helper.\n")
+        self.bins = self.repo / "bins"
+        self.bins.mkdir()
+        for name in ("opencode", "omp", "pi"):
+            path = self.bins / name
+            path.write_text("#!/bin/sh\nexit 0\n")
+            path.chmod(0o755)
+
+    def tearDown(self):
+        self.td.cleanup()
+
+    def _env(self, extra: dict | None = None) -> dict:
+        env = {
+            "PATH": f"{self.bins}:/usr/bin:/bin",
+            "RIG_PARENT": "grok",
+            "RIG_ROLE": "implement",
+        }
+        if extra:
+            env.update(extra)
+        return env
+
+    def test_opencode_dry_run_run_json_auto(self):
+        proc = run_worker(
+            self.repo, "opencode", "print-stream", str(self.brief), env=self._env()
+        )
+        out = proc.stdout + proc.stderr
+        self.assertIn(proc.returncode, (0, 127), out)
+        self.assertIn("would run:", out, out)
+        self.assertIn("opencode run", out)
+        self.assertIn("--format json", out)
+        self.assertIn("--dir", out)
+        self.assertIn("--auto", out)
+        self.assertNotIn("--interactive", out)
+        self.assertNotIn("gpt-5.6-sol", out)
+        self.assertNotIn("claude-fable", out)
+
+    def test_omp_dry_run_print_json_write(self):
+        proc = run_worker(self.repo, "omp", "print-stream", str(self.brief), env=self._env())
+        out = proc.stdout + proc.stderr
+        self.assertIn(proc.returncode, (0, 127), out)
+        self.assertIn("would run:", out, out)
+        self.assertIn("omp", out)
+        self.assertIn("-p", out)
+        self.assertIn("--mode json", out)
+        self.assertIn("--cwd", out)
+        self.assertIn("--approval-mode write", out)
+        self.assertIn("--no-session", out)
+        self.assertNotIn("--auto-approve", out)
+        self.assertNotIn("--plan-yolo", out)
+        self.assertNotIn("gpt-5.6-sol", out)
+
+    def test_pi_dry_run_print_json_approve(self):
+        proc = run_worker(self.repo, "pi", "print-stream", str(self.brief), env=self._env())
+        out = proc.stdout + proc.stderr
+        self.assertIn(proc.returncode, (0, 127), out)
+        self.assertIn("would run:", out, out)
+        self.assertIn("pi", out)
+        self.assertIn("-p", out)
+        self.assertIn("--mode json", out)
+        self.assertIn("--approve", out)
+        self.assertIn("--no-session", out)
+        self.assertNotIn("--auto-approve", out)
+        self.assertNotIn("gpt-5.6-sol", out)
+
+
 if __name__ == "__main__":
     unittest.main()

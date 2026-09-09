@@ -18,6 +18,7 @@ PREAMBLE_MARKERS = (
     "you are a worker, not the orchestrator",
     "do not spawn codex, grok, or claude",
     "do not spawn codex, grok, claude, or cursor",
+    "do not spawn codex, grok, claude, cursor, opencode, omp, or pi",
 )
 INPUT_KEYS = (
     "path",

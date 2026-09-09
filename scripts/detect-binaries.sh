@@ -13,7 +13,7 @@ iso_now() {
   date -u +%Y-%m-%dT%H:%M:%SZ
 }
 
-RIG_WORKERS=(grok claude codex cursor)
+RIG_WORKERS=(grok claude codex cursor opencode omp pi)
 
 find_bin() {
   command -v "$1" 2>/dev/null || true
@@ -23,7 +23,7 @@ find_bin() {
 find_worker_bin() {
   local name="$1" p real
   case "$name" in
-    grok|claude|codex)
+    grok|claude|codex|opencode|omp|pi)
       find_bin "$name"
       ;;
     cursor)
@@ -74,7 +74,7 @@ harness_path() {
   printf '%s\n' "$(repo_root)/.rig/harness.toml"
 }
 
-# Sets HARNESS_PARENT, HARNESS_PROFILE, HARNESS_WORKER_{CODEX,GROK,CLAUDE,CURSOR}.
+# Sets HARNESS_PARENT, HARNESS_PROFILE, HARNESS_WORKER_{CODEX,GROK,CLAUDE,CURSOR,OPENCODE,OMP,PI}.
 parse_harness() {
   local file="${1:-$(harness_path)}"
   HARNESS_PARENT="codex"
@@ -83,6 +83,9 @@ parse_harness() {
   HARNESS_WORKER_GROK="true"
   HARNESS_WORKER_CLAUDE="true"
   HARNESS_WORKER_CURSOR="false"
+  HARNESS_WORKER_OPENCODE="false"
+  HARNESS_WORKER_OMP="false"
+  HARNESS_WORKER_PI="false"
   HARNESS_FILE="$file"
   [[ -f "$file" ]] || return 0
 
@@ -121,6 +124,9 @@ parse_harness() {
             grok) HARNESS_WORKER_GROK="$val" ;;
             claude) HARNESS_WORKER_CLAUDE="$val" ;;
             cursor) HARNESS_WORKER_CURSOR="$val" ;;
+            opencode) HARNESS_WORKER_OPENCODE="$val" ;;
+            omp) HARNESS_WORKER_OMP="$val" ;;
+            pi) HARNESS_WORKER_PI="$val" ;;
           esac
           ;;
       esac
@@ -146,6 +152,9 @@ worker_flag() {
     grok) printf '%s\n' "$HARNESS_WORKER_GROK" ;;
     claude) printf '%s\n' "$HARNESS_WORKER_CLAUDE" ;;
     cursor) printf '%s\n' "$HARNESS_WORKER_CURSOR" ;;
+    opencode) printf '%s\n' "$HARNESS_WORKER_OPENCODE" ;;
+    omp) printf '%s\n' "$HARNESS_WORKER_OMP" ;;
+    pi) printf '%s\n' "$HARNESS_WORKER_PI" ;;
     *) printf '%s\n' "false" ;;
   esac
 }
@@ -165,7 +174,7 @@ _ps_command() {
 live_parent() {
   local forced="${RIG_PARENT:-}"
   case "$forced" in
-    grok|codex|claude|cursor)
+    grok|codex|claude|cursor|opencode|omp|pi)
       printf '%s\n' "$forced"
       return 0
       ;;
@@ -197,6 +206,18 @@ live_parent() {
         ;;
       cursor-agent|cursor-agent-*)
         printf '%s\n' "cursor"
+        return 0
+        ;;
+      opencode|opencode-*)
+        printf '%s\n' "opencode"
+        return 0
+        ;;
+      omp|omp-*)
+        printf '%s\n' "omp"
+        return 0
+        ;;
+      pi)
+        printf '%s\n' "pi"
         return 0
         ;;
       agent|agent-*)
@@ -385,7 +406,8 @@ PY
 rig_ensure_codex_child_sandbox() {
   local file="$1"
   [[ -f "$file" ]] || return 0
-  python3 - "$file" "$HOME/.grok" "$HOME/.claude" "$HOME/.cursor" <<'PY'
+  python3 - "$file" "$HOME/.grok" "$HOME/.claude" "$HOME/.cursor" \
+    "$HOME/.opencode" "$HOME/.config/opencode" "$HOME/.omp" "$HOME/.pi" <<'PY'
 import sys
 from pathlib import Path
 
@@ -523,4 +545,4 @@ else:
 PY
 }
 
-WORKER_PREAMBLE='You are a worker, not the orchestrator. Do not spawn codex, grok, claude, or cursor. Do not drive the user desktop or chrome profile unless the brief says so. Write code, fix, review, SSH/debug, or gather facts. Print a short summary. Stop.'
+WORKER_PREAMBLE='You are a worker, not the orchestrator. Do not spawn codex, grok, claude, cursor, opencode, omp, or pi. Do not drive the user desktop or chrome profile unless the brief says so. Write code, fix, review, SSH/debug, or gather facts. Print a short summary. Stop.'

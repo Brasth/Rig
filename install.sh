@@ -44,7 +44,7 @@ install_file() {
 }
 
 copy_into_home() {
-  mkdir -p "$RIG_HOME"/{bin,scripts,skills,adapters/codex/agents,adapters/grok,adapters/claude,adapters/cursor,templates}
+  mkdir -p "$RIG_HOME"/{bin,scripts,skills,adapters/codex/agents,adapters/grok,adapters/claude,adapters/cursor,adapters/opencode,adapters/omp,adapters/pi,templates}
   install_file "$SRC/bin/rig" "$RIG_HOME/bin/rig"
   local f skill
   for f in "$SRC/scripts/"*; do
@@ -66,6 +66,15 @@ copy_into_home() {
   install_file "$SRC/adapters/claude/CLAUDE.worker.md" "$RIG_HOME/adapters/claude/CLAUDE.worker.md"
   if [[ -f "$SRC/adapters/cursor/CURSOR.worker.md" ]]; then
     install_file "$SRC/adapters/cursor/CURSOR.worker.md" "$RIG_HOME/adapters/cursor/CURSOR.worker.md"
+  fi
+  if [[ -f "$SRC/adapters/opencode/OPENCODE.worker.md" ]]; then
+    install_file "$SRC/adapters/opencode/OPENCODE.worker.md" "$RIG_HOME/adapters/opencode/OPENCODE.worker.md"
+  fi
+  if [[ -f "$SRC/adapters/omp/OMP.worker.md" ]]; then
+    install_file "$SRC/adapters/omp/OMP.worker.md" "$RIG_HOME/adapters/omp/OMP.worker.md"
+  fi
+  if [[ -f "$SRC/adapters/pi/PI.worker.md" ]]; then
+    install_file "$SRC/adapters/pi/PI.worker.md" "$RIG_HOME/adapters/pi/PI.worker.md"
   fi
   for f in "$SRC/templates/"*; do
     [[ -f "$f" ]] || continue

@@ -1,6 +1,6 @@
 # Rig
 
-One parent CLI (Codex or Grok). You type a normal prompt. The parent may spawn Grok, Claude Code, Cursor, or Codex as workers. Claude and Cursor are never the parent. Missing worker binary → cheaper same-CLI. That is success.
+One parent CLI (Codex or Grok). You type a normal prompt. The parent may spawn Grok, Claude Code, Cursor, OpenCode, OMP, Pi, or Codex as workers. Claude, Cursor, OpenCode, OMP, and Pi are never the parent. Missing worker binary → cheaper same-CLI. That is success.
 
 ## Install
 
@@ -22,7 +22,7 @@ source ~/.zshrc
 
 `which rig` must print `$HOME/.local/bin/rig`.
 
-You need Codex CLI and/or Grok CLI as the parent. Optional worker binaries: `grok`, `claude`, `cursor-agent`, `codex`.
+You need Codex CLI and/or Grok CLI as the parent. Optional worker binaries: `grok`, `claude`, `cursor-agent`, `codex`, `opencode`, `omp`, `pi`.
 
 ## Per project
 
@@ -45,7 +45,7 @@ Type a normal prompt in that parent CLI. Example: `fix the failing tests in test
 ```bash
 rig use grok|codex
 rig parent sol|astra
-rig workers grok=on|off claude=on|off codex=on|off cursor=on|off
+rig workers grok=on|off claude=on|off codex=on|off cursor=on|off opencode=on|off omp=on|off pi=on|off
 ```
 
 ```toml
@@ -61,11 +61,14 @@ codex = false
 grok = true
 claude = true
 cursor = false
+opencode = false
+omp = false
+pi = false
 ```
 
 - **Live parent** is whichever Codex or Grok you actually opened (`rig status`). The `parent =` key is only the preferred default (`rig use grok|codex`). Opening the CLI is what makes it live.
 - A worker is **effective** only when: flag true **and** binary on PATH **and** not the live parent.
-- Claude Code and Cursor are never the parent.
+- Claude Code, Cursor, OpenCode, OMP, and Pi are never the parent.
 - Grok Bot.app and Cursor.app are GUIs, **not** spawnable workers. The Cursor worker binary is `cursor-agent`.
 
 ## Watch

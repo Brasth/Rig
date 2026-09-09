@@ -10,3 +10,6 @@ codex = false
 grok = true
 claude = true
 cursor = false
+opencode = false
+omp = false
+pi = false

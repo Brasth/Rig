@@ -119,12 +119,21 @@ class InitPresence(unittest.TestCase):
         (rig_dir / "harness.toml").write_text(
             'parent = "codex"\n\n[workers]\ncodex = false\ngrok = true\nclaude = false\n'
         )
+        _fake_bin(self.bins, "opencode")
+        _fake_bin(self.bins, "omp")
+        _fake_bin(self.bins, "pi")
         proc = run_rig(self.repo, "init", env={"PATH": _stub_path(self.bins)})
         self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
         text = (rig_dir / "harness.toml").read_text()
         self.assertRegex(text, r"claude\s*=\s*false")
         self.assertRegex(text, r"cursor\s*=\s*false")
         self.assertNotRegex(text, r"cursor\s*=\s*true")
+        self.assertRegex(text, r"opencode\s*=\s*false")
+        self.assertRegex(text, r"omp\s*=\s*false")
+        self.assertRegex(text, r"pi\s*=\s*false")
+        self.assertNotRegex(text, r"opencode\s*=\s*true")
+        self.assertNotRegex(text, r"omp\s*=\s*true")
+        self.assertNotRegex(text, r"pi\s*=\s*true")
 
     def test_workers_cursor_on(self):
         proc = run_rig(self.repo, "init", env={"PATH": _stub_path()})
@@ -148,6 +157,43 @@ class InitPresence(unittest.TestCase):
         self.assertRegex(doc.stdout, r"grok:.*(mcp_servers\.rig|missing)")
         self.assertRegex(doc.stdout, r"codex:.*(mcp_servers\.rig|missing)")
 
+    def test_new_init_opencode_omp_pi_on_when_cli_present(self):
+        _fake_bin(self.bins, "opencode")
+        _fake_bin(self.bins, "omp")
+        _fake_bin(self.bins, "pi")
+        proc = run_rig(self.repo, "init", env={"PATH": _stub_path(self.bins)})
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        text = (self.repo / ".rig" / "harness.toml").read_text()
+        self.assertRegex(text, r"opencode\s*=\s*true")
+        self.assertRegex(text, r"omp\s*=\s*true")
+        self.assertRegex(text, r"pi\s*=\s*true")
+        self.assertRegex(text, r"cursor\s*=\s*false")
+
+    def test_workers_opencode_on(self):
+        proc = run_rig(self.repo, "init", env={"PATH": _stub_path()})
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        on = run_rig(self.repo, "workers", "opencode=on", "omp=on", "pi=on", env={"PATH": _stub_path()})
+        self.assertEqual(on.returncode, 0, on.stderr)
+        self.assertIn("opencode = true", on.stdout)
+        self.assertIn("omp = true", on.stdout)
+        self.assertIn("pi = true", on.stdout)
+        text = (self.repo / ".rig" / "harness.toml").read_text()
+        self.assertRegex(text, r"opencode\s*=\s*true")
+        self.assertRegex(text, r"omp\s*=\s*true")
+        self.assertRegex(text, r"pi\s*=\s*true")
+
+    def test_doctor_lists_opencode_omp_pi_and_install_hints(self):
+        proc = run_rig(self.repo, "init", env={"PATH": _stub_path()})
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        doc = run_rig(self.repo, "doctor", env={"PATH": _stub_path(), "RIG_PARENT": "codex"})
+        self.assertEqual(doc.returncode, 0, doc.stderr)
+        self.assertIn("opencode", doc.stdout)
+        self.assertIn("omp", doc.stdout)
+        self.assertRegex(doc.stdout, r"\bpi\b")
+        self.assertIn("curl -fsSL https://opencode.ai/install", doc.stdout)
+        self.assertIn("curl -fsSL https://omp.sh/install", doc.stdout)
+        self.assertIn("@earendil-works/pi-coding-agent", doc.stdout)
+
     def test_job_start_accepts_cursor(self):
         run_rig(self.repo, "init", env={"PATH": _stub_path()})
         proc = run_rig(
@@ -162,6 +208,21 @@ class InitPresence(unittest.TestCase):
         )
         self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
 
+    def test_job_start_accepts_opencode_omp_pi(self):
+        run_rig(self.repo, "init", env={"PATH": _stub_path()})
+        for name in ("opencode", "omp", "pi"):
+            proc = run_rig(
+                self.repo,
+                "job",
+                "start",
+                "--worker",
+                name,
+                "--role",
+                "implement",
+                env={"PATH": _stub_path()},
+            )
+            self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+
     def test_init_agents_tells_parent_to_answer_ask(self):
         proc = run_rig(self.repo, "init", env={"PATH": _stub_path()})
         self.assertEqual(proc.returncode, 0, proc.stderr)
@@ -171,7 +232,7 @@ class InitPresence(unittest.TestCase):
         self.assertIn("Never kill", text)
         self.assertIn("Never spawn another worker", text)
         self.assertIn("background", text)
-        self.assertIn("Do not spawn Cursor/Codex just because their CLI is on PATH", text)
+        self.assertIn("Do not spawn Cursor/Codex/OpenCode/OMP/Pi just because their CLI is on PATH", text)
 
 
 if __name__ == "__main__":
