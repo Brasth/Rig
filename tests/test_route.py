@@ -169,6 +169,54 @@ class Pick(unittest.TestCase):
         self.assertEqual(route.model_for("omp", "hard"), ("", ""))
         self.assertEqual(route.model_for("pi", "review"), ("", ""))
 
+    def test_opencode_live_plus_grok_is_grok_child(self):
+        c = route.pick("opencode", ["grok"], "implement", "add a header")
+        self.assertEqual(c["worker"], "grok")
+        self.assertEqual(c["spawn"], "run-worker")
+        self.assertEqual(c["model"], "grok-4.6")
+
+    def test_opencode_live_no_other_is_native(self):
+        c = route.pick("opencode", [], "implement", "add a header")
+        self.assertEqual(c["spawn"], "native")
+        self.assertEqual(c["worker"], "opencode")
+        self.assertEqual(c["model"], "")
+        self.assertEqual(c["native_agent"], "worker")
+        c = route.pick("opencode", ["cursor", "codex"], "implement", "add a header")
+        self.assertEqual(c["spawn"], "native")
+        self.assertEqual(c["worker"], "opencode")
+
+    def test_opencode_live_explore_is_native(self):
+        c = route.pick("opencode", ["cursor", "codex"], "explore", "trace remaining gates")
+        self.assertEqual(c["spawn"], "native")
+        self.assertEqual(c["worker"], "opencode")
+        self.assertEqual(c["native_agent"], "explore")
+        self.assertEqual(c["model"], "")
+
+    def test_opencode_live_bulk_native_agent(self):
+        c = route.pick("opencode", ["grok"], "bulk", "rename the helper")
+        self.assertEqual(c["spawn"], "native")
+        self.assertEqual(c["worker"], "opencode")
+        self.assertEqual(c["native_agent"], "bulk")
+
+    def test_omp_live_plus_pi_is_native_omp(self):
+        c = route.pick("omp", ["pi"], "implement", "add a header")
+        self.assertEqual(c["spawn"], "native")
+        self.assertEqual(c["worker"], "omp")
+        self.assertEqual(c["model"], "")
+        c = route.pick("omp", ["grok", "pi"], "implement", "add a header")
+        self.assertEqual(c["worker"], "grok")
+        self.assertEqual(c["spawn"], "run-worker")
+
+    def test_pi_live_plus_omp_is_native_pi(self):
+        c = route.pick("pi", ["omp"], "implement", "add a header")
+        self.assertEqual(c["spawn"], "native")
+        self.assertEqual(c["worker"], "pi")
+
+    def test_omp_beats_pi_as_workers_of_other_parent(self):
+        c = route.pick("", ["pi", "omp"], "implement", "add a header")
+        self.assertEqual(c["worker"], "omp")
+        self.assertEqual(c["spawn"], "run-worker")
+
 
 if __name__ == "__main__":
     unittest.main()

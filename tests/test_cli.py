@@ -156,6 +156,9 @@ class InitPresence(unittest.TestCase):
         self.assertIn("MCP", doc.stdout)
         self.assertRegex(doc.stdout, r"grok:.*(mcp_servers\.rig|missing)")
         self.assertRegex(doc.stdout, r"codex:.*(mcp_servers\.rig|missing)")
+        self.assertRegex(doc.stdout, r"opencode:.*(mcp\.rig|missing)")
+        self.assertRegex(doc.stdout, r"omp:.*(mcpServers\.rig|missing)")
+        self.assertRegex(doc.stdout, r"pi:.*(mcpServers\.rig|missing)")
 
     def test_new_init_opencode_omp_pi_on_when_cli_present(self):
         _fake_bin(self.bins, "opencode")
@@ -233,6 +236,148 @@ class InitPresence(unittest.TestCase):
         self.assertIn("Never spawn another worker", text)
         self.assertIn("background", text)
         self.assertIn("Do not spawn Cursor/Codex/OpenCode/OMP/Pi just because their CLI is on PATH", text)
+        self.assertIn("rig use grok|codex|opencode|omp|pi", text)
+        self.assertIn("Claude Code and Cursor CLI are never the parent", text)
+        self.assertIn("OpenCode, OMP, and Pi can be the parent", text)
+        self.assertNotIn("'", text.split("<!-- rig:start -->", 1)[1].split("<!-- rig:end -->", 1)[0])
+
+    def test_use_opencode_omp_pi_writes_parent(self):
+        proc = run_rig(self.repo, "init", env={"PATH": _stub_path()})
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        for name in ("opencode", "omp", "pi", "grok", "codex"):
+            used = run_rig(self.repo, "use", name, env={"PATH": _stub_path()})
+            self.assertEqual(used.returncode, 0, used.stderr + used.stdout)
+            self.assertIn(f"preferred parent = {name}", used.stdout)
+            text = (self.repo / ".rig" / "harness.toml").read_text()
+            self.assertRegex(text, rf'parent\s*=\s*"{name}"')
+
+    def test_use_claude_and_cursor_rejected(self):
+        proc = run_rig(self.repo, "init", env={"PATH": _stub_path()})
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        for name in ("claude", "cursor"):
+            used = run_rig(self.repo, "use", name, env={"PATH": _stub_path()})
+            self.assertEqual(used.returncode, 2, used.stdout + used.stderr)
+            self.assertIn("usage: rig use", used.stderr)
+
+    def test_init_keeps_existing_codex_parent(self):
+        rig_dir = self.repo / ".rig"
+        rig_dir.mkdir()
+        (rig_dir / "harness.toml").write_text(
+            'parent = "codex"\n\n[workers]\ncodex = false\ngrok = true\nclaude = false\n'
+        )
+        proc = run_rig(self.repo, "init", env={"PATH": _stub_path()})
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        text = (rig_dir / "harness.toml").read_text()
+        self.assertRegex(text, r'parent\s*=\s*"codex"')
+        self.assertNotRegex(text, r'parent\s*=\s*"opencode"')
+
+    def test_doctor_lists_opencode_omp_pi_mcp_missing(self):
+        proc = run_rig(self.repo, "init", env={"PATH": _stub_path()})
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        home = self.repo / "empty-home"
+        home.mkdir()
+        doc = run_rig(
+            self.repo,
+            "doctor",
+            env={"PATH": _stub_path(), "RIG_PARENT": "codex", "HOME": str(home)},
+        )
+        self.assertEqual(doc.returncode, 0, doc.stderr)
+        self.assertRegex(doc.stdout, r"opencode:.*missing")
+        self.assertRegex(doc.stdout, r"omp:.*missing")
+        self.assertRegex(doc.stdout, r"pi:.*missing")
+        self.assertIn("pi install npm:pi-mcp-adapter", doc.stdout)
+        self.assertIn("/rig in Grok, Codex, OpenCode, OMP, or Pi", doc.stdout)
+        self.assertIn(".config/opencode/skill/delegate-harness", doc.stdout)
+        self.assertIn(".omp/agent/skills/delegate-harness", doc.stdout)
+        self.assertIn(".pi/agent/skills/delegate-harness", doc.stdout)
+
+    def test_doctor_reports_json_mcp_present(self):
+        proc = run_rig(self.repo, "init", env={"PATH": _stub_path()})
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        home = self.repo / "mcp-home"
+        oc = home / ".config" / "opencode" / "opencode.json"
+        oc.parent.mkdir(parents=True)
+        launcher = str(home / "rig-mcp.sh")
+        oc.write_text(
+            json.dumps(
+                {
+                    "mcp": {
+                        "rig": {
+                            "type": "local",
+                            "command": [launcher],
+                            "enabled": True,
+                        }
+                    }
+                }
+            )
+        )
+        omp = home / ".omp" / "mcp.json"
+        omp.parent.mkdir(parents=True)
+        omp.write_text(json.dumps({"mcpServers": {"rig": {"command": launcher}}}))
+        pi = home / ".pi" / "agent" / "mcp.json"
+        pi.parent.mkdir(parents=True)
+        pi.write_text(json.dumps({"mcpServers": {"rig": {"command": launcher}}}))
+        doc = run_rig(
+            self.repo,
+            "doctor",
+            env={"PATH": _stub_path(), "RIG_PARENT": "codex", "HOME": str(home)},
+        )
+        self.assertEqual(doc.returncode, 0, doc.stderr)
+        self.assertRegex(doc.stdout, r"opencode:.*mcp\.rig")
+        self.assertRegex(doc.stdout, r"omp:.*mcpServers\.rig")
+        self.assertRegex(doc.stdout, r"pi:.*mcpServers\.rig")
+        self.assertIn("pi install npm:pi-mcp-adapter", doc.stdout)
+
+    def test_doctor_pi_adapter_present_skips_hint(self):
+        proc = run_rig(self.repo, "init", env={"PATH": _stub_path()})
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        home = self.repo / "pi-home"
+        settings = home / ".pi" / "agent" / "settings.json"
+        settings.parent.mkdir(parents=True)
+        settings.write_text(json.dumps({"packages": ["pi-mcp-adapter"]}))
+        mcp = home / ".pi" / "agent" / "mcp.json"
+        mcp.write_text(
+            json.dumps({"mcpServers": {"rig": {"command": "/tmp/rig-mcp.sh"}}})
+        )
+        doc = run_rig(
+            self.repo,
+            "doctor",
+            env={"PATH": _stub_path(), "RIG_PARENT": "codex", "HOME": str(home)},
+        )
+        self.assertEqual(doc.returncode, 0, doc.stderr)
+        self.assertNotIn("pi MCP adapter missing", doc.stdout)
+
+    def test_setup_writes_user_mcp_not_project(self):
+        run_rig(self.repo, "init", env={"PATH": _stub_path()})
+        home = self.repo / "setup-home"
+        home.mkdir()
+        proc = run_rig(
+            self.repo,
+            "setup",
+            env={
+                "PATH": _stub_path(),
+                "HOME": str(home),
+                "RIG_HOME": str(home / ".rig"),
+                "RIG_SRC": str(ROOT),
+            },
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        oc = home / ".config" / "opencode" / "opencode.json"
+        omp = home / ".omp" / "mcp.json"
+        pi = home / ".pi" / "agent" / "mcp.json"
+        self.assertTrue(oc.is_file(), proc.stdout)
+        self.assertTrue(omp.is_file(), proc.stdout)
+        self.assertTrue(pi.is_file(), proc.stdout)
+        self.assertIn("rig-mcp", oc.read_text())
+        self.assertIn("rig-mcp", omp.read_text())
+        self.assertIn("rig-mcp", pi.read_text())
+        self.assertFalse((self.repo / "mcp.json").exists())
+        self.assertFalse((self.repo / "opencode.json").exists())
+        self.assertFalse((self.repo / ".mcp.json").exists())
+        skill = home / ".config" / "opencode" / "skill" / "delegate-harness"
+        self.assertTrue(skill.is_symlink() or skill.is_dir(), proc.stdout)
+        self.assertTrue((home / ".omp" / "agent" / "skills" / "rig-jobs").exists())
+        self.assertTrue((home / ".pi" / "agent" / "skills" / "delegate-harness").exists())
 
 
 if __name__ == "__main__":

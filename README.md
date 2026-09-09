@@ -1,6 +1,6 @@
 # Rig
 
-One parent CLI (Codex or Grok). You type a normal prompt. The parent may spawn Grok, Claude Code, Cursor, OpenCode, OMP, Pi, or Codex as workers. Claude, Cursor, OpenCode, OMP, and Pi are never the parent. Missing worker binary → cheaper same-CLI. That is success.
+One parent CLI (Codex, Grok, OpenCode, OMP, or Pi). You type a normal prompt. The parent may spawn Grok, Claude Code, Cursor, OpenCode, OMP, Pi, or Codex as workers. Claude and Cursor are never the parent. Missing worker binary → cheaper same-CLI. That is success.
 
 ## Install
 
@@ -22,7 +22,7 @@ source ~/.zshrc
 
 `which rig` must print `$HOME/.local/bin/rig`.
 
-You need Codex CLI and/or Grok CLI as the parent. Optional worker binaries: `grok`, `claude`, `cursor-agent`, `codex`, `opencode`, `omp`, `pi`.
+You need one parent CLI: Codex, Grok, OpenCode, OMP, or Pi. Optional worker binaries: `grok`, `claude`, `cursor-agent`, `codex`, `opencode`, `omp`, `pi`.
 
 ## Per project
 
@@ -34,16 +34,16 @@ rig doctor
 
 `rig init` is per repo. Do this in every project you want Rig to manage. Existing `.rig/harness.toml` flags are never flipped.
 
-Fully quit Grok and Codex once after first install (not just the tab — quit the apps). MCP tools and the Grok status line load on a cold start.
+Fully quit the parent CLI once after first install (not just the tab — quit the apps). MCP tools and the Grok status line load on a cold start.
 
-Open a **new** Codex or Grok thread in that repo. An already-open session will not pick up `AGENTS.md` or skills.
+Open a **new** thread in that repo. An already-open session will not pick up `AGENTS.md` or skills.
 
 Type a normal prompt in that parent CLI. Example: `fix the failing tests in tests/test_cli.py`. Do **not** use `rig run` for normal work.
 
 ## Configure
 
 ```bash
-rig use grok|codex
+rig use grok|codex|opencode|omp|pi
 rig parent sol|astra
 rig workers grok=on|off claude=on|off codex=on|off cursor=on|off opencode=on|off omp=on|off pi=on|off
 ```
@@ -51,6 +51,9 @@ rig workers grok=on|off claude=on|off codex=on|off cursor=on|off opencode=on|off
 ```toml
 parent = "codex"
 # parent = "grok"
+# parent = "opencode"
+# parent = "omp"
+# parent = "pi"
 
 [parent]
 profile = "sol"
@@ -66,14 +69,14 @@ omp = false
 pi = false
 ```
 
-- **Live parent** is whichever Codex or Grok you actually opened (`rig status`). The `parent =` key is only the preferred default (`rig use grok|codex`). Opening the CLI is what makes it live.
+- **Live parent** is whichever Codex, Grok, OpenCode, OMP, or Pi you actually opened (`rig status`). The `parent =` key is only the preferred default (`rig use grok|codex|opencode|omp|pi`). Opening the CLI is what makes it live.
 - A worker is **effective** only when: flag true **and** binary on PATH **and** not the live parent.
-- Claude Code, Cursor, OpenCode, OMP, and Pi are never the parent.
+- Claude Code and Cursor are never the parent.
 - Grok Bot.app and Cursor.app are GUIs, **not** spawnable workers. The Cursor worker binary is `cursor-agent`.
 
 ## Watch
 
-`rig tui` / `rig jobs` / `/rig` in Grok or Codex. Grok also gets a bottom status line after setup (restart Grok once).
+`rig tui` / `rig jobs` / `/rig` in Grok, Codex, OpenCode, OMP, or Pi. Grok also gets a bottom status line after setup (restart Grok once). Pi needs `pi install npm:pi-mcp-adapter` before `/rig` loads.
 
 Jobs and MEMORY are this repo, not the chat. A new thread still sees `.rig/jobs`. Running children keep going.
 

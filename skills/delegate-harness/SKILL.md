@@ -24,8 +24,8 @@ Doing the worker's job yourself is a failure. Later AGENTS.md may say "edit loca
 
 Jobs and MEMORY are this repo, not this chat. A new parent thread still sees `.rig/jobs` and `.rig/MEMORY.md`. Running children keep going.
 
-Live parent is this CLI, not the `parent` key in toml. That key is only the preferred default (`rig use grok|codex`). Switching preferred parent does not move the session — open that CLI.
-Claude Code (`claude`), Cursor CLI (`cursor-agent`), OpenCode (`opencode`), OMP (`omp`), and Pi (`pi`) are never the parent. Claude is a worker when `[workers].claude = true` and `claude` is on PATH. Cursor is a worker when `[workers].cursor = true` and `cursor-agent` is on PATH (`rig workers cursor=on`). OpenCode / OMP / Pi are workers when their flags are true and the binary is on PATH (`rig workers opencode=on` / `omp=on` / `pi=on`). Pin full model IDs. Never spawn Fable, Sol, or Astra as a child. Opus is allowed. Grok Bot.app is not a worker.
+Live parent is this CLI, not the `parent` key in toml. That key is only the preferred default (`rig use grok|codex|opencode|omp|pi`). Switching preferred parent does not move the session — open that CLI.
+Claude Code (`claude`) and Cursor CLI (`cursor-agent`) are never the parent. OpenCode (`opencode`), OMP (`omp`), and Pi (`pi`) can be the parent when you open that CLI. Claude is a worker when `[workers].claude = true` and `claude` is on PATH. Cursor is a worker when `[workers].cursor = true` and `cursor-agent` is on PATH (`rig workers cursor=on`). OpenCode / OMP / Pi are workers when their flags are true and the binary is on PATH (`rig workers opencode=on` / `omp=on` / `pi=on`) and they are not the live parent. Pin full model IDs. Never spawn Fable, Sol, or Astra as a child. Opus is allowed. Grok Bot.app is not a parent or worker.
 
 ## Parent vs worker
 
@@ -57,9 +57,9 @@ A worker is on only when all of these hold:
 2. The binary is on PATH (`grok`, `codex`, `claude`, `cursor-agent`, `opencode`, `omp`, or `pi`)
 3. The worker is not the live parent
 
-So: Codex parent → Grok/Claude/Cursor/OpenCode/OMP/Pi can be children. Grok parent → Grok child is off; the others can be children. Missing binary: that worker is off for this session, not an error. Use cheaper same-CLI workers. That is success. If both OMP and Pi are effective, pick uses OMP.
+So: Codex parent → Grok/Claude/Cursor/OpenCode/OMP/Pi can be children. Grok parent → Grok child is off; the others can be children. OpenCode/OMP/Pi parent → that CLI is off as a child; Grok/Claude/others can be children. Missing binary: that worker is off for this session, not an error. Use cheaper same-CLI workers. That is success. If both OMP and Pi are effective as workers of a different parent, pick uses OMP.
 
-Check with `rig status`, `rig jobs`, or `/rig`. Those show the worker **model** and **reasoning** level. Live child: `rig tui` in another pane, or `rig job log <id> -f`.
+Check with `rig status`, `rig jobs`, or `/rig`. Those show the worker **model** and **reasoning** level. Live child: `rig tui` in another pane, or `rig job log <id> -f`. Fully quit OpenCode / OMP / Pi once after `rig setup` so MCP `/rig` loads.
 
 ## Route
 
@@ -68,7 +68,7 @@ Never ask the user which model or reasoning to use. They will not know. Run `rig
 - Plan / vision / computer-use / chrome-profile: parent keeps it (`rig pick stay`). Spawn a worker only if this CLI cannot do it.
 - Small / locate / trace / gather facts: cheap same-CLI (`rig pick explore` or `mini`). Codex explorer is `gpt-5.3-codex-mini` low. Grok explore is `grok-4.5`. Claude Code explore is `claude-haiku-4-5-20251001` low. Cursor explore is `composer-2.5-fast` (run-worker, `--mode=ask`).
 - Mechanical bulk: `rig pick bulk`. Codex `gpt-5.6-luna` low. Claude Code `claude-haiku-4-5-20251001` low. Cursor `composer-2.5-fast`.
-- Write code / fix bugs / SSH / remote debug: `rig pick implement --case "<task>"`. Grok child `grok-4.6` high if Grok is effective. If Grok is the live parent: Claude Code `claude-sonnet-5` if effective, else cheap same-CLI (Grok native). Cursor/Codex/OpenCode/OMP/Pi children are last resort, not the default just because their CLI is on PATH.
+- Write code / fix bugs / SSH / remote debug: `rig pick implement --case "<task>"`. Grok child `grok-4.6` high if Grok is effective. If Grok is the live parent: Claude Code `claude-sonnet-5` if effective, else cheap same-CLI (Grok native). Same ladder if OpenCode, OMP, or Pi is live (native that CLI, empty model). Cursor/Codex/OpenCode/OMP/Pi children are last resort, not the default just because their CLI is on PATH.
 - Hard / architecture / security / multi-file: `rig pick hard`. Same ladder: Grok child, else Claude, else cheap same-CLI, else Cursor/OpenCode/OMP/Pi/Codex.
 - Review: different vendor than the writer. `rig pick review`. Claude Code review is `claude-opus-5` high. Cursor review is `claude-opus-5-thinking-high`.
 - No extra CLIs: cheap same-CLI. Record them. That is success.
@@ -78,7 +78,7 @@ Writer does not review its own diff.
 
 ## Record cheap same-CLI workers
 
-Codex `explorer` / `worker` / `bulk` / `reviewer` and Grok `explore` do not go through `run-worker.sh`. Still write a job so `.rig/jobs` and `rig status` show them:
+Codex `explorer` / `worker` / `bulk` / `reviewer`, Grok `explore`, and OpenCode/OMP/Pi `explore` / `worker` / `bulk` do not go through `run-worker.sh`. Still write a job so `.rig/jobs` and `rig status` show them:
 
 ```bash
 id=$(rig job start --worker codex --role explorer)

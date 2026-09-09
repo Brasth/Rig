@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""Point Grok/Codex at the Rig jobs statusline and MCP. Called from rig setup."""
+"""Point parent CLIs at the Rig jobs statusline and MCP. Called from rig setup."""
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import sys
@@ -112,6 +113,165 @@ def install_mcp(cfg: Path, script: Path, label: str) -> str:
     return f"set {label} [mcp_servers.rig]{extra}  (fully quit {label} to load tools)"
 
 
+def mcp_launcher(script: Path) -> Path:
+    launcher = script.with_name("rig-mcp.sh")
+    if not launcher.is_file():
+        launcher = script
+    return launcher.resolve()
+
+
+def strip_jsonc(text: str) -> str:
+    """Strip // and /* */ comments. Strings stay intact."""
+    out: list[str] = []
+    i = 0
+    n = len(text)
+    in_str = False
+    escape = False
+    while i < n:
+        c = text[i]
+        if in_str:
+            out.append(c)
+            if escape:
+                escape = False
+            elif c == "\\":
+                escape = True
+            elif c == '"':
+                in_str = False
+            i += 1
+            continue
+        if c == '"':
+            in_str = True
+            out.append(c)
+            i += 1
+            continue
+        if c == "/" and i + 1 < n:
+            nxt = text[i + 1]
+            if nxt == "/":
+                i += 2
+                while i < n and text[i] not in "\n\r":
+                    i += 1
+                continue
+            if nxt == "*":
+                i += 2
+                while i + 1 < n and not (text[i] == "*" and text[i + 1] == "/"):
+                    i += 1
+                i = i + 2 if i + 1 < n else n
+                continue
+        out.append(c)
+        i += 1
+    return "".join(out)
+
+
+def strip_trailing_commas(text: str) -> str:
+    """Drop JSONC trailing commas before } or ]. Strings stay intact."""
+    out: list[str] = []
+    i = 0
+    n = len(text)
+    in_str = False
+    escape = False
+    while i < n:
+        c = text[i]
+        if in_str:
+            out.append(c)
+            if escape:
+                escape = False
+            elif c == "\\":
+                escape = True
+            elif c == '"':
+                in_str = False
+            i += 1
+            continue
+        if c == '"':
+            in_str = True
+            out.append(c)
+            i += 1
+            continue
+        if c == ",":
+            j = i + 1
+            while j < n and text[j] in " \t\r\n":
+                j += 1
+            if j < n and text[j] in "}]":
+                i += 1
+                continue
+        out.append(c)
+        i += 1
+    return "".join(out)
+
+
+def load_json_object(path: Path) -> tuple[dict, bool]:
+    """Return (object, existed). Missing or empty file → ({}, False)."""
+    if not path.is_file():
+        return {}, False
+    raw = path.read_text()
+    if not raw.strip():
+        return {}, False
+    try:
+        data = json.loads(strip_trailing_commas(strip_jsonc(raw)))
+    except json.JSONDecodeError:
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
+    return data, True
+
+
+def write_json(path: Path, data: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    text = json.dumps(data, indent=2) + "\n"
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(text)
+    tmp.replace(path)
+
+
+def install_opencode_mcp(cfg: Path, script: Path) -> str:
+    created = not cfg.is_file()
+    data, existed_file = load_json_object(cfg)
+    launcher = str(mcp_launcher(script))
+    entry = {"type": "local", "command": [launcher], "enabled": True}
+    mcp = data.get("mcp")
+    if not isinstance(mcp, dict):
+        mcp = {}
+        data["mcp"] = mcp
+    servers = mcp.get("servers")
+    if isinstance(servers, dict):
+        existed = "rig" in servers
+        servers["rig"] = entry
+        key = "mcp.servers.rig"
+    else:
+        existed = "rig" in mcp
+        mcp["rig"] = entry
+        key = "mcp.rig"
+    write_json(cfg, data)
+    if existed:
+        return f"keep opencode {key} (refreshed launcher)"
+    extra = " (created opencode.json)" if created or not existed_file else ""
+    return f"set opencode {key}{extra}  (fully quit opencode to load tools)"
+
+
+def install_mcp_servers_json(cfg: Path, script: Path, label: str) -> str:
+    created = not cfg.is_file()
+    data, existed_file = load_json_object(cfg)
+    launcher = str(mcp_launcher(script))
+    servers = data.get("mcpServers")
+    if not isinstance(servers, dict):
+        servers = {}
+        data["mcpServers"] = servers
+    existed = "rig" in servers
+    servers["rig"] = {"command": launcher}
+    write_json(cfg, data)
+    if existed:
+        return f"keep {label} mcpServers.rig (refreshed launcher)"
+    extra = f" (created {cfg.name})" if created or not existed_file else ""
+    return f"set {label} mcpServers.rig{extra}  (fully quit {label} to load tools)"
+
+
+def install_omp_mcp(cfg: Path, script: Path) -> str:
+    return install_mcp_servers_json(cfg, script, "omp")
+
+
+def install_pi_mcp(cfg: Path, script: Path) -> str:
+    return install_mcp_servers_json(cfg, script, "pi")
+
+
 def refresh_codex_agents() -> str:
     agents = Path.home() / ".codex" / "agents"
     wanted = {
@@ -162,6 +322,19 @@ def main() -> int:
     print(install_mcp(grok_home / "config.toml", mcp, "grok"))
     print(install_mcp(Path.home() / ".codex" / "config.toml", mcp, "codex"))
     print(refresh_codex_agents())
+    oc = Path(
+        os.environ.get("OPENCODE_CONFIG")
+        or (Path.home() / ".config" / "opencode" / "opencode.json")
+    )
+    print(install_opencode_mcp(oc, mcp))
+    omp = Path(os.environ.get("OMP_MCP") or (Path.home() / ".omp" / "mcp.json"))
+    print(install_omp_mcp(omp, mcp))
+    pi_dir = Path(
+        os.environ.get("PI_CODING_AGENT_DIR")
+        or os.environ.get("PI_AGENT_DIR")
+        or (Path.home() / ".pi" / "agent")
+    )
+    print(install_pi_mcp(pi_dir / "mcp.json", mcp))
     return 0
 
 

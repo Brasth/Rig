@@ -4,15 +4,15 @@ Landing page: [README](../README.md).
 
 ## What Rig is
 
-You stay in **one parent**: Codex CLI or Grok CLI. You talk to that parent. The parent decides (via `rig pick`) whether to do the work itself or spawn a **worker**.
+You stay in **one parent**: Codex, Grok, OpenCode, OMP, or Pi. You talk to that parent. The parent decides (via `rig pick`) whether to do the work itself or spawn a **worker**.
 
-- **Parent** (you open this): Codex or Grok. It plans, checks, talks to you, does vision / computer-use / chrome-profile, and watches jobs. It does **not** sit on write/review/SSH when a worker is effective.
+- **Parent** (you open this): Codex, Grok, OpenCode, OMP, or Pi. It plans, checks, talks to you, does vision / computer-use / chrome-profile, and watches jobs. It does **not** sit on write/review/SSH when a worker is effective.
 - **Workers** (the parent may spawn these): Grok, Claude Code, Cursor CLI, OpenCode, OMP, Pi, Codex. They write code, fix bugs, review, SSH/debug, and gather facts.
-- **Never the parent:** Claude Code, Cursor, OpenCode, OMP, and Pi. Opening those CLIs does not make them the Rig parent.
-- **Live parent** is whichever Codex or Grok you actually opened (`rig status`). The `parent =` key in `.rig/harness.toml` is only the preferred default (`rig use grok|codex`). Opening the CLI is what makes it live.
+- **Never the parent:** Claude Code and Cursor. Opening those CLIs does not make them the Rig parent.
+- **Live parent** is whichever Codex, Grok, OpenCode, OMP, or Pi you actually opened (`rig status`). The `parent =` key in `.rig/harness.toml` is only the preferred default (`rig use grok|codex|opencode|omp|pi`). Opening the CLI is what makes it live.
 - **Missing binary is not a failure.** That worker is off. The parent uses a cheaper same-CLI worker. That is success.
 
-**You need** Codex CLI and/or Grok CLI as the parent. Optional worker binaries: `grok`, `claude`, `cursor-agent`, `codex`, `opencode`, `omp`, `pi`.
+**You need** one parent CLI: Codex, Grok, OpenCode, OMP, or Pi. Optional worker binaries: `grok`, `claude`, `cursor-agent`, `codex`, `opencode`, `omp`, `pi`.
 
 Grok Bot.app and Cursor.app are GUIs, **not** spawnable workers. `rig doctor` may list them under **Apps (not spawnable)** as a hint. The Cursor worker binary is `cursor-agent`, not the GUI.
 
@@ -49,11 +49,15 @@ Update Rig later: run the **same** `curl | bash` again. It is idempotent. It upd
 **`rig setup` writes:**
 
 - `~/.rig` (bin, scripts, skills, adapters, templates)
-- Skill links in `~/.agents/skills`, `~/.grok/skills`, `~/.codex/skills` (`delegate-harness` and `rig-jobs`)
+- Skill links in `~/.agents/skills`, `~/.grok/skills`, `~/.codex/skills`, `~/.config/opencode/skill`, `~/.omp/agent/skills`, `~/.pi/agent/skills` (`delegate-harness` and `rig-jobs`)
 - Codex agent files under `~/.codex/agents` when they are Rig agents
 - Grok bottom status line (`[ui.status_line]` → `rig-statusline`; restart Grok once)
 - `[mcp_servers.rig]` in `~/.grok/config.toml` and `~/.codex/config.toml` **even if those files did not exist**
+- `mcp.rig` in `~/.config/opencode/opencode.json` (or `mcp.servers.rig` if that map already exists)
+- `mcpServers.rig` in `~/.omp/mcp.json` and `~/.pi/agent/mcp.json`
 - Codex sandbox writable roots so Grok/Claude/Cursor/OpenCode/OMP/Pi children can write sessions (`[sandbox_workspace_write]`)
+
+Setup does **not** write project `mcp.json` / `opencode.json`. Setup does **not** add `pi-mcp-adapter` to Pi `settings.json`.
 
 Success print:
 
@@ -88,9 +92,10 @@ That must print `$HOME/.local/bin/rig` (for example `/Users/you/.local/bin/rig`)
 
 Install already ran `rig setup`. Re-run `rig setup` after you update Rig (the curl install does this for you).
 
-1. Fully quit Grok and Codex **once** so MCP tools load (quit the apps, then reopen).
-2. Run `rig doctor`. MCP lines should show `[mcp_servers.rig]` for grok and/or codex.
+1. Fully quit Grok, Codex, OpenCode, OMP, and/or Pi **once** so MCP tools load (quit the apps, then reopen).
+2. Run `rig doctor`. MCP lines should show `[mcp_servers.rig]` for grok and/or codex, plus OpenCode/OMP/Pi JSON MCP when those files exist.
 3. After setup, Grok gets a **bottom status line**. Restart Grok once if you do not see it.
+4. Pi `/rig` also needs `pi install npm:pi-mcp-adapter` (setup writes `mcp.json` but does not install the package).
 
 ### What `rig doctor` should look like
 
@@ -126,8 +131,11 @@ Scripts
   run-worker: /Users/you/.rig/scripts/run-worker.sh (ok)
 
 MCP
-  grok:  /Users/you/.grok/config.toml [mcp_servers.rig]  (fully quit grok once to load tools)
-  codex: /Users/you/.codex/config.toml [mcp_servers.rig]  (fully quit codex once to load tools)
+  grok:     /Users/you/.grok/config.toml [mcp_servers.rig]  (fully quit grok once to load tools)
+  codex:    /Users/you/.codex/config.toml [mcp_servers.rig]  (fully quit codex once to load tools)
+  opencode: /Users/you/.config/opencode/opencode.json mcp.rig  (fully quit opencode once to load tools)
+  omp:      /Users/you/.omp/mcp.json mcpServers.rig  (fully quit omp once to load tools)
+  pi:       /Users/you/.pi/agent/mcp.json mcpServers.rig  (fully quit pi once to load tools)
 ```
 
 How to read each section:
@@ -137,21 +145,21 @@ How to read each section:
 | **RIG_HOME** | `$HOME/.rig` | empty / missing — re-run the curl install or `rig setup` |
 | **repo** | the git repo you `cd`’d into | wrong directory |
 | **harness** | `.rig/harness.toml` exists | `(missing — run: rig init)` |
-| **Parent live** | `codex` or `grok` when you are inside that CLI; `(none)` in a plain terminal is normal | you expected a parent but opened Claude/Cursor |
-| **Parent preferred** | `codex` or `grok` from `rig use` | — |
-| **Parent profile** | `sol` or `astra` (Codex parent profile) | — |
+| **Parent live** | `codex`, `grok`, `opencode`, `omp`, or `pi` when you are inside that CLI; `(none)` in a plain terminal is normal | you expected a parent but opened Claude/Cursor |
+| **Parent preferred** | `codex`, `grok`, `opencode`, `omp`, or `pi` from `rig use` | — |
+| **Parent profile** | `sol` or `astra` (Codex parent profile; ignored when live is not Codex) | — |
 | **Workers** | the ones you want show `effective=on` | see reasons below |
 | **Apps** | GUIs listed or `(missing)` | do **not** treat these as workers |
-| **Skill** | project `SKILL.md` plus symlinks under `~/.agents`, `~/.grok`, `~/.codex` | `(missing — run: rig init)` or `(missing — run: rig setup)` |
+| **Skill** | project `SKILL.md` plus symlinks under `~/.agents`, `~/.grok`, `~/.codex`, `~/.config/opencode/skill`, `~/.omp/agent/skills`, `~/.pi/agent/skills` | `(missing — run: rig init)` or `(missing — run: rig setup)` |
 | **Scripts** | `run-worker: … (ok)` | missing — `rig setup` again; Rig itself is broken |
-| **MCP** | `[mcp_servers.rig]` on grok and/or codex | `missing — run: rig setup`, then fully quit the app |
-| **Watch** | reminder of `rig tui` / `rig jobs` / `/rig` | — |
+| **MCP** | `[mcp_servers.rig]` on grok/codex plus JSON MCP on OpenCode/OMP/Pi | `missing — run: rig setup`, then fully quit the app; Pi also needs `pi-mcp-adapter` |
+| **Watch** | reminder of `rig tui` / `rig jobs` / `/rig` in Grok, Codex, OpenCode, OMP, or Pi | — |
 
 **`effective=off` reasons** (printed in parentheses):
 
 - `flag` — `[workers].<name>` is `false`. Turn on with `rig workers <name>=on`.
 - `no binary` — flag is true but the CLI is not on PATH (`grok`, `claude`, `codex`, `cursor-agent`).
-- `is live parent` — you opened that CLI as the parent, so it cannot also be a child this session (typical: Grok parent → Grok child off).
+- `is live parent` — you opened that CLI as the parent, so it cannot also be a child this session (typical: Grok parent → Grok child off; OpenCode parent → OpenCode child off).
 
 A worker is **effective** only when: flag true **and** binary on PATH **and** not the live parent.
 
@@ -180,9 +188,9 @@ rig doctor
 
 **New harness only:** Grok / Claude / Cursor / OpenCode / OMP / Pi are turned **on** if that CLI is on PATH. Codex stays **off** (preferred parent). **Existing harness flags are never flipped.** Missing worker keys are appended as `false` → enable later with `rig workers <name>=on`.
 
-Open a **new** parent thread after init. An old Grok/Codex session will not pick up `AGENTS.md` or skills.
+Open a **new** parent thread after init. An old Grok/Codex/OpenCode/OMP/Pi session will not pick up `AGENTS.md` or skills.
 
-Do **not** use `rig run` for normal work. Just prompt in Codex or Grok.
+Do **not** use `rig run` for normal work. Just prompt in the parent CLI.
 
 ## Configure agents
 
@@ -191,6 +199,9 @@ Edit `.rig/harness.toml` or use the `rig` commands below. Real template shape:
 ```toml
 parent = "codex"
 # parent = "grok"
+# parent = "opencode"
+# parent = "omp"
+# parent = "pi"
 
 [parent]
 profile = "sol"
@@ -208,7 +219,7 @@ pi = false
 
 **Each key:**
 
-- **`parent`** — preferred default only (`"codex"` or `"grok"`). Live parent is whichever CLI you opened (`rig status`). `rig use grok` or `rig use codex` writes this key; you still have to **open** that CLI. Switching the key does not move an already-open session.
+- **`parent`** — preferred default only (`"codex"`, `"grok"`, `"opencode"`, `"omp"`, or `"pi"`). Live parent is whichever CLI you opened (`rig status`). `rig use grok` / `codex` / `opencode` / `omp` / `pi` writes this key; you still have to **open** that CLI. Switching the key does not move an already-open session. Claude and Cursor are never `rig use` targets.
 - **`[parent] profile`** — Codex parent profile: `sol` or `astra`. `rig parent sol` or `rig parent astra`. **Astra is parent-only.** Never spawn Astra, Sol, or Fable as a child.
 - **`[workers].*`** — allow-list, not “install for me”. `true` means “this CLI may be spawned **if** its binary is on PATH and it is not the live parent”. Commands:
 
@@ -246,7 +257,7 @@ Effective worker = flag `true` **and** binary on PATH **and** not live parent. C
    rig workers cursor=on
    ```
 
-3. `rig doctor` until `cursor` shows `effective=on`. Cursor is never the parent, so “is live parent” will not apply to it.
+3. `rig doctor` until `cursor` shows `effective=on`. Cursor is never the parent, so "is live parent" will not apply to it.
 
 **Enable Claude as a worker**
 
@@ -265,7 +276,7 @@ rig workers opencode=on
 rig doctor
 ```
 
-If both OMP and Pi are on, pick uses **OMP** (same family; OMP is the Pi fork). They are never the parent. OpenCode `--auto` is required for headless spawn (no TTY). OMP uses `--approval-mode write`, not `--auto-approve`.
+If both OMP and Pi are on as workers of a *different* parent, pick uses **OMP** (same family; OMP is the Pi fork). They can be the parent when you open that CLI (`rig use omp` / `rig use pi`, then open it). OpenCode `--auto` is required for headless spawn (no TTY). OMP uses `--approval-mode write`, not `--auto-approve`.
 
 Do **not** enable Claude on every project. You choose. Existing project flags stay until you run `rig workers`.
 
@@ -276,6 +287,16 @@ rig use grok
 ```
 
 Then **open Grok** in the repo. Grok-as-parent means the Grok **child** is off for that session (`effective=off (is live parent)`). Implement work then goes to Claude if effective, else cheap same-CLI Grok.
+
+**Prefer OpenCode, OMP, or Pi as parent**
+
+```bash
+rig use opencode
+# or: rig use omp
+# or: rig use pi
+```
+
+Then **open that CLI** in the repo. That CLI is off as a child. Implement: Grok child if effective, else Claude, else cheap same-CLI (empty model). Fully quit once after setup so MCP `/rig` loads. Pi also needs `pi install npm:pi-mcp-adapter`.
 
 **Prefer Codex as parent**
 
@@ -291,7 +312,7 @@ Then open Codex. `rig parent astra` is the other Codex parent profile — still 
 Numbered path for a human:
 
 1. `cd` to the repo. Confirm `which rig` and that `.rig/harness.toml` exists (`rig init` if not).
-2. Open **Codex or Grok** in that repo. After init or setup, use a **new** thread.
+2. Open **Codex, Grok, OpenCode, OMP, or Pi** in that repo. After init or setup, use a **new** thread.
 3. In a new thread, the parent’s first commands are `rig memory` then `rig jobs` then `rig status`. (The parent does this; you can run them in a terminal too.)
 4. Type a normal prompt. Do not pick a model. Do not run `rig run`.
 
@@ -303,7 +324,7 @@ Numbered path for a human:
    - `SSH to the box and collect the app logs from the last deploy.`
 
 5. The parent runs `rig pick --case "<task>"` and spawns if needed. It does **not** ask you which model.
-6. Watch the child: another terminal `rig tui` or `rig jobs`, or type `/rig` in Grok or Codex. Grok also gets a bottom status line after setup (restart Grok once).
+6. Watch the child: another terminal `rig tui` or `rig jobs`, or type `/rig` in Grok, Codex, OpenCode, OMP, or Pi. Grok also gets a bottom status line after setup (restart Grok once).
 7. `rig jobs` is a table. Columns: **STATUS AGENT ROLE JOB TASK**. Example:
 
    ```text
@@ -328,7 +349,7 @@ If **this** CLI cannot do computer-use or chrome-profile, the parent spawns a wo
 | --- | --- |
 | Plan / vision / computer-use / chrome-profile | parent (`rig pick stay`) unless this CLI cannot do it, then spawn |
 | Small locate / trace / gather | cheap same-CLI |
-| Implement / SSH / fix | Grok child if Grok is **effective**; if Grok is the live parent (or off) → Claude Code if effective, else cheap same-CLI. Cursor/OpenCode/OMP/Pi/Codex children last resort (not just because the CLI is on PATH) |
+| Implement / SSH / fix | Grok child if Grok is **effective**; if Grok/OpenCode/OMP/Pi is the live parent (or Grok off) → Claude Code if effective, else cheap same-CLI. Cursor/OpenCode/OMP/Pi/Codex children last resort (not just because the CLI is on PATH) |
 | Review | different vendor than the writer |
 | No extra CLIs | cheap same-CLI. Record it. That is success |
 
@@ -355,9 +376,9 @@ rig job show            # running job, or latest
 rig job log <id> -f     # decoded activity (tools + text)
 ```
 
-In Grok or Codex type `/rig`. Grok also gets a bottom status line after `rig setup` (restart Grok once).
+In Grok, Codex, OpenCode, OMP, or Pi type `/rig`. Grok also gets a bottom status line after `rig setup` (restart Grok once).
 
-MCP tools (after `rig setup` + fully quit Grok/Codex once): `rig_jobs`, `rig_job_show`, `rig_job_log`, `rig_job_wait`, `rig_job_allow`, `rig_job_deny`, `rig_memory`, `rig_memory_add`.
+MCP tools (after `rig setup` + fully quit the parent CLI once): `rig_jobs`, `rig_job_show`, `rig_job_log`, `rig_job_wait`, `rig_job_allow`, `rig_job_deny`, `rig_memory`, `rig_memory_add`.
 
 Open the Grok child TUI yourself: `grok -r <session-id>` or `grok dashboard`. The job folder has `WATCH.md`.
 
@@ -371,7 +392,7 @@ rig job deny <id> --reason "prod deploy"
 
 Safe worker work → allow. Destructive / prod / secrets → deny or ask the user. TUI keys: `y` / `n`. MCP: `rig_job_wait` / `rig_job_allow` / `rig_job_deny`. The child work timeout pauses while status is `ask` and restarts after allow, so a slow parent answer does not immediately timeout the job.
 
-Jobs are this repo, not this chat. A new Grok or Codex thread still sees `.rig/jobs`. Running children keep going. First commands in a new thread: `rig memory` then `rig jobs` then `rig status`.
+Jobs are this repo, not this chat. A new parent thread still sees `.rig/jobs`. Running children keep going. First commands in a new thread: `rig memory` then `rig jobs` then `rig status`.
 
 Memory is local only. Save with the command, not by editing the file:
 
@@ -403,11 +424,12 @@ Re-run the install if `~/.local/bin/rig` itself is missing:
 curl -fsSL https://raw.githubusercontent.com/Brasth/Rig/main/install.sh | bash
 ```
 
-**MCP missing in Grok or Codex** (`rig doctor` MCP lines do not show `[mcp_servers.rig]`, or `/rig` / tools are absent)
+**MCP missing in Grok, Codex, OpenCode, OMP, or Pi** (`rig doctor` MCP lines do not show `[mcp_servers.rig]` / `mcp.rig` / `mcpServers.rig`, or `/rig` / tools are absent)
 
 1. `rig setup`
-2. Fully quit the Grok/Codex **app**, then reopen
-3. `rig doctor` — MCP lines should show `[mcp_servers.rig]`
+2. Fully quit the parent **app**, then reopen
+3. `rig doctor` — MCP lines should show the server
+4. Pi only: `pi install npm:pi-mcp-adapter` if doctor prints that hint, then fully quit Pi again
 
 **Worker `effective=off`**
 
@@ -415,7 +437,7 @@ Read the reason in `rig doctor`:
 
 - `flag` → `rig workers <name>=on`
 - `no binary` → install that CLI so `grok` / `claude` / `codex` / `cursor-agent` is on PATH
-- `is live parent` → expected (Grok parent cannot spawn Grok). Use another worker or cheap same-CLI
+- `is live parent` → expected (that CLI cannot spawn itself). Use another worker or cheap same-CLI
 
 **Claude child `timeout` right after you allow**
 
@@ -423,7 +445,7 @@ The work clock used to keep counting the minutes spent waiting for allow. It now
 
 **Parent not spawning / ignoring Rig**
 
-Usually an **old thread**. Run `rig init`, then open a **new** Codex or Grok thread in the repo. Confirm `AGENTS.md` has the `<!-- rig:start -->` block at the top and `.agents/skills/delegate-harness/SKILL.md` exists.
+Usually an **old thread**. Run `rig init`, then open a **new** parent thread in the repo. Confirm `AGENTS.md` has the `<!-- rig:start -->` block at the top and `.agents/skills/delegate-harness/SKILL.md` exists.
 
 **Cursor not spawning**
 
@@ -445,13 +467,13 @@ Codex sandbox must allow writing `$HOME/.grok` (and `$HOME/.claude` / `$HOME/.cu
 
 **OpenCode / OMP / Pi not spawning**
 
-Need the binary **and** `rig workers opencode=on` (or `omp=on` / `pi=on`). Existing harness flags stay off. `rig doctor` prints the install hint if the CLI is missing. They are last-resort workers: a Grok parent with no Claude still uses cheap same-CLI Grok, not OpenCode, just because `opencode` is on PATH.
+Need the binary **and** `rig workers opencode=on` (or `omp=on` / `pi=on`). Existing harness flags stay off. `rig doctor` prints the install hint if the CLI is missing. As workers they are last resort: a Grok parent with no Claude still uses cheap same-CLI Grok, not OpenCode, just because `opencode` is on PATH. As parents, open that CLI (`rig use opencode|omp|pi`).
 
 ## Parent agents
 
 Parent agents: load `.agents/skills/delegate-harness/SKILL.md`. Live wrapper is `RIG_LIVE=1` + `run-worker.sh` in the background, then `rig job wait`. Default wrapper is dry-run. Claude `ask` → `rig job allow` / `rig job deny`. Never kill an asking job.
 
-Cheap same-CLI spawns (Codex explorer/worker/bulk/reviewer, Grok explore) often do not use `run-worker.sh`. Record them so they still show under `.rig/jobs/`:
+Cheap same-CLI spawns (Codex explorer/worker/bulk/reviewer, Grok explore, OpenCode/OMP/Pi explore/worker/bulk) often do not use `run-worker.sh`. Record them so they still show under `.rig/jobs/`:
 
 ```bash
 rig job record --worker codex --role explorer --status ok --summary "traced remaining gates"
@@ -474,7 +496,7 @@ usage: rig <command> [args]
   init [--patch-agents|--no-patch-agents] [--patch-claude]
   doctor
   status
-  use codex|grok
+  use codex|grok|opencode|omp|pi
   parent sol|astra
   workers grok=on|off claude=on|off codex=on|off cursor=on|off opencode=on|off omp=on|off pi=on|off
   prune
@@ -494,8 +516,8 @@ usage: rig <command> [args]
   pick [explore|mini|bulk|implement|hard|review|stay] [--case TEXT] [--json]
 ```
 
-Stay in Codex or Grok. They can invoke Claude, Cursor, OpenCode, OMP, Pi, or each other.
+Stay in Codex, Grok, OpenCode, OMP, or Pi. They can invoke Claude, Cursor, OpenCode, OMP, Pi, or each other.
 
 `rig parent astra` records a parent-only profile. Never spawn Astra as a child.
 
-`rig run "prompt"` exists but is **not** the daily path — type the prompt in Codex or Grok instead.
+`rig run "prompt"` exists but is **not** the daily path — type the prompt in the parent CLI instead.

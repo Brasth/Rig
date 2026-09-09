@@ -26,7 +26,7 @@ rig tui               # interactive board (user terminal; do not launch inside t
 rig memory add "fact" # one standing bullet after a useful run
 ```
 
-A new Grok/Codex thread does not start a new job board. Jobs live in `.rig/jobs/`. If the user named an id, show that job. Otherwise list jobs, then show the running one.
+A new Grok/Codex/OpenCode/OMP/Pi thread does not start a new job board. Jobs live in `.rig/jobs/`. If the user named an id, show that job. Otherwise list jobs, then show the running one.
 
 ## What to report
 
@@ -48,6 +48,6 @@ rig job deny <id> --reason "why"
 
 Safe worker work (read/edit/test/ssh gather/git) → allow. Destructive/prod/secrets → deny or ask the user. Do not leave `ask` hanging. After allow, loop `rig job wait` so the same child can continue.
 
-Headless children are not a native Codex/Grok agent row. The board, `/rig`, statusline, and these commands are the UI.
+Headless children are not a native Codex/Grok/OpenCode/OMP/Pi agent row. The board, `/rig`, statusline, and these commands are the UI. `/rig` works in OpenCode, OMP, and Pi after `rig setup` (Pi also needs `pi install npm:pi-mcp-adapter`).
 
 MCP tools if present: `rig_jobs`, `rig_job_show`, `rig_job_log`, `rig_job_wait`, `rig_job_allow`, `rig_job_deny`. Same data.
