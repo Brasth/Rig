@@ -15,11 +15,15 @@ CLEANUP=""
 
 clone_source() {
   local dest="$1"
+  if git clone --depth 1 "$REPO_URL" "$dest"; then
+    return 0
+  fi
   if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
     gh repo clone "$REPO_SLUG" "$dest" -- --depth 1
-  else
-    git clone --depth 1 "$REPO_URL" "$dest"
+    return 0
   fi
+  echo "install: could not clone $REPO_URL (need git, or gh auth)" >&2
+  exit 1
 }
 
 if [[ -n "$HERE" && -f "$HERE/bin/rig" && -f "$HERE/scripts/detect-binaries.sh" && -f "$HERE/skills/delegate-harness/SKILL.md" ]]; then

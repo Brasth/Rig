@@ -6,13 +6,11 @@ Type a normal prompt in one parent CLI. The parent may call the other CLIs as wo
 
 ## Install
 
-The repo is private. Log in with `gh auth login`, then:
-
 ```bash
-gh api -H 'Accept: application/vnd.github.raw' repos/Brasth/Rig/contents/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Brasth/Rig/main/install.sh | bash
 ```
 
-That pipes `install.sh` and clones the rest with your GitHub login. No local clone to keep. Anonymous `curl` will 404.
+No GitHub login. That pipes `install.sh` and clones the rest over HTTPS. No local clone to keep.
 
 From a checkout you already have: `./install.sh`
 
