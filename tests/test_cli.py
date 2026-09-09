@@ -144,6 +144,9 @@ class InitPresence(unittest.TestCase):
         self.assertIn("Apps (not spawnable)", doc.stdout)
         self.assertIn("grok-bot", doc.stdout)
         self.assertIn("curl https://cursor.com/install", doc.stdout)
+        self.assertIn("MCP", doc.stdout)
+        self.assertRegex(doc.stdout, r"grok:.*(mcp_servers\.rig|missing)")
+        self.assertRegex(doc.stdout, r"codex:.*(mcp_servers\.rig|missing)")
 
     def test_job_start_accepts_cursor(self):
         run_rig(self.repo, "init", env={"PATH": _stub_path()})
@@ -168,6 +171,7 @@ class InitPresence(unittest.TestCase):
         self.assertIn("Never kill", text)
         self.assertIn("Never spawn another worker", text)
         self.assertIn("background", text)
+        self.assertIn("Do not spawn Cursor/Codex just because their CLI is on PATH", text)
 
 
 if __name__ == "__main__":

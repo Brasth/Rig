@@ -15,6 +15,7 @@ No GitHub login. That pipes `install.sh` and clones the rest over HTTPS. No loca
 From a checkout you already have: `./install.sh`
 
 `install.sh` is idempotent. It updates the skill and scripts. It does not overwrite project `.rig/harness.toml` or `.rig/MEMORY.md`.
+`rig setup` writes `[mcp_servers.rig]` into `~/.grok/config.toml` and `~/.codex/config.toml` even if those files did not exist yet. Fully quit Grok and Codex once so they load the tools.
 
 If `~/.local/bin` is not on your PATH:
 
@@ -61,7 +62,7 @@ New `rig init` turns a worker on only if its CLI is on PATH (Grok, Claude, Curso
 
 The parent manages. It plans, checks, does vision, computer-use, and chrome-profile. Workers write code, fix bugs, review, SSH/debug, and gather facts for the parent. If this CLI cannot do computer-use or chrome-profile, spawn a worker. Do not ask the user.
 
-The parent agent picks worker **and** model/reasoning from the case. Do not ask the user. `rig pick --case "<task>"` is the lookup. Plan/vision/computer-use/chrome-profile: `rig pick stay` (parent keeps it). Codex cheap default is `gpt-5.6-luna` with low thinking; tiny explore uses `gpt-5.3-codex-mini`. Hard Codex work can use `gpt-5.6-terra` medium. Grok implement is `grok-4.6` high; Grok explore is `grok-4.5`. Never spawn Sol, Astra, or Fable as children. Opus is allowed.
+The parent agent picks worker **and** model/reasoning from the case. Do not ask the user. `rig pick --case "<task>"` is the lookup. Plan/vision/computer-use/chrome-profile: `rig pick stay` (parent keeps it). Implement: Grok child if Grok is effective; if Grok is the live parent, Claude if effective, else cheap same-CLI. Cursor and Codex children are last resort — not the default just because their CLI is on PATH. Codex cheap default is `gpt-5.6-luna` with low thinking; tiny explore uses `gpt-5.3-codex-mini`. Hard Codex work can use `gpt-5.6-terra` medium. Grok implement is `grok-4.6` high; Grok explore is `grok-4.5`. Never spawn Sol, Astra, or Fable as children. Opus is allowed.
 
 ## Workers
 

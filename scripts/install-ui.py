@@ -65,6 +65,15 @@ def set_key(path: Path, section: str, key: str, value: str) -> None:
     tmp.replace(path)
 
 
+def ensure_cfg(path: Path) -> bool:
+    """Create an empty config file if missing. Return True if it already existed."""
+    if path.is_file():
+        return True
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("")
+    return False
+
+
 def install_statusline(rig_home: Path, grok_home: Path) -> str:
     src = rig_home / "scripts" / "rig-statusline.sh"
     dest = grok_home / "rig-statusline.sh"
@@ -73,8 +82,7 @@ def install_statusline(rig_home: Path, grok_home: Path) -> str:
         shutil.copyfile(src, dest)
         dest.chmod(0o755)
     cfg = grok_home / "config.toml"
-    if not cfg.is_file():
-        return "skip grok statusline (no config.toml)"
+    ensure_cfg(cfg)
     text = cfg.read_text()
     typ = section_value(text, "ui.status_line", "type") or ""
     cmd = section_value(text, "ui.status_line", "command") or ""
@@ -88,8 +96,7 @@ def install_statusline(rig_home: Path, grok_home: Path) -> str:
 
 
 def install_mcp(cfg: Path, script: Path, label: str) -> str:
-    if not cfg.is_file():
-        return f"skip {label} mcp (no config)"
+    created = not ensure_cfg(cfg)
     launcher = script.with_name("rig-mcp.sh")
     if not launcher.is_file():
         launcher = script
@@ -101,7 +108,8 @@ def install_mcp(cfg: Path, script: Path, label: str) -> str:
     set_key(cfg, "mcp_servers.rig", "startup_timeout_sec", "8")
     if existed:
         return f"keep {label} mcp_servers.rig (refreshed launcher)"
-    return f"set {label} [mcp_servers.rig]  (fully quit {label} to load tools)"
+    extra = " (created config.toml)" if created else ""
+    return f"set {label} [mcp_servers.rig]{extra}  (fully quit {label} to load tools)"
 
 
 def refresh_codex_agents() -> str:

@@ -68,8 +68,8 @@ Never ask the user which model or reasoning to use. They will not know. Run `rig
 - Plan / vision / computer-use / chrome-profile: parent keeps it (`rig pick stay`). Spawn a worker only if this CLI cannot do it.
 - Small / locate / trace / gather facts: cheap same-CLI (`rig pick explore` or `mini`). Codex explorer is `gpt-5.3-codex-mini` low. Grok explore is `grok-4.5`. Claude Code explore is `claude-haiku-4-5-20251001` low. Cursor explore is `composer-2.5-fast` (run-worker, `--mode=ask`).
 - Mechanical bulk: `rig pick bulk`. Codex `gpt-5.6-luna` low. Claude Code `claude-haiku-4-5-20251001` low. Cursor `composer-2.5-fast`.
-- Write code / fix bugs / SSH / remote debug: `rig pick implement --case "<task>"`. Grok child `grok-4.6` high if Grok is effective. If Grok is the live parent or off: Claude Code `claude-sonnet-5` medium, else Cursor `composer-2.5`, else Codex `gpt-5.6-luna` low.
-- Hard / architecture / security / multi-file: `rig pick hard`. Grok `grok-4.6` high, Claude Code `claude-opus-5` high, Cursor `cursor-grok-4.6-high`, or Codex `gpt-5.6-terra` medium.
+- Write code / fix bugs / SSH / remote debug: `rig pick implement --case "<task>"`. Grok child `grok-4.6` high if Grok is effective. If Grok is the live parent: Claude Code `claude-sonnet-5` if effective, else cheap same-CLI (Grok native). Cursor/Codex children are last resort, not the default just because their CLI is on PATH.
+- Hard / architecture / security / multi-file: `rig pick hard`. Same ladder: Grok child, else Claude, else cheap same-CLI, else Cursor/Codex.
 - Review: different vendor than the writer. `rig pick review`. Claude Code review is `claude-opus-5` high. Cursor review is `claude-opus-5-thinking-high`.
 - No extra CLIs: cheap same-CLI. Record them. That is success.
 - Never spawn Sol, Astra, or Fable as a child. Never pass `gpt-5.6-sol`, `gpt-6-astra`, `gpt-5.6-sol-high`, or `claude-fable-5` to a worker. Profile `astra` is parent-only. Opus is allowed.

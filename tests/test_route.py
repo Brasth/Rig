@@ -41,15 +41,15 @@ class Pick(unittest.TestCase):
         self.assertEqual(c["model"], "grok-4.6")
         self.assertEqual(c["effort"], "high")
 
-    def test_grok_parent_uses_claude_then_codex_luna(self):
+    def test_grok_parent_uses_claude_then_native(self):
         c = route.pick("grok", ["claude"], "implement", "add a header")
         self.assertEqual(c["worker"], "claude")
         self.assertEqual(c["model"], "claude-sonnet-5")
         self.assertEqual(c["effort"], "medium")
         c = route.pick("grok", ["codex"], "implement", "add a header")
-        self.assertEqual(c["worker"], "codex")
-        self.assertEqual(c["model"], "gpt-5.6-luna")
-        self.assertEqual(c["effort"], "low")
+        self.assertEqual(c["spawn"], "native")
+        self.assertEqual(c["worker"], "grok")
+        self.assertEqual(c["model"], "grok-4.6")
 
     def test_codex_explore_is_native_mini(self):
         c = route.pick("codex", ["grok"], "explore", "trace remaining gates")
@@ -66,7 +66,9 @@ class Pick(unittest.TestCase):
         self.assertEqual(c["effort"], "low")
 
     def test_hard_codex_is_terra_medium(self):
-        c = route.pick("grok", ["codex"], "hard", "multi-file architecture")
+        c = route.pick("codex", ["cursor"], "hard", "multi-file architecture")
+        self.assertEqual(c["spawn"], "native")
+        self.assertEqual(c["worker"], "codex")
         self.assertEqual(c["model"], "gpt-5.6-terra")
         self.assertEqual(c["effort"], "medium")
 
@@ -110,8 +112,18 @@ class Pick(unittest.TestCase):
         self.assertIsNone(route.assert_child_model("cursor-grok-4.6-high"))
         self.assertIsNotNone(route.assert_child_model("claude-fable-5"))
 
-    def test_cursor_when_only_effective(self):
-        c = route.pick("grok", ["cursor"], "implement", "add a header")
+    def test_same_cli_beats_cursor_and_codex(self):
+        c = route.pick("grok", ["cursor", "codex"], "implement", "add a header")
+        self.assertEqual(c["spawn"], "native")
+        self.assertEqual(c["worker"], "grok")
+        self.assertEqual(c["model"], "grok-4.6")
+        c = route.pick("codex", ["cursor"], "implement", "add a header")
+        self.assertEqual(c["spawn"], "native")
+        self.assertEqual(c["worker"], "codex")
+        self.assertEqual(c["native_agent"], "worker")
+
+    def test_cursor_last_resort_when_parent_cannot_native(self):
+        c = route.pick("", ["cursor"], "implement", "add a header")
         self.assertEqual(c["worker"], "cursor")
         self.assertEqual(c["spawn"], "run-worker")
         self.assertEqual(c["model"], "composer-2.5")
