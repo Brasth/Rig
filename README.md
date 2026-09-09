@@ -1,6 +1,20 @@
 # Rig
 
-One parent CLI (Codex, Grok, OpenCode, OMP, or Pi). You type a normal prompt. The parent may spawn Grok, Claude Code, Cursor, OpenCode, OMP, Pi, or Codex as workers. Claude and Cursor are never the parent. Missing worker binary → cheaper same-CLI. That is success.
+A local parent/worker kit. You stay in one parent CLI. You type a prompt. The parent hands the work to a child, then checks the result and sends feedback — the loop you used to do yourself, sitting on one agent.
+
+Intended parent is **Codex running Astra** (the human-like assistant). Grok, OpenCode, OMP, and Pi can also be the parent. Claude and Cursor are never the parent. Missing worker binary → cheaper same-CLI. That is success.
+
+## Why
+
+Using AI to ship a feature often means **you** become the bottleneck. You read every diff. You write every correction. You get tired. The work stops being smooth.
+
+Sol made an agent feel like a person at the computer. Astra went further. Rig is the harness around that:
+
+1. You talk to the **parent** (Astra in Codex, or another parent CLI you opened).
+2. The parent assigns the task to a **child** (Grok, Claude, Cursor, OpenCode, OMP, Pi, Codex).
+3. The parent **checks, verifies, and gives the child feedback** (`rig jobs`, allow/deny, a follow-up prompt) — the same review loop you used to run by hand.
+
+Open Codex on Astra as the parent. Pick the parent model in that CLI. Worker models come from `rig pick`. Never spawn Astra, Sol, or Fable as a child.
 
 ## Install
 
@@ -44,7 +58,6 @@ Type a normal prompt in that parent CLI. Example: `fix the failing tests in test
 
 ```bash
 rig use grok|codex|opencode|omp|pi
-rig parent sol|astra
 rig workers grok=on|off claude=on|off codex=on|off cursor=on|off opencode=on|off omp=on|off pi=on|off
 ```
 
@@ -54,10 +67,6 @@ parent = "codex"
 # parent = "opencode"
 # parent = "omp"
 # parent = "pi"
-
-[parent]
-profile = "sol"
-# profile = "astra"
 
 [workers]
 codex = false
@@ -70,6 +79,7 @@ pi = false
 ```
 
 - **Live parent** is whichever Codex, Grok, OpenCode, OMP, or Pi you actually opened (`rig status`). The `parent =` key is only the preferred default (`rig use grok|codex|opencode|omp|pi`). Opening the CLI is what makes it live.
+- Parent **model** is the CLI’s model. Worker models come from `rig pick`. Never spawn Sol, Astra, or Fable as a child.
 - A worker is **effective** only when: flag true **and** binary on PATH **and** not the live parent.
 - Claude Code and Cursor are never the parent.
 - Grok Bot.app and Cursor.app are GUIs, **not** spawnable workers. The Cursor worker binary is `cursor-agent`.

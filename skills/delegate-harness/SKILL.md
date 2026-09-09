@@ -24,7 +24,7 @@ Doing the worker's job yourself is a failure. Later AGENTS.md may say "edit loca
 
 Jobs and MEMORY are this repo, not this chat. A new parent thread still sees `.rig/jobs` and `.rig/MEMORY.md`. Running children keep going.
 
-Live parent is this CLI, not the `parent` key in toml. That key is only the preferred default (`rig use grok|codex|opencode|omp|pi`). Switching preferred parent does not move the session — open that CLI.
+Live parent is this CLI, not the `parent` key in toml. That key is only the preferred default (`rig use grok|codex|opencode|omp|pi`). Switching preferred parent does not move the session — open that CLI. Parent model is this CLI’s model. Worker models come from `rig pick`.
 Claude Code (`claude`) and Cursor CLI (`cursor-agent`) are never the parent. OpenCode (`opencode`), OMP (`omp`), and Pi (`pi`) can be the parent when you open that CLI. Claude is a worker when `[workers].claude = true` and `claude` is on PATH. Cursor is a worker when `[workers].cursor = true` and `cursor-agent` is on PATH (`rig workers cursor=on`). OpenCode / OMP / Pi are workers when their flags are true and the binary is on PATH (`rig workers opencode=on` / `omp=on` / `pi=on`) and they are not the live parent. Pin full model IDs. Never spawn Fable, Sol, or Astra as a child. Opus is allowed. Grok Bot.app is not a parent or worker.
 
 ## Parent vs worker
@@ -72,7 +72,7 @@ Never ask the user which model or reasoning to use. They will not know. Run `rig
 - Hard / architecture / security / multi-file: `rig pick hard`. Same ladder: Grok child, else Claude, else cheap same-CLI, else Cursor/OpenCode/OMP/Pi/Codex.
 - Review: different vendor than the writer. `rig pick review`. Claude Code review is `claude-opus-5` high. Cursor review is `claude-opus-5-thinking-high`.
 - No extra CLIs: cheap same-CLI. Record them. That is success.
-- Never spawn Sol, Astra, or Fable as a child. Never pass `gpt-5.6-sol`, `gpt-6-astra`, `gpt-5.6-sol-high`, or `claude-fable-5` to a worker. Profile `astra` is parent-only. Opus is allowed.
+- Never spawn Sol, Astra, or Fable as a child. Never pass `gpt-5.6-sol`, `gpt-6-astra`, `gpt-5.6-sol-high`, or `claude-fable-5` to a worker. Opus is allowed.
 
 Writer does not review its own diff.
 
@@ -92,7 +92,7 @@ One-shot after a finished native spawn:
 rig job record --worker codex --role explorer --status ok --summary "one-line result"
 ```
 
-`--worker` is the CLI that did the work (`codex` if Astra spawned explorer). `--role` is `explorer`, `worker`, `bulk`, `reviewer`, or `parent`.
+`--worker` is the CLI that did the work (`codex` if Codex spawned explorer). `--role` is `explorer`, `worker`, `bulk`, `reviewer`, or `parent`.
 
 ## Call another CLI
 

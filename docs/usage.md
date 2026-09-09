@@ -4,7 +4,9 @@ Landing page: [README](../README.md).
 
 ## What Rig is
 
-You stay in **one parent**: Codex, Grok, OpenCode, OMP, or Pi. You talk to that parent. The parent decides (via `rig pick`) whether to do the work itself or spawn a **worker**.
+The point is to stop you being the tired reviewer of one agent. You talk to a **parent** (intended: Codex on Astra). The parent assigns work to a **child**, then checks and sends feedback — allow/deny, another prompt — the loop you used to do yourself.
+
+You stay in **one parent**: Codex, Grok, OpenCode, OMP, or Pi. You talk to that parent. The parent decides (via `rig pick`) whether to do the work itself or spawn a **worker**. Never spawn Astra, Sol, or Fable as a child.
 
 - **Parent** (you open this): Codex, Grok, OpenCode, OMP, or Pi. It plans, checks, talks to you, does vision / computer-use / chrome-profile, and watches jobs. It does **not** sit on write/review/SSH when a worker is effective.
 - **Workers** (the parent may spawn these): Grok, Claude Code, Cursor CLI, OpenCode, OMP, Pi, Codex. They write code, fix bugs, review, SSH/debug, and gather facts.
@@ -110,7 +112,6 @@ Rig doctor
 Parent
   live:      grok
   preferred: codex
-  profile:   sol
 
 Workers
   grok    flag=true  bin=/usr/local/bin/grok          effective=off (is live parent)
@@ -147,7 +148,6 @@ How to read each section:
 | **harness** | `.rig/harness.toml` exists | `(missing — run: rig init)` |
 | **Parent live** | `codex`, `grok`, `opencode`, `omp`, or `pi` when you are inside that CLI; `(none)` in a plain terminal is normal | you expected a parent but opened Claude/Cursor |
 | **Parent preferred** | `codex`, `grok`, `opencode`, `omp`, or `pi` from `rig use` | — |
-| **Parent profile** | `sol` or `astra` (Codex parent profile; ignored when live is not Codex) | — |
 | **Workers** | the ones you want show `effective=on` | see reasons below |
 | **Apps** | GUIs listed or `(missing)` | do **not** treat these as workers |
 | **Skill** | project `SKILL.md` plus symlinks under `~/.agents`, `~/.grok`, `~/.codex`, `~/.config/opencode/skill`, `~/.omp/agent/skills`, `~/.pi/agent/skills` | `(missing — run: rig init)` or `(missing — run: rig setup)` |
@@ -203,10 +203,6 @@ parent = "codex"
 # parent = "omp"
 # parent = "pi"
 
-[parent]
-profile = "sol"
-# profile = "astra"
-
 [workers]
 codex = false
 grok = true
@@ -219,8 +215,7 @@ pi = false
 
 **Each key:**
 
-- **`parent`** — preferred default only (`"codex"`, `"grok"`, `"opencode"`, `"omp"`, or `"pi"`). Live parent is whichever CLI you opened (`rig status`). `rig use grok` / `codex` / `opencode` / `omp` / `pi` writes this key; you still have to **open** that CLI. Switching the key does not move an already-open session. Claude and Cursor are never `rig use` targets.
-- **`[parent] profile`** — Codex parent profile: `sol` or `astra`. `rig parent sol` or `rig parent astra`. **Astra is parent-only.** Never spawn Astra, Sol, or Fable as a child.
+- **`parent`** — preferred default only (`"codex"`, `"grok"`, `"opencode"`, `"omp"`, or `"pi"`). Live parent is whichever CLI you opened (`rig status`). `rig use grok` / `codex` / `opencode` / `omp` / `pi` writes this key; you still have to **open** that CLI. Switching the key does not move an already-open session. Claude and Cursor are never `rig use` targets. Parent **model** is the CLI’s model; worker models come from `rig pick`. Never spawn Sol, Astra, or Fable as a child.
 - **`[workers].*`** — allow-list, not “install for me”. `true` means “this CLI may be spawned **if** its binary is on PATH and it is not the live parent”. Commands:
 
   ```bash
@@ -302,10 +297,9 @@ Then **open that CLI** in the repo. That CLI is off as a child. Implement: Grok 
 
 ```bash
 rig use codex
-rig parent sol
 ```
 
-Then open Codex. `rig parent astra` is the other Codex parent profile — still parent-only; never spawn Astra as a child.
+Then open Codex. Parent model is the CLI’s model. Worker models come from `rig pick`. Never spawn Sol, Astra, or Fable as a child.
 
 ## Daily use
 
@@ -497,7 +491,6 @@ usage: rig <command> [args]
   doctor
   status
   use codex|grok|opencode|omp|pi
-  parent sol|astra
   workers grok=on|off claude=on|off codex=on|off cursor=on|off opencode=on|off omp=on|off pi=on|off
   prune
   run "prompt"
@@ -518,6 +511,6 @@ usage: rig <command> [args]
 
 Stay in Codex, Grok, OpenCode, OMP, or Pi. They can invoke Claude, Cursor, OpenCode, OMP, Pi, or each other.
 
-`rig parent astra` records a parent-only profile. Never spawn Astra as a child.
+Parent model is the CLI’s model. Worker models come from `rig pick`. Never spawn Sol, Astra, or Fable as a child.
 
 `rig run "prompt"` exists but is **not** the daily path — type the prompt in the parent CLI instead.

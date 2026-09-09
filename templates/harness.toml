@@ -4,10 +4,6 @@ parent = "codex"
 # parent = "omp"
 # parent = "pi"
 
-[parent]
-profile = "sol"
-# profile = "astra"
-
 [workers]
 codex = false
 grok = true

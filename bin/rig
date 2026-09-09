@@ -23,7 +23,6 @@ usage: rig <command> [args]
   doctor
   status
   use codex|grok|opencode|omp|pi
-  parent sol|astra
   workers grok=on|off claude=on|off codex=on|off cursor=on|off opencode=on|off omp=on|off pi=on|off
   prune
   run "prompt"
@@ -396,14 +395,13 @@ worker_reason() {
 }
 
 cmd_doctor() {
-  local dest root harness live pref profile runw
+  local dest root harness live pref runw
   dest="$(rig_home)"
   root="$(repo_root)"
   harness="$(harness_path)"
   live="$(live_parent)"
   parse_harness "$harness"
   pref="$HARNESS_PARENT"
-  profile="$HARNESS_PROFILE"
   runw="$dest/scripts/run-worker.sh"
   if [[ ! -f "$runw" ]]; then
     runw="$(rig_source_root)/scripts/run-worker.sh"
@@ -421,7 +419,6 @@ cmd_doctor() {
   echo "Parent"
   echo "  live:      ${live:-(none)}"
   echo "  preferred: $pref"
-  echo "  profile:   $profile"
   echo
   echo "Workers"
   local name flag bin reason eff
@@ -559,11 +556,10 @@ cmd_doctor() {
 }
 
 cmd_status() {
-  local live pref profile name effs jobs
+  local live pref name effs jobs
   parse_harness "$(harness_path)"
   live="$(live_parent)"
   pref="$HARNESS_PARENT"
-  profile="$HARNESS_PROFILE"
   effs=""
   for name in "${RIG_WORKERS[@]}"; do
     if effective_worker "$name"; then
@@ -574,7 +570,7 @@ cmd_status() {
   if [[ -d "$(repo_root)/.rig/jobs" ]]; then
     jobs="$(command find "$(repo_root)/.rig/jobs" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l | tr -d ' ')"
   fi
-  echo "parent live=${live:-(none)} preferred=$pref profile=$profile"
+  echo "parent live=${live:-(none)} preferred=$pref"
   echo "effective: ${effs:-none}"
   echo "jobs: $jobs"
   local jp mp thread last
@@ -688,20 +684,8 @@ cmd_use() {
 }
 
 cmd_parent() {
-  local who="${1:-}"
-  case "$who" in
-    sol|astra) ;;
-    *)
-      echo "usage: rig parent sol|astra" >&2
-      exit 2
-      ;;
-  esac
-  ensure_harness
-  rig_set_toml_key "$(harness_path)" "parent" "profile" "\"$who\""
-  echo "parent profile = $who"
-  if [[ "$who" == "astra" ]]; then
-    echo "astra is parent-only. Never spawn it as a child. Start that CLI yourself."
-  fi
+  echo "rig parent is gone. Parent model is chosen in the CLI. Worker models come from rig pick. Never spawn Sol/Astra/Fable as a child." >&2
+  exit 2
 }
 
 cmd_workers() {

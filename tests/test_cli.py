@@ -379,6 +379,73 @@ class InitPresence(unittest.TestCase):
         self.assertTrue((home / ".omp" / "agent" / "skills" / "rig-jobs").exists())
         self.assertTrue((home / ".pi" / "agent" / "skills" / "delegate-harness").exists())
 
+    def test_new_init_harness_has_no_parent_profile(self):
+        proc = run_rig(self.repo, "init", env={"PATH": _stub_path()})
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        text = (self.repo / ".rig" / "harness.toml").read_text()
+        self.assertNotIn("[parent]", text)
+        self.assertNotRegex(text, r"profile\s*=")
+
+    def test_init_leaves_existing_parent_profile_section(self):
+        rig_dir = self.repo / ".rig"
+        rig_dir.mkdir()
+        original = (
+            'parent = "codex"\n'
+            "\n"
+            "[parent]\n"
+            'profile = "sol"\n'
+            "\n"
+            "[workers]\n"
+            "codex = false\n"
+            "grok = true\n"
+            "claude = false\n"
+            "cursor = false\n"
+            "opencode = false\n"
+            "omp = false\n"
+            "pi = false\n"
+        )
+        path = rig_dir / "harness.toml"
+        path.write_text(original)
+        proc = run_rig(self.repo, "init", env={"PATH": _stub_path()})
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        self.assertEqual(path.read_text(), original)
+
+    def test_parent_sol_astra_exit_2_and_do_not_write(self):
+        proc = run_rig(self.repo, "init", env={"PATH": _stub_path()})
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        path = self.repo / ".rig" / "harness.toml"
+        before = path.read_text()
+        for who in ("sol", "astra"):
+            gone = run_rig(self.repo, "parent", who, env={"PATH": _stub_path()})
+            self.assertEqual(gone.returncode, 2, gone.stdout + gone.stderr)
+            combined = gone.stdout + gone.stderr
+            self.assertIn("gone", combined)
+            self.assertIn("CLI", combined)
+            self.assertIn("rig pick", combined)
+            self.assertEqual(path.read_text(), before)
+            self.assertNotRegex(path.read_text(), r"profile\s*=")
+
+    def test_status_and_doctor_omit_profile(self):
+        rig_dir = self.repo / ".rig"
+        rig_dir.mkdir()
+        (rig_dir / "harness.toml").write_text(
+            'parent = "codex"\n\n[parent]\nprofile = "sol"\n\n[workers]\n'
+            "codex = false\ngrok = true\nclaude = false\ncursor = false\n"
+            "opencode = false\nomp = false\npi = false\n"
+        )
+        status = run_rig(
+            self.repo, "status", env={"PATH": _stub_path(), "RIG_PARENT": "codex"}
+        )
+        self.assertEqual(status.returncode, 0, status.stderr)
+        self.assertNotIn("profile=", status.stdout)
+        self.assertRegex(status.stdout, r"parent live=\S+ preferred=codex")
+        doc = run_rig(
+            self.repo, "doctor", env={"PATH": _stub_path(), "RIG_PARENT": "codex"}
+        )
+        self.assertEqual(doc.returncode, 0, doc.stderr)
+        self.assertNotIn("profile=", doc.stdout)
+        self.assertNotRegex(doc.stdout, r"(?m)^\s*profile:")
+
 
 if __name__ == "__main__":
     unittest.main()

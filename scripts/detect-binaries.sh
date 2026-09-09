@@ -74,11 +74,11 @@ harness_path() {
   printf '%s\n' "$(repo_root)/.rig/harness.toml"
 }
 
-# Sets HARNESS_PARENT, HARNESS_PROFILE, HARNESS_WORKER_{CODEX,GROK,CLAUDE,CURSOR,OPENCODE,OMP,PI}.
+# Sets HARNESS_PARENT, HARNESS_WORKER_{CODEX,GROK,CLAUDE,CURSOR,OPENCODE,OMP,PI}.
+# [parent] profile in old harness files is ignored (not a spawn/pick input).
 parse_harness() {
   local file="${1:-$(harness_path)}"
   HARNESS_PARENT="codex"
-  HARNESS_PROFILE="sol"
   HARNESS_WORKER_CODEX="false"
   HARNESS_WORKER_GROK="true"
   HARNESS_WORKER_CLAUDE="true"
@@ -113,11 +113,6 @@ parse_harness() {
             HARNESS_PARENT="$val"
           fi
           ;;
-        parent)
-          if [[ "$key" == "profile" ]]; then
-            HARNESS_PROFILE="$val"
-          fi
-          ;;
         workers)
           case "$key" in
             codex) HARNESS_WORKER_CODEX="$val" ;;
@@ -137,11 +132,6 @@ parse_harness() {
 preferred_parent() {
   parse_harness "$(harness_path)"
   printf '%s\n' "$HARNESS_PARENT"
-}
-
-parent_profile() {
-  parse_harness "$(harness_path)"
-  printf '%s\n' "$HARNESS_PROFILE"
 }
 
 worker_flag() {
