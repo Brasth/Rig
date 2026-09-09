@@ -19,6 +19,7 @@ usage() {
 usage: rig <command> [args]
 
   setup
+  update
   init [--patch-agents|--no-patch-agents] [--patch-claude]
   doctor
   status
@@ -225,6 +226,45 @@ cmd_setup() {
   echo "next: in a repo, run: rig init && rig doctor"
 }
 
+cmd_update() {
+  if [[ -n "${RIG_LIVE:-}" ]]; then
+    echo "rig update: refuse inside a worker" >&2
+    exit 1
+  fi
+  local url dest tmp rc
+  url="${RIG_INSTALL_SH:-https://raw.githubusercontent.com/Brasth/Rig/main/install.sh}"
+  if [[ "$url" != *://* && -f "$url" ]]; then
+    url="file://${url}"
+  fi
+  dest="$(rig_home)"
+  if ! command -v curl >/dev/null 2>&1; then
+    echo "rig update: curl not found" >&2
+    exit 1
+  fi
+  tmp="$(mktemp)"
+  if ! command curl -fsSL "$url" -o "$tmp"; then
+    rm -f "$tmp"
+    echo "rig update: could not fetch installer from $url" >&2
+    exit 1
+  fi
+  if [[ ! -s "$tmp" ]]; then
+    rm -f "$tmp"
+    echo "rig update: installer empty from $url" >&2
+    exit 1
+  fi
+  set +e
+  RIG_HOME="$dest" bash "$tmp"
+  rc=$?
+  set -e
+  rm -f "$tmp"
+  if [[ "$rc" -ne 0 ]]; then
+    echo "rig update: installer failed ($rc)" >&2
+    exit "$rc"
+  fi
+  echo "kit is at $dest"
+  echo "fully quit the parent CLI once if MCP/skills changed"
+}
+
 ensure_harness() {
   local root templates harness
   root="$(repo_root)"
@@ -400,8 +440,47 @@ worker_reason() {
   fi
 }
 
+# Fail open: empty stdout if git/network/timeout.
+doctor_remote_main_sha() {
+  local url="$1"
+  python3 - "$url" <<'PY' 2>/dev/null
+import os, subprocess, sys
+
+url = sys.argv[1]
+env = os.environ.copy()
+env["GIT_TERMINAL_PROMPT"] = "0"
+try:
+    proc = subprocess.run(
+        ["git", "ls-remote", url, "refs/heads/main"],
+        capture_output=True,
+        text=True,
+        timeout=5,
+        env=env,
+    )
+except Exception:
+    raise SystemExit(1)
+if proc.returncode != 0 or not proc.stdout.strip():
+    raise SystemExit(1)
+print(proc.stdout.split()[0])
+PY
+}
+
+doctor_print_update() {
+  local ver="${1:-}" local_sha remote
+  [[ -n "${RIG_SKIP_UPDATE_CHECK:-}" ]] && return 0
+  local_sha="$(awk '{print $2}' <<<"$ver")"
+  [[ -n "$local_sha" ]] || return 0
+  remote="$(doctor_remote_main_sha "${RIG_REPO_URL:-https://github.com/Brasth/Rig.git}")" || return 0
+  [[ -n "$remote" ]] || return 0
+  if [[ "$remote" == "$local_sha"* ]]; then
+    echo "  update:   current"
+  else
+    echo "  update:   behind main — run: rig update"
+  fi
+}
+
 cmd_doctor() {
-  local dest root harness live pref runw
+  local dest root harness live pref runw ver
   dest="$(rig_home)"
   root="$(repo_root)"
   harness="$(harness_path)"
@@ -421,6 +500,17 @@ cmd_doctor() {
   else
     echo "  harness:  $harness (missing — run: rig init)"
   fi
+  if [[ -f "$dest/VERSION" ]]; then
+    ver="$(tr -d '\r\n' < "$dest/VERSION")"
+  else
+    ver=""
+  fi
+  if [[ -n "$ver" ]]; then
+    echo "  version:  $ver"
+  else
+    echo "  version:  (unknown — run: rig update)"
+  fi
+  doctor_print_update "$ver"
   echo
   echo "Parent"
   echo "  live:      ${live:-(none)}"
@@ -1176,6 +1266,7 @@ main() {
   shift || true
   case "$cmd" in
     setup) cmd_setup "$@" ;;
+    update) cmd_update "$@" ;;
     init) cmd_init "$@" ;;
     doctor) cmd_doctor "$@" ;;
     status) cmd_status "$@" ;;

@@ -14,6 +14,7 @@ def run_rig(repo: Path, *args: str, env: dict | None = None) -> subprocess.Compl
     merged = os.environ.copy()
     merged["RIG_HOME"] = str(ROOT)
     merged["PATH"] = f"{ROOT / 'bin'}:{merged.get('PATH', '')}"
+    merged["RIG_SKIP_UPDATE_CHECK"] = "1"
     if env:
         merged.update(env)
     return subprocess.run(

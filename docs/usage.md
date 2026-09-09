@@ -45,9 +45,9 @@ What that does:
 - Runs `rig setup`.
 - Deletes the temp clone. There is **no local clone to keep**.
 
-From a checkout you already have: `./install.sh` (same copy + `rig setup`, no clone).
+From a checkout you already have: `./install.sh` (same copy + `rig setup`, no clone). That is the **dev** path; it copies the local tree, not GitHub `main`.
 
-Update Rig later: run the **same** `curl | bash` again. It is idempotent. It updates the skill and scripts. It does **not** overwrite project `.rig/harness.toml` or `.rig/MEMORY.md`. It already runs `rig setup`.
+Update an existing machine: `rig update`. That fetches GitHub `main` through the same `install.sh` (not your checkout). The same `curl | bash` still works (idempotent). An older `rig` without `update` still needs the curl once. It updates the skill and scripts. It does **not** overwrite project `.rig/harness.toml` or `.rig/MEMORY.md`. It already runs `rig setup`.
 
 **`rig setup` writes:**
 
@@ -93,7 +93,7 @@ That must print `$HOME/.local/bin/rig` (for example `/Users/you/.local/bin/rig`)
 
 ## First-time machine
 
-Install already ran `rig setup`. Re-run `rig setup` after you update Rig (the curl install does this for you).
+Install already ran `rig setup`. Re-run `rig setup` after you update Rig (`rig update` or the curl install does this for you).
 
 1. Fully quit Grok, Codex, OpenCode, OMP, Pi, and/or agy **once** so MCP tools load (quit the apps, then reopen).
 2. Run `rig doctor`. MCP lines should show `[mcp_servers.rig]` for grok and/or codex, plus OpenCode/OMP/Pi/agy JSON MCP when those files exist.
@@ -109,6 +109,8 @@ Rig doctor
   RIG_HOME: /Users/you/.rig
   repo:     /Users/you/your-repo
   harness:  /Users/you/your-repo/.rig/harness.toml
+  version:  v1 abc1234
+  update:   current
 
 Parent
   live:      grok
@@ -145,9 +147,11 @@ How to read each section:
 
 | Section | Good | Bad |
 | --- | --- | --- |
-| **RIG_HOME** | `$HOME/.rig` | empty / missing — re-run the curl install or `rig setup` |
+| **RIG_HOME** | `$HOME/.rig` | empty / missing — `rig update` or re-run the curl install or `rig setup` |
 | **repo** | the git repo you `cd`’d into | wrong directory |
 | **harness** | `.rig/harness.toml` exists | `(missing — run: rig init)` |
+| **version** | `v1 <sha>` from `~/.rig/VERSION` | `(unknown — run: rig update)` |
+| **update** | `current` | `behind main — run: rig update` (omitted if offline or `RIG_SKIP_UPDATE_CHECK`) |
 | **Parent live** | `codex`, `grok`, `opencode`, `omp`, `pi`, or `agy` when you are inside that CLI; `(none)` in a plain terminal is normal | you expected a parent but opened Claude/Cursor |
 | **Parent preferred** | `codex`, `grok`, `opencode`, `omp`, `pi`, or `agy` from `rig use` | — |
 | **Workers** | the ones you want show `effective=on` | see reasons below |
@@ -425,6 +429,8 @@ Re-run the install if `~/.local/bin/rig` itself is missing:
 curl -fsSL https://raw.githubusercontent.com/Brasth/Rig/main/install.sh | bash
 ```
 
+If `rig` is already on PATH: `rig update`.
+
 **MCP missing in Grok, Codex, OpenCode, OMP, Pi, or agy** (`rig doctor` MCP lines do not show `[mcp_servers.rig]` / `mcp.rig` / `mcpServers.rig`, or `/rig` / tools are absent)
 
 1. `rig setup`
@@ -442,7 +448,7 @@ Read the reason in `rig doctor`:
 
 **Claude child `timeout` right after you allow**
 
-The work clock used to keep counting the minutes spent waiting for allow. It now pauses during `ask` and restarts after allow. Update Rig (`./install.sh` from a checkout, or the same curl install) so `~/.rig/scripts/run-worker.sh` has that restart. Do not kill an asking job; allow/deny and wait.
+The work clock used to keep counting the minutes spent waiting for allow. It now pauses during `ask` and restarts after allow. Update Rig (`rig update`, or `./install.sh` from a checkout, or the same curl install) so `~/.rig/scripts/run-worker.sh` has that restart. Do not kill an asking job; allow/deny and wait.
 
 **Parent not spawning / ignoring Rig**
 
@@ -494,6 +500,7 @@ The parent agent picks worker **and** model/reasoning from the case. Do not ask 
 usage: rig <command> [args]
 
   setup
+  update
   init [--patch-agents|--no-patch-agents] [--patch-claude]
   doctor
   status
