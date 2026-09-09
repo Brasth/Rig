@@ -142,8 +142,8 @@ class Pick(unittest.TestCase):
         self.assertEqual(route.model_for("cursor", "explore"), ("composer-2.5-fast", ""))
         self.assertEqual(route.model_for("cursor", "hard"), ("cursor-grok-4.6-high", ""))
 
-    def test_same_cli_beats_opencode_omp_pi(self):
-        c = route.pick("grok", ["opencode", "omp", "pi", "cursor", "codex"], "implement", "add a header")
+    def test_same_cli_beats_opencode_omp_pi_agy(self):
+        c = route.pick("grok", ["opencode", "omp", "pi", "agy", "cursor", "codex"], "implement", "add a header")
         self.assertEqual(c["spawn"], "native")
         self.assertEqual(c["worker"], "grok")
         self.assertEqual(c["model"], "grok-4.6")
@@ -164,10 +164,12 @@ class Pick(unittest.TestCase):
         c = route.pick("codex", ["grok", "opencode"], "implement", "add a header")
         self.assertEqual(c["worker"], "grok")
 
-    def test_opencode_omp_pi_default_model_empty(self):
+    def test_opencode_omp_pi_agy_default_model_empty(self):
         self.assertEqual(route.model_for("opencode", "implement"), ("", ""))
         self.assertEqual(route.model_for("omp", "hard"), ("", ""))
         self.assertEqual(route.model_for("pi", "review"), ("", ""))
+        self.assertEqual(route.model_for("agy", "implement"), ("", ""))
+        self.assertEqual(route.model_for("agy", "hard"), ("", ""))
 
     def test_opencode_live_plus_grok_is_grok_child(self):
         c = route.pick("opencode", ["grok"], "implement", "add a header")
@@ -216,6 +218,40 @@ class Pick(unittest.TestCase):
         c = route.pick("", ["pi", "omp"], "implement", "add a header")
         self.assertEqual(c["worker"], "omp")
         self.assertEqual(c["spawn"], "run-worker")
+
+    def test_agy_live_explore_is_native(self):
+        c = route.pick("agy", ["cursor", "codex"], "explore", "trace remaining gates")
+        self.assertEqual(c["spawn"], "native")
+        self.assertEqual(c["worker"], "agy")
+        self.assertEqual(c["native_agent"], "explore")
+        self.assertEqual(c["model"], "")
+
+    def test_agy_live_implement_is_native_when_grok_claude_off(self):
+        c = route.pick("agy", ["cursor", "codex"], "implement", "add a header")
+        self.assertEqual(c["spawn"], "native")
+        self.assertEqual(c["worker"], "agy")
+        self.assertEqual(c["native_agent"], "worker")
+        self.assertEqual(c["model"], "")
+
+    def test_agy_live_plus_grok_is_grok_child(self):
+        c = route.pick("agy", ["grok"], "implement", "add a header")
+        self.assertEqual(c["worker"], "grok")
+        self.assertEqual(c["spawn"], "run-worker")
+
+    def test_agy_last_resort_when_parent_cannot_native(self):
+        c = route.pick("", ["agy"], "implement", "add a header")
+        self.assertEqual(c["worker"], "agy")
+        self.assertEqual(c["spawn"], "run-worker")
+        self.assertEqual(c["model"], "")
+
+    def test_omp_still_beats_pi_with_agy_present(self):
+        c = route.pick("", ["agy", "pi", "omp"], "implement", "add a header")
+        self.assertEqual(c["worker"], "omp")
+        self.assertEqual(c["spawn"], "run-worker")
+
+    def test_pi_beats_agy_as_last_resort(self):
+        c = route.pick("", ["agy", "pi"], "implement", "add a header")
+        self.assertEqual(c["worker"], "pi")
 
 
 if __name__ == "__main__":

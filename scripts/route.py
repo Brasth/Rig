@@ -77,9 +77,14 @@ NATIVE = {
     ("pi", "bulk"): "bulk",
     ("pi", "implement"): "worker",
     ("pi", "hard"): "worker",
+    ("agy", "explore"): "explore",
+    ("agy", "mini"): "explore",
+    ("agy", "bulk"): "bulk",
+    ("agy", "implement"): "worker",
+    ("agy", "hard"): "worker",
 }
 
-NATIVE_PARENTS = frozenset({"codex", "grok", "opencode", "omp", "pi"})
+NATIVE_PARENTS = frozenset({"codex", "grok", "opencode", "omp", "pi", "agy"})
 
 KEYWORDS = (
     (
@@ -135,7 +140,7 @@ def choose_worker(kind: str, effective: list[str], live: str) -> tuple[str, str]
     # Cross-CLI first: Grok (when not live), then Claude. Cursor/Codex are last
     # resort — a Grok parent with Cursor on PATH was always spawning Cursor.
     if kind == "review":
-        order = ("claude", "grok", "cursor", "opencode", "omp", "pi", "codex")
+        order = ("claude", "grok", "cursor", "opencode", "omp", "pi", "agy", "codex")
     else:
         order = ("grok", "claude")
     for worker in order:
@@ -143,7 +148,7 @@ def choose_worker(kind: str, effective: list[str], live: str) -> tuple[str, str]
             return worker, "run-worker"
     if kind in {"implement", "hard"} and live in NATIVE_PARENTS:
         return live, "native"
-    for worker in ("cursor", "opencode", "omp", "pi", "codex"):
+    for worker in ("cursor", "opencode", "omp", "pi", "agy", "codex"):
         if worker in effective:
             return worker, "run-worker"
     if live in NATIVE_PARENTS:

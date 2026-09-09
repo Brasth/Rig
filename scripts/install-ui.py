@@ -272,6 +272,10 @@ def install_pi_mcp(cfg: Path, script: Path) -> str:
     return install_mcp_servers_json(cfg, script, "pi")
 
 
+def install_agy_mcp(cfg: Path, script: Path) -> str:
+    return install_mcp_servers_json(cfg, script, "agy")
+
+
 def refresh_codex_agents() -> str:
     agents = Path.home() / ".codex" / "agents"
     wanted = {
@@ -335,6 +339,11 @@ def main() -> int:
         or (Path.home() / ".pi" / "agent")
     )
     print(install_pi_mcp(pi_dir / "mcp.json", mcp))
+    agy = Path(
+        os.environ.get("AGY_MCP")
+        or (Path.home() / ".gemini" / "config" / "mcp_config.json")
+    )
+    print(install_agy_mcp(agy, mcp))
     return 0
 
 

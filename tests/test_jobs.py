@@ -76,6 +76,17 @@ class TaskAndLog(unittest.TestCase):
         acts = jobs.decode_log_text(JSON_BLOB)
         self.assertTrue(any("session header" in a for a in acts))
 
+    def test_decode_agy_response_blob(self):
+        raw = json.dumps(
+            {
+                "status": "SUCCESS",
+                "response": "fixed the helper in scripts/run-worker.sh",
+                "denied_actions": [],
+            }
+        )
+        acts = jobs.decode_log_text(raw)
+        self.assertTrue(any("fixed the helper" in a for a in acts))
+
     def test_incomplete_json_blob(self):
         acts = jobs.decode_log_text('{"text": "still going')
         self.assertEqual(acts, ["waiting for child json (buffered until exit)"])

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# run-worker.sh <grok|codex|claude|cursor|opencode|omp|pi> <job-id> <brief-file>
+# run-worker.sh <grok|codex|claude|cursor|opencode|omp|pi|agy> <job-id> <brief-file>
 set -euo pipefail
 
 _DETECT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/detect-binaries.sh"
@@ -7,7 +7,7 @@ _DETECT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/detect-binaries.sh"
 source "$_DETECT"
 
 usage() {
-  echo "usage: run-worker.sh <grok|codex|claude|cursor|opencode|omp|pi> <job-id> <brief-file>" >&2
+  echo "usage: run-worker.sh <grok|codex|claude|cursor|opencode|omp|pi|agy> <job-id> <brief-file>" >&2
   exit 2
 }
 
@@ -22,7 +22,7 @@ TIMEOUT_SECS="${RIG_TIMEOUT:-1200}"
 ROUTE_PY="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/route.py"
 
 case "$WORKER" in
-  grok|codex|claude|cursor|opencode|omp|pi) ;;
+  grok|codex|claude|cursor|opencode|omp|pi|agy) ;;
   *)
     echo "run-worker: unknown worker '$WORKER'" >&2
     exit 2
@@ -351,6 +351,23 @@ PY
     [[ -n "$EFFORT" ]] && CMD+=(--thinking "$EFFORT")
     CMD+=("$BRIEF_TEXT")
     ;;
+  agy)
+    AGY_WORKER_MD="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../adapters/agy/AGY.worker.md"
+    AGY_PERMS_PY="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/agy_job_permissions.py"
+    AGY_PROMPT="$BRIEF_TEXT"
+    if [[ -f "$AGY_WORKER_MD" ]]; then
+      AGY_PROMPT="$(cat "$AGY_WORKER_MD")"$'\n\n'"$BRIEF_TEXT"
+    fi
+    CMD=(
+      agy -p "$AGY_PROMPT"
+      --output-format json
+      --mode accept-edits
+      --print-timeout "${TIMEOUT_SECS}s"
+      --disable-slash-commands
+    )
+    [[ -n "$MODEL" ]] && CMD+=(--model "$MODEL")
+    [[ -n "$EFFORT" ]] && CMD+=(--effort "$EFFORT")
+    ;;
 esac
 CMD_STR="$(shell_join "${CMD[@]}")"
 
@@ -383,6 +400,25 @@ if [[ "${RIG_LIVE:-0}" != "1" ]]; then
   echo "would run: $CMD_STR"
   write_json "ok" 0 "dry-run" "$(iso_now)"
   exit 0
+fi
+
+AGY_PERMS_MERGED=0
+agy_restore_settings() {
+  if [[ "${AGY_PERMS_MERGED:-0}" != "1" ]]; then
+    return 0
+  fi
+  AGY_PERMS_MERGED=0
+  local args=(restore --job-dir "$JOB_DIR")
+  [[ -n "${AGY_SETTINGS:-}" ]] && args+=(--settings "$AGY_SETTINGS")
+  python3 "$AGY_PERMS_PY" "${args[@]}" || true
+}
+if [[ "$WORKER" == "agy" ]]; then
+  AGY_PERMS_PY="${AGY_PERMS_PY:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/agy_job_permissions.py}"
+  agy_merge_args=(merge --job-dir "$JOB_DIR")
+  [[ -n "${AGY_SETTINGS:-}" ]] && agy_merge_args+=(--settings "$AGY_SETTINGS")
+  AGY_PERMS_MERGED=1
+  trap agy_restore_settings EXIT
+  python3 "$AGY_PERMS_PY" "${agy_merge_args[@]}"
 fi
 
 snapshot_files() {
@@ -464,7 +500,7 @@ for line in reversed(raw.splitlines()):
         obj = json.loads(line)
     except json.JSONDecodeError:
         continue
-    for k in ("result", "message", "text", "summary"):
+    for k in ("result", "message", "text", "summary", "response"):
         v = obj.get(k)
         if isinstance(v, str) and v.strip():
             print(v.strip()[:2000])
@@ -479,12 +515,22 @@ PY
   tail -c 2000 "$LOG" | tr '\n' ' '
 }
 
+agy_restore_settings
+trap - EXIT
+
 SUMMARY="$(summary_from_log)"
 if [[ "$TIMED_OUT" == "1" ]]; then
   write_json "timeout" 124 "${SUMMARY:-timeout after ${TIMEOUT_SECS}s}" "$ENDED"
   exit 124
 fi
 if [[ "$CHILD_RC" -eq 0 ]]; then
+  if [[ "$WORKER" == "agy" ]]; then
+    AGY_DENIED="$(python3 "$AGY_PERMS_PY" denied-actions "$LOG" 2>/dev/null || true)"
+    if [[ -n "$AGY_DENIED" ]]; then
+      write_json "fail" 1 "${SUMMARY:-denied_actions: $AGY_DENIED}" "$ENDED"
+      exit 1
+    fi
+  fi
   write_json "ok" 0 "${SUMMARY:-ok}" "$ENDED"
   rm -f "$LOG"
   exit 0

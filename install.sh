@@ -44,7 +44,7 @@ install_file() {
 }
 
 copy_into_home() {
-  mkdir -p "$RIG_HOME"/{bin,scripts,skills,adapters/codex/agents,adapters/grok,adapters/claude,adapters/cursor,adapters/opencode,adapters/omp,adapters/pi,templates}
+  mkdir -p "$RIG_HOME"/{bin,scripts,skills,adapters/codex/agents,adapters/grok,adapters/claude,adapters/cursor,adapters/opencode,adapters/omp,adapters/pi,adapters/agy,templates}
   install_file "$SRC/bin/rig" "$RIG_HOME/bin/rig"
   local f skill
   for f in "$SRC/scripts/"*; do
@@ -75,6 +75,9 @@ copy_into_home() {
   fi
   if [[ -f "$SRC/adapters/pi/PI.worker.md" ]]; then
     install_file "$SRC/adapters/pi/PI.worker.md" "$RIG_HOME/adapters/pi/PI.worker.md"
+  fi
+  if [[ -f "$SRC/adapters/agy/AGY.worker.md" ]]; then
+    install_file "$SRC/adapters/agy/AGY.worker.md" "$RIG_HOME/adapters/agy/AGY.worker.md"
   fi
   for f in "$SRC/templates/"*; do
     [[ -f "$f" ]] || continue

@@ -122,6 +122,7 @@ class InitPresence(unittest.TestCase):
         _fake_bin(self.bins, "opencode")
         _fake_bin(self.bins, "omp")
         _fake_bin(self.bins, "pi")
+        _fake_bin(self.bins, "agy")
         proc = run_rig(self.repo, "init", env={"PATH": _stub_path(self.bins)})
         self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
         text = (rig_dir / "harness.toml").read_text()
@@ -131,9 +132,11 @@ class InitPresence(unittest.TestCase):
         self.assertRegex(text, r"opencode\s*=\s*false")
         self.assertRegex(text, r"omp\s*=\s*false")
         self.assertRegex(text, r"pi\s*=\s*false")
+        self.assertRegex(text, r"agy\s*=\s*false")
         self.assertNotRegex(text, r"opencode\s*=\s*true")
         self.assertNotRegex(text, r"omp\s*=\s*true")
         self.assertNotRegex(text, r"pi\s*=\s*true")
+        self.assertNotRegex(text, r"agy\s*=\s*true")
 
     def test_workers_cursor_on(self):
         proc = run_rig(self.repo, "init", env={"PATH": _stub_path()})
@@ -159,33 +162,46 @@ class InitPresence(unittest.TestCase):
         self.assertRegex(doc.stdout, r"opencode:.*(mcp\.rig|missing)")
         self.assertRegex(doc.stdout, r"omp:.*(mcpServers\.rig|missing)")
         self.assertRegex(doc.stdout, r"pi:.*(mcpServers\.rig|missing)")
+        self.assertRegex(doc.stdout, r"agy:.*(mcpServers\.rig|missing)")
 
-    def test_new_init_opencode_omp_pi_on_when_cli_present(self):
+    def test_new_init_opencode_omp_pi_agy_on_when_cli_present(self):
         _fake_bin(self.bins, "opencode")
         _fake_bin(self.bins, "omp")
         _fake_bin(self.bins, "pi")
+        _fake_bin(self.bins, "agy")
         proc = run_rig(self.repo, "init", env={"PATH": _stub_path(self.bins)})
         self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
         text = (self.repo / ".rig" / "harness.toml").read_text()
         self.assertRegex(text, r"opencode\s*=\s*true")
         self.assertRegex(text, r"omp\s*=\s*true")
         self.assertRegex(text, r"pi\s*=\s*true")
+        self.assertRegex(text, r"agy\s*=\s*true")
         self.assertRegex(text, r"cursor\s*=\s*false")
 
     def test_workers_opencode_on(self):
         proc = run_rig(self.repo, "init", env={"PATH": _stub_path()})
         self.assertEqual(proc.returncode, 0, proc.stderr)
-        on = run_rig(self.repo, "workers", "opencode=on", "omp=on", "pi=on", env={"PATH": _stub_path()})
+        on = run_rig(
+            self.repo,
+            "workers",
+            "opencode=on",
+            "omp=on",
+            "pi=on",
+            "agy=on",
+            env={"PATH": _stub_path()},
+        )
         self.assertEqual(on.returncode, 0, on.stderr)
         self.assertIn("opencode = true", on.stdout)
         self.assertIn("omp = true", on.stdout)
         self.assertIn("pi = true", on.stdout)
+        self.assertIn("agy = true", on.stdout)
         text = (self.repo / ".rig" / "harness.toml").read_text()
         self.assertRegex(text, r"opencode\s*=\s*true")
         self.assertRegex(text, r"omp\s*=\s*true")
         self.assertRegex(text, r"pi\s*=\s*true")
+        self.assertRegex(text, r"agy\s*=\s*true")
 
-    def test_doctor_lists_opencode_omp_pi_and_install_hints(self):
+    def test_doctor_lists_opencode_omp_pi_agy_and_install_hints(self):
         proc = run_rig(self.repo, "init", env={"PATH": _stub_path()})
         self.assertEqual(proc.returncode, 0, proc.stderr)
         doc = run_rig(self.repo, "doctor", env={"PATH": _stub_path(), "RIG_PARENT": "codex"})
@@ -193,9 +209,11 @@ class InitPresence(unittest.TestCase):
         self.assertIn("opencode", doc.stdout)
         self.assertIn("omp", doc.stdout)
         self.assertRegex(doc.stdout, r"\bpi\b")
+        self.assertRegex(doc.stdout, r"\bagy\b")
         self.assertIn("curl -fsSL https://opencode.ai/install", doc.stdout)
         self.assertIn("curl -fsSL https://omp.sh/install", doc.stdout)
         self.assertIn("@earendil-works/pi-coding-agent", doc.stdout)
+        self.assertIn("curl -fsSL https://antigravity.google/cli/install.sh", doc.stdout)
 
     def test_job_start_accepts_cursor(self):
         run_rig(self.repo, "init", env={"PATH": _stub_path()})
@@ -211,9 +229,9 @@ class InitPresence(unittest.TestCase):
         )
         self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
 
-    def test_job_start_accepts_opencode_omp_pi(self):
+    def test_job_start_accepts_opencode_omp_pi_agy(self):
         run_rig(self.repo, "init", env={"PATH": _stub_path()})
-        for name in ("opencode", "omp", "pi"):
+        for name in ("opencode", "omp", "pi", "agy"):
             proc = run_rig(
                 self.repo,
                 "job",
@@ -235,16 +253,17 @@ class InitPresence(unittest.TestCase):
         self.assertIn("Never kill", text)
         self.assertIn("Never spawn another worker", text)
         self.assertIn("background", text)
-        self.assertIn("Do not spawn Cursor/Codex/OpenCode/OMP/Pi just because their CLI is on PATH", text)
-        self.assertIn("rig use grok|codex|opencode|omp|pi", text)
+        self.assertIn("Do not spawn Cursor/Codex/OpenCode/OMP/Pi/agy just because their CLI is on PATH", text)
+        self.assertIn("rig use grok|codex|opencode|omp|pi|agy", text)
         self.assertIn("Claude Code and Cursor CLI are never the parent", text)
-        self.assertIn("OpenCode, OMP, and Pi can be the parent", text)
+        self.assertIn("OpenCode, OMP, Pi, and agy can be the parent", text)
+        self.assertIn("When live parent is agy, do not use nested agy /agent dispatch", text)
         self.assertNotIn("'", text.split("<!-- rig:start -->", 1)[1].split("<!-- rig:end -->", 1)[0])
 
     def test_use_opencode_omp_pi_writes_parent(self):
         proc = run_rig(self.repo, "init", env={"PATH": _stub_path()})
         self.assertEqual(proc.returncode, 0, proc.stderr)
-        for name in ("opencode", "omp", "pi", "grok", "codex"):
+        for name in ("opencode", "omp", "pi", "agy", "grok", "codex"):
             used = run_rig(self.repo, "use", name, env={"PATH": _stub_path()})
             self.assertEqual(used.returncode, 0, used.stderr + used.stdout)
             self.assertIn(f"preferred parent = {name}", used.stdout)
@@ -285,11 +304,13 @@ class InitPresence(unittest.TestCase):
         self.assertRegex(doc.stdout, r"opencode:.*missing")
         self.assertRegex(doc.stdout, r"omp:.*missing")
         self.assertRegex(doc.stdout, r"pi:.*missing")
+        self.assertRegex(doc.stdout, r"agy:.*missing")
         self.assertIn("pi install npm:pi-mcp-adapter", doc.stdout)
-        self.assertIn("/rig in Grok, Codex, OpenCode, OMP, or Pi", doc.stdout)
+        self.assertIn("/rig in Grok, Codex, OpenCode, OMP, Pi, or agy", doc.stdout)
         self.assertIn(".config/opencode/skill/delegate-harness", doc.stdout)
         self.assertIn(".omp/agent/skills/delegate-harness", doc.stdout)
         self.assertIn(".pi/agent/skills/delegate-harness", doc.stdout)
+        self.assertIn(".gemini/antigravity-cli/skills/delegate-harness", doc.stdout)
 
     def test_doctor_reports_json_mcp_present(self):
         proc = run_rig(self.repo, "init", env={"PATH": _stub_path()})
@@ -317,6 +338,9 @@ class InitPresence(unittest.TestCase):
         pi = home / ".pi" / "agent" / "mcp.json"
         pi.parent.mkdir(parents=True)
         pi.write_text(json.dumps({"mcpServers": {"rig": {"command": launcher}}}))
+        agy = home / ".gemini" / "config" / "mcp_config.json"
+        agy.parent.mkdir(parents=True)
+        agy.write_text(json.dumps({"mcpServers": {"rig": {"command": launcher}}}))
         doc = run_rig(
             self.repo,
             "doctor",
@@ -326,6 +350,7 @@ class InitPresence(unittest.TestCase):
         self.assertRegex(doc.stdout, r"opencode:.*mcp\.rig")
         self.assertRegex(doc.stdout, r"omp:.*mcpServers\.rig")
         self.assertRegex(doc.stdout, r"pi:.*mcpServers\.rig")
+        self.assertRegex(doc.stdout, r"agy:.*mcpServers\.rig")
         self.assertIn("pi install npm:pi-mcp-adapter", doc.stdout)
 
     def test_doctor_pi_adapter_present_skips_hint(self):
@@ -365,12 +390,15 @@ class InitPresence(unittest.TestCase):
         oc = home / ".config" / "opencode" / "opencode.json"
         omp = home / ".omp" / "mcp.json"
         pi = home / ".pi" / "agent" / "mcp.json"
+        agy = home / ".gemini" / "config" / "mcp_config.json"
         self.assertTrue(oc.is_file(), proc.stdout)
         self.assertTrue(omp.is_file(), proc.stdout)
         self.assertTrue(pi.is_file(), proc.stdout)
+        self.assertTrue(agy.is_file(), proc.stdout)
         self.assertIn("rig-mcp", oc.read_text())
         self.assertIn("rig-mcp", omp.read_text())
         self.assertIn("rig-mcp", pi.read_text())
+        self.assertIn("rig-mcp", agy.read_text())
         self.assertFalse((self.repo / "mcp.json").exists())
         self.assertFalse((self.repo / "opencode.json").exists())
         self.assertFalse((self.repo / ".mcp.json").exists())
@@ -378,6 +406,7 @@ class InitPresence(unittest.TestCase):
         self.assertTrue(skill.is_symlink() or skill.is_dir(), proc.stdout)
         self.assertTrue((home / ".omp" / "agent" / "skills" / "rig-jobs").exists())
         self.assertTrue((home / ".pi" / "agent" / "skills" / "delegate-harness").exists())
+        self.assertTrue((home / ".gemini" / "antigravity-cli" / "skills" / "delegate-harness").exists())
 
     def test_new_init_harness_has_no_parent_profile(self):
         proc = run_rig(self.repo, "init", env={"PATH": _stub_path()})
@@ -403,6 +432,7 @@ class InitPresence(unittest.TestCase):
             "opencode = false\n"
             "omp = false\n"
             "pi = false\n"
+            "agy = false\n"
         )
         path = rig_dir / "harness.toml"
         path.write_text(original)
@@ -431,7 +461,7 @@ class InitPresence(unittest.TestCase):
         (rig_dir / "harness.toml").write_text(
             'parent = "codex"\n\n[parent]\nprofile = "sol"\n\n[workers]\n'
             "codex = false\ngrok = true\nclaude = false\ncursor = false\n"
-            "opencode = false\nomp = false\npi = false\n"
+            "opencode = false\nomp = false\npi = false\nagy = false\n"
         )
         status = run_rig(
             self.repo, "status", env={"PATH": _stub_path(), "RIG_PARENT": "codex"}

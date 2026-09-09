@@ -142,7 +142,7 @@ class OpenCodeOmpPiWorkerArgv(unittest.TestCase):
         (self.repo / ".rig").mkdir()
         (self.repo / ".rig" / "harness.toml").write_text(
             'parent = "codex"\n\n[workers]\ncodex = false\ngrok = false\nclaude = false\n'
-            "cursor = false\nopencode = true\nomp = true\npi = true\n"
+            "cursor = false\nopencode = true\nomp = true\npi = true\nagy = true\n"
         )
         jobs = self.repo / ".rig" / "jobs" / "print-stream"
         jobs.mkdir(parents=True)
@@ -150,7 +150,7 @@ class OpenCodeOmpPiWorkerArgv(unittest.TestCase):
         self.brief.write_text("You are a worker, not the orchestrator.\nFix the helper.\n")
         self.bins = self.repo / "bins"
         self.bins.mkdir()
-        for name in ("opencode", "omp", "pi"):
+        for name in ("opencode", "omp", "pi", "agy"):
             path = self.bins / name
             path.write_text("#!/bin/sh\nexit 0\n")
             path.chmod(0o755)
@@ -210,6 +210,94 @@ class OpenCodeOmpPiWorkerArgv(unittest.TestCase):
         self.assertIn("--no-session", out)
         self.assertNotIn("--auto-approve", out)
         self.assertNotIn("gpt-5.6-sol", out)
+
+    def test_agy_dry_run_print_json_accept_edits(self):
+        settings = self.repo / "agy-settings.json"
+        settings.write_text("{}\n")
+        env = self._env(
+            {
+                "AGY_SETTINGS": str(settings),
+                "RIG_TIMEOUT": "1200",
+            }
+        )
+        proc = run_worker(self.repo, "agy", "print-stream", str(self.brief), env=env)
+        out = proc.stdout + proc.stderr
+        self.assertIn(proc.returncode, (0, 127), out)
+        self.assertIn("would run:", out, out)
+        self.assertIn("agy", out)
+        self.assertIn("-p", out)
+        self.assertIn("--output-format json", out)
+        self.assertIn("--mode accept-edits", out)
+        self.assertIn("--print-timeout 1200s", out)
+        self.assertIn("--disable-slash-commands", out)
+        self.assertNotIn("--dangerously-skip-permissions", out)
+        self.assertNotIn("--model", out)
+        self.assertNotIn("--effort", out)
+        self.assertNotIn("gpt-5.6-sol", out)
+        self.assertEqual(settings.read_text(), "{}\n")
+        bak = self.repo / ".rig" / "jobs" / "print-stream" / "agy-settings.bak"
+        self.assertFalse(bak.exists(), out)
+
+    def test_agy_dry_run_passes_model_and_effort_when_set(self):
+        env = self._env({"RIG_MODEL": "gemini-foo", "RIG_EFFORT": "high", "RIG_TIMEOUT": "90"})
+        proc = run_worker(self.repo, "agy", "print-stream", str(self.brief), env=env)
+        out = proc.stdout + proc.stderr
+        self.assertIn("--model gemini-foo", out, out)
+        self.assertIn("--effort high", out, out)
+        self.assertIn("--print-timeout 90s", out, out)
+        self.assertNotIn("--dangerously-skip-permissions", out)
+
+    def test_agy_live_denied_actions_fails_and_restores_settings(self):
+        settings = self.repo / "agy-settings.json"
+        settings.write_text('{"keep": true, "permissions": {"allow": ["read(*)"]}}\n')
+        agent = self.bins / "agy"
+        agent.write_text(
+            "#!/bin/sh\n"
+            'echo \'{"status":"SUCCESS","response":"blocked","denied_actions":'
+            '[{"action":"command","display_name":"RunCommand"}]}\'\n'
+            "exit 0\n"
+        )
+        env = self._env(
+            {
+                "RIG_LIVE": "1",
+                "AGY_SETTINGS": str(settings),
+            }
+        )
+        proc = run_worker(self.repo, "agy", "print-stream", str(self.brief), env=env)
+        out = proc.stdout + proc.stderr
+        self.assertEqual(proc.returncode, 1, out)
+        result = json.loads(
+            (self.repo / ".rig" / "jobs" / "print-stream" / "result.json").read_text()
+        )
+        self.assertEqual(result["status"], "fail")
+        self.assertTrue(
+            "denied_actions" in result["summary"] or "blocked" in result["summary"],
+            result["summary"],
+        )
+        data = json.loads(settings.read_text())
+        self.assertTrue(data["keep"])
+        self.assertEqual(data["permissions"]["allow"], ["read(*)"])
+        self.assertNotIn("command(*)", data["permissions"]["allow"])
+
+    def test_agy_live_empty_denied_actions_ok(self):
+        settings = self.repo / "agy-settings.json"
+        settings.write_text("{}\n")
+        agent = self.bins / "agy"
+        agent.write_text(
+            "#!/bin/sh\n"
+            'echo \'{"status":"SUCCESS","response":"fixed the helper","denied_actions":[]}\'\n'
+            "exit 0\n"
+        )
+        env = self._env({"RIG_LIVE": "1", "AGY_SETTINGS": str(settings)})
+        proc = run_worker(self.repo, "agy", "print-stream", str(self.brief), env=env)
+        out = proc.stdout + proc.stderr
+        self.assertEqual(proc.returncode, 0, out)
+        result = json.loads(
+            (self.repo / ".rig" / "jobs" / "print-stream" / "result.json").read_text()
+        )
+        self.assertEqual(result["status"], "ok")
+        self.assertIn("fixed the helper", result["summary"])
+        self.assertEqual(json.loads(settings.read_text()), {})
 
 
 if __name__ == "__main__":

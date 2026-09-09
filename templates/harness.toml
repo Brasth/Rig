@@ -3,6 +3,7 @@ parent = "codex"
 # parent = "opencode"
 # parent = "omp"
 # parent = "pi"
+# parent = "agy"
 
 [workers]
 codex = false
@@ -12,3 +13,4 @@ cursor = false
 opencode = false
 omp = false
 pi = false
+agy = false

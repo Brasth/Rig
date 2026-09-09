@@ -19,6 +19,7 @@ PREAMBLE_MARKERS = (
     "do not spawn codex, grok, or claude",
     "do not spawn codex, grok, claude, or cursor",
     "do not spawn codex, grok, claude, cursor, opencode, omp, or pi",
+    "do not spawn codex, grok, claude, cursor, opencode, omp, pi, or agy",
 )
 INPUT_KEYS = (
     "path",
@@ -326,7 +327,7 @@ def _decode_json_lines(json_lines: list[str]) -> list[str]:
             if act and (not lines or lines[-1] != act):
                 lines.append(act)
             continue
-        blob = obj.get("text") or obj.get("result") or ""
+        blob = obj.get("text") or obj.get("result") or obj.get("response") or ""
         if isinstance(blob, str) and blob.strip():
             lines.append(_first_line(blob, 160))
     _flush_stream(buf_kind, buf, lines)
@@ -362,7 +363,7 @@ def decode_log_text(raw: str) -> list[str]:
             if isinstance(obj, dict):
                 if obj.get("type") == "error":
                     return [activity_from_event(obj) or str(obj)]
-                blob = obj.get("text") or obj.get("result") or ""
+                blob = obj.get("text") or obj.get("result") or obj.get("response") or ""
                 if isinstance(blob, str) and blob.strip():
                     out = [
                         _first_line(para, 160)

@@ -2,7 +2,7 @@
 
 A local parent/worker kit. You stay in one parent CLI. You type a prompt. The parent hands the work to a child, then checks the result and sends feedback — the loop you used to do yourself, sitting on one agent.
 
-Intended parent is **Codex running Astra** (the human-like assistant). Grok, OpenCode, OMP, and Pi can also be the parent. Claude and Cursor are never the parent. Missing worker binary → cheaper same-CLI. That is success.
+Intended parent is **Codex running Astra** (the human-like assistant). Grok, OpenCode, OMP, Pi, and agy can also be the parent. Claude and Cursor are never the parent. Missing worker binary → cheaper same-CLI. That is success.
 
 ## Why
 
@@ -11,7 +11,7 @@ Using AI to ship a feature often means **you** become the bottleneck. You read e
 Sol made an agent feel like a person at the computer. Astra went further. Rig is the harness around that:
 
 1. You talk to the **parent** (Astra in Codex, or another parent CLI you opened).
-2. The parent assigns the task to a **child** (Grok, Claude, Cursor, OpenCode, OMP, Pi, Codex).
+2. The parent assigns the task to a **child** (Grok, Claude, Cursor, OpenCode, OMP, Pi, agy, Codex).
 3. The parent **checks, verifies, and gives the child feedback** (`rig jobs`, allow/deny, a follow-up prompt) — the same review loop you used to run by hand.
 
 Open Codex on Astra as the parent. Pick the parent model in that CLI. Worker models come from `rig pick`. Never spawn Astra, Sol, or Fable as a child.
@@ -36,7 +36,7 @@ source ~/.zshrc
 
 `which rig` must print `$HOME/.local/bin/rig`.
 
-You need one parent CLI: Codex, Grok, OpenCode, OMP, or Pi. Optional worker binaries: `grok`, `claude`, `cursor-agent`, `codex`, `opencode`, `omp`, `pi`.
+You need one parent CLI: Codex, Grok, OpenCode, OMP, Pi, or agy. Optional worker binaries: `grok`, `claude`, `cursor-agent`, `codex`, `opencode`, `omp`, `pi`, `agy`.
 
 ## Per project
 
@@ -57,8 +57,8 @@ Type a normal prompt in that parent CLI. Example: `fix the failing tests in test
 ## Configure
 
 ```bash
-rig use grok|codex|opencode|omp|pi
-rig workers grok=on|off claude=on|off codex=on|off cursor=on|off opencode=on|off omp=on|off pi=on|off
+rig use grok|codex|opencode|omp|pi|agy
+rig workers grok=on|off claude=on|off codex=on|off cursor=on|off opencode=on|off omp=on|off pi=on|off agy=on|off
 ```
 
 ```toml
@@ -67,6 +67,7 @@ parent = "codex"
 # parent = "opencode"
 # parent = "omp"
 # parent = "pi"
+# parent = "agy"
 
 [workers]
 codex = false
@@ -76,9 +77,10 @@ cursor = false
 opencode = false
 omp = false
 pi = false
+agy = false
 ```
 
-- **Live parent** is whichever Codex, Grok, OpenCode, OMP, or Pi you actually opened (`rig status`). The `parent =` key is only the preferred default (`rig use grok|codex|opencode|omp|pi`). Opening the CLI is what makes it live.
+- **Live parent** is whichever Codex, Grok, OpenCode, OMP, Pi, or agy you actually opened (`rig status`). The `parent =` key is only the preferred default (`rig use grok|codex|opencode|omp|pi|agy`). Opening the CLI is what makes it live.
 - Parent **model** is the CLI’s model. Worker models come from `rig pick`. Never spawn Sol, Astra, or Fable as a child.
 - A worker is **effective** only when: flag true **and** binary on PATH **and** not the live parent.
 - Claude Code and Cursor are never the parent.
@@ -86,7 +88,7 @@ pi = false
 
 ## Watch
 
-`rig tui` / `rig jobs` / `/rig` in Grok, Codex, OpenCode, OMP, or Pi. Grok also gets a bottom status line after setup (restart Grok once). Pi needs `pi install npm:pi-mcp-adapter` before `/rig` loads.
+`rig tui` / `rig jobs` / `/rig` in Grok, Codex, OpenCode, OMP, Pi, or agy. Grok also gets a bottom status line after setup (restart Grok once). Pi needs `pi install npm:pi-mcp-adapter` before `/rig` loads.
 
 Jobs and MEMORY are this repo, not the chat. A new thread still sees `.rig/jobs`. Running children keep going.
 

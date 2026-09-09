@@ -149,6 +149,14 @@ class InstallJsonMcp(unittest.TestCase):
         self.assertEqual(data["mcpServers"]["rig"]["command"], self.launcher)
         self.assertIn("created mcp.json", msg)
 
+    def test_agy_creates_when_missing(self):
+        cfg = self.home / ".gemini" / "config" / "mcp_config.json"
+        msg = install_ui.install_agy_mcp(cfg, self.script)
+        data = json.loads(cfg.read_text())
+        self.assertEqual(data["mcpServers"]["rig"]["command"], self.launcher)
+        self.assertIn("created mcp_config.json", msg)
+        self.assertIn("agy", msg)
+
     def test_refresh_launcher_keep_message(self):
         cfg = self.home / ".omp" / "mcp.json"
         install_ui.install_omp_mcp(cfg, self.script)
