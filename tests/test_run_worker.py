@@ -68,6 +68,36 @@ class ClaudeWorkerArgv(unittest.TestCase):
         cfg = json.loads(mcp.read_text())
         self.assertIn("rig-ask", cfg.get("mcpServers") or cfg)
 
+    def test_claude_haiku_dry_run_omits_effort_flag(self):
+        env = {
+            "RIG_MODEL": "claude-haiku-4-5-20251001",
+            "RIG_EFFORT": "low",
+            "RIG_ROLE": "explore",
+        }
+        proc = run_worker(self.repo, "claude", "claude-stream", str(self.brief), env=env)
+        out = proc.stdout + proc.stderr
+        self.assertIn(proc.returncode, (0, 127), out)
+        self.assertIn("would run:", out, out)
+        self.assertIn("claude-haiku-4-5-20251001", out)
+        self.assertIn("stream-json", out)
+        self.assertNotIn("--effort", out)
+        meta = json.loads((self.repo / ".rig" / "jobs" / "claude-stream" / "meta.json").read_text())
+        self.assertEqual(meta.get("effort"), "low")
+        self.assertEqual(meta.get("model"), "claude-haiku-4-5-20251001")
+
+    def test_claude_sonnet_dry_run_passes_effort(self):
+        env = {
+            "RIG_MODEL": "claude-sonnet-5",
+            "RIG_EFFORT": "medium",
+        }
+        proc = run_worker(self.repo, "claude", "claude-stream", str(self.brief), env=env)
+        out = proc.stdout + proc.stderr
+        self.assertIn(proc.returncode, (0, 127), out)
+        self.assertIn("would run:", out, out)
+        self.assertIn("--effort medium", out)
+        self.assertIn("claude-sonnet-5", out)
+        self.assertIn("stream-json", out)
+
     def test_wrapper_pauses_timeout_while_ask_pending(self):
         src = RUN.read_text()
         self.assertIn("ask.json", src)

@@ -494,7 +494,7 @@ Cheap same-CLI spawns (Codex explorer/worker/bulk/reviewer, Grok explore, OpenCo
 rig job record --worker codex --role explorer --status ok --summary "traced remaining gates"
 ```
 
-A Claude Code child uses print-mode `stream-json` so the TUI can show tools while it runs. It does **not** use `--bare` (that drops OAuth) or `--dangerously-skip-permissions` (org policy can forbid bypass). Anthropic remote settings may print `Bash(eval $(wget*))` mismatched-parentheses warnings; those rules are skipped by Claude and hidden by `rig jobs` / `rig tui`.
+A Claude Code child uses print-mode `stream-json` so the TUI can show tools while it runs. It does **not** use `--bare` (that drops OAuth) or `--dangerously-skip-permissions` (org policy can forbid bypass). Anthropic remote settings may print `Bash(eval $(wget*))` mismatched-parentheses warnings; those rules are skipped by Claude and hidden by `rig jobs` / `rig tui`. Haiku cheap jobs still record `low` on the board but do not pass `--effort` into Claude Code (Haiku print-mode hangs).
 
 A Cursor child is `cursor-agent -p` with `stream-json`, `--force`, `--trust`, and `--workspace` set to the repo. It does **not** use `--worktree` (edits would leave the repo). `rig doctor` mentions Grok Bot.app and Cursor.app when they exist; those GUIs cannot be spawned.
 

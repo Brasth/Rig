@@ -291,7 +291,13 @@ PY
     if [[ -f "$CLAUDE_WORKER_MD" ]]; then
       CMD+=(--append-system-prompt-file "$CLAUDE_WORKER_MD")
     fi
-    [[ -n "$EFFORT" ]] && CMD+=(--effort "$EFFORT")
+    # Haiku print-mode hangs on --effort. Still stamp effort in meta.json.
+    if [[ -n "$EFFORT" ]]; then
+      case "$MODEL" in
+        *[Hh][Aa][Ii][Kk][Uu]*) ;;
+        *) CMD+=(--effort "$EFFORT") ;;
+      esac
+    fi
     ;;
   cursor)
     CURSOR_BIN="${BIN:-cursor-agent}"
