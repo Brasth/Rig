@@ -249,20 +249,32 @@ case "$WORKER" in
   claude)
     # Print-mode must stream. json buffers until exit, so Anthropic's
     # invalid remote deny rules (Bash(eval $(wget*))) fill the TUI as
-    # "doing" and the job looks stuck. Do not use --bare (drops OAuth)
-    # or --dangerously-skip-permissions (org policy can disable bypass).
+    # "doing" and the job looks stuck. -p is boolean; prompt is last
+    # after --. Do not use --bare (drops OAuth), empty --setting-sources=
+    # (can skip user auth), or --dangerously-skip-permissions (org
+    # policy can disable bypass).
     CLAUDE_WORKER_MD="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../adapters/claude/CLAUDE.worker.md"
     CLAUDE_ASK_PY="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/claude-ask.py"
     CLAUDE_MCP="$JOB_DIR/mcp.json"
-    python3 - "$CLAUDE_MCP" "$CLAUDE_ASK_PY" "$JOB_DIR" <<'PY'
+    CLAUDE_PY=""
+    for c in /opt/homebrew/bin/python3 /usr/local/bin/python3 /usr/bin/python3; do
+      if [[ -x "$c" ]]; then
+        CLAUDE_PY="$c"
+        break
+      fi
+    done
+    if [[ -z "$CLAUDE_PY" ]]; then
+      CLAUDE_PY="$(command -v python3 || true)"
+    fi
+    python3 - "$CLAUDE_MCP" "$CLAUDE_ASK_PY" "$JOB_DIR" "$CLAUDE_PY" <<'PY'
 import json, pathlib, sys
-path, script, job_dir = map(pathlib.Path, sys.argv[1:])
+path, script, job_dir, py = map(pathlib.Path, sys.argv[1:])
 path.write_text(
     json.dumps(
         {
             "mcpServers": {
                 "rig-ask": {
-                    "command": "python3",
+                    "command": str(py),
                     "args": [str(script)],
                     "env": {"RIG_JOB_DIR": str(job_dir)},
                 }
@@ -274,7 +286,7 @@ path.write_text(
 )
 PY
     CMD=(
-      claude -p "$BRIEF_TEXT"
+      claude -p
       --model "${MODEL:-claude-sonnet-5}"
       --output-format stream-json
       --verbose
@@ -286,7 +298,6 @@ PY
       --strict-mcp-config
       --disable-slash-commands
       --no-session-persistence
-      --setting-sources=
     )
     if [[ -f "$CLAUDE_WORKER_MD" ]]; then
       CMD+=(--append-system-prompt-file "$CLAUDE_WORKER_MD")
@@ -298,6 +309,7 @@ PY
         *) CMD+=(--effort "$EFFORT") ;;
       esac
     fi
+    CMD+=(-- "$BRIEF_TEXT")
     ;;
   cursor)
     CURSOR_BIN="${BIN:-cursor-agent}"

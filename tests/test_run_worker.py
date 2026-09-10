@@ -51,22 +51,34 @@ class ClaudeWorkerArgv(unittest.TestCase):
         out = proc.stdout + proc.stderr
         self.assertIn(proc.returncode, (0, 127), out)
         self.assertIn("would run:", out, out)
+        self.assertIn("claude -p", out)
         self.assertIn("stream-json", out)
         self.assertIn("--verbose", out)
         self.assertIn("acceptEdits", out)
         self.assertIn("Write", out)
         self.assertIn("--no-session-persistence", out)
-        self.assertIn("--setting-sources=", out)
+        self.assertNotIn("--setting-sources=", out)
         self.assertIn("--permission-prompt-tool", out)
         self.assertIn("mcp__rig-ask__permission_prompt", out)
         self.assertIn("--mcp-config", out)
         self.assertNotIn("--bare", out)
         self.assertNotIn("--dangerously-skip-permissions", out)
         self.assertNotRegex(out, r"--output-format json\b")
+        would = out.split("would run:", 1)[1]
+        prompt_at = would.find("Fix the container helper")
+        self.assertGreater(prompt_at, -1, out)
+        self.assertLess(would.find("--model"), prompt_at, out)
+        self.assertLess(would.find("--mcp-config"), prompt_at, out)
         mcp = self.repo / ".rig" / "jobs" / "claude-stream" / "mcp.json"
         self.assertTrue(mcp.is_file(), out)
         cfg = json.loads(mcp.read_text())
-        self.assertIn("rig-ask", cfg.get("mcpServers") or cfg)
+        servers = cfg.get("mcpServers") or cfg
+        self.assertIn("rig-ask", servers)
+        ask = servers["rig-ask"]
+        self.assertIn("python3", ask["command"])
+        self.assertTrue(os.path.isabs(ask["command"]), ask["command"])
+        self.assertTrue(os.path.isabs(ask["args"][0]), ask["args"])
+        self.assertTrue(str(ask["args"][0]).endswith("claude-ask.py"), ask["args"])
 
     def test_claude_haiku_dry_run_omits_effort_flag(self):
         env = {
