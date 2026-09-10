@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import os
 import sys
 import unittest
 from pathlib import Path
@@ -34,6 +35,16 @@ class Classify(unittest.TestCase):
 
 
 class Pick(unittest.TestCase):
+    def setUp(self):
+        self._skip = os.environ.get("RIG_SKIP_MODEL_CATALOG")
+        os.environ["RIG_SKIP_MODEL_CATALOG"] = "1"
+
+    def tearDown(self):
+        if self._skip is None:
+            os.environ.pop("RIG_SKIP_MODEL_CATALOG", None)
+        else:
+            os.environ["RIG_SKIP_MODEL_CATALOG"] = self._skip
+
     def test_implement_prefers_grok(self):
         c = route.pick("codex", ["grok", "claude"], "implement", "add a header")
         self.assertEqual(c["worker"], "grok")
@@ -110,7 +121,13 @@ class Pick(unittest.TestCase):
         self.assertIsNone(route.assert_child_model("claude-haiku-4-5-20251001"))
         self.assertIsNone(route.assert_child_model("composer-2.5"))
         self.assertIsNone(route.assert_child_model("cursor-grok-4.6-high"))
+        self.assertIsNone(route.assert_child_model("openai/gpt-5.4-mini"))
+        self.assertIsNone(route.assert_child_model("openai/gpt-5.6-luna"))
+        self.assertIsNone(route.assert_child_model("openai/gpt-5.6-terra"))
+        self.assertIsNone(route.assert_child_model("gemini-3.8-flash-high"))
+        self.assertIsNone(route.assert_child_model("gemini-3.1-pro-high"))
         self.assertIsNotNone(route.assert_child_model("claude-fable-5"))
+        self.assertIsNotNone(route.assert_child_model("openai/gpt-5.6-sol"))
 
     def test_same_cli_beats_cursor_and_codex(self):
         c = route.pick("grok", ["cursor", "codex"], "implement", "add a header")
@@ -152,24 +169,51 @@ class Pick(unittest.TestCase):
         c = route.pick("", ["pi", "omp"], "implement", "add a header")
         self.assertEqual(c["worker"], "omp")
         self.assertEqual(c["spawn"], "run-worker")
-        self.assertEqual(c["model"], "")
+        self.assertEqual(c["model"], "grok-4.6")
+        self.assertEqual(c["effort"], "high")
 
     def test_opencode_last_resort_when_parent_cannot_native(self):
         c = route.pick("", ["opencode"], "implement", "add a header")
         self.assertEqual(c["worker"], "opencode")
         self.assertEqual(c["spawn"], "run-worker")
-        self.assertEqual(c["model"], "")
+        self.assertEqual(c["model"], "openai/gpt-5.6-luna")
+        self.assertEqual(c["effort"], "high")
 
     def test_grok_still_beats_opencode(self):
         c = route.pick("codex", ["grok", "opencode"], "implement", "add a header")
         self.assertEqual(c["worker"], "grok")
 
-    def test_opencode_omp_pi_agy_default_model_empty(self):
-        self.assertEqual(route.model_for("opencode", "implement"), ("", ""))
-        self.assertEqual(route.model_for("omp", "hard"), ("", ""))
-        self.assertEqual(route.model_for("pi", "review"), ("", ""))
-        self.assertEqual(route.model_for("agy", "implement"), ("", ""))
-        self.assertEqual(route.model_for("agy", "hard"), ("", ""))
+    def test_opencode_omp_pi_agy_model_pins(self):
+        self.assertEqual(route.model_for("opencode", "explore"), ("openai/gpt-5.4-mini", "minimal"))
+        self.assertEqual(route.model_for("opencode", "mini"), ("openai/gpt-5.4-mini", "minimal"))
+        self.assertEqual(route.model_for("opencode", "bulk"), ("openai/gpt-5.4-mini", "minimal"))
+        self.assertEqual(route.model_for("opencode", "implement"), ("openai/gpt-5.6-luna", "high"))
+        self.assertEqual(route.model_for("opencode", "hard"), ("openai/gpt-5.6-terra", "max"))
+        self.assertEqual(route.model_for("opencode", "review"), ("openai/gpt-5.6-terra", "max"))
+        self.assertEqual(route.model_for("omp", "explore"), ("grok-4.5", "low"))
+        self.assertEqual(route.model_for("omp", "mini"), ("grok-4.5", "low"))
+        self.assertEqual(route.model_for("omp", "bulk"), ("grok-4.5", "low"))
+        self.assertEqual(route.model_for("omp", "implement"), ("grok-4.6", "high"))
+        self.assertEqual(route.model_for("omp", "hard"), ("grok-4.6", "high"))
+        self.assertEqual(route.model_for("omp", "review"), ("claude-opus-5", "high"))
+        self.assertEqual(route.model_for("pi", "explore"), ("grok-4.5", "low"))
+        self.assertEqual(route.model_for("pi", "mini"), ("grok-4.5", "low"))
+        self.assertEqual(route.model_for("pi", "bulk"), ("grok-4.5", "low"))
+        self.assertEqual(route.model_for("pi", "implement"), ("grok-4.6", "high"))
+        self.assertEqual(route.model_for("pi", "hard"), ("grok-4.6", "high"))
+        self.assertEqual(route.model_for("pi", "review"), ("claude-opus-5", "high"))
+        self.assertEqual(route.model_for("agy", "explore"), ("gemini-3.8-flash-low", "low"))
+        self.assertEqual(route.model_for("agy", "mini"), ("gemini-3.8-flash-low", "low"))
+        self.assertEqual(route.model_for("agy", "bulk"), ("gemini-3.8-flash-low", "low"))
+        self.assertEqual(route.model_for("agy", "implement"), ("gemini-3.8-flash-high", "high"))
+        self.assertEqual(route.model_for("agy", "hard"), ("gemini-3.1-pro-high", "high"))
+        self.assertEqual(route.model_for("agy", "review"), ("gemini-3.1-pro-high", "high"))
+        for (_worker, _kind), (model, _effort) in route.MODELS.items():
+            self.assertIsNone(route.assert_child_model(model), model)
+            raw = model.lower()
+            self.assertNotIn("sol", raw)
+            self.assertNotIn("astra", raw)
+            self.assertNotIn("fable", raw)
 
     def test_opencode_live_plus_grok_is_grok_child(self):
         c = route.pick("opencode", ["grok"], "implement", "add a header")
@@ -181,18 +225,21 @@ class Pick(unittest.TestCase):
         c = route.pick("opencode", [], "implement", "add a header")
         self.assertEqual(c["spawn"], "native")
         self.assertEqual(c["worker"], "opencode")
-        self.assertEqual(c["model"], "")
+        self.assertEqual(c["model"], "openai/gpt-5.6-luna")
+        self.assertEqual(c["effort"], "high")
         self.assertEqual(c["native_agent"], "worker")
         c = route.pick("opencode", ["cursor", "codex"], "implement", "add a header")
         self.assertEqual(c["spawn"], "native")
         self.assertEqual(c["worker"], "opencode")
+        self.assertEqual(c["model"], "openai/gpt-5.6-luna")
 
     def test_opencode_live_explore_is_native(self):
         c = route.pick("opencode", ["cursor", "codex"], "explore", "trace remaining gates")
         self.assertEqual(c["spawn"], "native")
         self.assertEqual(c["worker"], "opencode")
         self.assertEqual(c["native_agent"], "explore")
-        self.assertEqual(c["model"], "")
+        self.assertEqual(c["model"], "openai/gpt-5.4-mini")
+        self.assertEqual(c["effort"], "minimal")
 
     def test_opencode_live_bulk_native_agent(self):
         c = route.pick("opencode", ["grok"], "bulk", "rename the helper")
@@ -204,7 +251,8 @@ class Pick(unittest.TestCase):
         c = route.pick("omp", ["pi"], "implement", "add a header")
         self.assertEqual(c["spawn"], "native")
         self.assertEqual(c["worker"], "omp")
-        self.assertEqual(c["model"], "")
+        self.assertEqual(c["model"], "grok-4.6")
+        self.assertEqual(c["effort"], "high")
         c = route.pick("omp", ["grok", "pi"], "implement", "add a header")
         self.assertEqual(c["worker"], "grok")
         self.assertEqual(c["spawn"], "run-worker")
@@ -213,6 +261,8 @@ class Pick(unittest.TestCase):
         c = route.pick("pi", ["omp"], "implement", "add a header")
         self.assertEqual(c["spawn"], "native")
         self.assertEqual(c["worker"], "pi")
+        self.assertEqual(c["model"], "grok-4.6")
+        self.assertEqual(c["effort"], "high")
 
     def test_omp_beats_pi_as_workers_of_other_parent(self):
         c = route.pick("", ["pi", "omp"], "implement", "add a header")
@@ -224,14 +274,16 @@ class Pick(unittest.TestCase):
         self.assertEqual(c["spawn"], "native")
         self.assertEqual(c["worker"], "agy")
         self.assertEqual(c["native_agent"], "explore")
-        self.assertEqual(c["model"], "")
+        self.assertEqual(c["model"], "gemini-3.8-flash-low")
+        self.assertEqual(c["effort"], "low")
 
     def test_agy_live_implement_is_native_when_grok_claude_off(self):
         c = route.pick("agy", ["cursor", "codex"], "implement", "add a header")
         self.assertEqual(c["spawn"], "native")
         self.assertEqual(c["worker"], "agy")
         self.assertEqual(c["native_agent"], "worker")
-        self.assertEqual(c["model"], "")
+        self.assertEqual(c["model"], "gemini-3.8-flash-high")
+        self.assertEqual(c["effort"], "high")
 
     def test_agy_live_plus_grok_is_grok_child(self):
         c = route.pick("agy", ["grok"], "implement", "add a header")
@@ -242,7 +294,8 @@ class Pick(unittest.TestCase):
         c = route.pick("", ["agy"], "implement", "add a header")
         self.assertEqual(c["worker"], "agy")
         self.assertEqual(c["spawn"], "run-worker")
-        self.assertEqual(c["model"], "")
+        self.assertEqual(c["model"], "gemini-3.8-flash-high")
+        self.assertEqual(c["effort"], "high")
 
     def test_omp_still_beats_pi_with_agy_present(self):
         c = route.pick("", ["agy", "pi", "omp"], "implement", "add a header")

@@ -16,6 +16,7 @@ def run_worker(repo: Path, *args: str, env: dict | None = None) -> subprocess.Co
     merged["PATH"] = f"{ROOT / 'bin'}:{merged.get('PATH', '')}"
     merged["RIG_PARENT"] = "grok"
     merged["RIG_LIVE"] = "0"
+    merged["RIG_SKIP_MODEL_CATALOG"] = "1"
     if env:
         merged.update(env)
     return subprocess.run(
@@ -163,6 +164,8 @@ class OpenCodeOmpPiWorkerArgv(unittest.TestCase):
             "PATH": f"{self.bins}:/usr/bin:/bin",
             "RIG_PARENT": "grok",
             "RIG_ROLE": "implement",
+            "RIG_MODEL": "",
+            "RIG_EFFORT": "",
         }
         if extra:
             env.update(extra)
@@ -179,8 +182,11 @@ class OpenCodeOmpPiWorkerArgv(unittest.TestCase):
         self.assertIn("--format json", out)
         self.assertIn("--dir", out)
         self.assertIn("--auto", out)
+        self.assertIn("-m openai/gpt-5.6-luna", out)
+        self.assertIn("--variant high", out)
         self.assertNotIn("--interactive", out)
         self.assertNotIn("gpt-5.6-sol", out)
+        self.assertNotIn("openai/gpt-5.6-sol", out)
         self.assertNotIn("claude-fable", out)
 
     def test_omp_dry_run_print_json_write(self):
@@ -194,9 +200,12 @@ class OpenCodeOmpPiWorkerArgv(unittest.TestCase):
         self.assertIn("--cwd", out)
         self.assertIn("--approval-mode write", out)
         self.assertIn("--no-session", out)
+        self.assertIn("--model grok-4.6", out)
+        self.assertIn("--thinking high", out)
         self.assertNotIn("--auto-approve", out)
         self.assertNotIn("--plan-yolo", out)
         self.assertNotIn("gpt-5.6-sol", out)
+        self.assertNotIn("claude-fable", out)
 
     def test_pi_dry_run_print_json_approve(self):
         proc = run_worker(self.repo, "pi", "print-stream", str(self.brief), env=self._env())
@@ -208,8 +217,11 @@ class OpenCodeOmpPiWorkerArgv(unittest.TestCase):
         self.assertIn("--mode json", out)
         self.assertIn("--approve", out)
         self.assertIn("--no-session", out)
+        self.assertIn("--model grok-4.6", out)
+        self.assertIn("--thinking high", out)
         self.assertNotIn("--auto-approve", out)
         self.assertNotIn("gpt-5.6-sol", out)
+        self.assertNotIn("claude-fable", out)
 
     def test_agy_dry_run_print_json_accept_edits(self):
         settings = self.repo / "agy-settings.json"
@@ -230,10 +242,11 @@ class OpenCodeOmpPiWorkerArgv(unittest.TestCase):
         self.assertIn("--mode accept-edits", out)
         self.assertIn("--print-timeout 1200s", out)
         self.assertIn("--disable-slash-commands", out)
+        self.assertIn("--model gemini-3.8-flash-high", out)
+        self.assertIn("--effort high", out)
         self.assertNotIn("--dangerously-skip-permissions", out)
-        self.assertNotIn("--model", out)
-        self.assertNotIn("--effort", out)
         self.assertNotIn("gpt-5.6-sol", out)
+        self.assertNotIn("claude-fable", out)
         self.assertEqual(settings.read_text(), "{}\n")
         bak = self.repo / ".rig" / "jobs" / "print-stream" / "agy-settings.bak"
         self.assertFalse(bak.exists(), out)

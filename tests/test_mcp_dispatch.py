@@ -90,10 +90,18 @@ class McpDispatch(unittest.TestCase):
         _fake_bin(self.bins, "grok")
         self._env = {
             k: os.environ.get(k)
-            for k in ("PATH", "RIG_PARENT", "CLAUDECODE", "CLAUDE_CODE", "RIG_THREAD")
+            for k in (
+                "PATH",
+                "RIG_PARENT",
+                "CLAUDECODE",
+                "CLAUDE_CODE",
+                "RIG_THREAD",
+                "RIG_SKIP_MODEL_CATALOG",
+            )
         }
         os.environ["PATH"] = _stub_path(self.bins)
         os.environ["RIG_PARENT"] = "grok"
+        os.environ["RIG_SKIP_MODEL_CATALOG"] = "1"
         os.environ.pop("CLAUDECODE", None)
         os.environ.pop("CLAUDE_CODE", None)
         os.environ.pop("RIG_THREAD", None)

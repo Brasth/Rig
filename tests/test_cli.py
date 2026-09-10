@@ -15,6 +15,7 @@ def run_rig(repo: Path, *args: str, env: dict | None = None) -> subprocess.Compl
     merged["RIG_HOME"] = str(ROOT)
     merged["PATH"] = f"{ROOT / 'bin'}:{merged.get('PATH', '')}"
     merged["RIG_SKIP_UPDATE_CHECK"] = "1"
+    merged["RIG_SKIP_MODEL_CATALOG"] = "1"
     if env:
         merged.update(env)
     return subprocess.run(
@@ -264,6 +265,11 @@ class InitPresence(unittest.TestCase):
         self.assertIn("Claude Code and Cursor CLI are never the parent", text)
         self.assertIn("OpenCode, OMP, Pi, and agy can be the parent", text)
         self.assertIn("When live parent is agy, do not use nested agy /agent dispatch", text)
+        self.assertIn("openai/gpt-5.6-luna", text)
+        self.assertIn("gemini-3.8-flash-high", text)
+        self.assertIn("~/.rig/cache/model-catalogs.json", text)
+        self.assertIn("pins are preferences", text)
+        self.assertNotIn("omit --model unless RIG_MODEL is set", text)
         self.assertNotIn("'", text.split("<!-- rig:start -->", 1)[1].split("<!-- rig:end -->", 1)[0])
 
     def test_use_opencode_omp_pi_writes_parent(self):

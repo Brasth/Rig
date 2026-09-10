@@ -5,6 +5,13 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+if str(HERE) not in sys.path:
+    sys.path.insert(0, str(HERE))
+
+import catalog as rig_catalog  # noqa: E402
 
 PARENT_ONLY = frozenset(
     {
@@ -49,6 +56,31 @@ MODELS = {
     ("cursor", "implement"): ("composer-2.5", ""),
     ("cursor", "hard"): ("cursor-grok-4.6-high", ""),
     ("cursor", "review"): ("claude-opus-5-thinking-high", ""),
+    # OpenCode effort is --variant (minimal/high/max). OMP/Pi --thinking. agy --effort.
+    ("opencode", "explore"): ("openai/gpt-5.4-mini", "minimal"),
+    ("opencode", "mini"): ("openai/gpt-5.4-mini", "minimal"),
+    ("opencode", "bulk"): ("openai/gpt-5.4-mini", "minimal"),
+    ("opencode", "implement"): ("openai/gpt-5.6-luna", "high"),
+    ("opencode", "hard"): ("openai/gpt-5.6-terra", "max"),
+    ("opencode", "review"): ("openai/gpt-5.6-terra", "max"),
+    ("omp", "explore"): ("grok-4.5", "low"),
+    ("omp", "mini"): ("grok-4.5", "low"),
+    ("omp", "bulk"): ("grok-4.5", "low"),
+    ("omp", "implement"): ("grok-4.6", "high"),
+    ("omp", "hard"): ("grok-4.6", "high"),
+    ("omp", "review"): ("claude-opus-5", "high"),
+    ("pi", "explore"): ("grok-4.5", "low"),
+    ("pi", "mini"): ("grok-4.5", "low"),
+    ("pi", "bulk"): ("grok-4.5", "low"),
+    ("pi", "implement"): ("grok-4.6", "high"),
+    ("pi", "hard"): ("grok-4.6", "high"),
+    ("pi", "review"): ("claude-opus-5", "high"),
+    ("agy", "explore"): ("gemini-3.8-flash-low", "low"),
+    ("agy", "mini"): ("gemini-3.8-flash-low", "low"),
+    ("agy", "bulk"): ("gemini-3.8-flash-low", "low"),
+    ("agy", "implement"): ("gemini-3.8-flash-high", "high"),
+    ("agy", "hard"): ("gemini-3.1-pro-high", "high"),
+    ("agy", "review"): ("gemini-3.1-pro-high", "high"),
 }
 
 NATIVE = {
@@ -131,6 +163,16 @@ def model_for(worker: str, kind: str) -> tuple[str, str]:
     return MODELS.get((worker, kind), MODELS.get((worker, "implement"), ("", "")))
 
 
+def resolved_model_for(
+    worker: str,
+    kind: str,
+    catalogs: dict[str, list[str]] | None = None,
+) -> tuple[str, str]:
+    preferred, effort = model_for(worker, kind)
+    model = rig_catalog.resolve_model(worker, kind, preferred, catalogs=catalogs)
+    return model, effort
+
+
 def choose_worker(kind: str, effective: list[str], live: str) -> tuple[str, str]:
     """Return (worker, spawn) where spawn is run-worker, native, or stay."""
     if kind == "stay":
@@ -156,7 +198,13 @@ def choose_worker(kind: str, effective: list[str], live: str) -> tuple[str, str]
     return "", "none"
 
 
-def pick(live: str, effective: list[str], role: str, case: str) -> dict:
+def pick(
+    live: str,
+    effective: list[str],
+    role: str,
+    case: str,
+    catalogs: dict[str, list[str]] | None = None,
+) -> dict:
     kind = classify(role, case)
     worker, spawn = choose_worker(kind, effective, live)
     if spawn == "stay":
@@ -182,7 +230,7 @@ def pick(live: str, effective: list[str], role: str, case: str) -> dict:
             "native_agent": "",
             "reason": "no effective worker; use cheaper same-CLI workers. That is success.",
         }
-    model, effort = model_for(worker, kind)
+    model, effort = resolved_model_for(worker, kind, catalogs)
     native_agent = NATIVE.get((worker, kind), "") if spawn == "native" else ""
     if spawn == "native":
         reason = f"{kind}: cheap same-CLI {worker} {native_agent} ({model} {effort or 'default'})"
@@ -249,7 +297,7 @@ def main() -> int:
     if args.cmd == "env":
         kind = classify(args.role, args.case)
         worker = args.worker or "codex"
-        model, effort = model_for(worker, kind)
+        model, effort = resolved_model_for(worker, kind)
         print(f"RIG_ROLE={kind}")
         print(f"RIG_MODEL={model}")
         print(f"RIG_EFFORT={effort}")

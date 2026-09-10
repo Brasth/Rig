@@ -398,7 +398,9 @@ Live parent is this CLI, not the `parent` key (`rig use grok|codex|opencode|omp|
 Claude Code and Cursor CLI are never the parent. OpenCode, OMP, Pi, and agy can be the parent when you open that CLI. Worker on only if flag + binary + not live parent. Cursor binary is `cursor-agent`. Missing binary: that worker is off. Cheap same-CLI is success.
 Implement: Grok child if effective. If this CLI is Codex, Grok, OpenCode, OMP, Pi, or agy: Claude if effective, else cheap same-CLI. Do not spawn Cursor/Codex/OpenCode/OMP/Pi/agy just because their CLI is on PATH. If both OMP and Pi are on, pick OMP.
 When live parent is agy, do not use nested agy /agent dispatch for coding; use `rig pick`.
-Pin Claude IDs: `claude-haiku-4-5-20251001` cheap, `claude-sonnet-5` implement, `claude-opus-5` hard/review. Cursor: `composer-2.5-fast` cheap, `composer-2.5` implement, `cursor-grok-4.6-high` hard, `claude-opus-5-thinking-high` review. OpenCode/OMP/Pi/agy omit --model unless RIG_MODEL is set. Never Sol/Astra/Fable as a child. Opus is allowed.
+Pin Claude IDs: `claude-haiku-4-5-20251001` cheap, `claude-sonnet-5` implement, `claude-opus-5` hard/review. Cursor: `composer-2.5-fast` cheap, `composer-2.5` implement, `cursor-grok-4.6-high` hard, `claude-opus-5-thinking-high` review.
+OpenCode: `openai/gpt-5.4-mini` minimal cheap, `openai/gpt-5.6-luna` high implement, `openai/gpt-5.6-terra` max hard/review. OMP/Pi: `grok-4.5` low cheap, `grok-4.6` high implement/hard, `claude-opus-5` high review. agy: `gemini-3.8-flash-low` low cheap, `gemini-3.8-flash-high` high implement, `gemini-3.1-pro-high` high hard/review. Never Sol/Astra/Fable as a child. Opus is allowed.
+OpenCode/OMP/Pi/agy pins are preferences; Rig lists models from the CLI and picks one that exists. Cache ~/.rig/cache/model-catalogs.json.
 Grok Bot.app is not a worker. Do not spawn it.
 Watch: `rig jobs` / `rig job wait <id>` / `rig job show` / `rig job log <id>` / `rig tui` / `/rig`.
 After a run: `rig memory add "one standing fact"` if there is one. No transcripts.
@@ -599,6 +601,15 @@ cmd_doctor() {
     echo "  run-worker: $runw (missing)"
     echo "Rig itself is broken. Re-run: rig setup" >&2
     exit 1
+  fi
+  local cat_py cat_out
+  cat_py="$(py_script catalog.py)"
+  if [[ -f "$cat_py" ]]; then
+    cat_out="$(python3 "$cat_py" doctor 2>/dev/null || true)"
+    if [[ -n "$cat_out" ]]; then
+      echo
+      printf '%s\n' "$cat_out"
+    fi
   fi
   echo
   echo "MCP"
