@@ -386,8 +386,10 @@ Spawn for: write code, fix bugs, review, SSH/debug, gather repo or server facts.
 4. native → cheap same-CLI agent, then `rig job start` / `rig job finish`
 5. run-worker → write `.rig/jobs/<id>/brief.md` then start the wrapper in the background (do not block this turn on it):
    `RIG_LIVE=1 RIG_ROLE=<kind> RIG_MODEL=<model> RIG_EFFORT=<effort> "$HOME/.rig/scripts/run-worker.sh" <worker> <id> .rig/jobs/<id>/brief.md`
-   Loop `rig job wait <id>` until result.json. Do not parse a TUI.
+   Prefer MCP when present: `rig_jobs` / `rig_job_show` / `rig_job_log` / `rig_job_wait` / `rig_job_allow` / `rig_job_deny` / `rig_memory`. Wait = one blocking `rig_job_wait` with no timeout. Bash fallback if MCP missing: one `rig job wait <id>` with no `--timeout`.
+   Do not parse a TUI.
    wait exit 2 / status ask: YOU answer `rig job allow <id>` or `rig job deny <id>`. Safe worker work (read/edit/test/ssh gather/git) → allow. Destructive/prod/secrets → deny or ask the user.
+   Then wait once more (no timeout). exit 0 ok, exit 1 fail.
    Never kill, close, or finish an asking job. Never spawn another worker because the child asked. The child is waiting on you.
 
 Live parent is this CLI, not the `parent` key (`rig use grok|codex|opencode|omp|pi|agy` is only the preferred default).
@@ -655,7 +657,7 @@ cmd_doctor() {
   echo "Watch"
   echo "  board:  rig tui"
   echo "  list:   rig jobs"
-  echo "  wait:   rig job wait [id]   (exit 2 = ASK — you allow/deny)"
+  echo "  wait:   rig job wait [id]   (blocks until ASK or result; exit 2 = ASK — you allow/deny)"
   echo "  log:    rig job log [id] -f"
   echo "  memory: rig memory   |   rig memory add \"fact\""
   echo "  slash:  /rig in Grok, Codex, OpenCode, OMP, Pi, or agy"

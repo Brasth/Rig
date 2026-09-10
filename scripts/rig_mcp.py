@@ -63,8 +63,9 @@ TOOLS = [
     {
         "name": "rig_job_wait",
         "description": (
-            "Poll a Rig job until it asks for permission or finishes. "
-            "If the text starts with ASK, you MUST call rig_job_allow or rig_job_deny next "
+            "Block until a Rig job asks for permission or finishes. "
+            "Do not pass timeout unless you must cap the wait. Do not poll. "
+            "If the text starts with ASK, call rig_job_allow or rig_job_deny next "
             "so the child can continue. Do not kill the job. Do not spawn another worker."
         ),
         "inputSchema": {
@@ -74,7 +75,10 @@ TOOLS = [
                 "repo": {"type": "string"},
                 "timeout": {
                     "type": "number",
-                    "description": "Seconds to poll. Default 30. Returns immediately on ask or result.",
+                    "description": (
+                        "Optional cap in seconds. Omit to block until ASK or result. "
+                        "0 snapshots once. 124 only if still running when the cap hits."
+                    ),
                 },
             },
         },
@@ -180,10 +184,13 @@ def call_tool(name: str, args: dict) -> dict:
             return _ok(rig_jobs.format_log(job, n))
         if name == "rig_job_wait":
             timeout = args.get("timeout")
-            try:
-                timeout_s = float(timeout) if timeout is not None else 30.0
-            except (TypeError, ValueError):
-                timeout_s = 30.0
+            if timeout is None:
+                timeout_s = None
+            else:
+                try:
+                    timeout_s = float(timeout)
+                except (TypeError, ValueError):
+                    timeout_s = None
             code, text = rig_jobs.wait_job(repo, args.get("id"), timeout_s)
             if code == 1:
                 return _err(text)

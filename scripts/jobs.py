@@ -578,12 +578,16 @@ def format_wait(job: dict) -> str:
     return format_show(job)
 
 
-def wait_job(repo: Path, job_id: str | None, timeout: float = 30.0) -> tuple[int, str]:
-    try:
-        timeout_s = float(timeout)
-    except (TypeError, ValueError):
-        timeout_s = 30.0
-    deadline = time.time() + max(0.0, timeout_s)
+def wait_job(repo: Path, job_id: str | None, timeout: float | None = None) -> tuple[int, str]:
+    timeout_s: float | None
+    if timeout is None:
+        timeout_s = None
+    else:
+        try:
+            timeout_s = float(timeout)
+        except (TypeError, ValueError):
+            timeout_s = None
+    deadline = None if timeout_s is None else time.time() + max(0.0, timeout_s)
     while True:
         job = resolve_job(repo, job_id)
         eff = job.get("effective")
@@ -591,7 +595,7 @@ def wait_job(repo: Path, job_id: str | None, timeout: float = 30.0) -> tuple[int
             return 2, format_wait(job)
         if eff in {"ok", "fail", "timeout", "stale"}:
             return (0 if eff == "ok" else 1), format_wait(job)
-        if time.time() >= deadline:
+        if deadline is not None and time.time() >= deadline:
             return 124, format_wait(job)
         time.sleep(0.4)
 
@@ -767,7 +771,7 @@ def main() -> int:
     parser.add_argument("--json", action="store_true")
     parser.add_argument("-f", "--follow", action="store_true")
     parser.add_argument("-n", "--lines", type=int, default=40)
-    parser.add_argument("--timeout", type=float, default=30.0)
+    parser.add_argument("--timeout", type=float, default=None)
     parser.add_argument(
         "--thread",
         nargs="?",

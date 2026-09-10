@@ -369,21 +369,25 @@ Never Fable / Sol / Astra as a child. Opus is allowed.
 
 ## Watch, jobs, memory
 
-A Grok child is **headless**. Codex will not show its TUI. While it runs, both you and the parent can see **which agent, which task, status, and the log**:
+A Grok child is **headless**. Codex will not show its TUI. While it runs, both you and the parent can see **which agent, which task, status, and the log**.
+
+Prefer MCP for those tools when present: `rig_jobs`, `rig_job_show`, `rig_job_log`, `rig_job_wait`, `rig_job_allow`, `rig_job_deny`, `rig_memory`, `rig_memory_add`. Bash is fallback if MCP is missing.
 
 ```bash
 rig tui                 # jobs board (agent / task / status / live log)
 rig jobs                # same data as a table (agents use this)
 rig jobs --json
 rig jobs --thread       # this parent thread
-rig job wait <id>       # poll until ask (exit 2) or result
+rig job wait <id>       # one blocking wait until ASK (exit 2) or result; no --timeout
 rig job show            # running job, or latest
 rig job log <id> -f     # decoded activity (tools + text)
 ```
 
+`--timeout SECS` is an optional cap, not the default. Omit timeout to block. `0` snapshots once. Exit 124 only if still running when a cap hits.
+
 In Grok, Codex, OpenCode, OMP, Pi, or agy type `/rig`. Grok also gets a bottom status line after `rig setup` (restart Grok once).
 
-MCP tools (after `rig setup` + fully quit the parent CLI once): `rig_jobs`, `rig_job_show`, `rig_job_log`, `rig_job_wait`, `rig_job_allow`, `rig_job_deny`, `rig_memory`, `rig_memory_add`.
+MCP tools (after `rig setup` + fully quit the parent CLI once): `rig_jobs`, `rig_job_show`, `rig_job_log`, `rig_job_wait`, `rig_job_allow`, `rig_job_deny`, `rig_memory`, `rig_memory_add`. Wait is one blocking `rig_job_wait` with no timeout.
 
 Open the Grok child TUI yourself: `grok -r <session-id>` or `grok dashboard`. The job folder has `WATCH.md`.
 
@@ -478,7 +482,7 @@ Need the binary **and** `rig workers opencode=on` (or `omp=on` / `pi=on` / `agy=
 
 ## Parent agents
 
-Parent agents: load `.agents/skills/delegate-harness/SKILL.md`. Live wrapper is `RIG_LIVE=1` + `run-worker.sh` in the background, then `rig job wait`. Default wrapper is dry-run. Claude `ask` → `rig job allow` / `rig job deny`. Never kill an asking job.
+Parent agents: load `.agents/skills/delegate-harness/SKILL.md`. Live wrapper is `RIG_LIVE=1` + `run-worker.sh` in the background, then one blocking `rig job wait` (MCP `rig_job_wait` if present; no `--timeout`). Default wrapper is dry-run. Claude `ask` → `rig job allow` / `rig job deny`. Never kill an asking job.
 
 Cheap same-CLI spawns (Codex explorer/worker/bulk/reviewer, Grok explore, OpenCode/OMP/Pi/agy explore/worker/bulk) often do not use `run-worker.sh`. Record them so they still show under `.rig/jobs/`:
 

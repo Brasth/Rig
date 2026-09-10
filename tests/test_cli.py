@@ -254,6 +254,8 @@ class InitPresence(unittest.TestCase):
         self.assertIn("Never kill", text)
         self.assertIn("Never spawn another worker", text)
         self.assertIn("background", text)
+        self.assertNotIn("Loop `rig job wait`", text)
+        self.assertIn("rig_job_wait", text)
         self.assertIn("Do not spawn Cursor/Codex/OpenCode/OMP/Pi/agy just because their CLI is on PATH", text)
         self.assertIn("rig use grok|codex|opencode|omp|pi|agy", text)
         self.assertIn("Claude Code and Cursor CLI are never the parent", text)

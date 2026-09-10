@@ -13,12 +13,20 @@ argument-hint: "[job-id]"
 Show the user which Rig worker is running, the task, status, and a readable log.
 Do not guess. Run the commands. The parent checks this board and MUST spawn workers for code, review, SSH, and gather — it does not do that work itself.
 
+## MCP first
+
+If MCP tools are present, use them. Bash is fallback if MCP is missing.
+
+- `rig_jobs` / `rig_job_show` / `rig_job_log` / `rig_job_wait` / `rig_job_allow` / `rig_job_deny` / `rig_memory`
+
+`rig_job_wait` / `rig job wait`: call **once**, no timeout. Blocks until ASK or result. After allow, wait **once** more. Do not poll. `--timeout` is an optional cap, not the default.
+
 ## Commands
 
 ```bash
 rig memory            # standing facts; run this on a new thread
 rig jobs              # every job in this repo (survives a new parent thread)
-rig job wait [id]     # poll until ask (exit 2) or result
+rig job wait [id]     # one blocking wait; no --timeout; exit 2 = ASK
 rig job show          # running job, or latest
 rig job show <id>
 rig job log <id>      # decoded activity
@@ -41,13 +49,9 @@ A new Grok/Codex/OpenCode/OMP/Pi/agy thread does not start a new job board. Jobs
 If status is `ask`, the Claude child is waiting on a permission prompt. **You answer it** — that is the interaction. Do not kill the job. Do not spawn another worker.
 
 ```bash
-rig job wait <id>                  # exit 2 = ASK
+rig job wait <id>                  # one blocking wait; exit 2 = ASK
 rig job allow <id>
 rig job deny <id> --reason "why"
 ```
 
-Safe worker work (read/edit/test/ssh gather/git) → allow. Destructive/prod/secrets → deny or ask the user. Do not leave `ask` hanging. After allow, loop `rig job wait` so the same child can continue.
-
-Headless children are not a native Codex/Grok/OpenCode/OMP/Pi/agy agent row. The board, `/rig`, statusline, and these commands are the UI. `/rig` works in OpenCode, OMP, Pi, and agy after `rig setup` (Pi also needs `pi install npm:pi-mcp-adapter`).
-
-MCP tools if present: `rig_jobs`, `rig_job_show`, `rig_job_log`, `rig_job_wait`, `rig_job_allow`, `rig_job_deny`. Same data.
+Safe worker work (read/edit/test/ssh gather/git) → allow. Destructive/prod/secrets → deny or ask the user. Do not leave `ask` hanging. After allow, wait **once** more (no timeout). Do not poll.
