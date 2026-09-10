@@ -58,16 +58,34 @@ find_app() {
 }
 
 repo_root() {
-  local d
-  d="$(pwd)"
+  local d kit marker
+  d="$(pwd -P 2>/dev/null || pwd)"
+  kit="$(rig_home)"
+  if [[ -d "$kit" ]]; then
+    kit="$(cd "$kit" && pwd -P)"
+  fi
   while [[ "$d" != "/" ]]; do
-    if [[ -d "$d/.rig" || -d "$d/.git" ]]; then
+    if [[ -n "$kit" && "$d" == "$kit" ]]; then
+      d="$(dirname "$d")"
+      continue
+    fi
+    if [[ -f "$d/.rig/harness.toml" ]]; then
+      marker="$d/.rig"
+      if [[ -d "$marker" ]]; then
+        marker="$(cd "$marker" && pwd -P)"
+      fi
+      if [[ -z "$kit" || "$marker" != "$kit" ]]; then
+        printf '%s\n' "$d"
+        return 0
+      fi
+    fi
+    if [[ -d "$d/.git" ]]; then
       printf '%s\n' "$d"
       return 0
     fi
     d="$(dirname "$d")"
   done
-  pwd
+  pwd -P 2>/dev/null || pwd
 }
 
 harness_path() {
@@ -80,8 +98,8 @@ parse_harness() {
   local file="${1:-$(harness_path)}"
   HARNESS_PARENT="codex"
   HARNESS_WORKER_CODEX="false"
-  HARNESS_WORKER_GROK="true"
-  HARNESS_WORKER_CLAUDE="true"
+  HARNESS_WORKER_GROK="false"
+  HARNESS_WORKER_CLAUDE="false"
   HARNESS_WORKER_CURSOR="false"
   HARNESS_WORKER_OPENCODE="false"
   HARNESS_WORKER_OMP="false"
@@ -209,7 +227,7 @@ live_parent() {
         printf '%s\n' "omp"
         return 0
         ;;
-      pi)
+      pi|pi-*)
         printf '%s\n' "pi"
         return 0
         ;;

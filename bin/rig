@@ -382,6 +382,7 @@ Spawn for: write code, fix bugs, review, SSH/debug, gather repo or server facts.
 
 1. MCP `rig_memory` then `rig_jobs` then `rig_status` then `rig_pick` when MCP is present. Bash fallback if MCP missing: `rig memory` then `rig jobs` then `rig status` then `rig pick --case "<task>" --json`
 2. Follow pick JSON — do not ask the user which model
+Follow pick JSON; never spawn a worker whose harness flag is false; never spawn grok when workers.grok is false unless live parent is grok (native). Timeout/fail does not unlock a disabled worker.
 3. stay → you do it (plan / vision / computer-use / chrome-profile). Spawn only if this CLI cannot.
 4. native → cheap same-CLI agent, then MCP `rig_job_start` / `rig_job_finish` / `rig_job_record` when present, else `rig job start` / `rig job finish`
 5. run-worker → write `.rig/jobs/<id>/brief.md` then start the wrapper in the background (do not block this turn on it):
@@ -1157,6 +1158,18 @@ cmd_job() {
     [[ -n "$JOB_TIMEOUT" ]] && wait_args+=(--timeout "$JOB_TIMEOUT")
     python3 "$(py_script jobs.py)" "${wait_args[@]}"
     return $?
+  fi
+
+  if [[ "$sub" == "start" || "$sub" == "record" ]]; then
+    if [[ "$JOB_WORKER" != "parent" ]]; then
+      local live flag
+      live="$(live_parent)"
+      flag="$(worker_flag "$JOB_WORKER")"
+      if [[ "$JOB_WORKER" != "$live" && "$flag" != "true" ]]; then
+        echo "rig job: worker $JOB_WORKER is off in harness" >&2
+        exit 1
+      fi
+    fi
   fi
 
   if [[ "$sub" == "finish" && -z "$JOB_ID" ]]; then

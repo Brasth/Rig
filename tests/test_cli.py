@@ -57,7 +57,7 @@ class CliMemoryAndThread(unittest.TestCase):
             "grok",
             "--role",
             "implement",
-            env={"RIG_THREAD": "parent-thread-cli"},
+            env={"RIG_THREAD": "parent-thread-cli", "RIG_PARENT": "grok"},
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
         job_id = proc.stdout.strip().splitlines()[-1]
@@ -219,6 +219,7 @@ class InitPresence(unittest.TestCase):
 
     def test_job_start_accepts_cursor(self):
         run_rig(self.repo, "init", env={"PATH": _stub_path()})
+        run_rig(self.repo, "workers", "cursor=on", env={"PATH": _stub_path()})
         proc = run_rig(
             self.repo,
             "job",
@@ -233,6 +234,15 @@ class InitPresence(unittest.TestCase):
 
     def test_job_start_accepts_opencode_omp_pi_agy(self):
         run_rig(self.repo, "init", env={"PATH": _stub_path()})
+        run_rig(
+            self.repo,
+            "workers",
+            "opencode=on",
+            "omp=on",
+            "pi=on",
+            "agy=on",
+            env={"PATH": _stub_path()},
+        )
         for name in ("opencode", "omp", "pi", "agy"):
             proc = run_rig(
                 self.repo,
@@ -245,6 +255,28 @@ class InitPresence(unittest.TestCase):
                 env={"PATH": _stub_path()},
             )
             self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+
+    def test_job_start_refuses_disabled_grok_unless_live_parent(self):
+        run_rig(self.repo, "init", env={"PATH": _stub_path()})
+        refused = run_rig(
+            self.repo,
+            "job",
+            "start",
+            "--worker",
+            "grok",
+            env={"PATH": _stub_path(), "RIG_PARENT": "pi"},
+        )
+        self.assertNotEqual(refused.returncode, 0, refused.stdout + refused.stderr)
+        self.assertIn("off in harness", refused.stderr)
+        allowed = run_rig(
+            self.repo,
+            "job",
+            "start",
+            "--worker",
+            "grok",
+            env={"PATH": _stub_path(), "RIG_PARENT": "grok"},
+        )
+        self.assertEqual(allowed.returncode, 0, allowed.stderr + allowed.stdout)
 
     def test_init_agents_tells_parent_to_answer_ask(self):
         proc = run_rig(self.repo, "init", env={"PATH": _stub_path()})
@@ -269,6 +301,8 @@ class InitPresence(unittest.TestCase):
         self.assertIn("gemini-3.8-flash-high", text)
         self.assertIn("~/.rig/cache/model-catalogs.json", text)
         self.assertIn("pins are preferences", text)
+        self.assertIn("never spawn a worker whose harness flag is false", text)
+        self.assertIn("Timeout/fail does not unlock a disabled worker", text)
         self.assertNotIn("omit --model unless RIG_MODEL is set", text)
         self.assertNotIn("'", text.split("<!-- rig:start -->", 1)[1].split("<!-- rig:end -->", 1)[0])
 

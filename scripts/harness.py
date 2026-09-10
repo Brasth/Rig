@@ -10,16 +10,9 @@ from pathlib import Path
 WORKERS = ("grok", "claude", "codex", "cursor", "opencode", "omp", "pi", "agy")
 PARENTS = frozenset({"grok", "codex", "claude", "cursor", "opencode", "omp", "pi", "agy"})
 
-_DEFAULT_WORKERS = {
-    "codex": "false",
-    "grok": "true",
-    "claude": "true",
-    "cursor": "false",
-    "opencode": "false",
-    "omp": "false",
-    "pi": "false",
-    "agy": "false",
-}
+# Missing harness file and missing keys are all false so pick cannot
+# invent a Grok/Claude child. `rig init` still writes PATH-based flags.
+_DEFAULT_WORKERS = {name: "false" for name in WORKERS}
 
 
 def harness_path(repo: Path) -> Path:
@@ -120,7 +113,7 @@ def _comm_parent(comm: str, pid: int) -> str:
         return "opencode"
     if comm == "omp" or comm.startswith("omp-"):
         return "omp"
-    if comm == "pi":
+    if comm == "pi" or comm.startswith("pi-"):
         return "pi"
     if comm == "agy" or comm.startswith("agy-"):
         return "agy"
@@ -149,6 +142,22 @@ def live_parent(start_pid: int | None = None) -> str:
         except (TypeError, ValueError):
             break
     return ""
+
+
+def assert_spawn_allowed(repo: Path, worker: str, live: str | None = None) -> None:
+    """Refuse a disabled child. Native same-CLI (worker == live parent) is allowed."""
+    worker = (worker or "").strip()
+    if not worker or worker == "parent":
+        return
+    if live is None:
+        live = live_parent()
+    live = (live or "").strip()
+    if worker == live:
+        return
+    flags = parse_harness(harness_path(repo))["workers"]
+    if flags.get(worker) == "true":
+        return
+    raise SystemExit(f"rig job: worker {worker} is off in harness")
 
 
 def effective_workers(repo: Path, live: str | None = None) -> list[str]:

@@ -16,7 +16,7 @@ user-invocable: true
 When `.rig/harness.toml` exists, do not write app code, review a diff, fix a bug, SSH, or gather repo/server facts yourself.
 
 1. MCP `rig_memory` then `rig_jobs` then `rig_status` then `rig_pick` when MCP is present. Bash fallback if MCP missing: `rig memory` then `rig jobs` then `rig status` then `rig pick --case "<task>" --json`
-2. Follow pick JSON. Do not ask the user which model.
+2. Follow pick JSON. Do not ask the user which model. Never spawn a worker whose harness flag is false. Never spawn grok when `[workers].grok` is false unless the live parent is grok (native). Timeout or fail does not unlock a disabled worker.
 3. `stay` — you do plan / vision / computer-use / chrome-profile. Spawn only if this CLI cannot.
 4. `native` — cheap same-CLI agent, record with MCP `rig_job_start` / `rig_job_finish` / `rig_job_record` when present, else `rig job start` / `rig job finish`
 5. `run-worker` — brief + start `RIG_LIVE=1 run-worker.sh` in the background + **one blocking wait** (MCP `rig_job_wait` with no timeout if present, else `rig job wait <id>` with no `--timeout`). If status is `ask`, you allow/deny, then wait once more. Never kill or replace that job. Launching a child is still bash `run-worker.sh`. There is no spawn-from-MCP tool.
@@ -105,7 +105,7 @@ rig job record --worker codex --role explorer --status ok --summary "one-line re
 3. One blocking wait until ASK or `result.json`. Do not parse a TUI. Prefer MCP `rig_job_wait` with no timeout; bash fallback is `rig job wait <id>` with no `--timeout`. If MCP wait errors or the host drops the tool, bash `rig job wait` once (no `--timeout`). Do not poll. Do not go back to a 30s poll loop.
    - exit 2 / status `ask`: **you** answer. `rig job show` then `rig job allow <id>` or `rig job deny <id>` (MCP: `rig_job_allow` / `rig_job_deny`). Safe worker work (read/edit/test/ssh gather/git) → allow. Destructive/prod/secrets → deny or ask the user. Then wait **once** more (no timeout).
    - exit 0: child finished ok
-   - exit 1: fail / timeout / stale — escalate. Do not retry as Sol, Astra, or Fable.
+   - exit 1: fail / timeout / stale — escalate. Do not retry as Sol, Astra, or Fable. Do not spawn a worker pick did not choose or whose harness flag is false. Timeout does not unlock grok.
    - exit 124: only if you passed `--timeout` and the job was still running when the cap hit. Do not pass a timeout in the normal path.
 4. NEVER kill, close, finish, or replace a job that is `ask` or `running`. The child is waiting on you. Spawning another worker because Claude asked is a failure. The same Claude job continues after you allow.
 

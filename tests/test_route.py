@@ -99,6 +99,10 @@ class Pick(unittest.TestCase):
         c = route.pick("codex", [], "implement", "add a header")
         self.assertEqual(c["spawn"], "native")
         self.assertEqual(c["worker"], "codex")
+        c = route.pick("pi", [], "implement", "add a header")
+        self.assertEqual(c["spawn"], "native")
+        self.assertEqual(c["worker"], "pi")
+        self.assertNotEqual(c["worker"], "grok")
 
     def test_stay_does_not_spawn(self):
         c = route.pick("grok", ["claude", "codex"], "stay", "chrome profile login")

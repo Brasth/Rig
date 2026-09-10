@@ -16,6 +16,7 @@ if str(HERE) not in sys.path:
     sys.path.insert(0, str(HERE))
 
 import ask as rig_ask  # noqa: E402
+import harness as rig_harness  # noqa: E402
 
 PREAMBLE_MARKERS = (
     "you are a worker, not the orchestrator",
@@ -37,10 +38,31 @@ INPUT_KEYS = (
 )
 
 
+def _kit_dir() -> Path:
+    raw = (os.environ.get("RIG_HOME") or "").strip()
+    if raw:
+        return Path(raw).expanduser().resolve()
+    return (Path.home() / ".rig").resolve()
+
+
 def repo_root(start: str | None = None) -> Path:
     d = Path(start or os.getcwd()).resolve()
+    try:
+        kit = _kit_dir()
+    except OSError:
+        kit = None
     for p in [d, *d.parents]:
-        if (p / ".rig").is_dir() or (p / ".git").is_dir():
+        if kit is not None and p == kit:
+            continue
+        harness = p / ".rig" / "harness.toml"
+        if harness.is_file():
+            try:
+                marker = (p / ".rig").resolve()
+            except OSError:
+                marker = None
+            if kit is None or marker != kit:
+                return p
+        if (p / ".git").is_dir():
             return p
     return d
 
@@ -883,10 +905,13 @@ def start_job(
     """Write a running job. Does not launch a worker. Returns the job id."""
     _require_harness(repo)
     role = (role or "worker").strip() or "worker"
+    live = (live or "").strip() or rig_harness.live_parent()
+    preferred = (preferred or "").strip() or rig_harness.preferred_parent(repo)
     raw_id = (job_id or "").strip()
     meta = _read_meta_dict(jobs_dir(repo) / raw_id) if raw_id else {}
     job_id = _allocate_job_id(raw_id)
     worker = _resolve_worker(worker, live, preferred, meta)
+    rig_harness.assert_spawn_allowed(repo, worker, live)
     now = iso_now()
     job_dir = jobs_dir(repo) / job_id
     write_job_files(
@@ -965,6 +990,13 @@ def record_job(
     preferred: str = "",
 ) -> str:
     """One-shot start+finish like `rig job record`. Files only."""
+    _require_harness(repo)
+    live = (live or "").strip() or rig_harness.live_parent()
+    preferred = (preferred or "").strip() or rig_harness.preferred_parent(repo)
+    raw_id = (job_id or "").strip()
+    meta = _read_meta_dict(jobs_dir(repo) / raw_id) if raw_id else {}
+    worker = _resolve_worker(worker, live, preferred, meta)
+    rig_harness.assert_spawn_allowed(repo, worker, live)
     return finish_job(
         repo,
         job_id,

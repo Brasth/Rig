@@ -231,7 +231,7 @@ agy = false
   rig workers grok=on|off claude=on|off codex=on|off cursor=on|off opencode=on|off omp=on|off pi=on|off agy=on|off
   ```
 
-Effective worker = flag `true` **and** binary on PATH **and** not live parent. Check with `rig doctor` / `rig status`.
+Effective worker = flag `true` **and** binary on PATH **and** not live parent. Check with `rig doctor` / `rig status`. `grok = false` turns off grok as a child. Open Grok and you still get native Grok. Open Pi with grok off and pick must stay Pi.
 
 **Binaries:**
 

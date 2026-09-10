@@ -239,7 +239,7 @@ class McpDispatch(unittest.TestCase):
     def test_job_finish_writes_result(self):
         start = rig_mcp.call_tool(
             "rig_job_start",
-            {"repo": str(self.repo), "worker": "codex", "role": "explorer"},
+            {"repo": str(self.repo), "worker": "grok", "role": "explorer"},
         )
         job_id = self._text(start).strip()
         (self.repo / ".rig" / "jobs" / job_id / "stdout.log").write_text("noise\n")
@@ -288,7 +288,7 @@ class McpDispatch(unittest.TestCase):
             "rig_job_record",
             {
                 "repo": str(self.repo),
-                "worker": "codex",
+                "worker": "grok",
                 "role": "explorer",
                 "status": "ok",
                 "summary": "one-line result",
@@ -301,7 +301,7 @@ class McpDispatch(unittest.TestCase):
         job_id = text.split()[1]
         result = json.loads((self.repo / ".rig" / "jobs" / job_id / "result.json").read_text())
         self.assertEqual(result["status"], "ok")
-        self.assertEqual(result["worker"], "codex")
+        self.assertEqual(result["worker"], "grok")
         self.assertEqual(result["role"], "explorer")
 
     def test_existing_wait_allow_memory_still_work(self):
