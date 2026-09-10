@@ -160,7 +160,41 @@ def _repo(args: dict) -> Path:
     return rig_jobs.repo_root(args.get("repo") if isinstance(args, dict) else None)
 
 
-def call_tool(name: str, args: dict) -> dict:
+def _progress_token(params: dict):
+    meta = params.get("_meta") if isinstance(params, dict) else None
+    if not isinstance(meta, dict) or "progressToken" not in meta:
+        return None
+    token = meta.get("progressToken")
+    if token is None or token == "":
+        return None
+    return token
+
+
+def _progress_on_tick(token):
+    n = 0
+
+    def on_tick(job: dict) -> None:
+        nonlocal n
+        n += 1
+        status = str((job or {}).get("effective") or "").strip()
+        job_id = str((job or {}).get("job_id") or "").strip()
+        doing = str((job or {}).get("doing") or "").strip()
+        write_message(
+            {
+                "jsonrpc": "2.0",
+                "method": "notifications/progress",
+                "params": {
+                    "progressToken": token,
+                    "progress": n,
+                    "message": " ".join(p for p in (status, job_id, doing) if p),
+                },
+            }
+        )
+
+    return on_tick
+
+
+def call_tool(name: str, args: dict, on_tick=None) -> dict:
     args = args or {}
     try:
         repo = _repo(args)
@@ -191,7 +225,7 @@ def call_tool(name: str, args: dict) -> dict:
                     timeout_s = float(timeout)
                 except (TypeError, ValueError):
                     timeout_s = None
-            code, text = rig_jobs.wait_job(repo, args.get("id"), timeout_s)
+            code, text = rig_jobs.wait_job(repo, args.get("id"), timeout_s, on_tick=on_tick)
             if code == 1:
                 return _err(text)
             return _ok(text)
@@ -276,7 +310,18 @@ def handle(msg: dict) -> dict | None:
         return {"jsonrpc": "2.0", "id": mid, "result": {"tools": TOOLS}}
     if method == "tools/call":
         params = msg.get("params") or {}
-        result = call_tool(str(params.get("name") or ""), params.get("arguments") or {})
+        if not isinstance(params, dict):
+            params = {}
+        name = str(params.get("name") or "")
+        args = params.get("arguments") or {}
+        if not isinstance(args, dict):
+            args = {}
+        on_tick = None
+        if name == "rig_job_wait":
+            token = _progress_token(params)
+            if token is not None:
+                on_tick = _progress_on_tick(token)
+        result = call_tool(name, args, on_tick=on_tick)
         return {"jsonrpc": "2.0", "id": mid, "result": result}
     if method == "ping":
         return {"jsonrpc": "2.0", "id": mid, "result": {}}

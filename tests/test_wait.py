@@ -48,6 +48,45 @@ def _alarm_run(seconds: float, fn):
         signal.signal(signal.SIGALRM, prev)
 
 
+def _mcp_ndjson(messages: list, timeout: float = 3) -> subprocess.CompletedProcess:
+    payload = "".join(json.dumps(m, ensure_ascii=False) + "\n" for m in messages)
+    return subprocess.run(
+        [sys.executable, "-u", str(ROOT / "scripts" / "rig_mcp.py")],
+        input=payload,
+        text=True,
+        capture_output=True,
+        timeout=timeout,
+        check=False,
+    )
+
+
+def _init_and_wait(repo: Path, job_id: str, meta: dict | None = None) -> list:
+    params = {
+        "name": "rig_job_wait",
+        "arguments": {"repo": str(repo), "id": job_id},
+    }
+    if meta is not None:
+        params["_meta"] = meta
+    return [
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-03-26",
+                "capabilities": {},
+                "clientInfo": {"name": "t", "version": "1"},
+            },
+        },
+        {
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": params,
+        },
+    ]
+
+
 class WaitContract(unittest.TestCase):
     def setUp(self):
         self.td = tempfile.TemporaryDirectory()
@@ -165,6 +204,83 @@ class WaitContract(unittest.TestCase):
         )
         self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
         self.assertIn("wait-job", proc.stdout)
+
+    def test_on_tick_running_then_ok(self):
+        ticks = []
+
+        def later():
+            time.sleep(0.3)
+            self._finish_ok()
+
+        threading.Thread(target=later, daemon=True).start()
+        code, _text = _alarm_run(
+            3, lambda: jobs.wait_job(self.repo, "wait-job", on_tick=ticks.append)
+        )
+        self.assertEqual(code, 0)
+        self.assertGreaterEqual(len(ticks), 1)
+        self.assertEqual(ticks[0]["effective"], "running")
+
+    def test_on_tick_change_only(self):
+        ticks = []
+        code, _text = _alarm_run(
+            3,
+            lambda: jobs.wait_job(
+                self.repo, "wait-job", timeout=0.45, on_tick=ticks.append
+            ),
+        )
+        self.assertEqual(code, 124)
+        self.assertLess(len(ticks), 10)
+        self.assertGreaterEqual(len(ticks), 1)
+        self.assertEqual(ticks[0]["effective"], "running")
+        running = [t for t in ticks if t.get("effective") == "running"]
+        self.assertEqual(len(running), 1)
+
+    def test_mcp_stdio_progress_with_token(self):
+        (self.d / "stdout.log").write_text(
+            '{"type":"tool_call","toolName":"read_file","rawInput":{"path":"README.md"}}\n'
+        )
+
+        def later():
+            time.sleep(0.3)
+            self._finish_ok()
+
+        threading.Thread(target=later, daemon=True).start()
+        proc = _mcp_ndjson(
+            _init_and_wait(self.repo, "wait-job", {"progressToken": "tok-1"}),
+            timeout=3,
+        )
+        self.assertIn("notifications/progress", proc.stdout, proc.stderr)
+        lines = [json.loads(line) for line in proc.stdout.splitlines() if line.strip()]
+        progress = [m for m in lines if m.get("method") == "notifications/progress"]
+        self.assertTrue(progress, proc.stdout)
+        first = progress[0]
+        self.assertNotIn("id", first)
+        self.assertEqual(first.get("jsonrpc"), "2.0")
+        self.assertEqual(first["params"]["progressToken"], "tok-1")
+        self.assertEqual(first["params"]["progress"], 1)
+        self.assertIn("running", first["params"]["message"])
+        self.assertIn("wait-job", first["params"]["message"])
+        progress_idx = next(
+            i for i, m in enumerate(lines) if m.get("method") == "notifications/progress"
+        )
+        result_idx = next(i for i, m in enumerate(lines) if m.get("id") == 2)
+        self.assertLess(progress_idx, result_idx)
+        result = lines[result_idx]["result"]
+        self.assertIn("wait-job", result["content"][0]["text"])
+        self.assertNotIn("isError", result)
+
+    def test_mcp_stdio_no_progress_without_meta(self):
+        def later():
+            time.sleep(0.3)
+            self._finish_ok()
+
+        threading.Thread(target=later, daemon=True).start()
+        proc = _mcp_ndjson(_init_and_wait(self.repo, "wait-job"), timeout=3)
+        self.assertNotIn("notifications/progress", proc.stdout, proc.stderr)
+        self.assertIn('"id": 2', proc.stdout)
+        lines = [json.loads(line) for line in proc.stdout.splitlines() if line.strip()]
+        result = next(m for m in lines if m.get("id") == 2)
+        self.assertIn("wait-job", result["result"]["content"][0]["text"])
 
 
 class InitAgentsWait(unittest.TestCase):

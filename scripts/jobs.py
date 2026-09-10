@@ -6,6 +6,7 @@ import json
 import os
 import sys
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -578,7 +579,12 @@ def format_wait(job: dict) -> str:
     return format_show(job)
 
 
-def wait_job(repo: Path, job_id: str | None, timeout: float | None = None) -> tuple[int, str]:
+def wait_job(
+    repo: Path,
+    job_id: str | None,
+    timeout: float | None = None,
+    on_tick: Callable | None = None,
+) -> tuple[int, str]:
     timeout_s: float | None
     if timeout is None:
         timeout_s = None
@@ -588,9 +594,19 @@ def wait_job(repo: Path, job_id: str | None, timeout: float | None = None) -> tu
         except (TypeError, ValueError):
             timeout_s = None
     deadline = None if timeout_s is None else time.time() + max(0.0, timeout_s)
+    last_tick: tuple[str, str] | None = None
     while True:
         job = resolve_job(repo, job_id)
         eff = job.get("effective")
+        if on_tick is not None:
+            key = (str(eff or ""), str(job.get("doing") or ""))
+            if last_tick is None:
+                if eff == "running":
+                    on_tick(job)
+                    last_tick = key
+            elif key != last_tick:
+                on_tick(job)
+                last_tick = key
         if eff == "ask":
             return 2, format_wait(job)
         if eff in {"ok", "fail", "timeout", "stale"}:
