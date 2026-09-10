@@ -50,6 +50,7 @@ A new Grok/Codex/OpenCode/OMP/Pi/agy thread does not start a new job board. Jobs
 - status (`running`, `ask`, `ok`, `fail`, `timeout`, `stale`)
 - task (from the brief)
 - doing (last decoded log line: tool + path, or waiting for json)
+- elapsed (from start/end, if present)
 - how to watch: `rig job log <id> -f` or `rig tui` in another pane
 - Grok child: `open` line is `grok -r <session-id>`
 

@@ -474,6 +474,15 @@ def load_job(job_path: Path) -> dict | None:
         mtime = job_path.stat().st_mtime
     except OSError:
         pass
+    started_at = str(obj.get("started_at") or "")
+    ended_at = str(obj.get("ended_at") or "")
+    stored_elapsed = obj.get("elapsed_s")
+    try:
+        stored_i = int(stored_elapsed) if stored_elapsed not in (None, "") else None
+    except (TypeError, ValueError):
+        stored_i = None
+    computed = elapsed_seconds(started_at, ended_at, live=effective in {"running", "ask"})
+    elapsed_i = computed if computed is not None else stored_i
     model = str(obj.get("model") or "").strip()
     effort = str(obj.get("effort") or "").strip()
     inferred = False
@@ -503,8 +512,9 @@ def load_job(job_path: Path) -> dict | None:
         "open": str(obj.get("open") or ""),
         "watch": str(obj.get("watch") or ""),
         "summary": str(obj.get("summary") or ""),
-        "started_at": str(obj.get("started_at") or ""),
-        "ended_at": str(obj.get("ended_at") or ""),
+        "started_at": started_at,
+        "ended_at": ended_at,
+        "elapsed_s": elapsed_i,
         "task": task,
         "doing": doing,
         "ask": pending_ask,
@@ -653,6 +663,8 @@ def format_table(jobs: list[dict]) -> str:
             extras.append(
                 f"          model  {job.get('model') or '-'}   reasoning {job.get('effort') or '-'}"
             )
+        if job.get("elapsed_s") is not None:
+            extras.append(f"          elapsed  {format_elapsed(int(job['elapsed_s']))}")
         if job.get("thread"):
             extras.append(f"          thread {job['thread']}")
         if job["doing"]:
@@ -699,6 +711,8 @@ def format_show(job: dict, log_lines: int = 24) -> str:
         lines.append(f"start   {job['started_at']}")
     if job["ended_at"]:
         lines.append(f"end     {job['ended_at']}")
+    if job.get("elapsed_s") is not None:
+        lines.append(f"elapsed  {format_elapsed(int(job['elapsed_s']))}")
     if job["summary"] and job["effective"] != "running":
         lines.append(f"summary {_first_line(job['summary'], 200)}")
     lines.append(f"dir     {job['dir']}")
@@ -740,8 +754,41 @@ JOB_STATUSES = frozenset({"ok", "fail", "timeout", "running"})
 JOB_ID_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 
 
+JOB_TS_FMT = "%Y-%m-%dT%H:%M:%SZ"
+
+
 def iso_now() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return datetime.now(timezone.utc).strftime(JOB_TS_FMT)
+
+
+def parse_job_ts(raw: str) -> datetime | None:
+    text = (raw or "").strip()
+    if not text:
+        return None
+    try:
+        return datetime.strptime(text, JOB_TS_FMT).replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
+
+
+def elapsed_seconds(started_at: str, ended_at: str = "", *, live: bool = False) -> int | None:
+    start = parse_job_ts(started_at)
+    if start is None:
+        return None
+    end = parse_job_ts(ended_at)
+    if end is None:
+        if not live:
+            return None
+        end = datetime.now(timezone.utc)
+    return max(0, int((end - start).total_seconds()))
+
+
+def format_elapsed(seconds: int) -> str:
+    total = max(0, int(seconds))
+    if total < 60:
+        return f"{total}s"
+    minutes, secs = divmod(total, 60)
+    return f"{minutes}m{secs}s"
 
 
 def new_job_id() -> str:
@@ -818,6 +865,10 @@ def write_job_files(
             obj[key] = old[key]
     if thread:
         obj["thread"] = thread
+    live = (not (ended_at or "").strip()) and status in {"running", "ask"}
+    elapsed = elapsed_seconds(started_at, ended_at, live=live)
+    if elapsed is not None:
+        obj["elapsed_s"] = elapsed
     blob = json.dumps(obj, indent=2) + "\n"
     for name in ("meta.json", "result.json"):
         path = job_dir / name

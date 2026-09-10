@@ -6,7 +6,7 @@ Landing page: [README](../README.md).
 
 The point is to stop you being the tired reviewer of one agent. You talk to a **parent** (intended: Codex on Astra). The parent assigns work to a **child**, then checks and sends feedback — allow/deny, another prompt — the loop you used to do yourself.
 
-You stay in **one parent**: Codex, Grok, OpenCode, OMP, Pi, or agy. You talk to that parent. The parent decides (via `rig pick`) whether to do the work itself or spawn a **worker**. Never spawn Astra, Sol, or Fable as a child.
+You stay in **one parent**: Codex, Grok, OpenCode, OMP, Pi, or agy. You talk to that parent. The parent picks **kind**. `rig pick` maps that kind to worker, model, and effort. Never spawn Astra, Sol, or Fable as a child.
 
 - **Parent** (you open this): Codex, Grok, OpenCode, OMP, Pi, or agy. It plans, checks, talks to you, does vision / computer-use / chrome-profile, and watches jobs. It does **not** sit on write/review/SSH when a worker is effective.
 - **Workers** (the parent may spawn these): Grok, Claude Code, Cursor CLI, OpenCode, OMP, Pi, agy, Codex. They write code, fix bugs, review, SSH/debug, and gather facts.
@@ -329,7 +329,7 @@ Numbered path for a human:
    - `Review the diff I just staged.`
    - `SSH to the box and collect the app logs from the last deploy.`
 
-5. The parent checks first for implement: reads the code, names the files and the update, writes that in the brief, then runs `rig pick --case "<task>"` and spawns if needed. Locate / trace / codebase gather may spawn explore/mini. It does **not** ask you which model. Child does not assume scope and does not hunt extra updates.
+5. Ask / plan / advise stay with the parent. Docs/skills-only uses `rig pick mini`. The parent checks first for implement: reads the code, names the files and the update, writes that in the brief, then runs `rig pick implement --case "<task>"` and spawns if needed. Spawn explore/mini for codebase gather only if the parent cannot name the files after a short check. If the implement brief already lists files, do not also spawn explore. It does **not** ask you which model. Child does not assume scope and does not hunt extra updates. `--case` is the task text (fallback English if the parent omitted kind). Pick does not ship device skill names.
 6. Watch the child: another terminal `rig tui` or `rig jobs`, or type `/rig` in Grok, Codex, OpenCode, OMP, Pi, or agy. Grok also gets a bottom status line after setup (restart Grok once).
 7. `rig jobs` is a table. Columns: **STATUS AGENT ROLE JOB TASK**. Example:
 
@@ -343,9 +343,9 @@ Numbered path for a human:
 8. If a Claude child is `ask`: the **parent** answers `rig job allow <id>` or `rig job deny <id>` (TUI `y` / `n`). Never kill that job. Never spawn another worker because Claude asked. The same child continues after you allow.
 9. Jobs and MEMORY are **this repo**, not the chat. A new thread still sees `.rig/jobs`. Running children keep going.
 
-**Parent keeps:** plan, check (name files and the update), vision, computer-use, chrome-profile, talk to you.
+**Parent keeps:** ask / plan / advise, check (name files and the update), vision, computer-use, chrome-profile, talk to you.
 
-**Workers:** write the listed change, not hunt on a fix. Review, SSH/debug, codebase gather.
+**Workers:** write the listed change, not hunt on a fix. Review, SSH/debug. Codebase gather only if the parent cannot name the files.
 
 If **this** CLI cannot do computer-use or chrome-profile, the parent spawns a worker. It does **not** ask you.
 
@@ -353,8 +353,9 @@ If **this** CLI cannot do computer-use or chrome-profile, the parent spawns a wo
 
 | Case | Who |
 | --- | --- |
-| Plan / vision / computer-use / chrome-profile | parent (`rig pick stay`) unless this CLI cannot do it, then spawn |
-| Small locate / trace / codebase gather | cheap same-CLI explore/mini (including local repo) |
+| Ask / plan / advise / vision / computer-use / chrome-profile | parent (`rig pick stay`) unless this CLI cannot do it, then spawn |
+| Docs/skills-only | cheap same-CLI (`rig pick mini`) |
+| Locate / trace / codebase gather | cheap same-CLI explore/mini only if the parent cannot name the files after a short check |
 | Implement / SSH / fix | Grok child if Grok is **effective**; if Grok/OpenCode/OMP/Pi/agy is the live parent (or Grok off) → Claude Code if effective, else cheap same-CLI. Cursor/OpenCode/OMP/Pi/agy/Codex children last resort (not just because the CLI is on PATH) |
 | Review | different vendor than the writer |
 | No extra CLIs | cheap same-CLI. Record it. That is success |
@@ -500,7 +501,7 @@ A Cursor child is `cursor-agent -p` with `stream-json`, `--force`, `--trust`, an
 
 An OpenCode child is `opencode run --format json --dir <repo> --auto`. An OMP child is `omp -p --mode json --approval-mode write`. A Pi child is `pi -p --mode json --approve`. An agy child is `agy -p` with `--output-format json --mode accept-edits --print-timeout <RIG_TIMEOUT>s --disable-slash-commands`. No `--dangerously-skip-permissions`. `run-worker.sh` fills `RIG_MODEL` / `RIG_EFFORT` from `rig pick` when unset (OpenCode `--variant`, OMP/Pi `--thinking`, agy `--effort`). OpenCode / OMP / Pi / agy models are resolved against that CLI’s live catalog (cached). If both OMP and Pi are effective, pick uses OMP. agy `denied_actions` in JSON is a fail even when the process exits 0.
 
-The parent agent picks worker **and** model/reasoning from the case. Do not ask the user. `rig pick --case "<task>"` is the lookup. Plan/vision/computer-use/chrome-profile: `rig pick stay` unless this CLI cannot do it.
+The parent picks **kind**. Pick maps kind to worker, model, and effort. Do not ask the user. Pass the kind: `rig pick implement --case "<task>"` or `rig pick stay --case "<task>"`. `--case` is fallback English when the parent did not choose a kind. Pick does not ship device skill names. Plan/vision/computer-use/chrome-profile: `rig pick stay` unless this CLI cannot do it.
 
 ## Commands
 

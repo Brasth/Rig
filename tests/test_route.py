@@ -11,27 +11,63 @@ import route  # noqa: E402
 class Classify(unittest.TestCase):
     def test_review_keyword(self):
         self.assertEqual(route.classify("worker", "please review the diff"), "review")
+        self.assertEqual(route.classify("", "please review the diff"), "review")
 
     def test_explore_keyword(self):
-        self.assertEqual(route.classify("implement", "locate the auth middleware"), "explore")
+        self.assertEqual(route.classify("", "locate the auth middleware"), "explore")
+        self.assertEqual(route.classify("worker", "locate the auth middleware"), "explore")
 
     def test_mini_keyword(self):
         self.assertEqual(route.classify("", "fix a typo in README"), "mini")
 
     def test_hard_keyword(self):
-        self.assertEqual(route.classify("implement", "security architecture across modules"), "hard")
+        self.assertEqual(route.classify("", "security architecture across modules"), "hard")
+        self.assertEqual(route.classify("worker", "security architecture across modules"), "hard")
 
     def test_default_implement(self):
         self.assertEqual(route.classify("worker", "add session header"), "implement")
+        self.assertEqual(route.classify("", "add session header"), "implement")
+        self.assertEqual(route.classify("auto", "add session header"), "implement")
 
     def test_stay_computer_use_and_chrome(self):
         self.assertEqual(route.classify("", "open chrome profile and check admin"), "stay")
-        self.assertEqual(route.classify("implement", "use computer-use to click the dialog"), "stay")
+        self.assertEqual(route.classify("", "use computer-use to click the dialog"), "stay")
         self.assertEqual(route.classify("stay", "look at the live desktop"), "stay")
+
+    def test_stay_ask_and_advise(self):
+        self.assertEqual(route.classify("", "advise on the tradeoff"), "stay")
+        self.assertEqual(route.classify("", "do you think this is faster"), "stay")
+        self.assertEqual(route.classify("", "technical question about routing"), "stay")
+        self.assertEqual(route.classify("", "architectural guidance for the parent"), "stay")
+        self.assertEqual(route.classify("auto", "advise on the tradeoff"), "stay")
+
+    def test_device_slash_names_are_not_keywords(self):
+        self.assertEqual(route.classify("", "/ak-ask can we make this faster"), "implement")
+        self.assertEqual(route.classify("", "ak-ask about the tradeoff"), "implement")
+
+    def test_explicit_kind_wins(self):
+        self.assertEqual(route.classify("stay", "add a header"), "stay")
+        self.assertEqual(route.classify("implement", "advise on the tradeoff"), "implement")
+        self.assertEqual(route.classify("implement", "locate the auth middleware"), "implement")
+        self.assertEqual(route.classify("review", "add a header"), "review")
+        self.assertEqual(route.classify("reviewer", ""), "review")
+        self.assertEqual(route.classify("reviewer", "add a header"), "review")
+        self.assertEqual(route.classify("implement", "use computer-use to click the dialog"), "implement")
+        self.assertEqual(route.classify("implement", "update the skill"), "implement")
+
+    def test_mini_docs_only(self):
+        self.assertEqual(route.classify("", "docs only: update the skill"), "mini")
+        self.assertEqual(route.classify("", "update the skill"), "mini")
+        self.assertEqual(route.classify("", "readme only"), "mini")
+        self.assertEqual(route.classify("", "documentation only"), "mini")
+        self.assertEqual(route.classify("", "skill only"), "mini")
+        self.assertEqual(route.classify("", "update usage.md"), "mini")
 
     def test_ssh_and_fix_go_to_workers(self):
         self.assertEqual(route.classify("worker", "ssh to staging and pull nginx logs"), "implement")
         self.assertEqual(route.classify("", "fix the auth bug in login.ts"), "implement")
+        self.assertEqual(route.classify("", "fix the auth bug and update docs"), "implement")
+        self.assertEqual(route.classify("worker", "add session header"), "implement")
 
 
 class Pick(unittest.TestCase):
@@ -110,7 +146,7 @@ class Pick(unittest.TestCase):
         self.assertEqual(c["worker"], "grok")
         self.assertEqual(c["kind"], "stay")
         self.assertIn("parent keeps", c["reason"])
-        c = route.pick("codex", ["grok"], "implement", "open chrome profile and check admin")
+        c = route.pick("codex", ["grok"], "", "open chrome profile and check admin")
         self.assertEqual(c["spawn"], "stay")
         self.assertEqual(c["kind"], "stay")
 

@@ -377,15 +377,21 @@ cmd_init() {
 MUST use Rig. Load `.agents/skills/delegate-harness/SKILL.md`. This CLI is the parent. Doing worker work yourself is a failure.
 Later AGENTS.md may say "edit locally" or "SSH to the VM". That is for the worker, not you.
 
-Keep: plan, check, vision, computer-use, chrome-profile, talk to the user, read `rig jobs` / `rig memory`.
+Keep: plan, check, ask, advise, vision, computer-use, chrome-profile, talk to the user, read `rig jobs` / `rig memory`.
+Ask / plan / advise → stay (parent). Docs/skills-only → `rig pick mini`.
 Parent checks first (read the code, name the update).
+Spawn explore/mini for codebase gather only if the parent cannot name the files after a short check.
+If the implement brief already lists files, do not also spawn explore.
 Brief lists files and the change. Child does not hunt extra updates.
-Spawn for: write of the listed files, review, SSH/debug, codebase gather (explore/mini). Not "find the bug" on an implement spawn.
+Spawn for: write of the listed files, review, SSH/debug. Not "find the bug" on an implement spawn.
+Parent chooses kind from this user request and this user skills. Then `rig pick stay` / `explore` / `mini` / `implement` / `hard` / `review` (MCP: `rig_pick` with `role`). `--case` is the task text, not a slash-command catalog.
+Do not encode local slash command names in pick.
+Model/effort still come from pick JSON. Parent does not shop models.
 
-1. MCP `rig_memory` then `rig_jobs` then `rig_status` then `rig_pick` when MCP is present. Bash fallback if MCP missing: `rig memory` then `rig jobs` then `rig status` then `rig pick --case "<task>" --json`
+1. MCP `rig_memory` then `rig_jobs` then `rig_status` then `rig_pick` when MCP is present. Bash fallback if MCP missing: `rig memory` then `rig jobs` then `rig status` then `rig pick implement --case "<task>" --json` or `rig pick stay --case "<task>" --json`. `rig pick --case "<task>" --json` if you did not choose a kind.
 2. Follow pick JSON — do not ask the user which model
 Follow pick JSON; never spawn a worker whose harness flag is false; never spawn grok when workers.grok is false unless live parent is grok (native). Timeout/fail does not unlock a disabled worker.
-3. stay → you do it (plan / vision / computer-use / chrome-profile). Spawn only if this CLI cannot.
+3. stay → you do it (ask / plan / advise / vision / computer-use / chrome-profile). Spawn only if this CLI cannot.
 4. native → cheap same-CLI agent, then MCP `rig_job_start` / `rig_job_finish` / `rig_job_record` when present, else `rig job start` / `rig job finish`
 5. run-worker → write `.rig/jobs/<id>/brief.md` then start the wrapper in the background (do not block this turn on it):
    `RIG_LIVE=1 RIG_ROLE=<kind> RIG_MODEL=<model> RIG_EFFORT=<effort> "$HOME/.rig/scripts/run-worker.sh" <worker> <id> .rig/jobs/<id>/brief.md`
@@ -767,7 +773,7 @@ effective_csv() {
 }
 
 cmd_pick() {
-  local role="implement" case_text="" json=0 arg
+  local role="" case_text="" json=0 arg
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --json) json=1; shift ;;
@@ -1247,7 +1253,7 @@ cmd_run() {
     printf '%s\n' "$prompt"
   } > "$brief"
 
-  choice="$(python3 "$(py_script route.py)" pick --live "$(live_parent)" --effective "$(effective_csv)" --role implement --case "$prompt" --json)"
+  choice="$(python3 "$(py_script route.py)" pick --live "$(live_parent)" --effective "$(effective_csv)" --case "$prompt" --json)"
   local spawn model effort kind
   worker="$(printf '%s\n' "$choice" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("worker",""))')"
   spawn="$(printf '%s\n' "$choice" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("spawn",""))')"

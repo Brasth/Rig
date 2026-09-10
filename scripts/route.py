@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Pick worker, model, and reasoning from the case. User is not asked."""
+"""Pick worker, model, and reasoning from kind. Case is English fallback. User is not asked."""
 from __future__ import annotations
 
 import argparse
@@ -128,34 +128,63 @@ KEYWORDS = (
             "chrome-profile",
             "real chrome",
             "live desktop",
+            "advise",
+            "do you think",
+            "technical question",
+            "architectural guidance",
         ),
     ),
     ("review", ("review", "audit", "nitpick")),
     ("explore", ("explor", "scout", "locate", "trace", "where is", "find file", "read-only")),
     ("bulk", ("bulk", "rename-only", "mechanical", "format-only")),
-    ("mini", ("typo", "comment-only", "one-line", "tiny", "trivial")),
+    (
+        "mini",
+        (
+            "typo",
+            "comment-only",
+            "one-line",
+            "tiny",
+            "trivial",
+            "docs only",
+            "skill only",
+            "readme only",
+            "documentation only",
+            "update the skill",
+            "update usage.md",
+        ),
+    ),
     ("hard", ("architect", "security", "multi-file", "cross-module", "hard refactor")),
 )
 
-STAY_ROLES = frozenset({"stay", "parent", "vision", "computer-use", "chrome", "chrome-profile"})
+# Explicit pick kinds skip case keywords. Job role "worker" and "auto" do not.
+EXPLICIT_KIND = {
+    "stay": "stay",
+    "parent": "stay",
+    "vision": "stay",
+    "computer-use": "stay",
+    "chrome": "stay",
+    "chrome-profile": "stay",
+    "explore": "explore",
+    "explorer": "explore",
+    "mini": "mini",
+    "bulk": "bulk",
+    "hard": "hard",
+    "implement-hard": "hard",
+    "review": "review",
+    "reviewer": "review",
+    "implement": "implement",
+}
 
 
 def classify(role: str, case: str) -> str:
-    text = f"{role} {case}".lower()
+    role_n = (role or "").lower().strip()
+    mapped = EXPLICIT_KIND.get(role_n)
+    if mapped:
+        return mapped
+    text = (case or "").lower()
     for kind, words in KEYWORDS:
         if any(w in text for w in words):
             return kind
-    role = (role or "implement").lower().strip()
-    if role in STAY_ROLES:
-        return "stay"
-    if role in {"explorer", "explore"}:
-        return "explore"
-    if role in {"worker", "implement"}:
-        return "implement"
-    if role in {"hard", "implement-hard"}:
-        return "hard"
-    if role in {"bulk", "review", "mini"}:
-        return role
     return "implement"
 
 
@@ -216,7 +245,7 @@ def pick(
             "effort": "",
             "native_agent": "",
             "reason": (
-                "parent keeps plan / vision / computer-use / chrome-profile. "
+                "parent keeps ask / plan / advise / vision / computer-use / chrome-profile. "
                 "spawn a worker only if this CLI cannot do it."
             ),
         }
@@ -280,7 +309,7 @@ def main() -> int:
     parser.add_argument("cmd", choices=["pick", "allow", "env"])
     parser.add_argument("--live", default="")
     parser.add_argument("--effective", default="")
-    parser.add_argument("--role", default="implement")
+    parser.add_argument("--role", default="")
     parser.add_argument("--case", default="")
     parser.add_argument("--worker", default="")
     parser.add_argument("--model", default="")

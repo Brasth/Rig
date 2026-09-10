@@ -310,6 +310,60 @@ class ProbeAndCache(CatalogEnv):
         self._bin("omp", f"echo '{payload}'\n")
         self.assertEqual(catalog.probe_worker("omp"), ["xai-oauth/grok-4.6"])
 
+    def test_stale_ttl_returns_without_waiting(self):
+        catalog.cache_put("omp", [OMP_GROK])
+        data = json.loads(self.cache.read_text())
+        data["omp"]["fetched_at"] = time.time() - catalog.TTL_SECONDS - 10
+        self.cache.write_text(json.dumps(data))
+        self._bin("omp", "sleep 2\necho grok-4.5\n")
+        t0 = time.time()
+        ids = catalog.load_catalog("omp")
+        elapsed = time.time() - t0
+        self.assertEqual(ids, [OMP_GROK])
+        self.assertLess(elapsed, 0.5)
+
+    def test_refresh_still_probes(self):
+        catalog.cache_put("agy", [AGY_FLASH])
+        data = json.loads(self.cache.read_text())
+        data["agy"]["fetched_at"] = time.time() - catalog.TTL_SECONDS - 10
+        self.cache.write_text(json.dumps(data))
+        self._bin("agy", 'echo "gemini-3.8-flash-low"\n')
+        os.environ["RIG_REFRESH_MODELS"] = "1"
+        ids = catalog.load_catalog("agy")
+        self.assertEqual(ids, ["gemini-3.8-flash-low"])
+
+    def test_load_catalogs_probes_missing_in_parallel(self):
+        def slow_probe(worker, timeout=8.0):
+            time.sleep(0.35)
+            return {
+                "opencode": [OPENCODE_LUNA],
+                "agy": [AGY_FLASH],
+            }.get(worker)
+
+        old = catalog.probe_worker
+        catalog.probe_worker = slow_probe
+        try:
+            t0 = time.time()
+            got = catalog.load_catalogs(["opencode", "agy"])
+            elapsed = time.time() - t0
+        finally:
+            catalog.probe_worker = old
+        self.assertEqual(got["opencode"], [OPENCODE_LUNA])
+        self.assertEqual(got["agy"], [AGY_FLASH])
+        self.assertLess(elapsed, 0.55)
+        self.assertGreater(elapsed, 0.2)
+
+    def test_load_catalogs_skip_and_fresh_hit(self):
+        os.environ["RIG_SKIP_MODEL_CATALOG"] = "1"
+        self._bin("pi", 'echo "xai grok-4.6 1"\n')
+        self.assertEqual(catalog.load_catalogs(["pi"]), {"pi": None})
+        os.environ.pop("RIG_SKIP_MODEL_CATALOG", None)
+        catalog.cache_put("pi", ["grok-4.6"])
+        self.bins.joinpath("pi").write_text("#!/bin/sh\nexit 1\n")
+        self.bins.joinpath("pi").chmod(0o755)
+        got = catalog.load_catalogs(["pi"])
+        self.assertEqual(got["pi"], ["grok-4.6"])
+
 
 if __name__ == "__main__":
     unittest.main()

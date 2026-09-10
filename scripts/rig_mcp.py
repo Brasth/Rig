@@ -166,7 +166,11 @@ TOOLS = [
                 "role": {
                     "type": "string",
                     "enum": list(PICK_ROLES),
-                    "description": "Pick role. Default implement.",
+                    "description": (
+                        "Optional pick kind. Omit to classify from case. "
+                        "Pass stay|explore|mini|bulk|implement|hard|review "
+                        "when the parent already knows the kind."
+                    ),
                 },
                 "repo": {"type": "string", "description": "Project root. Default cwd."},
             },
@@ -353,8 +357,8 @@ def call_tool(name: str, args: dict, on_tick=None) -> dict:
                 return _err("rig_memory_add needs fact")
             return _ok(rig_memory.add_memory(repo, fact))
         if name == "rig_pick":
-            role = str(args.get("role") or "implement").strip() or "implement"
-            if role not in PICK_ROLES:
+            role = str(args.get("role") or "").strip()
+            if role and role not in PICK_ROLES:
                 return _err(
                     "rig_pick: role must be explore|mini|bulk|implement|hard|review|stay"
                 )

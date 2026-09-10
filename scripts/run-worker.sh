@@ -93,6 +93,7 @@ write_json() {
   RESULT_STATE="$RESULT_STATE" \
   python3 - <<'PY'
 import json, os, pathlib
+from datetime import datetime
 files = [f for f in os.environ.get("RESULT_FILES", "").split("\n") if f]
 keep = ("thread", "session_id", "pid", "open", "watch", "kind")
 old = {}
@@ -124,6 +125,15 @@ for key in keep:
 thread = os.environ.get("RESULT_THREAD", "")
 if thread:
     obj["thread"] = thread
+started = os.environ.get("RESULT_STARTED") or ""
+ended = os.environ.get("RESULT_ENDED") or ""
+if started and ended:
+    try:
+        start_dt = datetime.strptime(started, "%Y-%m-%dT%H:%M:%SZ")
+        end_dt = datetime.strptime(ended, "%Y-%m-%dT%H:%M:%SZ")
+        obj["elapsed_s"] = max(0, int((end_dt - start_dt).total_seconds()))
+    except ValueError:
+        pass
 path = pathlib.Path(os.environ["RESULT_OUT"])
 tmp = path.with_name(path.name + ".tmp")
 tmp.write_text(json.dumps(obj, indent=2) + "\n")

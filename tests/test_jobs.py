@@ -376,6 +376,38 @@ class JobBoard(unittest.TestCase):
         self.assertIn("running", text)
 
 
+class Elapsed(unittest.TestCase):
+    def test_write_load_show_elapsed(self):
+        import tempfile
+
+        td = tempfile.TemporaryDirectory()
+        job_dir = Path(td.name) / "elapsed-90"
+        jobs.write_job_files(
+            job_dir,
+            "elapsed-90",
+            "grok",
+            "implement",
+            "ok",
+            0,
+            "2026-09-10T07:00:00Z",
+            "2026-09-10T07:01:30Z",
+            "done",
+        )
+        meta = json.loads((job_dir / "meta.json").read_text())
+        result = json.loads((job_dir / "result.json").read_text())
+        self.assertEqual(meta["elapsed_s"], 90)
+        self.assertEqual(result["elapsed_s"], 90)
+        loaded = jobs.load_job(job_dir)
+        self.assertEqual(loaded["elapsed_s"], 90)
+        shown = jobs.format_show(loaded)
+        self.assertIn("elapsed  1m30s", shown)
+        table = jobs.format_table([loaded])
+        self.assertIn("elapsed  1m30s", table)
+        self.assertEqual(jobs.format_elapsed(45), "45s")
+        self.assertEqual(jobs.format_elapsed(316), "5m16s")
+        td.cleanup()
+
+
 class McpTools(unittest.TestCase):
     def test_list_and_show(self):
         sys.path.insert(0, str(ROOT / "scripts"))

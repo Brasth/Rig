@@ -8,12 +8,17 @@ import os
 import shutil
 import subprocess
 import sys
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 CATALOG_WORKERS = frozenset({"opencode", "omp", "pi", "agy"})
 TTL_SECONDS = 3600
 PROBE_TIMEOUT = 8.0
+_CACHE_LOCK = threading.Lock()
+_REFRESHING: set[str] = set()
+_REFRESH_LOCK = threading.Lock()
 BANNED_SUBSTR = ("sol", "astra", "fable")
 CHEAP_KINDS = frozenset({"explore", "mini", "bulk"})
 CHEAP_WORDS = ("mini", "flash", "haiku", "spark", "fast", "lite", "cheap", "small")
@@ -248,26 +253,66 @@ def _write_cache_file(data: dict) -> None:
         return
 
 
-def cache_get(worker: str) -> list[str] | None:
-    entry = _read_cache_file().get(worker)
+def cache_get(worker: str, *, allow_stale: bool = False) -> list[str] | None:
+    with _CACHE_LOCK:
+        entry = _read_cache_file().get(worker)
     if not isinstance(entry, dict):
         return None
     try:
         fetched = float(entry.get("fetched_at") or 0)
     except (TypeError, ValueError):
         return None
-    if fetched <= 0 or (time.time() - fetched) > TTL_SECONDS:
+    if fetched <= 0:
         return None
     ids = entry.get("ids")
     if not isinstance(ids, list):
         return None
-    return [str(x) for x in ids if str(x).strip()]
+    cleaned = [str(x) for x in ids if str(x).strip()]
+    if (time.time() - fetched) > TTL_SECONDS and not allow_stale:
+        return None
+    return cleaned
 
 
 def cache_put(worker: str, ids: list[str] | None) -> None:
-    data = _read_cache_file()
-    data[worker] = {"ids": list(ids or []), "fetched_at": time.time()}
-    _write_cache_file(data)
+    with _CACHE_LOCK:
+        data = _read_cache_file()
+        data[worker] = {"ids": list(ids or []), "fetched_at": time.time()}
+        _write_cache_file(data)
+
+
+def _lookup_cached(worker: str) -> tuple[str, list[str] | None]:
+    hit = cache_get(worker)
+    if hit is not None:
+        return "fresh", (hit or None)
+    stale = cache_get(worker, allow_stale=True)
+    if stale:
+        return "stale", stale
+    return "miss", None
+
+
+def _schedule_refresh(worker: str, timeout: float) -> None:
+    with _REFRESH_LOCK:
+        if worker in _REFRESHING:
+            return
+        _REFRESHING.add(worker)
+
+    def _run() -> None:
+        try:
+            probed = probe_worker(worker, timeout=timeout)
+            if probed is None:
+                return
+            cache_put(worker, probed)
+        except Exception:
+            return
+        finally:
+            with _REFRESH_LOCK:
+                _REFRESHING.discard(worker)
+
+    threading.Thread(
+        target=_run,
+        name=f"rig-catalog-refresh-{worker}",
+        daemon=True,
+    ).start()
 
 
 def load_catalog(worker: str, timeout: float = PROBE_TIMEOUT) -> list[str] | None:
@@ -277,12 +322,60 @@ def load_catalog(worker: str, timeout: float = PROBE_TIMEOUT) -> list[str] | Non
         return None
     refresh = env_on("RIG_REFRESH_MODELS")
     if not refresh:
-        hit = cache_get(worker)
-        if hit is not None:
-            return hit or None
+        state, ids = _lookup_cached(worker)
+        if state == "fresh":
+            return ids
+        if state == "stale":
+            _schedule_refresh(worker, timeout)
+            return ids
     probed = probe_worker(worker, timeout=timeout)
     cache_put(worker, probed)
     return probed
+
+
+def load_catalogs(
+    workers: list[str],
+    timeout: float = PROBE_TIMEOUT,
+) -> dict[str, list[str] | None]:
+    out: dict[str, list[str] | None] = {}
+    skip = env_on("RIG_SKIP_MODEL_CATALOG")
+    refresh = env_on("RIG_REFRESH_MODELS")
+    missing: list[str] = []
+    for worker in workers:
+        if skip or worker not in CATALOG_WORKERS:
+            out[worker] = None
+            continue
+        if not refresh:
+            state, ids = _lookup_cached(worker)
+            if state == "fresh":
+                out[worker] = ids
+                continue
+            if state == "stale":
+                _schedule_refresh(worker, timeout)
+                out[worker] = ids
+                continue
+        missing.append(worker)
+        out[worker] = None
+    if not missing:
+        return out
+
+    def _probe_one(name: str) -> tuple[str, list[str] | None]:
+        try:
+            probed = probe_worker(name, timeout=timeout)
+        except Exception:
+            return name, None
+        cache_put(name, probed)
+        return name, probed
+
+    with ThreadPoolExecutor(max_workers=max(1, len(missing))) as pool:
+        futs = [pool.submit(_probe_one, name) for name in missing]
+        for fut in as_completed(futs):
+            try:
+                name, probed = fut.result()
+            except Exception:
+                continue
+            out[name] = probed
+    return out
 
 
 def drop_banned(ids: list[str] | None) -> list[str]:
