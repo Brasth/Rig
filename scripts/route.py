@@ -117,6 +117,10 @@ NATIVE = {
 }
 
 NATIVE_PARENTS = frozenset({"codex", "grok", "opencode", "omp", "pi", "agy"})
+LAST_RESORT = ("opencode", "omp", "pi", "agy", "codex", "cursor")
+WORKER_NAMES = frozenset(
+    {"grok", "claude", "cursor", "opencode", "omp", "pi", "agy", "codex", "native"}
+)
 
 KEYWORDS = (
     (
@@ -202,69 +206,64 @@ def resolved_model_for(
     return model, effort
 
 
-def choose_worker(kind: str, effective: list[str], live: str) -> tuple[str, str]:
-    """Return (worker, spawn) where spawn is run-worker, native, or stay."""
+def parse_exclude(exclude: str | list | tuple | set | None) -> set[str]:
+    if exclude is None or exclude == "" or exclude == () or exclude == []:
+        return set()
+    if isinstance(exclude, str):
+        parts = exclude.split(",")
+    else:
+        parts = list(exclude)
+    out = {str(p).strip().lower() for p in parts if str(p).strip()}
+    return {p for p in out if p in WORKER_NAMES}
+
+
+def choose_worker(
+    kind: str,
+    effective: list[str],
+    live: str,
+    exclude: str | list | tuple | set | None = None,
+) -> tuple[str, str]:
+    """Return (worker, spawn) where spawn is run-worker, native, stay, or none."""
+    blocked = parse_exclude(exclude)
+    avail = [w for w in effective if w not in blocked]
+    skip_native = bool(live) and (live in blocked or "native" in blocked)
     if kind == "stay":
         return live, "stay"
-    if kind in {"explore", "mini", "bulk"} and live in NATIVE_PARENTS:
+    if kind in {"explore", "mini", "bulk"} and live in NATIVE_PARENTS and not skip_native:
         return live, "native"
-    # Cross-CLI first: Grok (when not live), then Claude. Cursor/Codex are last
-    # resort — a Grok parent with Cursor on PATH was always spawning Cursor.
     if kind == "review":
-        order = ("claude", "grok", "cursor", "opencode", "omp", "pi", "agy", "codex")
+        order = ("claude", "grok") + LAST_RESORT
     else:
         order = ("grok", "claude")
     for worker in order:
-        if worker in effective:
+        if worker in avail:
             return worker, "run-worker"
-    if kind in {"implement", "hard"} and live in NATIVE_PARENTS:
+    if kind in {"implement", "hard"} and live in NATIVE_PARENTS and not skip_native:
         return live, "native"
-    for worker in ("cursor", "opencode", "omp", "pi", "agy", "codex"):
-        if worker in effective:
+    last_avail = [w for w in LAST_RESORT if w in avail]
+    if blocked and last_avail == ["cursor"]:
+        return "", "none"
+    for worker in LAST_RESORT:
+        if worker in avail:
             return worker, "run-worker"
-    if live in NATIVE_PARENTS:
+    if kind == "review":
+        return "", "none"
+    if live in NATIVE_PARENTS and not skip_native:
         return live, "native"
     return "", "none"
 
 
-def pick(
-    live: str,
-    effective: list[str],
-    role: str,
-    case: str,
-    catalogs: dict[str, list[str]] | None = None,
+def _base_choice(
+    kind: str,
+    worker: str,
+    spawn: str,
+    *,
+    model: str = "",
+    effort: str = "",
+    native_agent: str = "",
+    reason: str = "",
+    parent_writes: bool = False,
 ) -> dict:
-    kind = classify(role, case)
-    worker, spawn = choose_worker(kind, effective, live)
-    if spawn == "stay":
-        return {
-            "kind": kind,
-            "worker": worker or live,
-            "spawn": "stay",
-            "model": "",
-            "effort": "",
-            "native_agent": "",
-            "reason": (
-                "parent keeps ask / plan / advise / vision / computer-use / chrome-profile. "
-                "spawn a worker only if this CLI cannot do it."
-            ),
-        }
-    if not worker:
-        return {
-            "kind": kind,
-            "worker": "",
-            "spawn": "none",
-            "model": "",
-            "effort": "",
-            "native_agent": "",
-            "reason": "no effective worker; use cheaper same-CLI workers. That is success.",
-        }
-    model, effort = resolved_model_for(worker, kind, catalogs)
-    native_agent = NATIVE.get((worker, kind), "") if spawn == "native" else ""
-    if spawn == "native":
-        reason = f"{kind}: cheap same-CLI {worker} {native_agent} ({model} {effort or 'default'})"
-    else:
-        reason = f"{kind}: {worker} child {model}" + (f" effort={effort}" if effort else "")
     return {
         "kind": kind,
         "worker": worker,
@@ -273,7 +272,71 @@ def pick(
         "effort": effort,
         "native_agent": native_agent,
         "reason": reason,
+        "parent_writes": bool(parent_writes),
     }
+
+
+def pick(
+    live: str,
+    effective: list[str],
+    role: str,
+    case: str,
+    catalogs: dict[str, list[str]] | None = None,
+    exclude: str | list | tuple | set | None = None,
+) -> dict:
+    kind = classify(role, case)
+    blocked = parse_exclude(exclude)
+    worker, spawn = choose_worker(kind, effective, live, exclude=exclude)
+    if spawn == "stay":
+        return _base_choice(
+            kind,
+            worker or live,
+            "stay",
+            reason=(
+                "parent keeps ask / plan / advise / vision / computer-use / chrome-profile. "
+                "Figma, computer-use, and chrome-profile stay with the parent."
+            ),
+        )
+    if spawn == "none" or not worker:
+        if kind == "review":
+            reason = (
+                "review needs a different vendor; do not self-review. tell the user."
+            )
+        elif blocked:
+            leftover = [w for w in LAST_RESORT if w in effective and w not in blocked]
+            if leftover == ["cursor"] or (
+                not leftover and "cursor" in {str(x).strip().lower() for x in effective}
+            ):
+                reason = "confirm before live Cursor; do not auto-spawn cursor"
+            else:
+                reason = (
+                    "no effective worker after exclude; do not unlock a disabled worker."
+                )
+        else:
+            reason = "no effective worker; use cheaper same-CLI workers. That is success."
+        return _base_choice(kind, "", "none", reason=reason)
+    model, effort = resolved_model_for(worker, kind, catalogs)
+    native_agent = NATIVE.get((worker, kind), "") if spawn == "native" else ""
+    parent_writes = spawn == "native" and kind in {"implement", "hard"}
+    if parent_writes:
+        reason = (
+            f"{kind}: this parent writes ({model} {effort or 'default'}). "
+            "record with rig job record. do not spawn a second same-CLI session."
+        )
+    elif spawn == "native":
+        reason = f"{kind}: cheap same-CLI {worker} {native_agent} ({model} {effort or 'default'})"
+    else:
+        reason = f"{kind}: {worker} child {model}" + (f" effort={effort}" if effort else "")
+    return _base_choice(
+        kind,
+        worker,
+        spawn,
+        model=model,
+        effort=effort,
+        native_agent=native_agent,
+        reason=reason,
+        parent_writes=parent_writes,
+    )
 
 
 def assert_child_model(model: str) -> str | None:
@@ -293,6 +356,8 @@ def format_text(choice: dict) -> str:
     ]
     if choice.get("native_agent"):
         lines.append(f"native_agent={choice['native_agent']}")
+    if choice.get("parent_writes"):
+        lines.append("parent_writes=true")
     lines.append(choice.get("reason") or "")
     if choice.get("spawn") == "run-worker" and choice.get("worker"):
         env = f"RIG_LIVE=1 RIG_ROLE={choice['kind']} RIG_MODEL={choice['model']}"
@@ -313,6 +378,7 @@ def main() -> int:
     parser.add_argument("--case", default="")
     parser.add_argument("--worker", default="")
     parser.add_argument("--model", default="")
+    parser.add_argument("--exclude", default="")
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()
 
@@ -333,7 +399,9 @@ def main() -> int:
         return 0
 
     effective = [x.strip() for x in args.effective.split(",") if x.strip()]
-    choice = pick(args.live, effective, args.role, args.case)
+    choice = pick(
+        args.live, effective, args.role, args.case, exclude=args.exclude
+    )
     if args.json:
         print(json.dumps(choice, indent=2))
     else:

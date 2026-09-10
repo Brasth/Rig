@@ -346,6 +346,90 @@ class Pick(unittest.TestCase):
         c = route.pick("", ["agy", "pi"], "implement", "add a header")
         self.assertEqual(c["worker"], "pi")
 
+    def test_opencode_beats_cursor_as_last_resort(self):
+        c = route.pick("", ["cursor", "opencode"], "implement", "add a header")
+        self.assertEqual(c["worker"], "opencode")
+        self.assertEqual(c["spawn"], "run-worker")
+        self.assertFalse(c["parent_writes"])
+
+    def test_exclude_skips_native_grok_to_omp(self):
+        c = route.pick(
+            "grok",
+            ["cursor", "omp", "pi"],
+            "implement",
+            "add a header",
+            exclude="grok",
+        )
+        self.assertEqual(c["worker"], "omp")
+        self.assertEqual(c["spawn"], "run-worker")
+        self.assertFalse(c["parent_writes"])
+
+    def test_exclude_grok_omp_falls_to_pi(self):
+        c = route.pick(
+            "grok",
+            ["cursor", "omp", "pi"],
+            "implement",
+            "add a header",
+            exclude="grok,omp",
+        )
+        self.assertEqual(c["worker"], "pi")
+        self.assertEqual(c["spawn"], "run-worker")
+
+    def test_exclude_leaving_only_cursor_is_none(self):
+        c = route.pick(
+            "grok",
+            ["cursor"],
+            "implement",
+            "add a header",
+            exclude="grok",
+        )
+        self.assertEqual(c["spawn"], "none")
+        self.assertEqual(c["worker"], "")
+        self.assertFalse(c["parent_writes"])
+        self.assertIn("Cursor", c["reason"])
+
+    def test_first_pick_cursor_only_still_cursor(self):
+        c = route.pick("", ["cursor"], "implement", "add a header")
+        self.assertEqual(c["worker"], "cursor")
+        self.assertEqual(c["spawn"], "run-worker")
+
+    def test_native_implement_parent_writes(self):
+        c = route.pick("grok", ["cursor", "codex"], "implement", "add a header")
+        self.assertEqual(c["spawn"], "native")
+        self.assertTrue(c["parent_writes"])
+        self.assertEqual(c["model"], "grok-4.6")
+        self.assertIn("this parent writes", c["reason"])
+        c = route.pick("grok", ["claude"], "implement", "add a header")
+        self.assertEqual(c["spawn"], "run-worker")
+        self.assertEqual(c["worker"], "claude")
+        self.assertFalse(c["parent_writes"])
+
+    def test_native_explore_is_not_parent_writes(self):
+        c = route.pick("grok", ["claude"], "explore", "trace remaining gates")
+        self.assertEqual(c["spawn"], "native")
+        self.assertFalse(c["parent_writes"])
+        self.assertEqual(c["model"], "grok-4.5")
+
+    def test_native_hard_parent_writes_on_each_parent(self):
+        for live, model in (
+            ("codex", "gpt-5.6-terra"),
+            ("opencode", "openai/gpt-5.6-terra"),
+            ("omp", "grok-4.6"),
+            ("pi", "grok-4.6"),
+            ("agy", "gemini-3.1-pro-high"),
+        ):
+            c = route.pick(live, [], "hard", "multi-file architecture")
+            self.assertEqual(c["spawn"], "native", live)
+            self.assertTrue(c["parent_writes"], live)
+            self.assertEqual(c["worker"], live)
+            self.assertEqual(c["model"], model, live)
+
+    def test_review_does_not_self_review(self):
+        c = route.pick("grok", [], "review", "review the writer diff")
+        self.assertEqual(c["spawn"], "none")
+        self.assertFalse(c["parent_writes"])
+        self.assertIn("different vendor", c["reason"])
+
 
 if __name__ == "__main__":
     unittest.main()

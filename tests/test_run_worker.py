@@ -116,6 +116,9 @@ class ClaudeWorkerArgv(unittest.TestCase):
         self.assertIn("ask-reply.json", src)
         self.assertIn("do not spawn another worker", src)
         self.assertIn("IN_ASK", src)
+        detect = (ROOT / "scripts" / "detect-binaries.sh").read_text()
+        self.assertIn("Do not use computer-use, chrome-profile, or Figma MCP", detect)
+        self.assertIn("Follow skill file paths listed in the brief", detect)
         self.assertIn("Restart the work clock", src)
 
 

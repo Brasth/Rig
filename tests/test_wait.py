@@ -270,6 +270,10 @@ class WaitContract(unittest.TestCase):
         self.assertNotIn("isError", result)
 
     def test_mcp_stdio_no_progress_without_meta(self):
+        (self.d / "stdout.log").write_text(
+            '{"type":"tool_call","toolName":"read_file","rawInput":{"path":"README.md"}}\n'
+        )
+
         def later():
             time.sleep(0.3)
             self._finish_ok()
@@ -280,7 +284,9 @@ class WaitContract(unittest.TestCase):
         self.assertIn('"id": 2', proc.stdout)
         lines = [json.loads(line) for line in proc.stdout.splitlines() if line.strip()]
         result = next(m for m in lines if m.get("id") == 2)
-        self.assertIn("wait-job", result["result"]["content"][0]["text"])
+        text = result["result"]["content"][0]["text"]
+        self.assertIn("wait-job", text)
+        self.assertIn("doing", text.lower())
 
 
 class InitAgentsWait(unittest.TestCase):
@@ -301,6 +307,8 @@ class InitAgentsWait(unittest.TestCase):
         self.assertIn("rig job allow", text)
         self.assertIn("Never kill", text)
         self.assertIn("rig_job_wait", text)
+        self.assertIn("rig_session", start)
+        self.assertIn("parent_writes", start)
         self.assertIn("rig_pick", start)
         self.assertIn("rig_status", start)
         self.assertIn("rig_job_start", start)

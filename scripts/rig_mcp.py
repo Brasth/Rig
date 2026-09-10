@@ -24,9 +24,9 @@ TOOLS = [
         "name": "rig_jobs",
         "description": (
             "List Rig worker jobs in this project: which agent is running, "
-            "the task, status, and what it is doing now. Status ask means the "
-            "Claude child is waiting: you MUST call rig_job_allow or rig_job_deny. "
-            "Do not kill that job. Do not spawn another worker for the same task."
+            "the task, status, and what it is doing now. Status ask or running: "
+            "you MUST call rig_job_allow or rig_job_deny for ask. "
+            "Do not kill that job. Do not spawn another worker while it is ask or running."
         ),
         "inputSchema": {
             "type": "object",
@@ -72,7 +72,9 @@ TOOLS = [
             "Block until a Rig job asks for permission or finishes. "
             "Do not pass timeout unless you must cap the wait. Do not poll. "
             "If the text starts with ASK, call rig_job_allow or rig_job_deny next "
-            "so the child can continue. Do not kill the job. Do not spawn another worker."
+            "so the child can continue. Do not kill an ask or running job. "
+            "Do not spawn another worker while it is ask or running. "
+            "Spawn-infra fail may re-pick with exclude once."
         ),
         "inputSchema": {
             "type": "object",
@@ -92,7 +94,7 @@ TOOLS = [
     {
         "name": "rig_job_allow",
         "description": (
-            "Allow the Claude child's pending permission prompt. "
+            "Allow a pending permission prompt (Claude ask). "
             "Call this when rig_jobs or rig_job_wait shows status ask and the command is safe worker work "
             "(read, edit, test, ssh gather, git status/diff/add/commit). "
             "This is how the child continues. Do not close the job instead."
@@ -108,7 +110,7 @@ TOOLS = [
     {
         "name": "rig_job_deny",
         "description": (
-            "Deny the Claude child's pending permission prompt. "
+            "Deny a pending permission prompt (Claude ask). "
             "Use for destructive, prod, or secrets commands. Optional reason is shown to the child."
         ),
         "inputSchema": {
@@ -173,6 +175,13 @@ TOOLS = [
                     ),
                 },
                 "repo": {"type": "string", "description": "Project root. Default cwd."},
+                "exclude": {
+                    "type": "string",
+                    "description": (
+                        "Comma worker names to skip after a dead spawn "
+                        "(example: grok). Skips native if live is excluded."
+                    ),
+                },
             },
             "required": ["case"],
         },
@@ -257,6 +266,55 @@ TOOLS = [
             },
         },
     },
+    {
+        "name": "rig_session",
+        "description": (
+            "One call: memory, jobs, status, and pick JSON. "
+            "Same as rig memory + rig jobs + rig status + rig pick. "
+            "Call this first when present. Does not launch a worker."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "case": {
+                    "type": "string",
+                    "description": "Task text for pick. Required to include pick JSON.",
+                },
+                "role": {
+                    "type": "string",
+                    "enum": list(PICK_ROLES),
+                    "description": "Optional pick kind. Omit to classify from case.",
+                },
+                "exclude": {
+                    "type": "string",
+                    "description": "Comma worker names to skip. Same as rig_pick exclude.",
+                },
+                "repo": {"type": "string", "description": "Project root. Default cwd."},
+            },
+            "required": ["case"],
+        },
+    },
+]
+
+TOOL_ORDER = (
+    "rig_session",
+    "rig_job_wait",
+    "rig_job_allow",
+    "rig_job_deny",
+    "rig_jobs",
+    "rig_pick",
+    "rig_status",
+    "rig_job_start",
+    "rig_job_show",
+    "rig_job_log",
+    "rig_job_finish",
+    "rig_job_record",
+    "rig_memory",
+    "rig_memory_add",
+)
+_TOOLS_BY_NAME = {t["name"]: t for t in TOOLS}
+TOOLS = [_TOOLS_BY_NAME[n] for n in TOOL_ORDER if n in _TOOLS_BY_NAME] + [
+    t for t in TOOLS if t["name"] not in TOOL_ORDER
 ]
 
 
@@ -270,6 +328,50 @@ def _err(text: str) -> dict:
 
 def _repo(args: dict) -> Path:
     return rig_jobs.repo_root(args.get("repo") if isinstance(args, dict) else None)
+
+
+def format_session(
+    repo: Path,
+    case: str,
+    role: str = "",
+    exclude: str = "",
+    *,
+    as_json: bool = False,
+) -> str:
+    live = rig_harness.live_parent()
+    effective = rig_harness.effective_workers(repo, live)
+    mem = rig_memory.show_memory(repo)
+    listing = rig_jobs.list_jobs(repo)
+    status = rig_harness.format_status(repo, live=live)
+    role_n = (role or "").strip()
+    pick_err = ""
+    choice: dict = {}
+    if role_n and role_n not in PICK_ROLES:
+        pick_err = "rig_pick: role must be explore|mini|bulk|implement|hard|review|stay"
+    else:
+        choice = rig_route.pick(live, effective, role_n, case or "", exclude=exclude)
+    if as_json:
+        return json.dumps(
+            {
+                "memory": mem,
+                "jobs": listing,
+                "status": status,
+                "pick": choice if not pick_err else {"error": pick_err},
+            },
+            indent=2,
+            default=str,
+        )
+    parts = [
+        "# memory",
+        mem.strip() or "(empty)",
+        "# jobs",
+        rig_jobs.format_table(listing),
+        "# status",
+        status.strip() or "(empty)",
+        "# pick",
+        pick_err or json.dumps(choice, indent=2),
+    ]
+    return "\n".join(parts)
 
 
 def _progress_token(params: dict):
@@ -365,8 +467,26 @@ def call_tool(name: str, args: dict, on_tick=None) -> dict:
             case = str(args.get("case") or "")
             live = rig_harness.live_parent()
             effective = rig_harness.effective_workers(repo, live)
-            choice = rig_route.pick(live, effective, role, case)
+            exclude = str(args.get("exclude") or "")
+            choice = rig_route.pick(live, effective, role, case, exclude=exclude)
             return _ok(json.dumps(choice, indent=2))
+        if name == "rig_session":
+            role = str(args.get("role") or "").strip()
+            if role and role not in PICK_ROLES:
+                return _err(
+                    "rig_session: role must be explore|mini|bulk|implement|hard|review|stay"
+                )
+            case = str(args.get("case") or "")
+            if not case.strip():
+                return _err("rig_session needs case")
+            return _ok(
+                format_session(
+                    repo,
+                    case,
+                    role,
+                    str(args.get("exclude") or ""),
+                )
+            )
         if name == "rig_status":
             return _ok(rig_harness.format_status(repo, live=rig_harness.live_parent()))
         if name in {"rig_job_start", "rig_job_finish", "rig_job_record"}:
@@ -504,7 +624,33 @@ def handle(msg: dict) -> dict | None:
     return None
 
 
+def run_session_cli(argv: list[str]) -> int:
+    import argparse
+
+    parser = argparse.ArgumentParser(prog="rig_mcp")
+    parser.add_argument("--session", action="store_true")
+    parser.add_argument("--case", default="")
+    parser.add_argument("--role", default="")
+    parser.add_argument("--exclude", default="")
+    parser.add_argument("--repo", default="")
+    parser.add_argument("--json", action="store_true")
+    args = parser.parse_args(argv)
+    repo = rig_jobs.repo_root(args.repo or None)
+    print(
+        format_session(
+            repo,
+            args.case,
+            args.role,
+            args.exclude,
+            as_json=args.json,
+        )
+    )
+    return 0
+
+
 def main() -> int:
+    if "--session" in sys.argv:
+        return run_session_cli(sys.argv[1:])
     while True:
         try:
             msg = read_message()

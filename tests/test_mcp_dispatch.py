@@ -15,8 +15,18 @@ import jobs  # noqa: E402
 import rig_mcp  # noqa: E402
 import route  # noqa: E402
 
-PICK_KEYS = {"kind", "worker", "spawn", "model", "effort", "native_agent", "reason"}
+PICK_KEYS = {
+    "kind",
+    "worker",
+    "spawn",
+    "model",
+    "effort",
+    "native_agent",
+    "reason",
+    "parent_writes",
+}
 DISPATCH_TOOLS = (
+    "rig_session",
     "rig_pick",
     "rig_status",
     "rig_job_start",
@@ -121,6 +131,7 @@ class McpDispatch(unittest.TestCase):
         names = [t["name"] for t in rig_mcp.TOOLS]
         for name in DISPATCH_TOOLS + EXISTING_TOOLS:
             self.assertIn(name, names)
+        self.assertEqual(names[0], "rig_session")
         self.assertNotIn("rig_spawn", names)
         self.assertFalse(any("run-worker" in n or n.endswith("_spawn") for n in names))
 
@@ -314,6 +325,54 @@ class McpDispatch(unittest.TestCase):
             {"repo": str(self.repo), "fact": "MCP pick uses live parent"},
         )
         self.assertEqual(self._text(added), "added")
+
+    def test_session_returns_memory_jobs_status_pick(self):
+        rig_mcp.call_tool(
+            "rig_memory_add",
+            {"repo": str(self.repo), "fact": "session packs four calls"},
+        )
+        out = rig_mcp.call_tool(
+            "rig_session",
+            {"repo": str(self.repo), "case": "add a header", "role": "implement"},
+        )
+        self.assertNotIn("isError", out)
+        text = self._text(out)
+        self.assertIn("# memory", text)
+        self.assertIn("session packs four calls", text)
+        self.assertIn("# jobs", text)
+        self.assertIn("# status", text)
+        self.assertIn("live=grok", text)
+        self.assertIn("# pick", text)
+        self.assertIn('"parent_writes": true', text)
+        self.assertIn('"spawn": "native"', text)
+
+    def test_session_stay_does_not_spawn(self):
+        out = rig_mcp.call_tool(
+            "rig_session",
+            {"repo": str(self.repo), "case": "anything", "role": "stay"},
+        )
+        text = self._text(out)
+        self.assertIn('"spawn": "stay"', text)
+        self.assertNotIn("run-worker.sh", text)
+
+    def test_session_needs_case(self):
+        out = rig_mcp.call_tool("rig_session", {"repo": str(self.repo)})
+        self.assertTrue(out.get("isError"))
+        self.assertIn("case", self._text(out).lower())
+
+    def test_pick_exclude_skips_native(self):
+        out = rig_mcp.call_tool(
+            "rig_pick",
+            {
+                "repo": str(self.repo),
+                "case": "add a header",
+                "role": "implement",
+                "exclude": "grok",
+            },
+        )
+        choice = json.loads(self._text(out))
+        self.assertEqual(choice["spawn"], "none")
+        self.assertFalse(choice["parent_writes"])
 
 
 if __name__ == "__main__":

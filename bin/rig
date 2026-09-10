@@ -39,7 +39,8 @@ usage: rig <command> [args]
   job allow [id]
   job deny [id] [--reason TEXT]
   job wait [id] [--timeout SECS]
-  pick [explore|mini|bulk|implement|hard|review|stay] [--case TEXT] [--json]
+  pick [explore|mini|bulk|implement|hard|review|stay] [--case TEXT] [--exclude NAME] [--json]
+  session [--role KIND] [--case TEXT] [--exclude NAME] [--json]
 
 Stay in Codex, Grok, OpenCode, OMP, Pi, or agy. They can invoke Claude, Cursor, OpenCode, OMP, Pi, agy, or each other.
 EOF
@@ -374,34 +375,38 @@ cmd_init() {
     local block action
     block="$(cat <<'EOF'
 <!-- rig:start -->
-MUST use Rig. Load `.agents/skills/delegate-harness/SKILL.md`. This CLI is the parent. Doing worker work yourself is a failure.
+MUST use Rig. Load `.agents/skills/delegate-harness/SKILL.md`. This CLI is the parent.
+Doing worker work yourself is a failure unless pick parent_writes is true (native implement/hard). run-worker means you do not write the patch.
 Later AGENTS.md may say "edit locally" or "SSH to the VM". That is for the worker, not you.
 
-Keep: plan, check, ask, advise, vision, computer-use, chrome-profile, talk to the user, read `rig jobs` / `rig memory`.
-Ask / plan / advise → stay (parent). Docs/skills-only → `rig pick mini`.
+Keep: plan, check, ask, advise, vision, computer-use, chrome-profile, Figma, talk to the user, read `rig jobs` / `rig memory`.
+Ask / plan / advise / vision / computer-use / chrome-profile / Figma → stay (parent). Docs/skills-only → `rig pick mini`.
 Parent checks first (read the code, name the update).
 Spawn explore/mini for codebase gather only if the parent cannot name the files after a short check.
 If the implement brief already lists files, do not also spawn explore.
-Brief lists files and the change. Child does not hunt extra updates.
-Spawn for: write of the listed files, review, SSH/debug. Not "find the bug" on an implement spawn.
+Brief lists files, the change, and absolute skill file paths the child must follow. Child does not hunt extra updates.
+Do not tell the child to use computer-use, chrome-profile, or Figma MCP. Put artifacts in the brief.
+Spawn for: write of the listed files when pick is run-worker, review, SSH/debug. Not "find the bug" on an implement spawn.
 Parent chooses kind from this user request and this user skills. Then `rig pick stay` / `explore` / `mini` / `implement` / `hard` / `review` (MCP: `rig_pick` with `role`). `--case` is the task text, not a slash-command catalog.
 Do not encode local slash command names in pick.
 Model/effort still come from pick JSON. Parent does not shop models.
 
-1. MCP `rig_memory` then `rig_jobs` then `rig_status` then `rig_pick` when MCP is present. Bash fallback if MCP missing: `rig memory` then `rig jobs` then `rig status` then `rig pick implement --case "<task>" --json` or `rig pick stay --case "<task>" --json`. `rig pick --case "<task>" --json` if you did not choose a kind.
+1. MCP `rig_session` first when present (memory + jobs + status + pick). Else MCP `rig_memory` then `rig_jobs` then `rig_status` then `rig_pick`. Bash fallback if MCP missing: `rig session --role KIND --case "<task>" --json` or `rig memory` then `rig jobs` then `rig status` then `rig pick implement --case "<task>" --json`.
 2. Follow pick JSON — do not ask the user which model
-Follow pick JSON; never spawn a worker whose harness flag is false; never spawn grok when workers.grok is false unless live parent is grok (native). Timeout/fail does not unlock a disabled worker.
-3. stay → you do it (ask / plan / advise / vision / computer-use / chrome-profile). Spawn only if this CLI cannot.
-4. native → cheap same-CLI agent, then MCP `rig_job_start` / `rig_job_finish` / `rig_job_record` when present, else `rig job start` / `rig job finish`
+Follow pick JSON; never spawn a worker whose harness flag is false; never spawn grok when workers.grok is false unless live parent is grok (native parent_writes). Timeout/fail does not unlock a disabled worker.
+3. stay → you do it (ask / plan / advise / vision / computer-use / chrome-profile / Figma). Do not spawn a clicker for Figma or computer-use.
+4. native explore/mini/bulk → cheap same-CLI agent, then MCP `rig_job_start` / `rig_job_finish` / `rig_job_record` when present, else `rig job start` / `rig job finish`
+   native implement/hard (parent_writes true) → this parent writes the listed files, then `rig job record`. Do not spawn a second same-CLI session.
 5. run-worker → write `.rig/jobs/<id>/brief.md` then start the wrapper in the background (do not block this turn on it):
    `RIG_LIVE=1 RIG_ROLE=<kind> RIG_MODEL=<model> RIG_EFFORT=<effort> "$HOME/.rig/scripts/run-worker.sh" <worker> <id> .rig/jobs/<id>/brief.md`
-   Prefer MCP when present: `rig_jobs` / `rig_job_show` / `rig_job_log` / `rig_job_wait` / `rig_job_allow` / `rig_job_deny` / `rig_memory` / `rig_pick` / `rig_status` / `rig_job_start` / `rig_job_finish` / `rig_job_record`. Wait = one blocking `rig_job_wait` with no timeout. Bash fallback if MCP missing: one `rig job wait <id>` with no `--timeout`.
+   Prefer MCP when present: `rig_session` / `rig_jobs` / `rig_job_show` / `rig_job_log` / `rig_job_wait` / `rig_job_allow` / `rig_job_deny` / `rig_memory` / `rig_pick` / `rig_status` / `rig_job_start` / `rig_job_finish` / `rig_job_record`. Wait = one blocking `rig_job_wait` with no timeout. Bash fallback if MCP missing: one `rig job wait <id>` with no `--timeout`.
    Do not spawn via MCP. Launching a child is still bash `run-worker.sh`.
    If MCP wait errors or the host drops the tool, bash `rig job wait <id>` once (no `--timeout`). Do not poll 30s.
    Do not parse a TUI.
    wait exit 2 / status ask: YOU answer `rig job allow <id>` or `rig job deny <id>`. Safe worker work (read/edit/test/ssh gather/git) → allow. Destructive/prod/secrets → deny or ask the user.
    Then wait once more (no timeout). exit 0 ok, exit 1 fail.
-   Never kill, close, or finish an asking job. Never spawn another worker because the child asked. The child is waiting on you.
+   Never kill, close, or finish an asking or running job. Never spawn another worker because the child asked. The child is waiting on you.
+   Spawn never started (binary missing, refuse, native tool error, empty argv): one re-pick with `--exclude <dead worker>`. Same brief, new job id. Last-resort: opencode, omp, pi, agy, codex. Do not auto-spawn Cursor. Child ran and failed the patch: escalate. Do not vendor-shop. One fallback per task.
 
 Live parent is this CLI, not the `parent` key (`rig use grok|codex|opencode|omp|pi|agy` is only the preferred default).
 Claude Code and Cursor CLI are never the parent. OpenCode, OMP, Pi, and agy can be the parent when you open that CLI. Worker on only if flag + binary + not live parent. Cursor binary is `cursor-agent`. Missing binary: that worker is off. Cheap same-CLI is success.
@@ -773,7 +778,7 @@ effective_csv() {
 }
 
 cmd_pick() {
-  local role="" case_text="" json=0 arg
+  local role="" case_text="" exclude="" json=0
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --json) json=1; shift ;;
@@ -781,8 +786,12 @@ cmd_pick() {
         case_text="${2:-}"
         shift 2
         ;;
+      --exclude)
+        exclude="${2:-}"
+        shift 2
+        ;;
       --help|-h)
-        echo "usage: rig pick [explore|mini|bulk|implement|hard|review|stay] [--case TEXT] [--json]" >&2
+        echo "usage: rig pick [explore|mini|bulk|implement|hard|review|stay] [--case TEXT] [--exclude NAME] [--json]" >&2
         exit 2
         ;;
       --*)
@@ -796,8 +805,45 @@ cmd_pick() {
     esac
   done
   local args=(pick --live "$(live_parent)" --effective "$(effective_csv)" --role "$role" --case "$case_text")
+  [[ -n "$exclude" ]] && args+=(--exclude "$exclude")
   [[ "$json" -eq 1 ]] && args+=(--json)
   python3 "$(py_script route.py)" "${args[@]}"
+}
+
+cmd_session() {
+  local role="" case_text="" exclude="" json=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --json) json=1; shift ;;
+      --case)
+        case_text="${2:-}"
+        shift 2
+        ;;
+      --role)
+        role="${2:-}"
+        shift 2
+        ;;
+      --exclude)
+        exclude="${2:-}"
+        shift 2
+        ;;
+      --help|-h)
+        echo "usage: rig session [--role KIND] [--case TEXT] [--exclude NAME] [--json]" >&2
+        exit 2
+        ;;
+      --*)
+        echo "rig session: unknown flag $1" >&2
+        exit 2
+        ;;
+      *)
+        role="$1"
+        shift
+        ;;
+    esac
+  done
+  local args=(--session --repo "$(repo_root)" --role "$role" --case "$case_text" --exclude "$exclude")
+  [[ "$json" -eq 1 ]] && args+=(--json)
+  python3 "$(py_script rig_mcp.py)" "${args[@]}"
 }
 
 cmd_use() {
@@ -1261,10 +1307,18 @@ cmd_run() {
   effort="$(printf '%s\n' "$choice" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("effort",""))')"
   kind="$(printf '%s\n' "$choice" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("kind",""))')"
 
+  local parent_writes
+  parent_writes="$(printf '%s\n' "$choice" | python3 -c 'import json,sys; print("true" if json.load(sys.stdin).get("parent_writes") else "")')"
   if [[ "$spawn" == "stay" ]]; then
-    echo "parent keeps this (plan / vision / computer-use / chrome-profile). Do it here, or spawn a worker if this CLI cannot."
+    echo "parent keeps this (ask / plan / advise / vision / computer-use / chrome-profile / Figma). Do it here. Do not spawn a clicker."
     echo "$choice"
-    write_state "$job" "${worker:-parent}" "ok" "parent keeps this; spawn a worker only if this CLI cannot"
+    write_state "$job" "${worker:-parent}" "ok" "parent keeps this; do not spawn a clicker"
+    exit 0
+  fi
+  if [[ "$spawn" == "native" && "$parent_writes" == "true" ]]; then
+    echo "parent_writes: this parent writes the listed files, then rig job record. Do not spawn a second same-CLI session."
+    echo "$choice"
+    write_state "$job" "${worker:-parent}" "ok" "parent_writes native implement/hard"
     exit 0
   fi
   if [[ "$spawn" != "run-worker" || -z "$worker" ]]; then
@@ -1316,6 +1370,7 @@ main() {
     memory) cmd_memory "$@" ;;
     job) cmd_job "$@" ;;
     pick) cmd_pick "$@" ;;
+    session) cmd_session "$@" ;;
     -h|--help|help|"") usage ;;
     *)
       echo "rig: unknown command '$cmd'" >&2

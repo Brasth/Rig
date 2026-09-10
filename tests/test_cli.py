@@ -286,6 +286,9 @@ class InitPresence(unittest.TestCase):
         self.assertIn("rig job allow", text)
         self.assertIn("Never kill", text)
         self.assertIn("Never spawn another worker", text)
+        self.assertIn("parent_writes", text)
+        self.assertIn("rig_session", text)
+        self.assertIn("--exclude", text)
         self.assertIn("background", text)
         self.assertNotIn("Loop `rig job wait`", text)
         self.assertIn("rig_job_wait", text)
@@ -304,9 +307,14 @@ class InitPresence(unittest.TestCase):
         self.assertIn("never spawn a worker whose harness flag is false", text)
         self.assertIn("Timeout/fail does not unlock a disabled worker", text)
         self.assertIn("Parent checks first", text)
-        self.assertIn("Brief lists files and the change", text)
+        self.assertIn("Brief lists files, the change, and absolute skill file paths", text)
         self.assertIn("Child does not hunt extra updates", text)
         self.assertIn("write of the listed files", text)
+        skill = (self.repo / ".agents" / "skills" / "delegate-harness" / "SKILL.md").read_text()
+        self.assertIn("parent_writes", skill)
+        self.assertIn("Fail classes", skill)
+        self.assertIn("skill file paths", skill)
+        self.assertNotIn("spawn a worker that can", skill)
         self.assertIn('Not "find the bug"', text)
         self.assertIn("codebase gather", text)
         self.assertIn("explore/mini", text)
@@ -320,6 +328,39 @@ class InitPresence(unittest.TestCase):
         self.assertIn("slash-command catalog", text)
         self.assertNotIn("omit --model unless RIG_MODEL is set", text)
         self.assertNotIn("'", text.split("<!-- rig:start -->", 1)[1].split("<!-- rig:end -->", 1)[0])
+
+    def test_session_and_pick_exclude(self):
+        sess = run_rig(
+            self.repo,
+            "session",
+            "--role",
+            "stay",
+            "--case",
+            "advise on the tradeoff",
+            "--json",
+            env={"PATH": _stub_path(), "RIG_PARENT": "grok"},
+        )
+        self.assertEqual(sess.returncode, 0, sess.stderr + sess.stdout)
+        payload = json.loads(sess.stdout)
+        self.assertIn("memory", payload)
+        self.assertIn("jobs", payload)
+        self.assertIn("status", payload)
+        self.assertEqual(payload["pick"]["spawn"], "stay")
+        picked = run_rig(
+            self.repo,
+            "pick",
+            "implement",
+            "--case",
+            "add a header",
+            "--exclude",
+            "grok",
+            "--json",
+            env={"PATH": _stub_path(), "RIG_PARENT": "grok"},
+        )
+        self.assertEqual(picked.returncode, 0, picked.stderr + picked.stdout)
+        choice = json.loads(picked.stdout)
+        self.assertIn(choice["spawn"], ("none", "run-worker", "native"))
+        self.assertFalse(choice.get("parent_writes"))
 
     def test_use_opencode_omp_pi_writes_parent(self):
         proc = run_rig(self.repo, "init", env={"PATH": _stub_path()})

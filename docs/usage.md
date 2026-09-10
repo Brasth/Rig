@@ -340,24 +340,24 @@ Numbered path for a human:
              log    rig job log 20260909T032405Z-82424 -f
    ```
 
-8. If a Claude child is `ask`: the **parent** answers `rig job allow <id>` or `rig job deny <id>` (TUI `y` / `n`). Never kill that job. Never spawn another worker because Claude asked. The same child continues after you allow.
+8. If a Claude child is `ask`: the **parent** answers `rig job allow <id>` or `rig job deny <id>` (TUI `y` / `n`). Never kill that job. Never spawn another worker because Claude asked. The same child continues after you allow. Spawn never started: one `rig pick --exclude <dead>` (last-resort opencode, omp, pi, agy, codex). Do not auto-spawn Cursor.
 9. Jobs and MEMORY are **this repo**, not the chat. A new thread still sees `.rig/jobs`. Running children keep going.
 
-**Parent keeps:** ask / plan / advise, check (name files and the update), vision, computer-use, chrome-profile, talk to you.
+**Parent keeps:** ask / plan / advise, check (name files and the update), vision, Figma, computer-use, chrome-profile, talk to you. Native implement/hard (`parent_writes`): this parent writes + `rig job record`.
 
-**Workers:** write the listed change, not hunt on a fix. Review, SSH/debug. Codebase gather only if the parent cannot name the files.
+**Workers:** write the listed change when pick is `run-worker`, not hunt on a fix. Follow skill file paths in the brief. Review, SSH/debug. Codebase gather only if the parent cannot name the files.
 
-If **this** CLI cannot do computer-use or chrome-profile, the parent spawns a worker. It does **not** ask you.
+Figma / computer-use / chrome-profile stay with the parent. If this CLI has no Figma MCP, ask for a screenshot. Do not spawn a clicker.
 
 ### Routing
 
 | Case | Who |
 | --- | --- |
-| Ask / plan / advise / vision / computer-use / chrome-profile | parent (`rig pick stay`) unless this CLI cannot do it, then spawn |
+| Ask / plan / advise / vision / computer-use / chrome-profile / Figma | parent (`rig pick stay`). Do not spawn a clicker |
 | Docs/skills-only | cheap same-CLI (`rig pick mini`) |
 | Locate / trace / codebase gather | cheap same-CLI explore/mini only if the parent cannot name the files after a short check |
-| Implement / SSH / fix | Grok child if Grok is **effective**; if Grok/OpenCode/OMP/Pi/agy is the live parent (or Grok off) → Claude Code if effective, else cheap same-CLI. Cursor/OpenCode/OMP/Pi/agy/Codex children last resort (not just because the CLI is on PATH) |
-| Review | different vendor than the writer |
+| Implement / SSH / fix | Grok child if Grok is **effective**; if Grok/OpenCode/OMP/Pi/agy is the live parent (or Grok off) → Claude Code if effective, else native `parent_writes` (this parent writes; no second same-CLI session). Last-resort children: opencode, omp, pi, agy, codex, then cursor. Do not auto-spawn Cursor on fallback |
+| Review | different vendor than the writer. No other vendor → do not self-review |
 | No extra CLIs | cheap same-CLI. Record it. That is success |
 
 Pin **full** model IDs (aliases drift). Codex / Grok / Claude / Cursor stay static pins. OpenCode / OMP / Pi / agy pins are **preferences**: `rig pick` and `run-worker.sh` list models from that CLI and pick one that exists. Catalog cache: `~/.rig/cache/model-catalogs.json` (TTL ~1 hour). `RIG_REFRESH_MODELS=1` refreshes. `RIG_SKIP_MODEL_CATALOG=1` keeps the static pin. Never Sol / Astra / Fable, even if the catalog lists them.
@@ -376,7 +376,7 @@ Never Fable / Sol / Astra as a child. Opus is allowed.
 
 A Grok child is **headless**. Codex will not show its TUI. While it runs, both you and the parent can see **which agent, which task, status, and the log**.
 
-Prefer MCP when present. Instant tools stay MCP: `rig_jobs`, `rig_job_show`, `rig_job_log`, `rig_job_allow`, `rig_job_deny`, `rig_memory`, `rig_memory_add`, `rig_pick`, `rig_status`, `rig_job_start`, `rig_job_finish`, `rig_job_record`. Launching a child is still bash `run-worker.sh` in the background; there is no spawn-from-MCP tool. Wait is one blocking `rig_job_wait` with **no timeout** (until ASK or result). If the parent host supports MCP progress, `rig_job_wait` may stream the child `doing` line while that wait is in flight. That is not a new wait API. If a parent host **kills** the MCP tool or returns early with an error, fall back to **one** bash `rig job wait <id>` with **no** `--timeout`. Do not poll 30s. Do not loop MCP wait with a short timeout. Bash is also fallback if MCP is missing.
+Prefer MCP when present. First call: `rig_session` (memory + jobs + status + pick) when the host lists it. Instant tools stay MCP: `rig_session`, `rig_jobs`, `rig_job_show`, `rig_job_log`, `rig_job_allow`, `rig_job_deny`, `rig_memory`, `rig_memory_add`, `rig_pick`, `rig_status`, `rig_job_start`, `rig_job_finish`, `rig_job_record`. Launching a child is still bash `run-worker.sh` in the background; there is no spawn-from-MCP tool. Wait is one blocking `rig_job_wait` with **no timeout** (until ASK or result). If the parent host supports MCP progress, `rig_job_wait` may stream the child `doing` line while that wait is in flight. The wait **result** also includes `doing`. That is not a new wait API. If a parent host **kills** the MCP tool or returns early with an error, fall back to **one** bash `rig job wait <id>` with **no** `--timeout`. Do not poll 30s. Do not loop MCP wait with a short timeout. Bash is also fallback if MCP is missing (`rig session --case "..." --json`).
 
 ```bash
 rig tui                 # jobs board (agent / task / status / live log)
@@ -501,7 +501,7 @@ A Cursor child is `cursor-agent -p` with `stream-json`, `--force`, `--trust`, an
 
 An OpenCode child is `opencode run --format json --dir <repo> --auto`. An OMP child is `omp -p --mode json --approval-mode write`. A Pi child is `pi -p --mode json --approve`. An agy child is `agy -p` with `--output-format json --mode accept-edits --print-timeout <RIG_TIMEOUT>s --disable-slash-commands`. No `--dangerously-skip-permissions`. `run-worker.sh` fills `RIG_MODEL` / `RIG_EFFORT` from `rig pick` when unset (OpenCode `--variant`, OMP/Pi `--thinking`, agy `--effort`). OpenCode / OMP / Pi / agy models are resolved against that CLI’s live catalog (cached). If both OMP and Pi are effective, pick uses OMP. agy `denied_actions` in JSON is a fail even when the process exits 0.
 
-The parent picks **kind**. Pick maps kind to worker, model, and effort. Do not ask the user. Pass the kind: `rig pick implement --case "<task>"` or `rig pick stay --case "<task>"`. `--case` is fallback English when the parent did not choose a kind. Pick does not ship device skill names. Plan/vision/computer-use/chrome-profile: `rig pick stay` unless this CLI cannot do it.
+The parent picks **kind**. Pick maps kind to worker, model, and effort. Do not ask the user. Pass the kind: `rig pick implement --case "<task>"` or `rig pick stay --case "<task>"`. `--case` is fallback English when the parent did not choose a kind. Pick does not ship device skill names. Plan/vision/computer-use/chrome-profile/Figma: `rig pick stay`. Native implement/hard: `parent_writes` — this parent writes. Dead spawn: one `rig pick --exclude`. First parent call: `rig session` / MCP `rig_session` when present.
 
 ## Commands
 

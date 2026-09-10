@@ -11,13 +11,13 @@ argument-hint: "[job-id]"
 # Rig jobs
 
 Show the user which Rig worker is running, the task, status, and a readable log.
-Do not guess. Run the commands. The parent checks this board and MUST spawn workers for code, review, SSH, and gather — it does not do that work itself.
+Do not guess. Run the commands. The parent checks this board and MUST spawn workers for code, review, SSH, and gather unless pick `parent_writes` is true (native implement/hard).
 
 ## MCP first
 
 If MCP tools are present, use them. Bash is fallback if MCP is missing.
 
-- Instant: `rig_jobs` / `rig_job_show` / `rig_job_log` / `rig_job_allow` / `rig_job_deny` / `rig_memory` / `rig_pick` / `rig_status` / `rig_job_start` / `rig_job_finish` / `rig_job_record`
+- Instant: `rig_session` / `rig_jobs` / `rig_job_show` / `rig_job_log` / `rig_job_allow` / `rig_job_deny` / `rig_memory` / `rig_pick` / `rig_status` / `rig_job_start` / `rig_job_finish` / `rig_job_record`
 - Wait: `rig_job_wait` (one blocking call, no timeout)
 
 Launching a child is still bash `run-worker.sh` in the background. There is no spawn-from-MCP tool.
@@ -26,13 +26,15 @@ Launching a child is still bash `run-worker.sh` in the background. There is no s
 
 ## Commands
 
-First commands in a new thread: MCP `rig_memory` then `rig_jobs` then `rig_status` then `rig_pick` when present; else bash:
+First commands in a new thread: MCP `rig_session` when present; else `rig_memory` then `rig_jobs` then `rig_status` then `rig_pick`; else bash:
 
 ```bash
+rig session --case "..." --json   # memory + jobs + status + pick
 rig memory            # standing facts; run this on a new thread
 rig jobs              # every job in this repo (survives a new parent thread)
 rig status            # live parent, effective workers, job count
 rig pick --case "..." --json
+rig pick implement --exclude grok --case "..." --json  # after a dead spawn, once
 rig job wait [id]     # one blocking wait; no --timeout; exit 2 = ASK
 rig job show          # running job, or latest
 rig job show <id>
@@ -54,7 +56,7 @@ A new Grok/Codex/OpenCode/OMP/Pi/agy thread does not start a new job board. Jobs
 - how to watch: `rig job log <id> -f` or `rig tui` in another pane
 - Grok child: `open` line is `grok -r <session-id>`
 
-If status is `ask`, the Claude child is waiting on a permission prompt. **You answer it** — that is the interaction. Do not kill the job. Do not spawn another worker.
+If status is `ask` or `running`, the child is still live. **You answer `ask`** — that is the interaction. Do not kill the job. Do not spawn another worker while it is ask or running. Spawn never started (`fail` with empty files / binary missing): one `--exclude` re-pick. Child ran and failed the patch: escalate.
 
 ```bash
 rig job wait <id>                  # one blocking wait; exit 2 = ASK
