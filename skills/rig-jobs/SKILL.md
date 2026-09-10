@@ -19,7 +19,7 @@ If MCP tools are present, use them. Bash is fallback if MCP is missing.
 
 - `rig_jobs` / `rig_job_show` / `rig_job_log` / `rig_job_wait` / `rig_job_allow` / `rig_job_deny` / `rig_memory`
 
-`rig_job_wait` / `rig job wait`: call **once**, no timeout. Blocks until ASK or result. After allow, wait **once** more. Do not poll. `--timeout` is an optional cap, not the default.
+`rig_job_wait` / `rig job wait`: call **once**, no timeout. Blocks until ASK or result. After allow, wait **once** more. Do not poll. `--timeout` is an optional cap, not the default. If MCP wait errors or the host drops the tool, bash `rig job wait` once (no `--timeout`). Do not go back to a 30s poll loop.
 
 ## Commands
 

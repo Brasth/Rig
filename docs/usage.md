@@ -371,7 +371,7 @@ Never Fable / Sol / Astra as a child. Opus is allowed.
 
 A Grok child is **headless**. Codex will not show its TUI. While it runs, both you and the parent can see **which agent, which task, status, and the log**.
 
-Prefer MCP for those tools when present: `rig_jobs`, `rig_job_show`, `rig_job_log`, `rig_job_wait`, `rig_job_allow`, `rig_job_deny`, `rig_memory`, `rig_memory_add`. Bash is fallback if MCP is missing.
+Prefer MCP when present. Instant tools stay MCP: `rig_jobs`, `rig_job_show`, `rig_job_log`, `rig_job_allow`, `rig_job_deny`, `rig_memory`, `rig_memory_add`. Wait is one blocking `rig_job_wait` with **no timeout** (until ASK or result). If a parent host **kills** the MCP tool or returns early with an error, fall back to **one** bash `rig job wait <id>` with **no** `--timeout`. Do not poll 30s. Do not loop MCP wait with a short timeout. Bash is also fallback if MCP is missing.
 
 ```bash
 rig tui                 # jobs board (agent / task / status / live log)
@@ -387,7 +387,7 @@ rig job log <id> -f     # decoded activity (tools + text)
 
 In Grok, Codex, OpenCode, OMP, Pi, or agy type `/rig`. Grok also gets a bottom status line after `rig setup` (restart Grok once).
 
-MCP tools (after `rig setup` + fully quit the parent CLI once): `rig_jobs`, `rig_job_show`, `rig_job_log`, `rig_job_wait`, `rig_job_allow`, `rig_job_deny`, `rig_memory`, `rig_memory_add`. Wait is one blocking `rig_job_wait` with no timeout.
+MCP tools load after `rig setup` + fully quit the parent CLI once. Instant tools stay MCP. Wait is still one blocking `rig_job_wait` with no timeout; one bash `rig job wait` if the host drops the tool.
 
 Open the Grok child TUI yourself: `grok -r <session-id>` or `grok dashboard`. The job folder has `WATCH.md`.
 

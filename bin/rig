@@ -387,6 +387,7 @@ Spawn for: write code, fix bugs, review, SSH/debug, gather repo or server facts.
 5. run-worker → write `.rig/jobs/<id>/brief.md` then start the wrapper in the background (do not block this turn on it):
    `RIG_LIVE=1 RIG_ROLE=<kind> RIG_MODEL=<model> RIG_EFFORT=<effort> "$HOME/.rig/scripts/run-worker.sh" <worker> <id> .rig/jobs/<id>/brief.md`
    Prefer MCP when present: `rig_jobs` / `rig_job_show` / `rig_job_log` / `rig_job_wait` / `rig_job_allow` / `rig_job_deny` / `rig_memory`. Wait = one blocking `rig_job_wait` with no timeout. Bash fallback if MCP missing: one `rig job wait <id>` with no `--timeout`.
+   If MCP wait errors or the host drops the tool, bash `rig job wait <id>` once (no `--timeout`). Do not poll 30s.
    Do not parse a TUI.
    wait exit 2 / status ask: YOU answer `rig job allow <id>` or `rig job deny <id>`. Safe worker work (read/edit/test/ssh gather/git) → allow. Destructive/prod/secrets → deny or ask the user.
    Then wait once more (no timeout). exit 0 ok, exit 1 fail.
