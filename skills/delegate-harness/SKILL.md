@@ -2,10 +2,10 @@
 name: delegate-harness
 description: >
   ALWAYS activate when `.rig/harness.toml` exists. MUST run MCP `rig_pick` (or
-  bash `rig pick`) and spawn a Rig worker for code, review, fix, SSH, debug, or
-  gather. Parent must not implement those itself. Delegate implement, review,
-  explore, or split work across Codex, Grok, Claude, Cursor, OpenCode, OMP, Pi,
-  and agy via run-worker.sh.
+  bash `rig pick`) and spawn a Rig worker for code, review, fix, SSH, remote
+  debug, or gather in the codebase. Parent must not write the fix; parent checks
+  first and writes the brief. Delegate implement, review, explore, or split work
+  across Codex, Grok, Claude, Cursor, OpenCode, OMP, Pi, and agy via run-worker.sh.
 user-invocable: true
 ---
 
@@ -13,7 +13,11 @@ user-invocable: true
 
 ## Hard gate
 
-When `.rig/harness.toml` exists, do not write app code, review a diff, fix a bug, SSH, or gather repo/server facts yourself.
+When `.rig/harness.toml` exists, do not write app code, review a diff, fix a bug, or SSH yourself. Parent still must not write the fix / review / SSH. Local codebase gather may spawn explore/mini.
+
+Parent still must not write the fix. Parent does check: read local files, name the cause, write the brief. Parent checks before an implement spawn (name files and the update). For locate/trace/codebase gather, spawn explore/mini.
+
+Before `run-worker` / native implement: the brief MUST list files to modify, what to change, what not to change, and acceptance. Do not spawn "go find and fix". The child does only those files and changes. Do not hunt extra updates.
 
 1. MCP `rig_memory` then `rig_jobs` then `rig_status` then `rig_pick` when MCP is present. Bash fallback if MCP missing: `rig memory` then `rig jobs` then `rig status` then `rig pick --case "<task>" --json`
 2. Follow pick JSON. Do not ask the user which model. Never spawn a worker whose harness flag is false. Never spawn grok when `[workers].grok` is false unless the live parent is grok (native). Timeout or fail does not unlock a disabled worker.
@@ -36,7 +40,7 @@ This CLI is the parent. It manages. It does not sit on write/review/SSH when a w
 
 **Parent keeps**
 
-- plan, check, decide, talk to the user
+- plan, check (read local files, name the cause, write the brief), decide, talk to the user
 - vision (screenshots, Figma, images)
 - computer use (desktop)
 - chrome profile (real browser, the user's cookies)
@@ -44,11 +48,10 @@ This CLI is the parent. It manages. It does not sit on write/review/SSH when a w
 
 **Worker does**
 
-- write code
-- fix bugs
+- write the listed files and changes; do not hunt extra updates
 - review (different vendor than the writer)
 - SSH / remote debug
-- gather repo or server facts for the parent (explore, logs, grep)
+- codebase gather (grep, file search, trace) and remote/SSH gather (logs, server facts)
 
 If this CLI cannot do computer-use, chrome-profile, or vision well (no tool, no skill, no profile), spawn a worker that can. Do not ask the user. `rig pick --case "<task>"` still decides worker and model.
 
@@ -69,7 +72,7 @@ Check with MCP `rig_status` / `rig_jobs` (bash: `rig status`, `rig jobs`) or `/r
 Never ask the user which model or reasoning to use. They will not know. Run MCP `rig_pick` (or bash `rig pick --case "<task>" --json` if MCP is missing) and follow it.
 
 - Plan / vision / computer-use / chrome-profile: parent keeps it (`rig pick stay`). Spawn a worker only if this CLI cannot do it.
-- Small / locate / trace / gather facts: cheap same-CLI (`rig pick explore` or `mini`). Codex explorer is `gpt-5.3-codex-mini` low. Grok explore is `grok-4.5`. Claude Code explore is `claude-haiku-4-5-20251001` low. Cursor explore is `composer-2.5-fast` (run-worker, `--mode=ask`).
+- Small / locate / trace / codebase gather: cheap same-CLI (`rig pick explore` or `mini`). Include SSH/remote too. Codex explorer is `gpt-5.3-codex-mini` low. Grok explore is `grok-4.5`. Claude Code explore is `claude-haiku-4-5-20251001` low. Cursor explore is `composer-2.5-fast` (run-worker, `--mode=ask`).
 - Mechanical bulk: `rig pick bulk`. Codex `gpt-5.6-luna` low. Claude Code `claude-haiku-4-5-20251001` low. Cursor `composer-2.5-fast`.
 - Write code / fix bugs / SSH / remote debug: `rig pick implement --case "<task>"`. Grok child `grok-4.6` high if Grok is effective. If Grok is the live parent: Claude Code `claude-sonnet-5` if effective, else cheap same-CLI (Grok native). Same ladder if OpenCode, OMP, Pi, or agy is live (native that CLI with its pin, resolved against the CLI catalog). Cursor/Codex/OpenCode/OMP/Pi/agy children are last resort, not the default just because their CLI is on PATH.
 - Hard / architecture / security / multi-file: `rig pick hard`. Same ladder: Grok child, else Claude, else cheap same-CLI, else Cursor/OpenCode/OMP/Pi/agy/Codex.
@@ -99,7 +102,7 @@ rig job record --worker codex --role explorer --status ok --summary "one-line re
 
 ## Call another CLI
 
-1. Write `.rig/jobs/<id>/brief.md`. Start with: you are a worker, not the orchestrator; do not spawn codex, grok, claude, cursor, opencode, omp, pi, or agy; do the task; print a short summary; stop.
+1. Write `.rig/jobs/<id>/brief.md`. Start with: you are a worker, not the orchestrator; do not spawn codex, grok, claude, cursor, opencode, omp, pi, or agy; do only the files and changes in the brief; do not hunt extra updates; print a short summary; stop. Implement briefs MUST list files to modify, what to change, what not to change, and acceptance. Do not spawn "go find and fix". Explore/gather briefs may say what to find; they do not need a file-edit list.
 2. MCP `rig_pick` (bash fallback: `pick=$(rig pick --case "<task>" --json)`) then start the wrapper **in the background**. Do not block this turn on `run-worker.sh` (that deadlocks when Claude asks for permission). Do not spawn via MCP:
    `RIG_LIVE=1 RIG_ROLE=<kind> RIG_MODEL=<model> RIG_EFFORT=<effort> "${RIG_HOME:-$HOME/.rig}/scripts/run-worker.sh" <worker> <id> .rig/jobs/<id>/brief.md`
 3. One blocking wait until ASK or `result.json`. Do not parse a TUI. Prefer MCP `rig_job_wait` with no timeout; bash fallback is `rig job wait <id>` with no `--timeout`. If MCP wait errors or the host drops the tool, bash `rig job wait` once (no `--timeout`). Do not poll. Do not go back to a 30s poll loop.

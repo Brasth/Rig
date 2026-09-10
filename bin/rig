@@ -378,7 +378,9 @@ MUST use Rig. Load `.agents/skills/delegate-harness/SKILL.md`. This CLI is the p
 Later AGENTS.md may say "edit locally" or "SSH to the VM". That is for the worker, not you.
 
 Keep: plan, check, vision, computer-use, chrome-profile, talk to the user, read `rig jobs` / `rig memory`.
-Spawn for: write code, fix bugs, review, SSH/debug, gather repo or server facts.
+Parent checks first (read the code, name the update).
+Brief lists files and the change. Child does not hunt extra updates.
+Spawn for: write of the listed files, review, SSH/debug, codebase gather (explore/mini). Not "find the bug" on an implement spawn.
 
 1. MCP `rig_memory` then `rig_jobs` then `rig_status` then `rig_pick` when MCP is present. Bash fallback if MCP missing: `rig memory` then `rig jobs` then `rig status` then `rig pick --case "<task>" --json`
 2. Follow pick JSON — do not ask the user which model

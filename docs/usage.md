@@ -329,7 +329,7 @@ Numbered path for a human:
    - `Review the diff I just staged.`
    - `SSH to the box and collect the app logs from the last deploy.`
 
-5. The parent runs `rig pick --case "<task>"` and spawns if needed. It does **not** ask you which model.
+5. The parent checks first for implement: reads the code, names the files and the update, writes that in the brief, then runs `rig pick --case "<task>"` and spawns if needed. Locate / trace / codebase gather may spawn explore/mini. It does **not** ask you which model. Child does not assume scope and does not hunt extra updates.
 6. Watch the child: another terminal `rig tui` or `rig jobs`, or type `/rig` in Grok, Codex, OpenCode, OMP, Pi, or agy. Grok also gets a bottom status line after setup (restart Grok once).
 7. `rig jobs` is a table. Columns: **STATUS AGENT ROLE JOB TASK**. Example:
 
@@ -343,9 +343,9 @@ Numbered path for a human:
 8. If a Claude child is `ask`: the **parent** answers `rig job allow <id>` or `rig job deny <id>` (TUI `y` / `n`). Never kill that job. Never spawn another worker because Claude asked. The same child continues after you allow.
 9. Jobs and MEMORY are **this repo**, not the chat. A new thread still sees `.rig/jobs`. Running children keep going.
 
-**Parent keeps:** plan, check, vision, computer-use, chrome-profile, talk to you.
+**Parent keeps:** plan, check (name files and the update), vision, computer-use, chrome-profile, talk to you.
 
-**Workers:** write code, fix, review, SSH/debug, gather facts.
+**Workers:** write the listed change, not hunt on a fix. Review, SSH/debug, codebase gather.
 
 If **this** CLI cannot do computer-use or chrome-profile, the parent spawns a worker. It does **not** ask you.
 
@@ -354,7 +354,7 @@ If **this** CLI cannot do computer-use or chrome-profile, the parent spawns a wo
 | Case | Who |
 | --- | --- |
 | Plan / vision / computer-use / chrome-profile | parent (`rig pick stay`) unless this CLI cannot do it, then spawn |
-| Small locate / trace / gather | cheap same-CLI |
+| Small locate / trace / codebase gather | cheap same-CLI explore/mini (including local repo) |
 | Implement / SSH / fix | Grok child if Grok is **effective**; if Grok/OpenCode/OMP/Pi/agy is the live parent (or Grok off) → Claude Code if effective, else cheap same-CLI. Cursor/OpenCode/OMP/Pi/agy/Codex children last resort (not just because the CLI is on PATH) |
 | Review | different vendor than the writer |
 | No extra CLIs | cheap same-CLI. Record it. That is success |

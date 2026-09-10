@@ -303,6 +303,13 @@ class InitPresence(unittest.TestCase):
         self.assertIn("pins are preferences", text)
         self.assertIn("never spawn a worker whose harness flag is false", text)
         self.assertIn("Timeout/fail does not unlock a disabled worker", text)
+        self.assertIn("Parent checks first", text)
+        self.assertIn("Brief lists files and the change", text)
+        self.assertIn("Child does not hunt extra updates", text)
+        self.assertIn("write of the listed files", text)
+        self.assertIn('Not "find the bug"', text)
+        self.assertIn("codebase gather", text)
+        self.assertIn("explore/mini", text)
         self.assertNotIn("omit --model unless RIG_MODEL is set", text)
         self.assertNotIn("'", text.split("<!-- rig:start -->", 1)[1].split("<!-- rig:end -->", 1)[0])
 
