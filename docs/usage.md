@@ -371,7 +371,7 @@ Never Fable / Sol / Astra as a child. Opus is allowed.
 
 A Grok child is **headless**. Codex will not show its TUI. While it runs, both you and the parent can see **which agent, which task, status, and the log**.
 
-Prefer MCP when present. Instant tools stay MCP: `rig_jobs`, `rig_job_show`, `rig_job_log`, `rig_job_allow`, `rig_job_deny`, `rig_memory`, `rig_memory_add`. Wait is one blocking `rig_job_wait` with **no timeout** (until ASK or result). If the parent host supports MCP progress, `rig_job_wait` may stream the child `doing` line while that wait is in flight. That is not a new wait API. If a parent host **kills** the MCP tool or returns early with an error, fall back to **one** bash `rig job wait <id>` with **no** `--timeout`. Do not poll 30s. Do not loop MCP wait with a short timeout. Bash is also fallback if MCP is missing.
+Prefer MCP when present. Instant tools stay MCP: `rig_jobs`, `rig_job_show`, `rig_job_log`, `rig_job_allow`, `rig_job_deny`, `rig_memory`, `rig_memory_add`, `rig_pick`, `rig_status`, `rig_job_start`, `rig_job_finish`, `rig_job_record`. Launching a child is still bash `run-worker.sh` in the background; there is no spawn-from-MCP tool. Wait is one blocking `rig_job_wait` with **no timeout** (until ASK or result). If the parent host supports MCP progress, `rig_job_wait` may stream the child `doing` line while that wait is in flight. That is not a new wait API. If a parent host **kills** the MCP tool or returns early with an error, fall back to **one** bash `rig job wait <id>` with **no** `--timeout`. Do not poll 30s. Do not loop MCP wait with a short timeout. Bash is also fallback if MCP is missing.
 
 ```bash
 rig tui                 # jobs board (agent / task / status / live log)
@@ -387,7 +387,7 @@ rig job log <id> -f     # decoded activity (tools + text)
 
 In Grok, Codex, OpenCode, OMP, Pi, or agy type `/rig`. Grok also gets a bottom status line after `rig setup` (restart Grok once).
 
-MCP tools load after `rig setup` + fully quit the parent CLI once. Instant tools stay MCP. Wait is still one blocking `rig_job_wait` with no timeout; one bash `rig job wait` if the host drops the tool.
+MCP tools load after `rig setup` + fully quit the parent CLI once. Instant tools stay MCP (pick, status, start, finish, record, list/show/log, allow/deny, memory). Launch is still bash. Wait is still one blocking `rig_job_wait` with no timeout; one bash `rig job wait` if the host drops the tool.
 
 Open the Grok child TUI yourself: `grok -r <session-id>` or `grok dashboard`. The job folder has `WATCH.md`.
 
@@ -401,7 +401,7 @@ rig job deny <id> --reason "prod deploy"
 
 Safe worker work → allow. Destructive / prod / secrets → deny or ask the user. TUI keys: `y` / `n`. MCP: `rig_job_wait` / `rig_job_allow` / `rig_job_deny`. The child work timeout pauses while status is `ask` and restarts after allow, so a slow parent answer does not immediately timeout the job.
 
-Jobs are this repo, not this chat. A new parent thread still sees `.rig/jobs`. Running children keep going. First commands in a new thread: `rig memory` then `rig jobs` then `rig status`.
+Jobs are this repo, not this chat. A new parent thread still sees `.rig/jobs`. Running children keep going. First commands in a new thread: MCP `rig_memory` then `rig_jobs` then `rig_status` then `rig_pick` when present; else `rig memory` then `rig jobs` then `rig status` then `rig pick --json`.
 
 Memory is local only. Save with the command, not by editing the file:
 

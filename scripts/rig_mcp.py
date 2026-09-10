@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""stdio MCP server: list/show/log Rig jobs for the parent agent."""
+"""stdio MCP server: pick/status/jobs/wait/allow/memory for the parent agent."""
 from __future__ import annotations
 
 import json
@@ -10,8 +10,14 @@ HERE = Path(__file__).resolve().parent
 if str(HERE) not in sys.path:
     sys.path.insert(0, str(HERE))
 
+import harness as rig_harness  # noqa: E402
 import jobs as rig_jobs  # noqa: E402
 import memory as rig_memory  # noqa: E402
+import route as rig_route  # noqa: E402
+
+PICK_ROLES = ("explore", "mini", "bulk", "implement", "hard", "review", "stay")
+JOB_WORKERS = ("grok", "codex", "claude", "cursor", "opencode", "omp", "pi", "agy", "parent")
+JOB_FINISH_STATUSES = ("ok", "fail", "timeout")
 
 TOOLS = [
     {
@@ -145,6 +151,108 @@ TOOLS = [
             "required": ["fact"],
         },
     },
+    {
+        "name": "rig_pick",
+        "description": (
+            "Pick worker, spawn kind, model, and effort for a task. "
+            "Same JSON as rig pick --json. Live parent is this MCP process "
+            "(PPID walk / RIG_PARENT), so a Grok parent does not pick a Grok "
+            "run-worker child. Does not launch a worker."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "case": {"type": "string", "description": "The task text."},
+                "role": {
+                    "type": "string",
+                    "enum": list(PICK_ROLES),
+                    "description": "Pick role. Default implement.",
+                },
+                "repo": {"type": "string", "description": "Project root. Default cwd."},
+            },
+            "required": ["case"],
+        },
+    },
+    {
+        "name": "rig_status",
+        "description": (
+            "Show live parent (this process / RIG_PARENT, not the toml parent key), "
+            "preferred parent, effective workers, and job count."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "repo": {"type": "string", "description": "Project root. Default cwd."},
+            },
+        },
+    },
+    {
+        "name": "rig_job_start",
+        "description": (
+            "Record a running job in .rig/jobs (meta.json + STATE). "
+            "Files only. Does not launch a worker. Returns the job id."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "worker": {
+                    "type": "string",
+                    "enum": list(JOB_WORKERS),
+                    "description": "Worker name. Default live parent, else preferred.",
+                },
+                "role": {"type": "string", "description": "Default worker."},
+                "id": {"type": "string", "description": "Job id. Allocated if omitted."},
+                "summary": {"type": "string"},
+                "repo": {"type": "string"},
+            },
+        },
+    },
+    {
+        "name": "rig_job_finish",
+        "description": (
+            "Finish a recorded job (ok|fail|timeout). Writes result.json. "
+            "Does not kill a process."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "id": {"type": "string", "description": "Job id."},
+                "status": {
+                    "type": "string",
+                    "enum": list(JOB_FINISH_STATUSES),
+                    "description": "Default ok.",
+                },
+                "summary": {"type": "string"},
+                "repo": {"type": "string"},
+            },
+            "required": ["id"],
+        },
+    },
+    {
+        "name": "rig_job_record",
+        "description": (
+            "One-shot start+finish for a cheap same-CLI worker. Files only. "
+            "Same text as rig job record."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "worker": {
+                    "type": "string",
+                    "enum": list(JOB_WORKERS),
+                },
+                "role": {"type": "string"},
+                "status": {
+                    "type": "string",
+                    "enum": list(JOB_FINISH_STATUSES),
+                    "description": "Default ok.",
+                },
+                "summary": {"type": "string"},
+                "id": {"type": "string"},
+                "repo": {"type": "string"},
+            },
+        },
+    },
 ]
 
 
@@ -244,6 +352,64 @@ def call_tool(name: str, args: dict, on_tick=None) -> dict:
             if not rig_memory.normalize_fact(fact):
                 return _err("rig_memory_add needs fact")
             return _ok(rig_memory.add_memory(repo, fact))
+        if name == "rig_pick":
+            role = str(args.get("role") or "implement").strip() or "implement"
+            if role not in PICK_ROLES:
+                return _err(
+                    "rig_pick: role must be explore|mini|bulk|implement|hard|review|stay"
+                )
+            case = str(args.get("case") or "")
+            live = rig_harness.live_parent()
+            effective = rig_harness.effective_workers(repo, live)
+            choice = rig_route.pick(live, effective, role, case)
+            return _ok(json.dumps(choice, indent=2))
+        if name == "rig_status":
+            return _ok(rig_harness.format_status(repo, live=rig_harness.live_parent()))
+        if name in {"rig_job_start", "rig_job_finish", "rig_job_record"}:
+            live = rig_harness.live_parent()
+            preferred = rig_harness.preferred_parent(repo)
+            worker = str(args.get("worker") or "")
+            role = str(args.get("role") or "")
+            summary = str(args.get("summary") or "")
+            job_id = str(args.get("id") or "")
+            if name == "rig_job_start":
+                return _ok(
+                    rig_jobs.start_job(
+                        repo,
+                        worker=worker,
+                        role=role or "worker",
+                        job_id=job_id,
+                        summary=summary,
+                        live=live,
+                        preferred=preferred,
+                    )
+                )
+            status = str(args.get("status") or "ok")
+            if name == "rig_job_finish":
+                return _ok(
+                    rig_jobs.finish_job(
+                        repo,
+                        job_id,
+                        status=status,
+                        summary=summary,
+                        worker=worker,
+                        role=role,
+                        live=live,
+                        preferred=preferred,
+                    )
+                )
+            return _ok(
+                rig_jobs.record_job(
+                    repo,
+                    worker=worker,
+                    role=role or "worker",
+                    status=status,
+                    summary=summary,
+                    job_id=job_id,
+                    live=live,
+                    preferred=preferred,
+                )
+            )
         return _err(f"unknown tool {name}")
     except SystemExit as exc:
         return _err(str(exc) or "rig error")

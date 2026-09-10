@@ -1,10 +1,11 @@
 ---
 name: delegate-harness
 description: >
-  ALWAYS activate when `.rig/harness.toml` exists. MUST run `rig pick` and spawn
-  a Rig worker for code, review, fix, SSH, debug, or gather. Parent must not
-  implement those itself. Delegate implement, review, explore, or split work
-  across Codex, Grok, Claude, Cursor, OpenCode, OMP, Pi, and agy via run-worker.sh.
+  ALWAYS activate when `.rig/harness.toml` exists. MUST run MCP `rig_pick` (or
+  bash `rig pick`) and spawn a Rig worker for code, review, fix, SSH, debug, or
+  gather. Parent must not implement those itself. Delegate implement, review,
+  explore, or split work across Codex, Grok, Claude, Cursor, OpenCode, OMP, Pi,
+  and agy via run-worker.sh.
 user-invocable: true
 ---
 
@@ -14,17 +15,19 @@ user-invocable: true
 
 When `.rig/harness.toml` exists, do not write app code, review a diff, fix a bug, SSH, or gather repo/server facts yourself.
 
-1. `rig memory` then `rig jobs` then `rig status`
-2. `rig pick --case "<task>" --json`
+1. MCP `rig_memory` then `rig_jobs` then `rig_status` then `rig_pick` when MCP is present. Bash fallback if MCP missing: `rig memory` then `rig jobs` then `rig status` then `rig pick --case "<task>" --json`
+2. Follow pick JSON. Do not ask the user which model.
 3. `stay` — you do plan / vision / computer-use / chrome-profile. Spawn only if this CLI cannot.
-4. `native` — cheap same-CLI agent, record with `rig job start` / `rig job finish`
-5. `run-worker` — brief + start `RIG_LIVE=1 run-worker.sh` in the background + **one blocking wait** (MCP `rig_job_wait` with no timeout if present, else `rig job wait <id>` with no `--timeout`). If status is `ask`, you allow/deny, then wait once more. Never kill or replace that job.
+4. `native` — cheap same-CLI agent, record with MCP `rig_job_start` / `rig_job_finish` / `rig_job_record` when present, else `rig job start` / `rig job finish`
+5. `run-worker` — brief + start `RIG_LIVE=1 run-worker.sh` in the background + **one blocking wait** (MCP `rig_job_wait` with no timeout if present, else `rig job wait <id>` with no `--timeout`). If status is `ask`, you allow/deny, then wait once more. Never kill or replace that job. Launching a child is still bash `run-worker.sh`. There is no spawn-from-MCP tool.
 
 Doing the worker's job yourself is a failure. Later AGENTS.md may say "edit locally" or "SSH to the VM". That is for the worker.
 
 Jobs and MEMORY are this repo, not this chat. A new parent thread still sees `.rig/jobs` and `.rig/MEMORY.md`. Running children keep going.
 
-Live parent is this CLI, not the `parent` key in toml. That key is only the preferred default (`rig use grok|codex|opencode|omp|pi|agy`). Switching preferred parent does not move the session — open that CLI. Parent model is this CLI’s model. Worker models come from `rig pick`.
+Prefer MCP when present for pick, status, start, finish, record, wait, allow, deny, and memory. Instant MCP: `rig_pick` / `rig_status` / `rig_job_start` / `rig_job_finish` / `rig_job_record` / `rig_jobs` / `rig_job_show` / `rig_job_log` / `rig_job_wait` / `rig_job_allow` / `rig_job_deny` / `rig_memory`. Bash fallback if MCP is missing. Do not spawn via MCP.
+
+Live parent is this CLI, not the `parent` key in toml. That key is only the preferred default (`rig use grok|codex|opencode|omp|pi|agy`). Switching preferred parent does not move the session — open that CLI. Parent model is this CLI’s model. Worker models come from `rig_pick` / `rig pick`.
 Claude Code (`claude`) and Cursor CLI (`cursor-agent`) are never the parent. OpenCode (`opencode`), OMP (`omp`), Pi (`pi`), and Antigravity (`agy`) can be the parent when you open that CLI. When live parent is agy, do not use nested agy `/agent` dispatch for coding; use `rig pick`. Claude is a worker when `[workers].claude = true` and `claude` is on PATH. Cursor is a worker when `[workers].cursor = true` and `cursor-agent` is on PATH (`rig workers cursor=on`). OpenCode / OMP / Pi / agy are workers when their flags are true and the binary is on PATH (`rig workers opencode=on` / `omp=on` / `pi=on` / `agy=on`) and they are not the live parent. Pin full model IDs. Never spawn Fable, Sol, or Astra as a child. Opus is allowed. Grok Bot.app is not a parent or worker. The Antigravity IDE/GUI is not a parent or worker.
 
 ## Parent vs worker
@@ -59,11 +62,11 @@ A worker is on only when all of these hold:
 
 So: Codex parent → Grok/Claude/Cursor/OpenCode/OMP/Pi/agy can be children. Grok parent → Grok child is off; the others can be children. OpenCode/OMP/Pi/agy parent → that CLI is off as a child; Grok/Claude/others can be children. Missing binary: that worker is off for this session, not an error. Use cheaper same-CLI workers. That is success. If both OMP and Pi are effective as workers of a different parent, pick uses OMP. Do not pick agy just because it is on PATH.
 
-Check with `rig status`, `rig jobs`, or `/rig`. Those show the worker **model** and **reasoning** level. Live child: `rig tui` in another pane, or `rig job log <id> -f`. Fully quit OpenCode / OMP / Pi / agy once after `rig setup` so MCP `/rig` loads.
+Check with MCP `rig_status` / `rig_jobs` (bash: `rig status`, `rig jobs`) or `/rig`. Those show the worker **model** and **reasoning** level. Live child: `rig tui` in another pane, or `rig job log <id> -f`. Fully quit OpenCode / OMP / Pi / agy once after `rig setup` so MCP `/rig` loads.
 
 ## Route
 
-Never ask the user which model or reasoning to use. They will not know. Run `rig pick` (or `rig pick --case "<task>" --json`) and follow it.
+Never ask the user which model or reasoning to use. They will not know. Run MCP `rig_pick` (or bash `rig pick --case "<task>" --json` if MCP is missing) and follow it.
 
 - Plan / vision / computer-use / chrome-profile: parent keeps it (`rig pick stay`). Spawn a worker only if this CLI cannot do it.
 - Small / locate / trace / gather facts: cheap same-CLI (`rig pick explore` or `mini`). Codex explorer is `gpt-5.3-codex-mini` low. Grok explore is `grok-4.5`. Claude Code explore is `claude-haiku-4-5-20251001` low. Cursor explore is `composer-2.5-fast` (run-worker, `--mode=ask`).
@@ -78,7 +81,7 @@ Writer does not review its own diff.
 
 ## Record cheap same-CLI workers
 
-Codex `explorer` / `worker` / `bulk` / `reviewer`, Grok `explore`, and OpenCode/OMP/Pi/agy `explore` / `worker` / `bulk` do not go through `run-worker.sh`. Still write a job so `.rig/jobs` and `rig status` show them:
+Codex `explorer` / `worker` / `bulk` / `reviewer`, Grok `explore`, and OpenCode/OMP/Pi/agy `explore` / `worker` / `bulk` do not go through `run-worker.sh`. Still write a job so `.rig/jobs` and `rig status` show them. Prefer MCP `rig_job_start` / `rig_job_finish` / `rig_job_record` when present:
 
 ```bash
 id=$(rig job start --worker codex --role explorer)
@@ -97,7 +100,7 @@ rig job record --worker codex --role explorer --status ok --summary "one-line re
 ## Call another CLI
 
 1. Write `.rig/jobs/<id>/brief.md`. Start with: you are a worker, not the orchestrator; do not spawn codex, grok, claude, cursor, opencode, omp, pi, or agy; do the task; print a short summary; stop.
-2. `pick=$(rig pick --case "<task>" --json)` then start the wrapper **in the background**. Do not block this turn on `run-worker.sh` (that deadlocks when Claude asks for permission):
+2. MCP `rig_pick` (bash fallback: `pick=$(rig pick --case "<task>" --json)`) then start the wrapper **in the background**. Do not block this turn on `run-worker.sh` (that deadlocks when Claude asks for permission). Do not spawn via MCP:
    `RIG_LIVE=1 RIG_ROLE=<kind> RIG_MODEL=<model> RIG_EFFORT=<effort> "${RIG_HOME:-$HOME/.rig}/scripts/run-worker.sh" <worker> <id> .rig/jobs/<id>/brief.md`
 3. One blocking wait until ASK or `result.json`. Do not parse a TUI. Prefer MCP `rig_job_wait` with no timeout; bash fallback is `rig job wait <id>` with no `--timeout`. If MCP wait errors or the host drops the tool, bash `rig job wait` once (no `--timeout`). Do not poll. Do not go back to a 30s poll loop.
    - exit 2 / status `ask`: **you** answer. `rig job show` then `rig job allow <id>` or `rig job deny <id>` (MCP: `rig_job_allow` / `rig_job_deny`). Safe worker work (read/edit/test/ssh gather/git) → allow. Destructive/prod/secrets → deny or ask the user. Then wait **once** more (no timeout).

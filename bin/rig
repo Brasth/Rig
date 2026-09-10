@@ -380,13 +380,14 @@ Later AGENTS.md may say "edit locally" or "SSH to the VM". That is for the worke
 Keep: plan, check, vision, computer-use, chrome-profile, talk to the user, read `rig jobs` / `rig memory`.
 Spawn for: write code, fix bugs, review, SSH/debug, gather repo or server facts.
 
-1. `rig memory` then `rig jobs` then `rig status`
-2. `pick=$(rig pick --case "<task>" --json)` — do not ask the user which model
+1. MCP `rig_memory` then `rig_jobs` then `rig_status` then `rig_pick` when MCP is present. Bash fallback if MCP missing: `rig memory` then `rig jobs` then `rig status` then `rig pick --case "<task>" --json`
+2. Follow pick JSON — do not ask the user which model
 3. stay → you do it (plan / vision / computer-use / chrome-profile). Spawn only if this CLI cannot.
-4. native → cheap same-CLI agent, then `rig job start` / `rig job finish`
+4. native → cheap same-CLI agent, then MCP `rig_job_start` / `rig_job_finish` / `rig_job_record` when present, else `rig job start` / `rig job finish`
 5. run-worker → write `.rig/jobs/<id>/brief.md` then start the wrapper in the background (do not block this turn on it):
    `RIG_LIVE=1 RIG_ROLE=<kind> RIG_MODEL=<model> RIG_EFFORT=<effort> "$HOME/.rig/scripts/run-worker.sh" <worker> <id> .rig/jobs/<id>/brief.md`
-   Prefer MCP when present: `rig_jobs` / `rig_job_show` / `rig_job_log` / `rig_job_wait` / `rig_job_allow` / `rig_job_deny` / `rig_memory`. Wait = one blocking `rig_job_wait` with no timeout. Bash fallback if MCP missing: one `rig job wait <id>` with no `--timeout`.
+   Prefer MCP when present: `rig_jobs` / `rig_job_show` / `rig_job_log` / `rig_job_wait` / `rig_job_allow` / `rig_job_deny` / `rig_memory` / `rig_pick` / `rig_status` / `rig_job_start` / `rig_job_finish` / `rig_job_record`. Wait = one blocking `rig_job_wait` with no timeout. Bash fallback if MCP missing: one `rig job wait <id>` with no `--timeout`.
+   Do not spawn via MCP. Launching a child is still bash `run-worker.sh`.
    If MCP wait errors or the host drops the tool, bash `rig job wait <id>` once (no `--timeout`). Do not poll 30s.
    Do not parse a TUI.
    wait exit 2 / status ask: YOU answer `rig job allow <id>` or `rig job deny <id>`. Safe worker work (read/edit/test/ssh gather/git) → allow. Destructive/prod/secrets → deny or ask the user.

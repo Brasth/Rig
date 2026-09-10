@@ -17,15 +17,22 @@ Do not guess. Run the commands. The parent checks this board and MUST spawn work
 
 If MCP tools are present, use them. Bash is fallback if MCP is missing.
 
-- `rig_jobs` / `rig_job_show` / `rig_job_log` / `rig_job_wait` / `rig_job_allow` / `rig_job_deny` / `rig_memory`
+- Instant: `rig_jobs` / `rig_job_show` / `rig_job_log` / `rig_job_allow` / `rig_job_deny` / `rig_memory` / `rig_pick` / `rig_status` / `rig_job_start` / `rig_job_finish` / `rig_job_record`
+- Wait: `rig_job_wait` (one blocking call, no timeout)
+
+Launching a child is still bash `run-worker.sh` in the background. There is no spawn-from-MCP tool.
 
 `rig_job_wait` / `rig job wait`: call **once**, no timeout. Blocks until ASK or result. After allow, wait **once** more. Do not poll. `--timeout` is an optional cap, not the default. If MCP wait errors or the host drops the tool, bash `rig job wait` once (no `--timeout`). Do not go back to a 30s poll loop.
 
 ## Commands
 
+First commands in a new thread: MCP `rig_memory` then `rig_jobs` then `rig_status` then `rig_pick` when present; else bash:
+
 ```bash
 rig memory            # standing facts; run this on a new thread
 rig jobs              # every job in this repo (survives a new parent thread)
+rig status            # live parent, effective workers, job count
+rig pick --case "..." --json
 rig job wait [id]     # one blocking wait; no --timeout; exit 2 = ASK
 rig job show          # running job, or latest
 rig job show <id>

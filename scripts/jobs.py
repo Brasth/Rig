@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
-"""List Rig jobs, decode child logs, and render statusline text."""
+"""List Rig jobs, decode child logs, write start/finish files, and render statusline text."""
 from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import time
 from collections.abc import Callable
+from datetime import datetime, timezone
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -707,6 +709,273 @@ def format_log(job: dict, n: int = 40) -> str:
             return "log pruned after success"
         return "log empty"
     return "\n".join(acts[-n:])
+
+
+JOB_WORKERS = frozenset(
+    {"grok", "codex", "claude", "cursor", "opencode", "omp", "pi", "agy", "parent"}
+)
+JOB_STATUSES = frozenset({"ok", "fail", "timeout", "running"})
+JOB_ID_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+
+
+def iso_now() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def new_job_id() -> str:
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    return f"{stamp}-{os.getpid()}"
+
+
+def _read_meta_dict(job_dir: Path) -> dict:
+    path = job_dir / "meta.json"
+    if not path.is_file():
+        return {}
+    try:
+        obj = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return obj if isinstance(obj, dict) else {}
+
+
+def write_state(repo: Path, job: str, worker: str, status: str, summary: str) -> None:
+    path = repo / ".rig" / "STATE.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "# STATE\n\n"
+        "Overwritten each run.\n\n"
+        f"- last_job: {job}\n"
+        f"- worker: {worker}\n"
+        f"- status: {status}\n"
+        f"- summary: {summary}\n"
+    )
+
+
+def write_job_files(
+    job_dir: Path,
+    job_id: str,
+    worker: str,
+    role: str,
+    status: str,
+    exit_code: int,
+    started_at: str,
+    ended_at: str,
+    summary: str,
+    kind: str = "native",
+    thread: str = "",
+    model: str = "",
+    effort: str = "",
+) -> None:
+    job_dir.mkdir(parents=True, exist_ok=True)
+    if not model:
+        try:
+            import route as rig_route
+
+            route_kind = rig_route.classify(role or "implement", "")
+            model, effort = rig_route.model_for(worker or "codex", route_kind)
+        except Exception:
+            model, effort = model or "", effort or ""
+    old = _read_meta_dict(job_dir)
+    obj = {
+        "job_id": job_id,
+        "worker": worker,
+        "role": role,
+        "status": status,
+        "exit_code": int(exit_code),
+        "started_at": started_at,
+        "ended_at": ended_at,
+        "summary": summary,
+        "files_changed": [],
+        "next": "",
+        "kind": kind or "native",
+        "model": model,
+        "effort": effort,
+    }
+    for key in ("thread", "session_id", "pid", "open", "watch", "kind", "model", "effort"):
+        if not obj.get(key) and old.get(key) not in (None, ""):
+            obj[key] = old[key]
+    if thread:
+        obj["thread"] = thread
+    blob = json.dumps(obj, indent=2) + "\n"
+    for name in ("meta.json", "result.json"):
+        path = job_dir / name
+        tmp = path.with_name(path.name + ".tmp")
+        tmp.write_text(blob)
+        tmp.replace(path)
+
+
+def _require_harness(repo: Path) -> None:
+    harness = repo / ".rig" / "harness.toml"
+    if not harness.is_file():
+        raise SystemExit(f"rig job: missing {harness} — run: rig init")
+
+
+def _allocate_job_id(job_id: str) -> str:
+    job_id = (job_id or "").strip()
+    if not job_id:
+        job_id = new_job_id()
+    if not JOB_ID_RE.match(job_id):
+        raise SystemExit(f"rig job: invalid job id '{job_id}'")
+    return job_id
+
+
+def _validate_worker(worker: str) -> str:
+    if worker not in JOB_WORKERS:
+        raise SystemExit(
+            "rig job: worker must be grok|codex|claude|cursor|opencode|omp|pi|agy|parent"
+        )
+    return worker
+
+
+def _validate_status(status: str) -> str:
+    if status not in JOB_STATUSES:
+        raise SystemExit("rig job: status must be ok|fail|timeout|running")
+    return status
+
+
+def _resolve_worker(worker: str, live: str, preferred: str, meta: dict) -> str:
+    worker = (worker or "").strip()
+    if not worker:
+        worker = str(meta.get("worker") or "").strip()
+    if not worker:
+        worker = (live or preferred or "").strip()
+    return _validate_worker(worker)
+
+
+def _job_thread(repo: Path) -> str:
+    return (os.environ.get("RIG_THREAD") or "").strip() or current_thread(repo)
+
+
+def _started_at(job_dir: Path, meta: dict, now: str) -> str:
+    stamp = job_dir / "started_at"
+    if stamp.is_file():
+        try:
+            text = stamp.read_text(errors="replace").strip().splitlines()
+            if text and text[0].strip():
+                return text[0].strip()
+        except OSError:
+            pass
+    started = str(meta.get("started_at") or "").strip()
+    return started or now
+
+
+def _exit_code(status: str) -> int:
+    if status == "ok":
+        return 0
+    if status == "timeout":
+        return 124
+    return 1
+
+
+def _finish_text(job_id: str, worker: str, role: str, status: str, job_dir: Path) -> str:
+    return f"job {job_id} worker={worker} role={role} status={status}\n{job_dir / 'result.json'}"
+
+
+def start_job(
+    repo: Path,
+    worker: str = "",
+    role: str = "worker",
+    job_id: str = "",
+    summary: str = "",
+    live: str = "",
+    preferred: str = "",
+) -> str:
+    """Write a running job. Does not launch a worker. Returns the job id."""
+    _require_harness(repo)
+    role = (role or "worker").strip() or "worker"
+    raw_id = (job_id or "").strip()
+    meta = _read_meta_dict(jobs_dir(repo) / raw_id) if raw_id else {}
+    job_id = _allocate_job_id(raw_id)
+    worker = _resolve_worker(worker, live, preferred, meta)
+    now = iso_now()
+    job_dir = jobs_dir(repo) / job_id
+    write_job_files(
+        job_dir,
+        job_id,
+        worker,
+        role,
+        "running",
+        0,
+        now,
+        "",
+        summary or "",
+        "native",
+        thread=_job_thread(repo),
+    )
+    (job_dir / "started_at").write_text(now + "\n")
+    write_state(repo, job_id, worker, "running", summary or "")
+    return job_id
+
+
+def finish_job(
+    repo: Path,
+    job_id: str,
+    status: str = "ok",
+    summary: str = "",
+    worker: str = "",
+    role: str = "",
+    live: str = "",
+    preferred: str = "",
+    require_id: bool = True,
+) -> str:
+    """Write result.json for a job. Does not kill a process."""
+    _require_harness(repo)
+    raw_id = (job_id or "").strip()
+    if require_id and not raw_id:
+        raise SystemExit("usage: rig job finish <id> [--status ok|fail] [--summary TEXT]")
+    status = _validate_status((status or "ok").strip() or "ok")
+    meta = _read_meta_dict(jobs_dir(repo) / raw_id) if raw_id else {}
+    role = (role or "").strip() or str(meta.get("role") or "").strip() or "worker"
+    worker = _resolve_worker(worker, live, preferred, meta)
+    job_id = _allocate_job_id(raw_id)
+    now = iso_now()
+    job_dir = jobs_dir(repo) / job_id
+    started = _started_at(job_dir, meta, now)
+    write_job_files(
+        job_dir,
+        job_id,
+        worker,
+        role,
+        status,
+        _exit_code(status),
+        started,
+        now,
+        summary or "",
+        "native",
+        thread=_job_thread(repo),
+    )
+    write_state(repo, job_id, worker, status, summary or "")
+    if status == "ok":
+        log = job_dir / "stdout.log"
+        try:
+            log.unlink()
+        except OSError:
+            pass
+    return _finish_text(job_id, worker, role, status, job_dir)
+
+
+def record_job(
+    repo: Path,
+    worker: str = "",
+    role: str = "worker",
+    status: str = "ok",
+    summary: str = "",
+    job_id: str = "",
+    live: str = "",
+    preferred: str = "",
+) -> str:
+    """One-shot start+finish like `rig job record`. Files only."""
+    return finish_job(
+        repo,
+        job_id,
+        status=status,
+        summary=summary,
+        worker=worker,
+        role=role,
+        live=live,
+        preferred=preferred,
+        require_id=False,
+    )
 
 
 def follow_log(job: dict) -> None:
