@@ -43,6 +43,12 @@ EXISTING_TOOLS = (
     "rig_memory",
     "rig_memory_add",
     "rig_job_message",
+    "rig_queue_add",
+    "rig_queue_list",
+    "rig_queue_cancel",
+    "rig_queue_claim",
+    "rig_queue_unclaim",
+    "rig_queue_spawned",
 )
 CHILD_TOOLS = (
     "rig_job_doing",
@@ -387,6 +393,8 @@ class McpDispatch(unittest.TestCase):
             self.assertNotIn("rig_pick", names)
             self.assertNotIn("rig_job_wait", names)
             self.assertNotIn("rig_job_message", names)
+            self.assertNotIn("rig_queue_add", names)
+            self.assertNotIn("rig_queue_claim", names)
             blocked = rig_mcp.call_tool("rig_pick", {"case": "x", "repo": str(self.repo)})
             self.assertTrue(blocked.get("isError"))
             doing = rig_mcp.call_tool("rig_job_doing", {"text": "edit jobs.py"})

@@ -654,6 +654,13 @@ def load_job(job_path: Path) -> dict | None:
         "log": str(log_path),
         "log_pruned": status == "ok" and not log_path.is_file(),
         "mtime": mtime,
+        "files": [
+            str(x).strip()
+            for x in (obj.get("files") or [])
+            if str(x).strip()
+        ]
+        if isinstance(obj.get("files"), list)
+        else [],
     }
 
 
@@ -842,36 +849,45 @@ def wait_job(
         time.sleep(0.4)
 
 
-def format_table(jobs: list[dict]) -> str:
+def format_table(jobs: list[dict], repo: Path | None = None) -> str:
     if not jobs:
-        return "no jobs  (cross-CLI children and recorded cheap workers show up here)"
-    rows = ["STATUS    AGENT    ROLE       JOB                              TASK"]
-    for job in jobs:
-        rows.append(
-            f"{job['effective']:<9} {job['worker']:<8} {job['role']:<10} {job['job_id']:<32} {job['task']}"
-        )
-        extras = []
-        if job.get("model") or job.get("effort"):
-            extras.append(
-                f"          model  {job.get('model') or '-'}   reasoning {job.get('effort') or '-'}"
+        rows = ["no jobs  (cross-CLI children and recorded cheap workers show up here)"]
+    else:
+        rows = ["STATUS    AGENT    ROLE       JOB                              TASK"]
+        for job in jobs:
+            rows.append(
+                f"{job['effective']:<9} {job['worker']:<8} {job['role']:<10} {job['job_id']:<32} {job['task']}"
             )
-        if job.get("elapsed_s") is not None:
-            extras.append(f"          elapsed  {format_elapsed(int(job['elapsed_s']))}")
-        if job.get("thread"):
-            extras.append(f"          thread {job['thread']}")
-        if job["doing"]:
-            extras.append(f"          doing  {job['doing']}")
-        if job.get("inbox") and job["effective"] in {"running", "ask"}:
-            extras.append(f"          inbox  pending")
-        if job["effective"] == "ask":
-            extras.append(f"          answer rig job allow {job['job_id']}  |  rig job deny {job['job_id']}")
-        if job["effective"] == "running" and job.get("open"):
-            extras.append(f"          open   {job['open']}")
-        if job["effective"] in {"running", "ask"}:
-            extras.append(f"          log    rig job log {job['job_id']} -f")
-        rows.extend(extras)
-    running = sum(1 for j in jobs if j["effective"] == "running")
-    rows.append(f"\n{running} running / {len(jobs)} jobs    rig tui    rig job log [id] -f")
+            extras = []
+            if job.get("model") or job.get("effort"):
+                extras.append(
+                    f"          model  {job.get('model') or '-'}   reasoning {job.get('effort') or '-'}"
+                )
+            if job.get("elapsed_s") is not None:
+                extras.append(f"          elapsed  {format_elapsed(int(job['elapsed_s']))}")
+            if job.get("thread"):
+                extras.append(f"          thread {job['thread']}")
+            if job["doing"]:
+                extras.append(f"          doing  {job['doing']}")
+            if job.get("inbox") and job["effective"] in {"running", "ask"}:
+                extras.append("          inbox  pending")
+            if job["effective"] == "ask":
+                extras.append(
+                    f"          answer rig job allow {job['job_id']}  |  rig job deny {job['job_id']}"
+                )
+            if job["effective"] == "running" and job.get("open"):
+                extras.append(f"          open   {job['open']}")
+            if job["effective"] in {"running", "ask"}:
+                extras.append(f"          log    rig job log {job['job_id']} -f")
+            rows.extend(extras)
+        running = sum(1 for j in jobs if j["effective"] == "running")
+        rows.append(f"\n{running} running / {len(jobs)} jobs    rig tui    rig job log [id] -f")
+    if repo is not None:
+        import work_queue as rig_queue
+
+        live = sum(1 for j in jobs if j.get("effective") in {"running", "ask"})
+        rows.append("")
+        rows.append(rig_queue.format_block(repo, live=live))
     return "\n".join(rows)
 
 
@@ -1034,6 +1050,7 @@ def write_job_files(
     thread: str = "",
     model: str = "",
     effort: str = "",
+    files: list | None = None,
 ) -> None:
     job_dir.mkdir(parents=True, exist_ok=True)
     if not model:
@@ -1063,6 +1080,11 @@ def write_job_files(
     for key in ("thread", "session_id", "pid", "open", "watch", "kind", "model", "effort", "doing"):
         if not obj.get(key) and old.get(key) not in (None, ""):
             obj[key] = old[key]
+    listed = files
+    if listed is None:
+        raw = old.get("files")
+        listed = raw if isinstance(raw, list) else []
+    obj["files"] = [str(x).strip() for x in listed if str(x).strip()]
     if thread:
         obj["thread"] = thread
     live = (not (ended_at or "").strip()) and status in {"running", "ask"}
@@ -1163,6 +1185,19 @@ def start_job(
     job_id = _allocate_job_id(raw_id)
     worker = _resolve_worker(worker, live, preferred, meta)
     rig_harness.assert_spawn_allowed(repo, worker, live)
+    listed = [
+        p.strip()
+        for p in (os.environ.get("RIG_JOB_FILES") or "").replace(",", " ").split()
+        if p.strip()
+    ]
+    if not listed and isinstance(meta.get("files"), list):
+        listed = [str(x).strip() for x in meta.get("files") or [] if str(x).strip()]
+    import work_queue as rig_queue
+
+    try:
+        rig_queue.check_start(repo, job_id, files=listed, role=role)
+    except rig_queue.QueueError as exc:
+        raise SystemExit(str(exc)) from exc
     now = iso_now()
     job_dir = jobs_dir(repo) / job_id
     write_job_files(
@@ -1177,6 +1212,7 @@ def start_job(
         summary or "",
         "native",
         thread=_job_thread(repo),
+        files=listed or None,
     )
     (job_dir / "started_at").write_text(now + "\n")
     write_state(repo, job_id, worker, "running", summary or "")
@@ -1224,6 +1260,12 @@ def finish_job(
     persist_activity(job_dir)
     if status == "ok":
         _prune_stdout_log(job_dir)
+    try:
+        import work_queue as rig_queue
+
+        rig_queue.mark_done_for_job(repo, job_id)
+    except Exception:
+        pass
     return _finish_text(job_id, worker, role, status, job_dir)
 
 
@@ -1390,7 +1432,7 @@ def main() -> int:
             dump = [{k: v for k, v in j.items() if k != "activities"} for j in listing]
             print(json.dumps(dump, indent=2))
         else:
-            print(format_table(listing))
+            print(format_table(listing, repo))
         return 0
     if args.cmd == "show":
         print(format_show(resolve_job(repo, job_id)))

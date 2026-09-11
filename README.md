@@ -90,7 +90,7 @@ agy = false
 
 ## Watch
 
-`rig tui` / `rig jobs` / `/rig` in Grok, Codex, OpenCode, OMP, Pi, or agy. Grok also gets a bottom status line after setup (restart Grok once). Pi needs `pi install npm:pi-mcp-adapter` before `/rig` loads.
+`rig tui` / `rig jobs` / `/rig` / `/queue` in Grok, Codex, OpenCode, OMP, Pi, or agy (Codex also `/prompts:queue`). Grok also gets a bottom status line after setup (restart Grok once). Pi needs `pi install npm:pi-mcp-adapter` before `/rig` loads. `/queue` parks work in `.rig/queue/` and does not spawn. While a wait is blocking, enqueue from another pane: `rig queue add "…"`.
 
 Jobs and MEMORY are this repo, not the chat. A new thread still sees `.rig/jobs`. Running children keep going.
 

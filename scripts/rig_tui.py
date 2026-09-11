@@ -180,7 +180,7 @@ def _paint(stdscr, repo: Path) -> None:
 def main() -> int:
     repo = rig_jobs.repo_root()
     if not sys.stdout.isatty() or os.environ.get("RIG_TUI") == "0":
-        print(rig_jobs.format_table(rig_jobs.list_jobs(repo)))
+        print(rig_jobs.format_table(rig_jobs.list_jobs(repo), repo))
         return 0
     try:
         curses.wrapper(lambda stdscr: _paint(stdscr, repo))

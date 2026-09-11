@@ -20,7 +20,11 @@ def harness_path(repo: Path) -> Path:
 
 
 def parse_harness(path: Path) -> dict:
-    out = {"parent": "codex", "workers": dict(_DEFAULT_WORKERS)}
+    out = {
+        "parent": "codex",
+        "workers": dict(_DEFAULT_WORKERS),
+        "queue": {"max_running": 3},
+    }
     if not path.is_file():
         return out
     try:
@@ -46,6 +50,12 @@ def parse_harness(path: Path) -> dict:
             out["parent"] = val
         elif section == "workers" and key in out["workers"]:
             out["workers"][key] = val
+        elif section == "queue" and key == "max_running":
+            try:
+                n = int(val.strip().strip('"'))
+            except (TypeError, ValueError):
+                n = 3
+            out["queue"]["max_running"] = max(1, n)
     return out
 
 
@@ -215,5 +225,5 @@ def format_status(repo: Path, live: str | None = None) -> str:
         if marked:
             lines.append("state:")
             lines.extend(f"  {ln}" for ln in marked)
-    lines.append(rig_jobs.format_table(rig_jobs.list_jobs(repo)))
+    lines.append(rig_jobs.format_table(rig_jobs.list_jobs(repo), repo))
     return "\n".join(lines)

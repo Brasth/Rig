@@ -32,7 +32,7 @@ Doing the worker's job yourself is a failure unless pick `parent_writes` is true
 
 Jobs and MEMORY are this repo, not this chat. A new parent thread still sees `.rig/jobs` and `.rig/MEMORY.md`. Running children keep going.
 
-Prefer MCP when present for session, pick, status, start, finish, record, wait, allow, deny, memory, and `rig_job_message`. Instant MCP: `rig_session` / `rig_pick` / `rig_status` / `rig_job_start` / `rig_job_finish` / `rig_job_record` / `rig_jobs` / `rig_job_show` / `rig_job_log` / `rig_job_wait` / `rig_job_allow` / `rig_job_deny` / `rig_job_message` / `rig_memory`. Bash fallback if MCP is missing. Do not spawn via MCP. A child with `RIG_JOB_ID` sees doing/note/ask/inbox only — never pick/wait/allow. Inbox is not ASK.
+Prefer MCP when present for session, pick, status, start, finish, record, wait, allow, deny, memory, `rig_job_message`, and queue claim. Instant MCP: `rig_session` / `rig_pick` / `rig_status` / `rig_job_start` / `rig_job_finish` / `rig_job_record` / `rig_jobs` / `rig_job_show` / `rig_job_log` / `rig_job_wait` / `rig_job_allow` / `rig_job_deny` / `rig_job_message` / `rig_queue_add` / `rig_queue_list` / `rig_queue_claim` / `rig_queue_unclaim` / `rig_queue_spawned` / `rig_memory`. Bash fallback if MCP is missing. Do not spawn via MCP. A child with `RIG_JOB_ID` sees doing/note/ask/inbox only — never pick/wait/allow/queue. Inbox is not ASK.
 
 Live parent is this CLI, not the `parent` key in toml. That key is only the preferred default (`rig use grok|codex|opencode|omp|pi|agy`). Switching preferred parent does not move the session — open that CLI. Parent model is this CLI’s model. Worker models come from `rig_pick` / `rig pick`.
 Claude Code (`claude`) and Cursor CLI (`cursor-agent`) are never the parent. OpenCode (`opencode`), OMP (`omp`), Pi (`pi`), and Antigravity (`agy`) can be the parent when you open that CLI. When live parent is agy, do not use nested agy `/agent` dispatch for coding; use `rig pick`. Claude is a worker when `[workers].claude = true` and `claude` is on PATH. Cursor is a worker when `[workers].cursor = true` and `cursor-agent` is on PATH (`rig workers cursor=on`). OpenCode / OMP / Pi / agy are workers when their flags are true and the binary is on PATH (`rig workers opencode=on` / `omp=on` / `pi=on` / `agy=on`) and they are not the live parent. Pin full model IDs. Never spawn Fable, Sol, or Astra as a child. Opus is allowed. Grok Bot.app is not a parent or worker. The Antigravity IDE/GUI is not a parent or worker.
@@ -88,7 +88,9 @@ Writer does not review its own diff.
 
 ## Stage-gated parallel
 
-Until implement+verify is **ok**: one child. Do not fan out gather/QA/fix/seed as teammates on the same write.
+Until **that write** is ok: one child on those files. Do not fan out gather/QA/fix/seed as teammates on the same write. Never spawn a second writer on the same files.
+
+Independent queued user items may run at the same time, up to `[queue].max_running` (default 3 live `running`+`ask` jobs), if their listed files are disjoint. Every live job counts toward the cap, including ASK. `parent_writes` occupies this parent turn — do not drain more writers in that turn. Stay/ask/advise never become children.
 
 After that job is `ok` (tests in the implement brief passed), the parent MAY start **at most**:
 
@@ -102,6 +104,19 @@ rig job wait <review-id> <seed-id>     # exit 2 = ASK on one of them; allow/deny
 ```
 
 MCP: `rig_job_wait` with `ids: ["review-id", "seed-id"]`. Wakes on first ASK. Exit 0 only if every id is ok. Do not kill the other job. Do not spawn a second writer on the same files. Do not spawn explore/fix/QA as extra teammates. If seed is part of the reviewed tree, run seed first, then review — not in parallel.
+
+## Queue drain
+
+On a **free** parent turn, after `rig_session`, if `.rig/queue/` has pending items and live jobs < cap:
+
+1. Parent checks the next item (read the code). Stay/advise: answer it here or leave pending. Do not spawn.
+2. Name listed files. `rig_queue_claim` with those files (or `rig queue claim --files a,b [id]`). Cap or overlap → leave pending.
+3. Write the brief. If the brief fails: `rig_queue_unclaim`.
+4. Spawn `run-worker.sh` with `RIG_JOB_FILES=a,b`. Then `rig_queue_spawned <queue-id> --job <job-id>`.
+5. Repeat until cap or no eligible item.
+6. One blocking wait on **all** live ids (not only the new ones). ASK: allow/deny that id; wait the same ids again. Do not claim during ASK.
+
+`/queue` and `rig queue add` only park. They do not spawn.
 
 ## Fail classes
 

@@ -47,6 +47,14 @@ if [[ ! -f "$HARNESS" ]]; then
 fi
 parse_harness "$HARNESS"
 
+QUEUE_PY="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/work_queue.py"
+if [[ -f "$QUEUE_PY" ]]; then
+  if ! python3 "$QUEUE_PY" gate --repo "$REPO" --job-id "$JOB_ID" --role "$ROLE" --files "${RIG_JOB_FILES:-}"; then
+    echo "run-worker: live cap or file overlap — rig queue list" >&2
+    exit 1
+  fi
+fi
+
 JOB_DIR="$REPO/.rig/jobs/$JOB_ID"
 mkdir -p "$JOB_DIR"
 BRIEF="$JOB_DIR/brief.md"
@@ -95,7 +103,7 @@ write_json() {
 import json, os, pathlib
 from datetime import datetime
 files = [f for f in os.environ.get("RESULT_FILES", "").split("\n") if f]
-keep = ("thread", "session_id", "pid", "open", "watch", "kind", "doing")
+keep = ("thread", "session_id", "pid", "open", "watch", "kind", "doing", "files")
 old = {}
 mpath = pathlib.Path(os.environ["RESULT_META"])
 if mpath.is_file():
@@ -160,7 +168,7 @@ write_meta() {
   local status="$1"
   META_OUT="$JOB_DIR/meta.json"
   python3 - "$META_OUT" "$JOB_ID" "$WORKER" "$ROLE" "$status" "$STARTED" "$REPO" "$BIN" "${CHILD:-}" "${SESSION_ID:-}" "$JOB_DIR" "${MODEL:-}" "${EFFORT:-}" "${PARENT_THREAD:-}" <<'PY'
-import json, pathlib, sys
+import json, os, pathlib, sys
 path = pathlib.Path(sys.argv[1])
 old = {}
 if path.is_file():
@@ -192,6 +200,11 @@ if effort:
     obj["effort"] = effort
 if thread:
     obj["thread"] = thread
+listed = [p for p in os.environ.get("RIG_JOB_FILES", "").replace(",", " ").split() if p]
+if listed:
+    obj["files"] = listed
+elif old.get("files"):
+    obj["files"] = old["files"]
 obj["watch"] = f"tail -f {job_dir}/stdout.log"
 for key, val in old.items():
     if key not in obj and val not in (None, ""):

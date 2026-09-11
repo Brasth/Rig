@@ -19,6 +19,7 @@ import ask as rig_ask  # noqa: E402
 import harness as rig_harness  # noqa: E402
 import inbox as rig_inbox  # noqa: E402
 import jobs as rig_jobs  # noqa: E402
+import work_queue as rig_queue  # noqa: E402
 import memory as rig_memory  # noqa: E402
 import route as rig_route  # noqa: E402
 
@@ -397,6 +398,92 @@ TOOLS = [
             "required": ["text"],
         },
     },
+    {
+        "name": "rig_queue_add",
+        "description": (
+            "Parent only. Park a work item in .rig/queue/. Does not spawn. "
+            "Does not wait. Use while a child is running so the next free turn can drain it."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "text": {"type": "string", "description": "Work to park."},
+                "repo": {"type": "string"},
+            },
+            "required": ["text"],
+        },
+    },
+    {
+        "name": "rig_queue_list",
+        "description": (
+            "Parent only. List pending queue items and live/max slots. "
+            "Does not spawn."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {"repo": {"type": "string"}},
+        },
+    },
+    {
+        "name": "rig_queue_cancel",
+        "description": "Parent only. Cancel a pending queue item. Does not spawn.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "id": {"type": "string", "description": "Queue item id."},
+                "repo": {"type": "string"},
+            },
+            "required": ["id"],
+        },
+    },
+    {
+        "name": "rig_queue_claim",
+        "description": (
+            "Parent only. Claim the oldest pending queue item (or id) if live < max_running "
+            "and listed files are disjoint. Does not spawn. Brief after claim; unclaim if the brief fails."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "id": {"type": "string", "description": "Optional queue item id. Default: oldest pending."},
+                "files": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Listed files for this item. Required if other writers are live.",
+                },
+                "repo": {"type": "string"},
+            },
+        },
+    },
+    {
+        "name": "rig_queue_unclaim",
+        "description": "Parent only. Return a claimed item to pending (brief failed). Does not spawn.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "id": {"type": "string"},
+                "repo": {"type": "string"},
+            },
+            "required": ["id"],
+        },
+    },
+    {
+        "name": "rig_queue_spawned",
+        "description": "Parent only. After run-worker.sh, mark a claimed item spawned with its job id.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "id": {"type": "string", "description": "Queue item id."},
+                "job_id": {"type": "string", "description": "Running job id."},
+                "files": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                },
+                "repo": {"type": "string"},
+            },
+            "required": ["id", "job_id"],
+        },
+    },
 ]
 
 TOOL_ORDER = (
@@ -415,6 +502,12 @@ TOOL_ORDER = (
     "rig_memory",
     "rig_memory_add",
     "rig_job_message",
+    "rig_queue_add",
+    "rig_queue_list",
+    "rig_queue_cancel",
+    "rig_queue_claim",
+    "rig_queue_unclaim",
+    "rig_queue_spawned",
 )
 CHILD_TOOL_ORDER = (
     "rig_job_doing",
@@ -507,7 +600,7 @@ def format_session(
         "# memory",
         mem.strip() or "(empty)",
         "# jobs",
-        rig_jobs.format_table(listing),
+        rig_jobs.format_table(listing, repo),
         "# status",
         status.strip() or "(empty)",
         "# pick",
@@ -611,13 +704,68 @@ def call_tool(name: str, args: dict, on_tick=None) -> dict:
             job = rig_jobs.resolve_job(repo, args.get("id"))
             obj = rig_inbox.write_inbox(Path(job["dir"]), text)
             return _ok(f"message {job['job_id']} inbox pending\n{obj['text']}")
+        if name == "rig_queue_add":
+            text = str(args.get("text") or "").strip()
+            if not text:
+                return _err("rig_queue_add needs text")
+            obj = rig_queue.add_item(repo, text)
+            return _ok(f"queued {obj['id']}\n{obj['text']}\n{rig_queue.format_block(repo)}")
+        if name == "rig_queue_list":
+            return _ok(rig_queue.format_list(repo))
+        if name == "rig_queue_cancel":
+            qid = str(args.get("id") or "").strip()
+            if not qid:
+                return _err("rig_queue_cancel needs id")
+            try:
+                obj = rig_queue.cancel_item(repo, qid)
+            except FileNotFoundError:
+                return _err(f"queue item not found: {qid}")
+            except ValueError as exc:
+                return _err(str(exc))
+            return _ok(f"cancelled {obj['id']}\n{rig_queue.format_block(repo)}")
+        if name == "rig_queue_claim":
+            files = args.get("files")
+            try:
+                obj = rig_queue.claim_next(
+                    repo,
+                    files=files,
+                    item_id=str(args.get("id") or "").strip(),
+                )
+            except rig_queue.QueueError as exc:
+                return _err(str(exc))
+            except FileNotFoundError as exc:
+                return _err(f"queue item not found: {exc}")
+            return _ok(f"claimed {obj['id']}\n{obj.get('text') or ''}\n{rig_queue.format_block(repo)}")
+        if name == "rig_queue_unclaim":
+            qid = str(args.get("id") or "").strip()
+            if not qid:
+                return _err("rig_queue_unclaim needs id")
+            try:
+                obj = rig_queue.unclaim(repo, qid)
+            except FileNotFoundError:
+                return _err(f"queue item not found: {qid}")
+            except rig_queue.QueueError as exc:
+                return _err(str(exc))
+            return _ok(f"unclaimed {obj['id']}\n{rig_queue.format_block(repo)}")
+        if name == "rig_queue_spawned":
+            qid = str(args.get("id") or "").strip()
+            jid = str(args.get("job_id") or "").strip()
+            try:
+                obj = rig_queue.mark_spawned(
+                    repo, qid, jid, files=args.get("files")
+                )
+            except FileNotFoundError:
+                return _err(f"queue item not found: {qid}")
+            except rig_queue.QueueError as exc:
+                return _err(str(exc))
+            return _ok(f"spawned {obj['id']} job {obj.get('job_id')}\n{rig_queue.format_block(repo)}")
         if name == "rig_jobs":
             want_thread = str(args.get("thread") or "").strip() or None
             listing = rig_jobs.list_jobs(repo, thread=want_thread)
             want = str(args.get("status") or "").strip()
             if want:
                 listing = [j for j in listing if j["effective"] == want or j["status"] == want]
-            return _ok(rig_jobs.format_table(listing))
+            return _ok(rig_jobs.format_table(listing, repo))
         if name == "rig_job_show":
             job = rig_jobs.resolve_job(repo, args.get("id"))
             return _ok(rig_jobs.format_show(job))

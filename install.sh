@@ -44,7 +44,7 @@ install_file() {
 }
 
 copy_into_home() {
-  mkdir -p "$RIG_HOME"/{bin,scripts,skills,adapters/codex/agents,adapters/grok,adapters/claude,adapters/cursor,adapters/opencode,adapters/omp,adapters/pi,adapters/agy,templates}
+  mkdir -p "$RIG_HOME"/{bin,scripts,skills,adapters/codex/agents,adapters/codex/prompts,adapters/grok,adapters/claude,adapters/cursor,adapters/opencode/commands,adapters/omp,adapters/pi,adapters/agy,templates}
   install_file "$SRC/bin/rig" "$RIG_HOME/bin/rig"
   local f skill
   for f in "$SRC/scripts/"*; do
@@ -62,6 +62,20 @@ copy_into_home() {
   for f in "$SRC/adapters/codex/agents/"*.toml; do
     install_file "$f" "$RIG_HOME/adapters/codex/agents/$(basename "$f")"
   done
+  if [[ -d "$SRC/adapters/codex/prompts" ]]; then
+    mkdir -p "$RIG_HOME/adapters/codex/prompts"
+    for f in "$SRC/adapters/codex/prompts/"*; do
+      [[ -f "$f" ]] || continue
+      install_file "$f" "$RIG_HOME/adapters/codex/prompts/$(basename "$f")"
+    done
+  fi
+  if [[ -d "$SRC/adapters/opencode/commands" ]]; then
+    mkdir -p "$RIG_HOME/adapters/opencode/commands"
+    for f in "$SRC/adapters/opencode/commands/"*; do
+      [[ -f "$f" ]] || continue
+      install_file "$f" "$RIG_HOME/adapters/opencode/commands/$(basename "$f")"
+    done
+  fi
   install_file "$SRC/adapters/grok/config.toml.snippet" "$RIG_HOME/adapters/grok/config.toml.snippet"
   install_file "$SRC/adapters/claude/CLAUDE.worker.md" "$RIG_HOME/adapters/claude/CLAUDE.worker.md"
   if [[ -f "$SRC/adapters/cursor/CURSOR.worker.md" ]]; then

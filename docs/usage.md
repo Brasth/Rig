@@ -52,7 +52,8 @@ Update an existing machine: `rig update`. That fetches GitHub `main` through the
 **`rig setup` writes:**
 
 - `~/.rig` (bin, scripts, skills, adapters, templates)
-- Skill links in `~/.agents/skills`, `~/.grok/skills`, `~/.codex/skills`, `~/.config/opencode/skill`, `~/.omp/agent/skills`, `~/.pi/agent/skills`, `~/.gemini/antigravity-cli/skills` (`delegate-harness` and `rig-jobs`)
+- Skill links in `~/.agents/skills`, `~/.grok/skills`, `~/.codex/skills`, `~/.config/opencode/skill`, `~/.omp/agent/skills`, `~/.pi/agent/skills`, `~/.gemini/antigravity-cli/skills` (`delegate-harness`, `rig-jobs`, and `rig-queue`)
+- Codex slash adapter `~/.codex/prompts/queue.md` (`/prompts:queue`) and OpenCode slash adapter `~/.config/opencode/commands/queue.md` (`/queue`)
 - Codex agent files under `~/.codex/agents` when they are Rig agents
 - Grok bottom status line (`[ui.status_line]` → `rig-statusline`; restart Grok once)
 - `[mcp_servers.rig]` in `~/.grok/config.toml` and `~/.codex/config.toml` **even if those files did not exist**
@@ -160,7 +161,7 @@ How to read each section:
 | **Scripts** | `run-worker: … (ok)` | missing — `rig setup` again; Rig itself is broken |
 | **Model catalogs** | `opencode: N models` on a fresh cache hit (`~/.rig/cache/model-catalogs.json`) | omitted when cache is missing or stale — doctor does not wait on the four CLIs |
 | **MCP** | `[mcp_servers.rig]` on grok/codex plus JSON MCP on OpenCode/OMP/Pi/agy | `missing — run: rig setup`, then fully quit the app; Pi also needs `pi-mcp-adapter` |
-| **Watch** | reminder of `rig tui` / `rig jobs` / `/rig` in Grok, Codex, OpenCode, OMP, Pi, or agy | — |
+| **Watch** | reminder of `rig tui` / `rig jobs` / `/rig` / `/queue` in Grok, Codex, OpenCode, OMP, Pi, or agy | — |
 
 **`effective=off` reasons** (printed in parentheses):
 
@@ -189,11 +190,12 @@ rig doctor
 | `.rig/STATE.md` | Last job snapshot (overwritten each run). **Kept** if it exists on first write; later runs overwrite contents. |
 | `.agents/skills/delegate-harness/SKILL.md` | **Refreshed every init.** |
 | `.agents/skills/rig-jobs/SKILL.md` | **Refreshed every init.** |
+| `.agents/skills/rig-queue/SKILL.md` | **Refreshed every init.** `/queue` parks work; does not spawn. |
 | `AGENTS.md` | Inserts a **MUST use Rig** block at the **top** (markers `<!-- rig:start -->` / `<!-- rig:end -->`). Never replaces the rest of the file. `--no-patch-agents` skips. |
 | `CLAUDE.md` | Only with `--patch-claude`, and only if the file is **missing**. |
-| `.gitignore` | If the file exists, appends `.rig/jobs/` and `.rig/thread` when those lines are not already there. |
+| `.gitignore` | If the file exists, appends `.rig/jobs/`, `.rig/thread`, and `.rig/queue/` when those lines are not already there. |
 
-**New harness only:** Grok / Claude / Cursor / OpenCode / OMP / Pi / agy are turned **on** if that CLI is on PATH. Codex stays **off** (preferred parent). **Existing harness flags are never flipped.** Missing worker keys are appended as `false` → enable later with `rig workers <name>=on`.
+**New harness only:** Grok / Claude / Cursor / OpenCode / OMP / Pi / agy are turned **on** if that CLI is on PATH. Codex stays **off** (preferred parent). **Existing harness flags are never flipped.** Missing worker keys are appended as `false` → enable later with `rig workers <name>=on`. Missing `[queue] max_running` is appended as `3`; an existing value is kept.
 
 Open a **new** parent thread after init. An old Grok/Codex/OpenCode/OMP/Pi/agy session will not pick up `AGENTS.md` or skills.
 
@@ -220,6 +222,9 @@ opencode = false
 omp = false
 pi = false
 agy = false
+
+[queue]
+max_running = 3
 ```
 
 **Each key:**
@@ -232,6 +237,8 @@ agy = false
   ```
 
 Effective worker = flag `true` **and** binary on PATH **and** not live parent. Check with `rig doctor` / `rig status`. `grok = false` turns off grok as a child. Open Grok and you still get native Grok. Open Pi with grok off and pick must stay Pi.
+
+- **`[queue].max_running`** — max live jobs (`running` + `ask`) per repo (default 3). `job start` / `run-worker.sh` refuse a new job at cap or when listed files overlap a live writer. Set to `1` to restore one-child. Existing values are never flipped on init.
 
 **Binaries:**
 
@@ -358,7 +365,8 @@ Figma / computer-use / chrome-profile stay with the parent. If this CLI has no F
 | Locate / trace / codebase gather | cheap same-CLI explore/mini only if the parent cannot name the files after a short check |
 | Implement / SSH / fix | Grok child if Grok is **effective**; if Grok/OpenCode/OMP/Pi/agy is the live parent (or Grok off) → Claude Code if effective, else native `parent_writes` (this parent writes; no second same-CLI session). Last-resort children: opencode, omp, pi, agy, codex, then cursor. Do not auto-spawn Cursor on fallback |
 | Review | different vendor than the writer. No other vendor → do not self-review |
-| After implement+verify ok | MAY start read-only review **and** seed/bulk with **disjoint listed files** in parallel. One wait on both ids. Until implement is ok: one child |
+| After implement+verify ok | MAY start read-only review **and** seed/bulk with **disjoint listed files** in parallel. One wait on both ids |
+| Independent queued items | Up to `[queue].max_running` (default 3 live `running`+`ask`) if listed files are disjoint. Until **that write** is ok: one child on those files. Never a second writer on the same files. Never explore/fix/QA teammates on the same write. `/queue` parks only; drain is the parent on a free turn |
 | No extra CLIs | cheap same-CLI. Record it. That is success |
 
 Pin **full** model IDs (aliases drift). Codex / Grok / Claude / Cursor stay static pins. OpenCode / OMP / Pi / agy pins are **preferences**: `rig pick` and `run-worker.sh` list models from that CLI and pick one that exists. Catalog cache: `~/.rig/cache/model-catalogs.json` (TTL ~1 hour). `RIG_REFRESH_MODELS=1` refreshes. `RIG_SKIP_MODEL_CATALOG=1` keeps the static pin. Never Sol / Astra / Fable, even if the catalog lists them.
@@ -377,7 +385,7 @@ Never Fable / Sol / Astra as a child. Opus is allowed.
 
 A Grok child is **headless**. Codex will not show its TUI. While it runs, both you and the parent can see **which agent, which task, status, and the log**.
 
-Prefer MCP when present. First call: `rig_session` (memory + jobs + status + pick) when the host lists it. Instant tools stay MCP: `rig_session`, `rig_jobs`, `rig_job_show`, `rig_job_log`, `rig_job_allow`, `rig_job_deny`, `rig_memory`, `rig_memory_add`, `rig_pick`, `rig_status`, `rig_job_start`, `rig_job_finish`, `rig_job_record`. Launching a child is still bash `run-worker.sh` in the background; there is no spawn-from-MCP tool. Wait is one blocking `rig_job_wait` with **no timeout** (until ASK or result). After implement+verify ok, pass `ids` (or `rig job wait id1 id2`) to wait review+seed together; it wakes on first ASK. If the parent host supports MCP progress, `rig_job_wait` may stream the child `doing` line while that wait is in flight. The wait **result** also includes `doing`. That is not a new wait API. If a parent host **kills** the MCP tool or returns early with an error, fall back to **one** bash `rig job wait <id>` with **no** `--timeout`. Do not poll 30s. Do not loop MCP wait with a short timeout. Bash is also fallback if MCP is missing (`rig session --case "..." --json`).
+Prefer MCP when present. First call: `rig_session` (memory + jobs + status + pick) when the host lists it. Instant tools stay MCP: `rig_session`, `rig_jobs`, `rig_job_show`, `rig_job_log`, `rig_job_allow`, `rig_job_deny`, `rig_memory`, `rig_memory_add`, `rig_pick`, `rig_status`, `rig_job_start`, `rig_job_finish`, `rig_job_record`, `rig_queue_add`, `rig_queue_list`, `rig_queue_cancel`. Launching a child is still bash `run-worker.sh` in the background; there is no spawn-from-MCP tool. Wait is one blocking `rig_job_wait` with **no timeout** (until ASK or result). After implement+verify ok, pass `ids` (or `rig job wait id1 id2`) to wait review+seed together; it wakes on first ASK. If the parent host supports MCP progress, `rig_job_wait` may stream the child `doing` line while that wait is in flight. The wait **result** also includes `doing`. That is not a new wait API. If a parent host **kills** the MCP tool or returns early with an error, fall back to **one** bash `rig job wait <id>` with **no** `--timeout`. Do not poll 30s. Do not loop MCP wait with a short timeout. Bash is also fallback if MCP is missing (`rig session --case "..." --json`).
 
 ```bash
 rig tui                 # jobs board (agent / task / status / live log)
@@ -388,11 +396,14 @@ rig job wait <id>       # one blocking wait until ASK (exit 2) or result; no --t
 rig job wait <id1> <id2>  # wait-all (review + seed after implement ok)
 rig job show            # running job, or latest
 rig job log <id> -f     # decoded activity (tools + text)
+rig queue add "text"    # park work (works during a wait, any parent)
+rig queue list
+rig queue cancel <id>
 ```
 
 `--timeout SECS` is an optional cap, not the default. Omit timeout to block. `0` snapshots once. Exit 124 only if still running when a cap hits.
 
-In Grok, Codex, OpenCode, OMP, Pi, or agy type `/rig`. Grok also gets a bottom status line after `rig setup` (restart Grok once).
+In Grok, Codex, OpenCode, OMP, Pi, or agy type `/rig` or `/queue`. Codex slash menu also has `/prompts:queue`. `/queue` parks a line in `.rig/queue/` and does **not** spawn. While `rig_job_wait` is blocking this chat, type `rig queue add "…"` in another terminal — the slash command runs on the next free turn. Grok also gets a bottom status line after `rig setup` (restart Grok once).
 
 MCP tools load after `rig setup` + fully quit the parent CLI once. Instant tools stay MCP (pick, status, start, finish, record, list/show/log, allow/deny, memory). Launch is still bash. Wait is still one blocking `rig_job_wait` with no timeout (`ids` for a review+seed panel); one bash `rig job wait` if the host drops the tool.
 
@@ -420,7 +431,8 @@ rig memory add "Codex sandbox must write ~/.grok"
 - `.rig/MEMORY.md` — durable bullets, about 120 lines. No transcripts. `add` drops duplicates and caps the file.
 - `.rig/STATE.md` — overwritten each run (last job / worker / status / summary).
 - `.rig/jobs/` — gitignored. Each job records the parent `thread` when known. `rig prune` drops jobs older than 7 days and keeps the last 20. Successful jobs delete `stdout.log` after decoded activity is saved in `activity.json` (`rig job log` still works). If the log cannot be decoded, the raw log is kept. Fail/timeout logs stay for debug. Never read Cursor `state.vscdb` or other vendor sqlite to learn a Rig job — use `rig job log` / MCP.
-- Child MCP: when `RIG_JOB_ID` is set, Rig MCP is job-scoped (`rig_job_doing`, `rig_job_note`, `rig_job_ask`, `rig_job_inbox`). It cannot pick, wait, spawn, or allow. Parent MCP stays the orchestrator. `rig job message <id> --text "…"` leaves one inbox note; the child pulls it. Inbox is not ASK. Cursor print-mode has no isolated `--mcp-config`; do not install Rig into `~/.cursor/mcp.json`.
+- Child MCP: when `RIG_JOB_ID` is set, Rig MCP is job-scoped (`rig_job_doing`, `rig_job_note`, `rig_job_ask`, `rig_job_inbox`). It cannot pick, wait, spawn, queue, or allow. Parent MCP stays the orchestrator. `rig job message <id> --text "…"` leaves one inbox note; the child pulls it. Inbox is not ASK. Cursor print-mode has no isolated `--mcp-config`; do not install Rig into `~/.cursor/mcp.json`.
+- `.rig/queue/` — gitignored user work queue. `rig queue add` / `/queue` parks text and does not spawn. On a free turn the parent claims (disjoint listed files), briefs, spawns, then waits all live ids. Cap `[queue].max_running` (default 3). Mid-wait enqueue: `rig queue add` in another pane.
 - `.rig/thread` — gitignored (parent thread id).
 
 ## Troubleshooting

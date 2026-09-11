@@ -17,8 +17,8 @@ Do not guess. Run the commands. The parent checks this board and MUST spawn work
 
 If MCP tools are present, use them. Bash is fallback if MCP is missing.
 
-- Instant: `rig_session` / `rig_jobs` / `rig_job_show` / `rig_job_log` / `rig_job_allow` / `rig_job_deny` / `rig_job_message` / `rig_memory` / `rig_pick` / `rig_status` / `rig_job_start` / `rig_job_finish` / `rig_job_record`
-- Wait: `rig_job_wait` (one blocking call, no timeout; pass `ids` to wait a review+seed panel)
+- Instant: `rig_session` / `rig_jobs` / `rig_job_show` / `rig_job_log` / `rig_job_allow` / `rig_job_deny` / `rig_job_message` / `rig_queue_list` / `rig_queue_claim` / `rig_memory` / `rig_pick` / `rig_status` / `rig_job_start` / `rig_job_finish` / `rig_job_record`
+- Wait: `rig_job_wait` (one blocking call, no timeout; pass `ids` for every live job, including a review+seed or queue-drain panel)
 
 Launching a child is still bash `run-worker.sh` in the background. There is no spawn-from-MCP tool.
 
@@ -44,7 +44,7 @@ rig tui               # interactive board (user terminal; do not launch inside t
 rig memory add "fact" # one standing bullet after a useful run
 ```
 
-A new Grok/Codex/OpenCode/OMP/Pi/agy thread does not start a new job board. Jobs live in `.rig/jobs/`. If the user named an id, show that job. Otherwise list jobs, then show the running one.
+A new Grok/Codex/OpenCode/OMP/Pi/agy thread does not start a new job board. Jobs live in `.rig/jobs/`. If the user named an id, show that job. Otherwise list jobs, then show the running one. `rig jobs` also prints a QUEUE block (pending user work). `/queue` / `rig queue add` parks text and does not spawn. While wait is blocking, enqueue from another pane with `rig queue add`.
 
 ## What to report
 

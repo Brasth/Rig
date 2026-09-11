@@ -72,6 +72,46 @@ class CliMemoryAndThread(unittest.TestCase):
         shown = run_rig(self.repo, "job", "show", job_id)
         self.assertIn("use listed files", shown.stdout)
 
+    def test_queue_add_list_cancel_and_jobs_footer(self):
+        added = run_rig(self.repo, "queue", "add", "fix pagination")
+        self.assertEqual(added.returncode, 0, added.stderr + added.stdout)
+        self.assertIn("queued ", added.stdout)
+        self.assertIn("fix pagination", added.stdout)
+        qdir = self.repo / ".rig" / "queue"
+        files = list(qdir.glob("*.json"))
+        self.assertEqual(len(files), 1)
+        obj = json.loads(files[0].read_text())
+        self.assertEqual(obj["status"], "pending")
+        listed = run_rig(self.repo, "queue", "list")
+        self.assertIn("1 pending", listed.stdout)
+        jobs = run_rig(self.repo, "jobs")
+        self.assertIn("QUEUE", jobs.stdout)
+        self.assertIn("fix pagination", jobs.stdout)
+        cancelled = run_rig(self.repo, "queue", "cancel", obj["id"])
+        self.assertEqual(cancelled.returncode, 0, cancelled.stderr)
+        self.assertIn("cancelled", cancelled.stdout)
+        again = run_rig(self.repo, "queue", "list")
+        self.assertIn("0 pending", again.stdout)
+
+    def test_init_appends_queue_gitignore_and_keeps_max_running(self):
+        gi = self.repo / ".gitignore"
+        gi.write_text(".rig/\n")
+        harness = self.repo / ".rig" / "harness.toml"
+        original = harness.read_text()
+        self.assertIn("max_running", original)
+        proc = run_rig(self.repo, "init")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn(".rig/queue/", gi.read_text())
+        self.assertIn("max_running = 3", harness.read_text())
+        harness.write_text('parent = "codex"\n\n[workers]\ngrok = true\n\n[queue]\nmax_running = 1\n')
+        again = run_rig(self.repo, "init")
+        self.assertEqual(again.returncode, 0, again.stderr)
+        self.assertIn("max_running = 1", harness.read_text())
+        self.assertNotIn("max_running = 3", harness.read_text())
+        skill = self.repo / ".agents" / "skills" / "rig-queue" / "SKILL.md"
+        self.assertTrue(skill.is_file())
+        self.assertIn("Does not spawn", skill.read_text())
+
     def test_prune_persists_activity_then_drops_ok_log(self):
         job_dir = self.repo / ".rig" / "jobs" / "prune-ok"
         job_dir.mkdir(parents=True)
@@ -503,7 +543,7 @@ class InitPresence(unittest.TestCase):
         self.assertRegex(doc.stdout, r"pi:.*missing")
         self.assertRegex(doc.stdout, r"agy:.*missing")
         self.assertIn("pi install npm:pi-mcp-adapter", doc.stdout)
-        self.assertIn("/rig in Grok, Codex, OpenCode, OMP, Pi, or agy", doc.stdout)
+        self.assertIn("/rig /queue in Grok, Codex, OpenCode, OMP, Pi, or agy", doc.stdout)
         self.assertIn(".config/opencode/skill/delegate-harness", doc.stdout)
         self.assertIn(".omp/agent/skills/delegate-harness", doc.stdout)
         self.assertIn(".pi/agent/skills/delegate-harness", doc.stdout)
@@ -604,6 +644,14 @@ class InitPresence(unittest.TestCase):
         self.assertTrue((home / ".omp" / "agent" / "skills" / "rig-jobs").exists())
         self.assertTrue((home / ".pi" / "agent" / "skills" / "delegate-harness").exists())
         self.assertTrue((home / ".gemini" / "antigravity-cli" / "skills" / "delegate-harness").exists())
+        self.assertTrue((home / ".grok" / "skills" / "rig-queue").exists())
+        self.assertTrue((home / ".codex" / "skills" / "rig-queue").exists())
+        self.assertTrue((home / ".config" / "opencode" / "skill" / "rig-queue").exists())
+        self.assertTrue((home / ".codex" / "prompts" / "queue.md").is_file())
+        self.assertTrue((home / ".config" / "opencode" / "commands" / "queue.md").is_file())
+        prompt = (home / ".codex" / "prompts" / "queue.md").read_text()
+        self.assertIn("rig queue", prompt)
+        self.assertIn("Do not spawn", prompt)
 
     def test_new_init_harness_has_no_parent_profile(self):
         proc = run_rig(self.repo, "init", env={"PATH": _stub_path()})
@@ -630,6 +678,9 @@ class InitPresence(unittest.TestCase):
             "omp = false\n"
             "pi = false\n"
             "agy = false\n"
+            "\n"
+            "[queue]\n"
+            "max_running = 3\n"
         )
         path = rig_dir / "harness.toml"
         path.write_text(original)
