@@ -13,9 +13,10 @@ if str(HERE) not in sys.path:
     sys.path.insert(0, str(HERE))
 
 import jobs as rig_jobs  # noqa: E402
+import work_queue as rig_queue  # noqa: E402
 
 
-HELP = "j/k select   y allow   n deny   l log   o open   r refresh   q quit"
+HELP = "j/k select   e enqueue   y allow   n deny   l log   o open   r refresh   q quit"
 
 
 def _elide(text: str, width: int) -> str:
@@ -64,7 +65,12 @@ def _paint(stdscr, repo: Path) -> None:
         stdscr.erase()
         running = sum(1 for j in listing if j["effective"] == "running")
         asking = sum(1 for j in listing if j["effective"] == "ask")
-        title = f" Rig  {asking} ask / {running} running / {len(listing)} jobs   {repo} "
+        pending = len(rig_queue.list_items(repo, status="pending"))
+        cap = rig_queue.max_running(repo)
+        title = (
+            f" Rig  {asking} ask / {running} running / {len(listing)} jobs  "
+            f"queue {pending}  live {running + asking}/{cap}   {repo} "
+        )
         stdscr.addnstr(0, 0, title[:w], w, curses.A_REVERSE)
         if h < 8 or w < 40:
             stdscr.addnstr(1, 0, "terminal too small", w)
@@ -144,6 +150,30 @@ def _paint(stdscr, repo: Path) -> None:
             if listing:
                 job = listing[selected]
                 footer = job.get("open") or f"no session for {job['job_id']}"
+        elif ch == ord("e"):
+            stdscr.nodelay(False)
+            stdscr.timeout(-1)
+            curses.curs_set(1)
+            curses.echo()
+            prompt = "enqueue: "
+            stdscr.addnstr(h - 1, 0, (prompt + " " * max(0, w - 1))[:w], w, curses.A_REVERSE)
+            stdscr.move(h - 1, min(len(prompt), max(0, w - 2)))
+            try:
+                raw = stdscr.getstr(h - 1, len(prompt), max(8, w - len(prompt) - 1))
+                line = raw.decode("utf-8", "replace") if isinstance(raw, bytes) else str(raw or "")
+                line = line.strip()
+                if line:
+                    obj = rig_queue.add_item(repo, line)
+                    footer = f"queued {obj['id']}  {obj['text']}"
+                else:
+                    footer = "enqueue cancelled"
+            except Exception as exc:
+                footer = f"enqueue failed: {exc}"
+            curses.noecho()
+            curses.curs_set(0)
+            stdscr.nodelay(True)
+            stdscr.timeout(400)
+            last = 0
         elif ch in (ord("y"), ord("n")):
             if listing:
                 job = listing[selected]

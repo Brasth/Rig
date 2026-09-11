@@ -40,7 +40,7 @@ usage: rig <command> [args]
   job deny [id] [--reason TEXT]
   job wait [id ...] [--timeout SECS]
   job message <id> --text TEXT
-  queue add "text"
+  queue add [--priority N] [--worker NAME] "text"
   queue list
   queue cancel <id>
   queue claim [--files a,b] [id]
@@ -239,6 +239,43 @@ cmd_setup() {
   [[ -f "$qsrc" ]] || qsrc="$(rig_source_root)/adapters/opencode/commands/queue.md"
   if [[ -f "$qsrc" ]]; then
     maybe_copy_queue_adapter "$qsrc" "$HOME/.config/opencode/commands/queue.md"
+  fi
+
+  local hook_py hook_dest py_bin
+  hook_py="$dest/scripts/queue_submit_hook.py"
+  [[ -f "$hook_py" ]] || hook_py="$(rig_source_root)/scripts/queue_submit_hook.py"
+  if [[ -f "$hook_py" ]]; then
+    mkdir -p "$HOME/.grok/hooks"
+    hook_dest="$HOME/.grok/hooks/rig-queue-submit.json"
+    if [[ -e "$hook_dest" ]] && ! command grep -q "queue_submit_hook" "$hook_dest" 2>/dev/null; then
+      printf 'skip %s (exists, not a Rig queue hook)\n' "$hook_dest"
+    else
+      py_bin="$(command -v python3 || true)"
+      python3 - "$hook_dest" "${py_bin:-python3}" "$hook_py" <<'PY'
+import json, pathlib, sys
+dest, py, script = pathlib.Path(sys.argv[1]), sys.argv[2], sys.argv[3]
+obj = {
+    "hooks": {
+        "UserPromptSubmit": [
+            {
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": f"{py} {script}",
+                        "timeout": 10,
+                    }
+                ]
+            }
+        ]
+    }
+}
+dest.parent.mkdir(parents=True, exist_ok=True)
+tmp = dest.with_name(dest.name + ".tmp")
+tmp.write_text(json.dumps(obj, indent=2) + "\n")
+tmp.replace(dest)
+print(f"wrote {dest}")
+PY
+    fi
   fi
 
   local codex_cfg="$HOME/.codex/config.toml"

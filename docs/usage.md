@@ -239,6 +239,7 @@ max_running = 3
 Effective worker = flag `true` **and** binary on PATH **and** not live parent. Check with `rig doctor` / `rig status`. `grok = false` turns off grok as a child. Open Grok and you still get native Grok. Open Pi with grok off and pick must stay Pi.
 
 - **`[queue].max_running`** — max live jobs (`running` + `ask`) per repo (default 3). `job start` / `run-worker.sh` refuse a new job at cap or when listed files overlap a live writer. Set to `1` to restore one-child. Existing values are never flipped on init.
+- **`[queue].max_per_worker`** — extra cap per worker name (default `0` = off). `[queue.workers].grok = 2` overrides for that worker. Fair drain is highest `priority` (0–9) then oldest pending.
 
 **Binaries:**
 
@@ -397,13 +398,15 @@ rig job wait <id1> <id2>  # wait-all (review + seed after implement ok)
 rig job show            # running job, or latest
 rig job log <id> -f     # decoded activity (tools + text)
 rig queue add "text"    # park work (works during a wait, any parent)
+rig queue add --priority 2 --worker claude "text"
 rig queue list
 rig queue cancel <id>
+rig tui                 # e = enqueue one line
 ```
 
 `--timeout SECS` is an optional cap, not the default. Omit timeout to block. `0` snapshots once. Exit 124 only if still running when a cap hits.
 
-In Grok, Codex, OpenCode, OMP, Pi, or agy type `/rig` or `/queue`. Codex slash menu also has `/prompts:queue`. `/queue` parks a line in `.rig/queue/` and does **not** spawn. While `rig_job_wait` is blocking this chat, type `rig queue add "…"` in another terminal — the slash command runs on the next free turn. Grok also gets a bottom status line after `rig setup` (restart Grok once).
+In Grok, Codex, OpenCode, OMP, Pi, or agy type `/rig` or `/queue`. Codex slash menu also has `/prompts:queue`. `/queue` parks a line in `.rig/queue/` and does **not** spawn. Grok `UserPromptSubmit` hook (installed by `rig setup` into `~/.grok/hooks/rig-queue-submit.json`) parks `/queue …` and **blocks** that prompt from the model, so it can hit disk even while a wait is in flight. Bare `/queue` (list) is not blocked. Codex/OpenCode/OMP/Pi/agy still use `rig queue add` in another pane during wait. `rig tui` key `e` enqueues a line. Grok also gets a bottom status line after `rig setup` (restart Grok once).
 
 MCP tools load after `rig setup` + fully quit the parent CLI once. Instant tools stay MCP (pick, status, start, finish, record, list/show/log, allow/deny, memory). Launch is still bash. Wait is still one blocking `rig_job_wait` with no timeout (`ids` for a review+seed panel); one bash `rig job wait` if the host drops the tool.
 

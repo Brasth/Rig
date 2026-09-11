@@ -1195,7 +1195,7 @@ def start_job(
     import work_queue as rig_queue
 
     try:
-        rig_queue.check_start(repo, job_id, files=listed, role=role)
+        rig_queue.check_start(repo, job_id, files=listed, role=role, worker=worker)
     except rig_queue.QueueError as exc:
         raise SystemExit(str(exc)) from exc
     now = iso_now()

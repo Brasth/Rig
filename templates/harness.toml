@@ -17,3 +17,6 @@ agy = false
 
 [queue]
 max_running = 3
+# max_per_worker = 2
+# [queue.workers]
+# grok = 2

@@ -221,6 +221,53 @@ class QueueFiles(unittest.TestCase):
         self.assertTrue(text.startswith("ASK") or "ASK" in text.splitlines()[0])
         self.assertIn("panel-1", text)
 
+    def test_priority_fifo_and_slash_parse(self):
+        low = rig_queue.add_item(self.repo, "later", priority=0)
+        high = rig_queue.add_item(self.repo, "first", priority=2)
+        mid = rig_queue.add_item(self.repo, "middle", priority=1)
+        order = [i["id"] for i in rig_queue.list_items(self.repo)]
+        self.assertEqual(order, [high["id"], mid["id"], low["id"]])
+        self.assertEqual(rig_queue.parse_slash("hello"), None)
+        self.assertEqual(rig_queue.parse_slash("/queue")["action"], "list")
+        parsed = rig_queue.parse_slash("/queue --priority 3 --worker claude fix pagination")
+        self.assertEqual(parsed["action"], "add")
+        self.assertEqual(parsed["priority"], 3)
+        self.assertEqual(parsed["worker"], "claude")
+        self.assertEqual(parsed["text"], "fix pagination")
+        cancel = rig_queue.parse_slash("/prompts:queue cancel abc")
+        self.assertEqual(cancel, {"action": "cancel", "id": "abc"})
+
+    def test_per_worker_cap(self):
+        _write_harness(
+            self.repo,
+            'parent = "codex"\n\n[workers]\ngrok = true\nclaude = true\n\n'
+            "[queue]\nmax_running = 3\nmax_per_worker = 1\n",
+        )
+        self._live_job("g1", files=["a.py"], role="implement")
+        meta = json.loads((self.repo / ".rig" / "jobs" / "g1" / "meta.json").read_text())
+        meta["worker"] = "grok"
+        (self.repo / ".rig" / "jobs" / "g1" / "meta.json").write_text(json.dumps(meta) + "\n")
+        with self.assertRaises(rig_queue.QueueError) as ctx:
+            rig_queue.check_start(
+                self.repo, "g2", files=["b.py"], role="implement", worker="grok"
+            )
+        self.assertIn("grok live 1/1", str(ctx.exception))
+        rig_queue.check_start(
+            self.repo, "c1", files=["c.py"], role="implement", worker="claude"
+        )
+
+    def test_submit_hook_parks_and_blocks(self):
+        import queue_submit_hook as hook
+
+        out = hook.handle({"prompt": "/queue fix pagination", "cwd": str(self.repo)})
+        self.assertEqual(out["decision"], "block")
+        self.assertIn("queued", out["reason"])
+        items = rig_queue.list_items(self.repo)
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0]["text"], "fix pagination")
+        self.assertIsNone(hook.handle({"prompt": "implement pagination", "cwd": str(self.repo)}))
+        self.assertIsNone(hook.handle({"prompt": "/queue", "cwd": str(self.repo)}))
+
 
 if __name__ == "__main__":
     unittest.main()

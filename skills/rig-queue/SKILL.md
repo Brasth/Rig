@@ -30,7 +30,7 @@ Works in Grok, Codex, OpenCode, OMP, Pi, and agy. Same files for every parent.
 - Do not call `rig_job_wait`, allow, or deny.
 - Do not encode `/queue` into `rig pick --case`.
 - Do not spawn from `/queue` itself. Parking is this command. Drain is the parent on a **free** turn (claim → brief → spawn → wait all live ids).
-- Do not tell the user this hits disk **during** a blocking wait. While wait is in flight, they must run `rig queue add "…"` in another terminal. `/queue` in this chat runs on the next free turn.
+- On Grok, a UserPromptSubmit hook parks `/queue text` and blocks the prompt (disk even mid-wait). Bare `/queue` still needs a free turn to list. Other parent CLIs: `rig queue add` in another pane, or `rig tui` `e`.
 
 ```bash
 rig queue add "fix pagination on the jobs list"

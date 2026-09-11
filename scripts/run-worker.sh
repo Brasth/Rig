@@ -49,7 +49,7 @@ parse_harness "$HARNESS"
 
 QUEUE_PY="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/work_queue.py"
 if [[ -f "$QUEUE_PY" ]]; then
-  if ! python3 "$QUEUE_PY" gate --repo "$REPO" --job-id "$JOB_ID" --role "$ROLE" --files "${RIG_JOB_FILES:-}"; then
+  if ! python3 "$QUEUE_PY" gate --repo "$REPO" --job-id "$JOB_ID" --role "$ROLE" --worker "$WORKER" --files "${RIG_JOB_FILES:-}"; then
     echo "run-worker: live cap or file overlap — rig queue list" >&2
     exit 1
   fi

@@ -81,14 +81,148 @@ def _clip_text(text: str) -> str:
     return line
 
 
+def _queue_cfg(repo: Path) -> dict:
+    return rig_harness.parse_harness(rig_harness.harness_path(Path(repo))).get("queue") or {}
+
+
 def max_running(repo: Path) -> int:
-    parsed = rig_harness.parse_harness(rig_harness.harness_path(Path(repo)))
-    raw = (parsed.get("queue") or {}).get("max_running", 3)
+    raw = _queue_cfg(repo).get("max_running", 3)
     try:
         n = int(raw)
     except (TypeError, ValueError):
         n = 3
     return max(1, n)
+
+
+def max_per_worker(repo: Path, worker: str = "") -> int:
+    cfg = _queue_cfg(repo)
+    name = str(worker or "").strip()
+    table = cfg.get("per_worker") or {}
+    if name and name in table:
+        try:
+            return max(0, int(table[name]))
+        except (TypeError, ValueError):
+            pass
+    try:
+        n = int(cfg.get("max_per_worker", 0) or 0)
+    except (TypeError, ValueError):
+        n = 0
+    return max(0, n)
+
+
+def worker_live_count(repo: Path, worker: str) -> int:
+    name = str(worker or "").strip()
+    if not name:
+        return 0
+    return sum(1 for job in live_jobs(repo) if str(job.get("worker") or "") == name)
+
+
+def clip_priority(raw) -> int:
+    try:
+        n = int(raw)
+    except (TypeError, ValueError):
+        n = 0
+    return max(0, min(9, n))
+
+
+def parse_slash(text: str) -> dict | None:
+    """Parse /queue or /prompts:queue. None if this is a normal prompt."""
+    line = str(text or "").strip()
+    if line.startswith("/"):
+        line = line[1:]
+    low = line.lower()
+    rest = ""
+    if low.startswith("prompts:queue"):
+        rest = line[len("prompts:queue") :].strip()
+    elif low.startswith("queue"):
+        rest = line[len("queue") :].strip()
+    else:
+        return None
+    if not rest:
+        return {"action": "list"}
+    priority = 0
+    worker = ""
+    parts = rest.split()
+    out: list[str] = []
+    i = 0
+    while i < len(parts):
+        tok = parts[i]
+        if tok in {"--priority", "-p"} and i + 1 < len(parts):
+            priority = clip_priority(parts[i + 1])
+            i += 2
+            continue
+        if tok.startswith("--priority="):
+            priority = clip_priority(tok.split("=", 1)[1])
+            i += 1
+            continue
+        if tok in {"--worker", "-w"} and i + 1 < len(parts):
+            worker = parts[i + 1].strip()
+            i += 2
+            continue
+        if tok.startswith("--worker="):
+            worker = tok.split("=", 1)[1].strip()
+            i += 1
+            continue
+        out.append(tok)
+        i += 1
+    body = " ".join(out).strip()
+    if not body:
+        return {"action": "list"}
+    if body.lower().startswith("cancel"):
+        bits = body.split(None, 1)
+        if len(bits) < 2:
+            return {"action": "list"}
+        return {"action": "cancel", "id": bits[1].strip()}
+    return {
+        "action": "add",
+        "text": body,
+        "priority": priority,
+        "worker": worker,
+    }
+
+
+def prompt_from_hook_payload(data: dict) -> str:
+    if not isinstance(data, dict):
+        return ""
+    for key in ("prompt", "text", "userPrompt", "user_prompt", "content"):
+        val = data.get(key)
+        if isinstance(val, str) and val.strip():
+            return val
+        if isinstance(val, dict):
+            inner = val.get("text") or val.get("prompt") or ""
+            if str(inner).strip():
+                return str(inner)
+        if isinstance(val, list):
+            bits = []
+            for item in val:
+                if isinstance(item, str):
+                    bits.append(item)
+                elif isinstance(item, dict) and item.get("text"):
+                    bits.append(str(item.get("text")))
+            joined = " ".join(bits).strip()
+            if joined:
+                return joined
+    return ""
+
+
+def apply_slash(repo: Path, text: str) -> dict | None:
+    """Run a /queue slash. None if not a queue command. list is a no-op dict."""
+    parsed = parse_slash(text)
+    if not parsed:
+        return None
+    action = parsed.get("action")
+    if action == "list":
+        return {"action": "list"}
+    if action == "cancel":
+        obj = cancel_item(repo, str(parsed.get("id") or ""))
+        return {"action": "cancel", "item": obj}
+    obj = add_item(
+        repo,
+        str(parsed.get("text") or ""),
+        priority=parsed.get("priority") or 0,
+        worker=str(parsed.get("worker") or ""),
+    )
+    return {"action": "add", "item": obj}
 
 
 def live_jobs(repo: Path) -> list[dict]:
@@ -224,6 +358,7 @@ def check_start(
     job_id: str = "",
     files=None,
     role: str = "worker",
+    worker: str = "",
 ) -> None:
     """Refuse a new running job at cap or on file overlap. Existing live id is ok."""
     repo = Path(repo)
@@ -240,6 +375,14 @@ def check_start(
             f"live jobs {n}/{cap} (running+ask). wait or rig queue list"
             + (f". {extra}" if extra else "")
         )
+    who = str(worker or "").strip()
+    cap_w = max_per_worker(repo, who)
+    if who and cap_w:
+        nw = worker_live_count(repo, who)
+        if nw >= cap_w:
+            raise QueueError(
+                f"{who} live {nw}/{cap_w} (max_per_worker). wait or use another worker"
+            )
     if not is_writer(role):
         return
     why = overlap_reason(
@@ -356,9 +499,20 @@ def mark_done_for_job(repo: Path, job_id: str) -> dict | None:
     return _with_lock(repo, _done)
 
 
-def add_item(repo: Path, text: str, *, thread: str = "") -> dict:
+def add_item(
+    repo: Path,
+    text: str,
+    *,
+    thread: str = "",
+    priority: int = 0,
+    worker: str = "",
+) -> dict:
     line = _clip_text(text)
-    item_id = rig_jobs.new_job_id()
+    item_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ") + f"-{os.getpid()}"
+    n = 0
+    while item_path(repo, item_id).is_file() and n < 20:
+        n += 1
+        item_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ") + f"-{os.getpid()}-{n}"
     obj = {
         "id": item_id,
         "text": line,
@@ -367,6 +521,8 @@ def add_item(repo: Path, text: str, *, thread: str = "") -> dict:
         "claimed_at": "",
         "job_id": "",
         "files": [],
+        "priority": clip_priority(priority),
+        "worker": str(worker or "").strip(),
         "thread": (thread or current_thread()).strip(),
     }
     _write_json(item_path(repo, item_id), obj)
@@ -394,7 +550,13 @@ def list_items(repo: Path, *, status: str | None = "pending") -> list[dict]:
         if status and str(obj.get("status") or "") != status:
             continue
         out.append(obj)
-    out.sort(key=lambda item: str(item.get("created_at") or item.get("id") or ""))
+    out.sort(
+        key=lambda item: (
+            -clip_priority(item.get("priority") or 0),
+            str(item.get("created_at") or ""),
+            str(item.get("id") or ""),
+        )
+    )
     return out
 
 
@@ -429,8 +591,15 @@ def format_block(repo: Path, *, live: int | None = None) -> str:
             text = str(item.get("text") or "")
             if len(text) > 64:
                 text = text[:63] + "…"
+            extra_bits = ""
+            pri = clip_priority(item.get("priority") or 0)
+            if pri:
+                extra_bits += f" p{pri}"
+            want = str(item.get("worker") or "").strip()
+            if want:
+                extra_bits += f" {want}"
             rows.append(
-                f"{status:<8} {str(item.get('id') or '-'):<32} {text}"
+                f"{status:<8} {str(item.get('id') or '-'):<32} {text}{extra_bits}"
             )
             shown += 1
         if shown >= 8:
@@ -473,6 +642,8 @@ def main() -> int:
     parser.add_argument("--job", default="")
     parser.add_argument("--job-id", default="")
     parser.add_argument("--role", default="worker")
+    parser.add_argument("--priority", type=int, default=0)
+    parser.add_argument("--worker", default="")
     args = parser.parse_args()
     repo = rig_jobs.repo_root(args.repo)
     try:
@@ -480,7 +651,17 @@ def main() -> int:
             text = (args.text or " ".join(args.rest)).strip()
             if not text:
                 raise SystemExit('usage: rig queue add "text"')
-            _print_obj(add_item(repo, text), "queued", repo, args.json)
+            _print_obj(
+                add_item(
+                    repo,
+                    text,
+                    priority=args.priority,
+                    worker=args.worker,
+                ),
+                "queued",
+                repo,
+                args.json,
+            )
             return 0
         if args.cmd == "cancel":
             name = (args.rest[0] if args.rest else "").strip()
@@ -507,7 +688,9 @@ def main() -> int:
             return 0
         if args.cmd == "gate":
             jid = (args.job_id or args.job or (args.rest[0] if args.rest else "")).strip()
-            check_start(repo, jid, files=args.files, role=args.role)
+            check_start(
+                repo, jid, files=args.files, role=args.role, worker=args.worker
+            )
             return 0
         items = list_items(repo, status="pending")
         if args.json:

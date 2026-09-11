@@ -649,6 +649,10 @@ class InitPresence(unittest.TestCase):
         self.assertTrue((home / ".config" / "opencode" / "skill" / "rig-queue").exists())
         self.assertTrue((home / ".codex" / "prompts" / "queue.md").is_file())
         self.assertTrue((home / ".config" / "opencode" / "commands" / "queue.md").is_file())
+        hook = home / ".grok" / "hooks" / "rig-queue-submit.json"
+        self.assertTrue(hook.is_file(), proc.stdout)
+        self.assertIn("queue_submit_hook", hook.read_text())
+        self.assertIn("UserPromptSubmit", hook.read_text())
         prompt = (home / ".codex" / "prompts" / "queue.md").read_text()
         self.assertIn("rig queue", prompt)
         self.assertIn("Do not spawn", prompt)
