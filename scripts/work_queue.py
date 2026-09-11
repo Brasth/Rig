@@ -20,6 +20,7 @@ import harness as rig_harness  # noqa: E402
 import jobs as rig_jobs  # noqa: E402
 
 TEXT_CAP = 2000
+OCCUPIED_SHOW = 8
 STATUSES = frozenset({"pending", "cancelled", "claimed", "spawned", "done"})
 WRITER_ROLES = frozenset({"implement", "hard", "worker", "bulk"})
 NON_WRITER_ROLES = frozenset({"explorer", "reviewer", "review", "parent"})
@@ -405,14 +406,19 @@ def claim_next(repo: Path, files=None, item_id: str = "") -> dict:
                 f"live+claimed {n}/{cap}. wait or rig queue list"
                 + (f". {extra}" if extra else "")
             )
-        why = overlap_reason(repo, listed, include_claimed=True)
-        if why:
-            raise QueueError(why)
         pending = list_items(repo, status="pending")
         if want:
             pending = [item for item in pending if str(item.get("id") or "") == want]
+        elif len(pending) > 1:
+            raise QueueError(
+                "claim needs id when more than one pending item. "
+                "rig queue list then claim --files a,b <id>"
+            )
         if not pending:
             raise QueueError("no pending queue item" + (f" {want}" if want else ""))
+        why = overlap_reason(repo, listed, include_claimed=True)
+        if why:
+            raise QueueError(why)
         obj = dict(pending[0])
         name = str(obj.get("id") or "")
         fresh = load_item(repo, name)
@@ -575,6 +581,21 @@ def cancel_item(repo: Path, item_id: str) -> dict:
     return obj
 
 
+def format_occupied_line(repo: Path) -> str:
+    occ, unknown = occupied_files(repo, include_claimed=True)
+    if unknown:
+        return "occupied  unknown (a live writer has no listed files)"
+    if not occ:
+        return ""
+    paths = sorted(occ)
+    extra = max(0, len(paths) - OCCUPIED_SHOW)
+    shown = paths[:OCCUPIED_SHOW]
+    line = "occupied  " + " ".join(shown)
+    if extra:
+        line += f" +{extra} more"
+    return line
+
+
 def format_block(repo: Path, *, live: int | None = None) -> str:
     pending = list_items(repo, status="pending")
     cap = max_running(repo)
@@ -583,6 +604,9 @@ def format_block(repo: Path, *, live: int | None = None) -> str:
         f"QUEUE    {len(pending)} pending / live {n_live}/{cap}    "
         "rig queue add|list|cancel|claim"
     ]
+    occ_line = format_occupied_line(repo)
+    if occ_line:
+        rows.append(occ_line)
     shown = 0
     for status in ("pending", "claimed", "spawned"):
         for item in list_items(repo, status=status):

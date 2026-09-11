@@ -150,6 +150,69 @@ class QueueFiles(unittest.TestCase):
         back = rig_queue.unclaim(self.repo, item["id"])
         self.assertEqual(back["status"], "pending")
 
+    def test_claim_needs_id_when_several_pending(self):
+        first = rig_queue.add_item(self.repo, "fix a")
+        second = rig_queue.add_item(self.repo, "fix b")
+        with self.assertRaises(rig_queue.QueueError) as ctx:
+            rig_queue.claim_next(self.repo, files=["src/a.py"])
+        self.assertIn("needs id", str(ctx.exception))
+        self.assertEqual(rig_queue.load_item(self.repo, first["id"])["status"], "pending")
+        self.assertEqual(rig_queue.load_item(self.repo, second["id"])["status"], "pending")
+        claimed = rig_queue.claim_next(
+            self.repo, files=["src/b.py"], item_id=second["id"]
+        )
+        self.assertEqual(claimed["id"], second["id"])
+        self.assertEqual(claimed["files"], ["src/b.py"])
+        self.assertEqual(rig_queue.load_item(self.repo, first["id"])["status"], "pending")
+
+    def test_selects_disjoint_subset_leaves_overlap_pending(self):
+        item_a = rig_queue.add_item(self.repo, "touch foo a")
+        item_b = rig_queue.add_item(self.repo, "touch foo b")
+        item_c = rig_queue.add_item(self.repo, "touch bar")
+        claimed_a = rig_queue.claim_next(
+            self.repo, files=["foo.py"], item_id=item_a["id"]
+        )
+        claimed_c = rig_queue.claim_next(
+            self.repo, files=["bar.py"], item_id=item_c["id"]
+        )
+        self.assertEqual(claimed_a["id"], item_a["id"])
+        self.assertEqual(claimed_c["id"], item_c["id"])
+        with self.assertRaises(rig_queue.QueueError) as ctx:
+            rig_queue.claim_next(self.repo, files=["foo.py"], item_id=item_b["id"])
+        self.assertIn("overlap", str(ctx.exception))
+        self.assertEqual(rig_queue.load_item(self.repo, item_b["id"])["status"], "pending")
+
+    def test_format_block_shows_occupied_files(self):
+        self._live_job("writer-a", files=["src/foo.py", "src/bar.py"])
+        block = rig_queue.format_block(self.repo)
+        self.assertIn("occupied", block)
+        self.assertIn("src/foo.py", block)
+        self.assertIn("src/bar.py", block)
+
+    def test_format_block_unknown_occupied(self):
+        self._live_job("writer-empty", files=[], role="implement")
+        block = rig_queue.format_block(self.repo)
+        self.assertIn("occupied", block)
+        self.assertIn("unknown", block)
+
+    def test_format_block_caps_occupied_paths(self):
+        files = [f"src/f{i}.py" for i in range(10)]
+        self._live_job("writer-many", files=files)
+        block = rig_queue.format_block(self.repo)
+        self.assertIn("+2 more", block)
+        self.assertIn("src/f0.py", block)
+        self.assertNotIn("src/f9.py", block)
+
+    def test_mcp_claim_without_id_two_pending_errors(self):
+        rig_queue.add_item(self.repo, "one")
+        rig_queue.add_item(self.repo, "two")
+        blocked = rig_mcp.call_tool(
+            "rig_queue_claim",
+            {"files": ["a.py"], "repo": str(self.repo)},
+        )
+        self.assertTrue(blocked.get("isError"), blocked)
+        self.assertIn("needs id", blocked["content"][0]["text"])
+
     def test_cap_refuses_fourth_start(self):
         for i in range(3):
             self._live_job(f"live-{i}", files=[f"f{i}.py"])

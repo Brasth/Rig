@@ -439,13 +439,17 @@ TOOLS = [
     {
         "name": "rig_queue_claim",
         "description": (
-            "Parent only. Claim the oldest pending queue item (or id) if live < max_running "
-            "and listed files are disjoint. Does not spawn. Brief after claim; unclaim if the brief fails."
+            "Parent only. Claim a pending queue item by id if live < max_running "
+            "and listed files are disjoint. Id required when more than one item is pending. "
+            "Does not spawn. Brief after claim; unclaim if the brief fails."
         ),
         "inputSchema": {
             "type": "object",
             "properties": {
-                "id": {"type": "string", "description": "Optional queue item id. Default: oldest pending."},
+                "id": {
+                    "type": "string",
+                    "description": "Queue item id. Required when more than one item is pending. Default: the only pending item.",
+                },
                 "files": {
                     "type": "array",
                     "items": {"type": "string"},

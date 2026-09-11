@@ -469,6 +469,7 @@ class InitAgentsWait(unittest.TestCase):
         self.assertIn("ids", start)
         skill = (self.repo / ".agents" / "skills" / "delegate-harness" / "SKILL.md").read_text()
         self.assertIn("Stage-gated parallel", skill)
+        self.assertIn("MCP first", skill)
         self.assertIn("rig job wait <id1> <id2>", skill)
 
 

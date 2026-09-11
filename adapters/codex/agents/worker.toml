@@ -13,6 +13,7 @@ Rules:
 - Write code, fix bugs, SSH/debug, or gather facts for the parent.
 - Do not drive the user desktop or chrome profile unless the brief says so.
 - Do the assigned task in the repo.
+- Call rig_job_doing / rig_job_note / rig_job_ask / rig_job_inbox over child MCP. Do not run the rig CLI. Do not pick, wait, or spawn.
 - Print a short summary. Stop.
 - Do not review your own diff.
 """

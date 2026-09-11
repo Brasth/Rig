@@ -90,11 +90,11 @@ agy = false
 
 ## Watch
 
-`rig tui` / `rig jobs` / `/rig` / `/queue` in Grok, Codex, OpenCode, OMP, Pi, or agy (Codex also `/prompts:queue`). Grok also gets a bottom status line after setup (restart Grok once). Pi needs `pi install npm:pi-mcp-adapter` before `/rig` loads. `/queue` parks work in `.rig/queue/` and does not spawn. Grok mid-wait `/queue text` is parked by a submit hook. Other parents: `rig queue add` in another pane, or `rig tui` `e`. No auto-spawn without a parent brief.
+`rig tui` / `rig jobs` / `/rig` / `/queue` in Grok, Codex, OpenCode, OMP, Pi, or agy (Codex also `/prompts:queue`). Grok also gets a bottom status line after setup (restart Grok once). Pi needs `pi install npm:pi-mcp-adapter` before `/rig` loads. `/queue` parks work in `.rig/queue/` and does not spawn. On a free turn the parent claims a disjoint subset by id (list shows occupied files; skip overlap). Grok mid-wait `/queue text` is parked by a submit hook. Other parents: `rig queue add` in another pane, or `rig tui` `e`. No auto-spawn without a parent brief.
 
 Jobs and MEMORY are this repo, not the chat. A new thread still sees `.rig/jobs`. Running children keep going.
 
-If a Claude child is `ask`, the parent answers `rig job allow <id>` or `rig job deny <id>` (TUI `y` / `n`). Never kill that job. Dead spawn: one `rig pick --exclude`. Native implement on the live parent: that parent writes (`parent_writes`), no second same-CLI session. After implement+verify ok, the parent may run read-only review and disjoint seed in parallel (`rig job wait id1 id2`). First MCP call: `rig_session`.
+Parent orchestration is MCP (`rig_session`, `rig_job_wait`, `rig_job_allow` / `rig_job_deny`, `rig_job_message`). Do not shell `rig` for those when MCP is listed. Launching a child is still `run-worker.sh`. If a Claude child is `ask`, the parent answers MCP `rig_job_allow` or `rig_job_deny` (human TUI `y` / `n`). Never kill that job. Dead spawn: one MCP `rig_pick` `exclude`. Native implement on the live parent: that parent writes (`parent_writes`), no second same-CLI session. After implement+verify ok, wait review+seed with MCP `rig_job_wait` `ids`.
 
 More: [Usage](docs/usage.md) (setup, doctor, harness, daily use, troubleshooting).
 Parent spawn protocol: `.agents/skills/delegate-harness/SKILL.md` (also the `<!-- rig:start -->` block in `AGENTS.md`).
