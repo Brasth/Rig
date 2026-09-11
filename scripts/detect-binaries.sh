@@ -520,53 +520,58 @@ PY
 # Replace a marked block and keep it at the top of the file.
 # Args: FILE START_MARKER END_MARKER BLOCK_TEXT
 # Prints: updated | moved | prepended | wrote
+# Bash-only: Linux LANG=C and missing python3 must still write AGENTS.md.
 rig_upsert_marked_block() {
   local file="$1" start="$2" end="$3" block="$4"
-  local tmp
-  if ! command -v python3 >/dev/null 2>&1; then
-    echo "rig: python3 is required to edit $file" >&2
-    return 1
+  local tmp orig rest action dir
+  dir="$(dirname -- "$file")"
+  mkdir -p "$dir" || return 1
+  block="${block%"${block##*[![:space:]]}"}"
+  if [[ ! -f "$file" ]]; then
+    printf '%s\n' "$block" > "$file" || return 1
+    echo wrote
+    return 0
   fi
-  # Do not pass the block through env/argv: LANG=C Linux decodes those as
-  # ASCII and Path.write_text then fails on AGENTS.md arrows/dashes.
-  tmp="$(mktemp "${TMPDIR:-/tmp}/rig-upsert.XXXXXX")"
-  printf '%s\n' "$block" > "$tmp" || { rm -f "$tmp"; return 1; }
-  python3 - "$file" "$start" "$end" "$tmp" <<'PY'
-import sys
-from pathlib import Path
-
-path = Path(sys.argv[1])
-start = sys.argv[2]
-end = sys.argv[3]
-block_path = Path(sys.argv[4])
-try:
-    block = block_path.read_text(encoding="utf-8").strip() + "\n"
-finally:
-    try:
-        block_path.unlink()
-    except OSError:
-        pass
-text = path.read_text(encoding="utf-8") if path.exists() else ""
-path.parent.mkdir(parents=True, exist_ok=True)
-if start in text and end in text:
-    i = text.find(start)
-    j = text.find(end, i)
-    if j == -1:
-        raise SystemExit("markers out of order")
-    j += len(end)
-    rest = (text[:i] + text[j:]).strip("\n")
-    new = block if not rest else block.rstrip() + "\n\n" + rest + "\n"
-    path.write_text(new if new.endswith("\n") else new + "\n", encoding="utf-8")
-    print("moved" if i > 0 else "updated")
-elif text:
-    rest = text.strip("\n")
-    new = block.rstrip() + "\n\n" + rest + "\n"
-    path.write_text(new, encoding="utf-8")
-    print("prepended")
-else:
-    path.write_text(block if block.endswith("\n") else block + "\n", encoding="utf-8")
-    print("wrote")
-PY
+  orig="$(cat -- "$file" && printf x)" || return 1
+  orig="${orig%x}"
+  if [[ -z "${orig//[$'\t\n\r ']/}" ]]; then
+    printf '%s\n' "$block" > "$file" || return 1
+    echo wrote
+    return 0
+  fi
+  tmp="$(mktemp "${TMPDIR:-/tmp}/rig-upsert.XXXXXX" 2>/dev/null \
+    || mktemp -t rig-upsert.XXXXXX 2>/dev/null \
+    || mktemp)" || return 1
+  if printf '%s' "$orig" | grep -Fq -- "$start" \
+    && printf '%s' "$orig" | grep -Fq -- "$end"; then
+    awk -v s="$start" -v e="$end" '
+      { sub(/\r$/, "") }
+      $0 == s { skip=1; next }
+      skip && $0 == e { skip=0; next }
+      skip { next }
+      { print }
+    ' "$file" > "$tmp" || { rm -f "$tmp"; return 1; }
+    rest="$(cat -- "$tmp" && printf x)" || { rm -f "$tmp"; return 1; }
+    rest="${rest%x}"
+    rest="${rest#"${rest%%[![:space:]]*}"}"
+    rest="${rest%"${rest##*[![:space:]]}"}"
+    if [[ "$orig" == "$start"* ]]; then
+      action=updated
+    else
+      action=moved
+    fi
+  else
+    rest="${orig#"${orig%%[![:space:]]*}"}"
+    rest="${rest%"${rest##*[![:space:]]}"}"
+    action=prepended
+  fi
+  rm -f "$tmp"
+  if [[ -z "$rest" ]]; then
+    printf '%s\n' "$block" > "$file" || return 1
+  else
+    printf '%s\n\n%s\n' "$block" "$rest" > "$file" || return 1
+  fi
+  echo "$action"
 }
 
 WORKER_PREAMBLE='You are a worker, not the orchestrator. Do not spawn codex, grok, claude, cursor, opencode, omp, pi, or agy. Do not use computer-use, chrome-profile, or Figma MCP. Follow skill file paths listed in the brief. Write code, fix, review, SSH/debug, or gather facts. Do only the files and changes in the brief. Do not hunt extra updates. Print a short summary. Stop.'

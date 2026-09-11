@@ -321,26 +321,30 @@ cmd_init() {
       [[ "$f" == "harness.toml" ]] && harness_new=1
     fi
   done
-  if [[ "$harness_new" -eq 1 ]]; then
-    local name flag
-    for name in "${RIG_WORKERS[@]}"; do
-      [[ "$name" == "codex" ]] && continue
-      if [[ -n "$(find_worker_bin "$name")" ]]; then
-        flag=true
-      else
-        flag=false
-      fi
-      rig_set_toml_key "$harness" "workers" "$name" "$flag"
-    done
-    echo "workers from PATH: grok=$(worker_flag grok) claude=$(worker_flag claude) cursor=$(worker_flag cursor) opencode=$(worker_flag opencode) omp=$(worker_flag omp) pi=$(worker_flag pi) agy=$(worker_flag agy)"
-  elif [[ -f "$harness" ]]; then
-    local name
-    for name in "${RIG_WORKERS[@]}"; do
-      if ! rig_has_section_key "$harness" "workers" "$name"; then
-        rig_set_toml_key "$harness" "workers" "$name" "false"
-        echo "appended $name = false (existing harness; run: rig workers $name=on)"
-      fi
-    done
+  if command -v python3 >/dev/null 2>&1; then
+    if [[ "$harness_new" -eq 1 ]]; then
+      local name flag
+      for name in "${RIG_WORKERS[@]}"; do
+        [[ "$name" == "codex" ]] && continue
+        if [[ -n "$(find_worker_bin "$name")" ]]; then
+          flag=true
+        else
+          flag=false
+        fi
+        rig_set_toml_key "$harness" "workers" "$name" "$flag"
+      done
+      echo "workers from PATH: grok=$(worker_flag grok) claude=$(worker_flag claude) cursor=$(worker_flag cursor) opencode=$(worker_flag opencode) omp=$(worker_flag omp) pi=$(worker_flag pi) agy=$(worker_flag agy)"
+    elif [[ -f "$harness" ]]; then
+      local name
+      for name in "${RIG_WORKERS[@]}"; do
+        if ! rig_has_section_key "$harness" "workers" "$name"; then
+          rig_set_toml_key "$harness" "workers" "$name" "false"
+          echo "appended $name = false (existing harness; run: rig workers $name=on)"
+        fi
+      done
+    fi
+  else
+    echo "rig init: no python3; left template worker flags. later: rig workers NAME=on"
   fi
 
   # Codex loads repo skills from .agents/skills. Refresh SKILL.md on each init.
@@ -422,7 +426,10 @@ After a run: `rig memory add "one standing fact"` if there is one. No transcript
 <!-- rig:end -->
 EOF
 )"
-    action="$(rig_upsert_marked_block "$agents" "<!-- rig:start -->" "<!-- rig:end -->" "$block")"
+    if ! action="$(rig_upsert_marked_block "$agents" "<!-- rig:start -->" "<!-- rig:end -->" "$block")"; then
+      printf '%s\n' "$block" > "$agents"
+      action="wrote"
+    fi
     echo "$action $agents"
   fi
 

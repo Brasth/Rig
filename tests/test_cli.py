@@ -83,6 +83,38 @@ def _stub_path(extra: Path | None = None) -> str:
     return ":".join(parts)
 
 
+def _core_bins(folder: Path) -> str:
+    import shutil
+
+    names = (
+        "bash",
+        "mkdir",
+        "cp",
+        "mv",
+        "mktemp",
+        "cat",
+        "grep",
+        "chmod",
+        "ln",
+        "awk",
+        "sed",
+        "rm",
+        "dirname",
+        "head",
+        "tr",
+        "uname",
+    )
+    folder.mkdir(parents=True, exist_ok=True)
+    for name in names:
+        src = shutil.which(name)
+        if not src:
+            continue
+        dest = folder / name
+        if not dest.exists():
+            dest.symlink_to(src)
+    return str(folder)
+
+
 def _fake_bin(folder: Path, name: str) -> None:
     path = folder / name
     path.write_text("#!/bin/sh\nexit 0\n")
@@ -277,6 +309,19 @@ class InitPresence(unittest.TestCase):
             env={"PATH": _stub_path(), "RIG_PARENT": "grok"},
         )
         self.assertEqual(allowed.returncode, 0, allowed.stderr + allowed.stdout)
+
+    def test_init_writes_agents_without_python3(self):
+        path = _core_bins(self.bins / "core")
+        proc = run_rig(self.repo, "init", env={"PATH": path})
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        agents = self.repo / "AGENTS.md"
+        self.assertTrue(agents.is_file(), proc.stdout + proc.stderr)
+        text = agents.read_text(encoding="utf-8")
+        self.assertIn("<!-- rig:start -->", text)
+        self.assertIn("MUST use Rig", text)
+        self.assertIn("wrote ", proc.stdout)
+        self.assertIn("AGENTS.md", proc.stdout)
+        self.assertNotIn("python3 is required", proc.stderr)
 
     def test_init_writes_agents_when_locale_is_c(self):
         proc = run_rig(
