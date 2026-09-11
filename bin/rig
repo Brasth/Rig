@@ -38,7 +38,7 @@ usage: rig <command> [args]
   job log [id] [-f] [-n N]
   job allow [id]
   job deny [id] [--reason TEXT]
-  job wait [id] [--timeout SECS]
+  job wait [id ...] [--timeout SECS]
   pick [explore|mini|bulk|implement|hard|review|stay] [--case TEXT] [--exclude NAME] [--json]
   session [--role KIND] [--case TEXT] [--exclude NAME] [--json]
 
@@ -399,13 +399,14 @@ Follow pick JSON; never spawn a worker whose harness flag is false; never spawn 
    native implement/hard (parent_writes true) → this parent writes the listed files, then `rig job record`. Do not spawn a second same-CLI session.
 5. run-worker → write `.rig/jobs/<id>/brief.md` then start the wrapper in the background (do not block this turn on it):
    `RIG_LIVE=1 RIG_ROLE=<kind> RIG_MODEL=<model> RIG_EFFORT=<effort> "$HOME/.rig/scripts/run-worker.sh" <worker> <id> .rig/jobs/<id>/brief.md`
-   Prefer MCP when present: `rig_session` / `rig_jobs` / `rig_job_show` / `rig_job_log` / `rig_job_wait` / `rig_job_allow` / `rig_job_deny` / `rig_memory` / `rig_pick` / `rig_status` / `rig_job_start` / `rig_job_finish` / `rig_job_record`. Wait = one blocking `rig_job_wait` with no timeout. Bash fallback if MCP missing: one `rig job wait <id>` with no `--timeout`.
+   Prefer MCP when present: `rig_session` / `rig_jobs` / `rig_job_show` / `rig_job_log` / `rig_job_wait` / `rig_job_allow` / `rig_job_deny` / `rig_memory` / `rig_pick` / `rig_status` / `rig_job_start` / `rig_job_finish` / `rig_job_record`. Wait = one blocking `rig_job_wait` with no timeout. Bash fallback if MCP missing: one `rig job wait <id>` with no `--timeout`. After implement+verify ok, wait review+seed together: MCP `ids` or `rig job wait id1 id2`.
    Do not spawn via MCP. Launching a child is still bash `run-worker.sh`.
    If MCP wait errors or the host drops the tool, bash `rig job wait <id>` once (no `--timeout`). Do not poll 30s.
    Do not parse a TUI.
    wait exit 2 / status ask: YOU answer `rig job allow <id>` or `rig job deny <id>`. Safe worker work (read/edit/test/ssh gather/git) → allow. Destructive/prod/secrets → deny or ask the user.
-   Then wait once more (no timeout). exit 0 ok, exit 1 fail.
+   Then wait once more (no timeout). Same ids if you waited a panel. exit 0 ok, exit 1 fail.
    Never kill, close, or finish an asking or running job. Never spawn another worker because the child asked. The child is waiting on you.
+   After implement+verify ok, parent MAY start at most one read-only review (different vendor) and one seed/bulk with listed files disjoint from the review set, in parallel. Until implement is ok: one child. Do not spawn a second writer on the same files. Do not spawn explore/fix/QA as extra teammates.
    Spawn never started (binary missing, refuse, native tool error, empty argv): one re-pick with `--exclude <dead worker>`. Same brief, new job id. Last-resort: opencode, omp, pi, agy, codex. Do not auto-spawn Cursor. Child ran and failed the patch: escalate. Do not vendor-shop. One fallback per task.
 
 Live parent is this CLI, not the `parent` key (`rig use grok|codex|opencode|omp|pi|agy` is only the preferred default).
@@ -416,7 +417,7 @@ Pin Claude IDs: `claude-haiku-4-5-20251001` cheap, `claude-sonnet-5` implement, 
 OpenCode: `openai/gpt-5.4-mini` minimal cheap, `openai/gpt-5.6-luna` high implement, `openai/gpt-5.6-terra` max hard/review. OMP/Pi: `grok-4.5` low cheap, `grok-4.6` high implement/hard, `claude-opus-5` high review. agy: `gemini-3.8-flash-low` low cheap, `gemini-3.8-flash-high` high implement, `gemini-3.1-pro-high` high hard/review. Never Sol/Astra/Fable as a child. Opus is allowed.
 OpenCode/OMP/Pi/agy pins are preferences; Rig lists models from the CLI and picks one that exists. Cache ~/.rig/cache/model-catalogs.json.
 Grok Bot.app is not a worker. Do not spawn it.
-Watch: `rig jobs` / `rig job wait <id>` / `rig job show` / `rig job log <id>` / `rig tui` / `/rig`.
+Watch: `rig jobs` / `rig job wait [id ...]` / `rig job show` / `rig job log <id>` / `rig tui` / `/rig`.
 After a run: `rig memory add "one standing fact"` if there is one. No transcripts.
 <!-- rig:end -->
 EOF
@@ -684,7 +685,7 @@ cmd_doctor() {
   echo "Watch"
   echo "  board:  rig tui"
   echo "  list:   rig jobs"
-  echo "  wait:   rig job wait [id]   (blocks until ASK or result; exit 2 = ASK — you allow/deny)"
+  echo "  wait:   rig job wait [id ...]   (blocks until ASK or result; exit 2 = ASK — you allow/deny)"
   echo "  log:    rig job log [id] -f"
   echo "  memory: rig memory   |   rig memory add \"fact\""
   echo "  slash:  /rig in Grok, Codex, OpenCode, OMP, Pi, or agy"
@@ -1073,6 +1074,7 @@ parse_job_flags() {
   JOB_STATUS="ok"
   JOB_SUMMARY=""
   JOB_ID=""
+  JOB_IDS=()
   JOB_FOLLOW=0
   JOB_LINES=""
   JOB_REASON=""
@@ -1113,7 +1115,7 @@ parse_job_flags() {
         shift 2
         ;;
       --help|-h)
-        echo "usage: rig job start|finish|record|show|log|allow|deny|wait [--worker NAME] [--role ROLE] [--status ok|fail] [--summary TEXT] [--reason TEXT] [--timeout SECS] [id] [-f] [-n N]" >&2
+        echo "usage: rig job start|finish|record|show|log|allow|deny|wait [--worker NAME] [--role ROLE] [--status ok|fail] [--summary TEXT] [--reason TEXT] [--timeout SECS] [id ...] [-f] [-n N]" >&2
         exit 2
         ;;
       --*)
@@ -1121,11 +1123,10 @@ parse_job_flags() {
         exit 2
         ;;
       *)
-        if [[ -n "$JOB_ID" ]]; then
-          echo "rig job: extra arg $1" >&2
-          exit 2
+        JOB_IDS+=("$1")
+        if [[ -z "$JOB_ID" ]]; then
+          JOB_ID="$1"
         fi
-        JOB_ID="$1"
         shift
         ;;
     esac
@@ -1138,11 +1139,15 @@ cmd_job() {
   case "$sub" in
     start|finish|record|show|log|allow|deny|wait) ;;
     *)
-      echo "usage: rig job start|finish|record|show|log|allow|deny|wait [--worker NAME] [--role ROLE] [--status ok|fail] [--summary TEXT] [--reason TEXT] [--timeout SECS] [id] [-f] [-n N]" >&2
+      echo "usage: rig job start|finish|record|show|log|allow|deny|wait [--worker NAME] [--role ROLE] [--status ok|fail] [--summary TEXT] [--reason TEXT] [--timeout SECS] [id ...] [-f] [-n N]" >&2
       exit 2
       ;;
   esac
   parse_job_flags "$@"
+  if [[ "$sub" != "wait" && ${#JOB_IDS[@]} -gt 1 ]]; then
+    echo "rig job: extra arg ${JOB_IDS[1]}" >&2
+    exit 2
+  fi
   local root harness
   root="$(repo_root)"
   harness="$(harness_path)"
@@ -1208,7 +1213,11 @@ cmd_job() {
   fi
   if [[ "$sub" == "wait" ]]; then
     local wait_args=(wait)
-    [[ -n "$JOB_ID" ]] && wait_args+=("$JOB_ID")
+    if [[ ${#JOB_IDS[@]} -gt 0 ]]; then
+      wait_args+=("${JOB_IDS[@]}")
+    elif [[ -n "$JOB_ID" ]]; then
+      wait_args+=("$JOB_ID")
+    fi
     [[ -n "$JOB_TIMEOUT" ]] && wait_args+=(--timeout "$JOB_TIMEOUT")
     python3 "$(py_script jobs.py)" "${wait_args[@]}"
     return $?

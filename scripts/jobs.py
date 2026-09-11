@@ -583,34 +583,78 @@ def answer_pending(job: dict, behavior: str, message: str = "") -> str:
     return f"{behavior} {job['job_id']}  {preview}"
 
 
-def format_wait(job: dict) -> str:
+def format_wait(job: dict, others: list[dict] | None = None) -> str:
     job_id = job["job_id"]
     eff = job.get("effective")
     if eff == "ask":
         pending = job.get("ask") if isinstance(job.get("ask"), dict) else {}
         preview = str(pending.get("preview") or pending.get("tool_name") or "tool")
-        return "\n".join(
-            [
-                f"ASK {job_id}",
-                f"agent   {job.get('worker') or '?'}",
-                f"preview {preview}",
-                f"answer  rig job allow {job_id}",
-                f"        rig job deny {job_id}",
-                "You must answer this prompt so the child can continue.",
-                "Do not kill this job. Do not spawn another worker for this task.",
-            ]
-        )
-    if eff == "running":
+        lines = [
+            f"ASK {job_id}",
+            f"agent   {job.get('worker') or '?'}",
+            f"preview {preview}",
+            f"answer  rig job allow {job_id}",
+            f"        rig job deny {job_id}",
+            "You must answer this prompt so the child can continue.",
+            "Do not kill this job. Do not spawn another worker for this task.",
+        ]
+    elif eff == "running":
         doing = job.get("doing") or "running"
-        return "\n".join(
-            [
-                f"RUNNING {job_id}",
-                f"agent   {job.get('worker') or '?'}",
-                f"doing   {doing}",
-                f"next    rig job wait {job_id}",
-            ]
+        lines = [
+            f"RUNNING {job_id}",
+            f"agent   {job.get('worker') or '?'}",
+            f"doing   {doing}",
+            f"next    rig job wait {job_id}",
+        ]
+    else:
+        lines = [format_show(job)]
+    if others:
+        for other in others:
+            oid = other.get("job_id")
+            if not oid or oid == job_id:
+                continue
+            lines.append(f"also    {str(other.get('effective') or '').upper()} {oid}")
+    return "\n".join(lines)
+
+
+def format_wait_many(jobs: list[dict]) -> str:
+    if len(jobs) == 1:
+        return format_wait(jobs[0])
+    rows = [f"WAIT {len(jobs)} jobs"]
+    for job in jobs:
+        rows.append(
+            f"{str(job.get('effective') or '-'):<9} {job.get('job_id')}  "
+            f"{job.get('worker') or '?'}"
         )
-    return format_show(job)
+        if job.get("doing") and job.get("effective") == "running":
+            rows.append(f"          doing  {job['doing']}")
+    return "\n".join(rows)
+
+
+def _normalize_wait_ids(
+    job_id: str | None,
+    ids: str | list | tuple | set | None = None,
+) -> list[str]:
+    out: list[str] = []
+
+    def add(raw) -> None:
+        if raw is None or raw is False:
+            return
+        if isinstance(raw, (list, tuple, set)):
+            for item in raw:
+                add(item)
+            return
+        text = str(raw).strip()
+        if not text:
+            return
+        for part in text.split(","):
+            name = part.strip()
+            if name and name not in out:
+                out.append(name)
+
+    add(ids)
+    add(job_id)
+    return out
 
 
 def wait_job(
@@ -618,6 +662,7 @@ def wait_job(
     job_id: str | None,
     timeout: float | None = None,
     on_tick: Callable | None = None,
+    ids: str | list | tuple | set | None = None,
 ) -> tuple[int, str]:
     timeout_s: float | None
     if timeout is None:
@@ -628,25 +673,41 @@ def wait_job(
         except (TypeError, ValueError):
             timeout_s = None
     deadline = None if timeout_s is None else time.time() + max(0.0, timeout_s)
-    last_tick: tuple[str, str] | None = None
+    last_tick: dict[str, tuple[str, str]] = {}
+    names = _normalize_wait_ids(job_id, ids)
     while True:
-        job = resolve_job(repo, job_id)
-        eff = job.get("effective")
+        if names:
+            jobs = [resolve_job(repo, name) for name in names]
+        else:
+            jobs = [resolve_job(repo, None)]
+            names = [str(jobs[0]["job_id"])]
         if on_tick is not None:
-            key = (str(eff or ""), str(job.get("doing") or ""))
-            if last_tick is None:
-                if eff == "running":
+            for job in jobs:
+                key = (str(job.get("effective") or ""), str(job.get("doing") or ""))
+                jid = str(job.get("job_id") or "")
+                prev = last_tick.get(jid)
+                if prev is None:
+                    if job.get("effective") == "running":
+                        on_tick(job)
+                        last_tick[jid] = key
+                elif key != prev:
                     on_tick(job)
-                    last_tick = key
-            elif key != last_tick:
-                on_tick(job)
-                last_tick = key
-        if eff == "ask":
-            return 2, format_wait(job)
-        if eff in {"ok", "fail", "timeout", "stale"}:
-            return (0 if eff == "ok" else 1), format_wait(job)
+                    last_tick[jid] = key
+        asks = [job for job in jobs if job.get("effective") == "ask"]
+        if asks:
+            return 2, format_wait(asks[0], others=jobs)
+        live = [job for job in jobs if job.get("effective") == "running"]
+        if not live:
+            fails = [
+                job
+                for job in jobs
+                if job.get("effective") in {"fail", "timeout", "stale"}
+            ]
+            text = format_wait_many(jobs)
+            return (1 if fails else 0), text
         if deadline is not None and time.time() >= deadline:
-            return 124, format_wait(job)
+            running = live[0]
+            return 124, format_wait(running, others=jobs)
         time.sleep(0.4)
 
 
@@ -1134,7 +1195,7 @@ def main() -> int:
         default="list",
         choices=["list", "show", "log", "statusline", "thread", "allow", "deny", "wait"],
     )
-    parser.add_argument("job_id", nargs="?")
+    parser.add_argument("job_id", nargs="*")
     parser.add_argument("--repo")
     parser.add_argument("--json", action="store_true")
     parser.add_argument("-f", "--follow", action="store_true")
@@ -1149,6 +1210,8 @@ def main() -> int:
     parser.add_argument("--reason", default="")
     args = parser.parse_args()
     repo = repo_root(args.repo)
+    wait_ids = [str(x).strip() for x in (args.job_id or []) if str(x).strip()]
+    job_id = wait_ids[0] if wait_ids else None
     if args.cmd == "thread":
         print(current_thread(repo))
         return 0
@@ -1164,22 +1227,22 @@ def main() -> int:
             print(format_table(listing))
         return 0
     if args.cmd == "show":
-        print(format_show(resolve_job(repo, args.job_id)))
+        print(format_show(resolve_job(repo, job_id)))
         return 0
     if args.cmd == "log":
-        job = resolve_job(repo, args.job_id)
+        job = resolve_job(repo, job_id)
         if args.follow:
             follow_log(job)
             return 0
         print(format_log(job, args.lines))
         return 0
     if args.cmd in {"allow", "deny"}:
-        job = resolve_job(repo, args.job_id)
+        job = resolve_job(repo, job_id)
         text = answer_pending(job, args.cmd, args.reason)
         print(text)
         return 0 if text.startswith(args.cmd) else 1
     if args.cmd == "wait":
-        code, text = wait_job(repo, args.job_id, args.timeout)
+        code, text = wait_job(repo, job_id, args.timeout, ids=wait_ids or None)
         print(text)
         return code
     raw = sys.stdin.read() if not sys.stdin.isatty() else "{}"

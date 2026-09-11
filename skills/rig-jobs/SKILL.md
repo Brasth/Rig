@@ -18,11 +18,11 @@ Do not guess. Run the commands. The parent checks this board and MUST spawn work
 If MCP tools are present, use them. Bash is fallback if MCP is missing.
 
 - Instant: `rig_session` / `rig_jobs` / `rig_job_show` / `rig_job_log` / `rig_job_allow` / `rig_job_deny` / `rig_memory` / `rig_pick` / `rig_status` / `rig_job_start` / `rig_job_finish` / `rig_job_record`
-- Wait: `rig_job_wait` (one blocking call, no timeout)
+- Wait: `rig_job_wait` (one blocking call, no timeout; pass `ids` to wait a review+seed panel)
 
 Launching a child is still bash `run-worker.sh` in the background. There is no spawn-from-MCP tool.
 
-`rig_job_wait` / `rig job wait`: call **once**, no timeout. Blocks until ASK or result. After allow, wait **once** more. Do not poll. `--timeout` is an optional cap, not the default. If MCP wait errors or the host drops the tool, bash `rig job wait` once (no `--timeout`). Do not go back to a 30s poll loop.
+`rig_job_wait` / `rig job wait`: call **once**, no timeout. Blocks until ASK or result. After allow, wait **once** more (same ids). Do not poll. `--timeout` is an optional cap, not the default. If MCP wait errors or the host drops the tool, bash `rig job wait` once (no `--timeout`). Do not go back to a 30s poll loop. After implement+verify ok, wait review+seed together: `ids` or `rig job wait id1 id2`.
 
 ## Commands
 
@@ -35,7 +35,7 @@ rig jobs              # every job in this repo (survives a new parent thread)
 rig status            # live parent, effective workers, job count
 rig pick --case "..." --json
 rig pick implement --exclude grok --case "..." --json  # after a dead spawn, once
-rig job wait [id]     # one blocking wait; no --timeout; exit 2 = ASK
+rig job wait [id ...] # one blocking wait; no --timeout; exit 2 = ASK; two ids = wait-all
 rig job show          # running job, or latest
 rig job show <id>
 rig job log <id>      # decoded activity
@@ -56,10 +56,11 @@ A new Grok/Codex/OpenCode/OMP/Pi/agy thread does not start a new job board. Jobs
 - how to watch: `rig job log <id> -f` or `rig tui` in another pane
 - Grok child: `open` line is `grok -r <session-id>`
 
-If status is `ask` or `running`, the child is still live. **You answer `ask`** — that is the interaction. Do not kill the job. Do not spawn another worker while it is ask or running. Spawn never started (`fail` with empty files / binary missing): one `--exclude` re-pick. Child ran and failed the patch: escalate.
+If status is `ask` or `running`, the child is still live. **You answer `ask`** — that is the interaction. Do not kill the job. Never spawn another worker because the child asked. After implement+verify ok, a second job with disjoint listed files may already be running (seed in parallel with read-only review); wait both ids; do not replace either. Spawn never started (`fail` with empty files / binary missing): one `--exclude` re-pick. Child ran and failed the patch: escalate.
 
 ```bash
 rig job wait <id>                  # one blocking wait; exit 2 = ASK
+rig job wait <id1> <id2>           # wait-all (review + seed)
 rig job allow <id>
 rig job deny <id> --reason "why"
 ```

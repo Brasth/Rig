@@ -26,7 +26,7 @@ Parent chooses kind from **this** user's request and **this** user's skills. The
 2. Follow pick JSON. Do not ask the user which model. Never spawn a worker whose harness flag is false. Never spawn grok when `[workers].grok` is false unless the live parent is grok (native `parent_writes`). Timeout or fail does not unlock a disabled worker.
 3. `stay` — you do ask / plan / advise / vision / computer-use / chrome-profile / Figma. Do not spawn a clicker.
 4. `native` + `parent_writes` (implement/hard) — **this parent writes** the listed files, then MCP `rig_job_record` (else `rig job record`). Do not spawn a second same-CLI session. Explore/mini/bulk native stay cheap same-CLI agents + `rig_job_start` / `rig_job_finish`.
-5. `run-worker` — brief + start `RIG_LIVE=1 run-worker.sh` in the background + **one blocking wait** (MCP `rig_job_wait` with no timeout if present, else `rig job wait <id>` with no `--timeout`). If status is `ask` or `running`, you allow/deny, then wait once more. Never kill or replace that job. Spawn never started: one re-pick with `--exclude <dead>`. Launching a child is still bash `run-worker.sh`. There is no spawn-from-MCP tool.
+5. `run-worker` — brief + start `RIG_LIVE=1 run-worker.sh` in the background + **one blocking wait** (MCP `rig_job_wait` with no timeout if present, else `rig job wait <id>` with no `--timeout`). After implement+verify ok, you MAY start a read-only review and a disjoint seed/bulk in parallel, then wait both ids together (`rig_job_wait` `ids` or `rig job wait id1 id2`). If status is `ask` or `running`, you allow/deny, then wait once more (same ids). Never kill or replace that job. Never spawn another worker because the child asked. Spawn never started: one re-pick with `--exclude <dead>`. Launching a child is still bash `run-worker.sh`. There is no spawn-from-MCP tool.
 
 Doing the worker's job yourself is a failure unless pick `parent_writes` is true. Later AGENTS.md may say "edit locally" or "SSH to the VM". That is for the worker.
 
@@ -86,6 +86,23 @@ Never ask the user which model or reasoning to use. They will not know. Parent p
 
 Writer does not review its own diff.
 
+## Stage-gated parallel
+
+Until implement+verify is **ok**: one child. Do not fan out gather/QA/fix/seed as teammates on the same write.
+
+After that job is `ok` (tests in the implement brief passed), the parent MAY start **at most**:
+
+1. one **read-only** `review` (different vendor; no patches)
+2. one **seed/bulk** whose brief lists files **disjoint** from the review set (no hunt)
+
+Those two may run at the same time. Then **one** wait on both ids:
+
+```bash
+rig job wait <review-id> <seed-id>     # exit 2 = ASK on one of them; allow/deny that id; wait the same ids again
+```
+
+MCP: `rig_job_wait` with `ids: ["review-id", "seed-id"]`. Wakes on first ASK. Exit 0 only if every id is ok. Do not kill the other job. Do not spawn a second writer on the same files. Do not spawn explore/fix/QA as extra teammates. If seed is part of the reviewed tree, run seed first, then review — not in parallel.
+
 ## Fail classes
 
 - `ask` / `running` — allow/deny or wait. Never kill. Never replace.
@@ -116,8 +133,8 @@ rig job record --worker grok --role worker --status ok --summary "one-line resul
 1. Write `.rig/jobs/<id>/brief.md`. Start with: you are a worker, not the orchestrator; do not spawn codex, grok, claude, cursor, opencode, omp, pi, or agy; do only the files and changes in the brief; do not hunt extra updates; print a short summary; stop. Implement briefs MUST list files to modify, what to change, what not to change, and acceptance. If the parent used a skill the writer must follow, put the absolute `SKILL.md` path in the brief (not a slash command name). Parent already did Figma / computer-use / chrome: put artifacts; tell the child not to use those tools. Do not spawn "go find and fix". Explore/gather briefs may say what to find; they do not need a file-edit list.
 2. MCP `rig_pick` with `role` (bash fallback: `pick=$(rig pick implement --case "<task>" --json)`) then start the wrapper **in the background**. Do not block this turn on `run-worker.sh` (that deadlocks when Claude asks for permission). Do not spawn via MCP:
    `RIG_LIVE=1 RIG_ROLE=<kind> RIG_MODEL=<model> RIG_EFFORT=<effort> "${RIG_HOME:-$HOME/.rig}/scripts/run-worker.sh" <worker> <id> .rig/jobs/<id>/brief.md`
-3. One blocking wait until ASK or `result.json`. Do not parse a TUI. Prefer MCP `rig_job_wait` with no timeout; bash fallback is `rig job wait <id>` with no `--timeout`. If MCP wait errors or the host drops the tool, bash `rig job wait` once (no `--timeout`). Do not poll. Do not go back to a 30s poll loop.
-   - exit 2 / status `ask`: **you** answer. `rig job show` then `rig job allow <id>` or `rig job deny <id>` (MCP: `rig_job_allow` / `rig_job_deny`). Safe worker work (read/edit/test/ssh gather/git) → allow. Destructive/prod/secrets → deny or ask the user. Then wait **once** more (no timeout).
+3. One blocking wait until ASK or `result.json`. After implement+verify ok, one wait on the review+seed ids together. Do not parse a TUI. Prefer MCP `rig_job_wait` with no timeout; bash fallback is `rig job wait <id>` with no `--timeout` (`rig job wait id1 id2` for a panel). If MCP wait errors or the host drops the tool, bash `rig job wait` once (no `--timeout`). Do not poll. Do not go back to a 30s poll loop.
+   - exit 2 / status `ask`: **you** answer. `rig job show` then `rig job allow <id>` or `rig job deny <id>` (MCP: `rig_job_allow` / `rig_job_deny`). Safe worker work (read/edit/test/ssh gather/git) → allow. Destructive/prod/secrets → deny or ask the user. Then wait **once** more (no timeout; same ids).
    - exit 0: child finished ok
    - spawn never started: **one** re-pick with `--exclude <dead worker>` (MCP `rig_pick` `exclude`, bash `rig pick --exclude`). Same brief, new job id. Last-resort: opencode, omp, pi, agy, codex. Do not auto-spawn Cursor (`spawn=none` → tell the user). One fallback per task. Do not retry as Sol, Astra, or Fable. Do not spawn a worker whose harness flag is false. Timeout does not unlock grok.
    - child ran and the patch failed / timeout / stale: escalate. Do not vendor-shop.
@@ -153,6 +170,7 @@ A Claude child with no TTY cannot click Allow. When it needs permission, the job
 
 ```bash
 rig job wait <id>                  # one blocking wait; no --timeout; exit 2 = ASK
+rig job wait <id1> <id2>           # wait-all after implement ok (review + seed)
 rig job allow <id>                 # safe worker work — child continues
 rig job deny <id> --reason "..."   # destructive / prod / secrets
 ```

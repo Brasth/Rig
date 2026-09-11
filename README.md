@@ -94,7 +94,7 @@ agy = false
 
 Jobs and MEMORY are this repo, not the chat. A new thread still sees `.rig/jobs`. Running children keep going.
 
-If a Claude child is `ask`, the parent answers `rig job allow <id>` or `rig job deny <id>` (TUI `y` / `n`). Never kill that job. Dead spawn: one `rig pick --exclude`. Native implement on the live parent: that parent writes (`parent_writes`), no second same-CLI session. First MCP call: `rig_session`.
+If a Claude child is `ask`, the parent answers `rig job allow <id>` or `rig job deny <id>` (TUI `y` / `n`). Never kill that job. Dead spawn: one `rig pick --exclude`. Native implement on the live parent: that parent writes (`parent_writes`), no second same-CLI session. After implement+verify ok, the parent may run read-only review and disjoint seed in parallel (`rig job wait id1 id2`). First MCP call: `rig_session`.
 
 More: [Usage](docs/usage.md) (setup, doctor, harness, daily use, troubleshooting).
 Parent spawn protocol: `.agents/skills/delegate-harness/SKILL.md` (also the `<!-- rig:start -->` block in `AGENTS.md`).

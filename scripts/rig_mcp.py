@@ -26,7 +26,9 @@ TOOLS = [
             "List Rig worker jobs in this project: which agent is running, "
             "the task, status, and what it is doing now. Status ask or running: "
             "you MUST call rig_job_allow or rig_job_deny for ask. "
-            "Do not kill that job. Do not spawn another worker while it is ask or running."
+            "Do not kill that job. Never spawn another worker because a child asked. "
+            "After implement+verify ok, you MAY start seed (disjoint listed files) "
+            "in parallel with a read-only review; wait those ids together."
         ),
         "inputSchema": {
             "type": "object",
@@ -69,17 +71,30 @@ TOOLS = [
     {
         "name": "rig_job_wait",
         "description": (
-            "Block until a Rig job asks for permission or finishes. "
+            "Block until the job (or jobs) asks for permission or finishes. "
             "Do not pass timeout unless you must cap the wait. Do not poll. "
             "If the text starts with ASK, call rig_job_allow or rig_job_deny next "
-            "so the child can continue. Do not kill an ask or running job. "
-            "Do not spawn another worker while it is ask or running. "
+            "so that child can continue; then wait the same ids again. "
+            "Do not kill an ask or running job. Never spawn a replacement because "
+            "a child asked. After implement+verify ok, pass ids for read-only review "
+            "and disjoint seed together (barrier; wakes on first ASK). "
             "Spawn-infra fail may re-pick with exclude once."
         ),
         "inputSchema": {
             "type": "object",
             "properties": {
-                "id": {"type": "string", "description": "Job id. Default: asking, else running."},
+                "id": {
+                    "type": "string",
+                    "description": "Job id. Default: asking, else running. Comma-separated is wait-all.",
+                },
+                "ids": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": (
+                        "Wait these jobs together. Wakes on first ASK. "
+                        "Exit 0 only if every id is ok."
+                    ),
+                },
                 "repo": {"type": "string"},
                 "timeout": {
                     "type": "number",
@@ -439,7 +454,13 @@ def call_tool(name: str, args: dict, on_tick=None) -> dict:
                     timeout_s = float(timeout)
                 except (TypeError, ValueError):
                     timeout_s = None
-            code, text = rig_jobs.wait_job(repo, args.get("id"), timeout_s, on_tick=on_tick)
+            code, text = rig_jobs.wait_job(
+                repo,
+                args.get("id"),
+                timeout_s,
+                on_tick=on_tick,
+                ids=args.get("ids"),
+            )
             if code == 1:
                 return _err(text)
             return _ok(text)

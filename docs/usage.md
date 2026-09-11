@@ -340,7 +340,7 @@ Numbered path for a human:
              log    rig job log 20260909T032405Z-82424 -f
    ```
 
-8. If a Claude child is `ask`: the **parent** answers `rig job allow <id>` or `rig job deny <id>` (TUI `y` / `n`). Never kill that job. Never spawn another worker because Claude asked. The same child continues after you allow. Spawn never started: one `rig pick --exclude <dead>` (last-resort opencode, omp, pi, agy, codex). Do not auto-spawn Cursor.
+8. If a Claude child is `ask`: the **parent** answers `rig job allow <id>` or `rig job deny <id>` (TUI `y` / `n`). Never kill that job. Never spawn another worker because Claude asked. The same child continues after you allow. After implement+verify ok, seed (disjoint listed files) may already be running next to a read-only review — wait both ids; do not replace either. Spawn never started: one `rig pick --exclude <dead>` (last-resort opencode, omp, pi, agy, codex). Do not auto-spawn Cursor.
 9. Jobs and MEMORY are **this repo**, not the chat. A new thread still sees `.rig/jobs`. Running children keep going.
 
 **Parent keeps:** ask / plan / advise, check (name files and the update), vision, Figma, computer-use, chrome-profile, talk to you. Native implement/hard (`parent_writes`): this parent writes + `rig job record`.
@@ -358,6 +358,7 @@ Figma / computer-use / chrome-profile stay with the parent. If this CLI has no F
 | Locate / trace / codebase gather | cheap same-CLI explore/mini only if the parent cannot name the files after a short check |
 | Implement / SSH / fix | Grok child if Grok is **effective**; if Grok/OpenCode/OMP/Pi/agy is the live parent (or Grok off) → Claude Code if effective, else native `parent_writes` (this parent writes; no second same-CLI session). Last-resort children: opencode, omp, pi, agy, codex, then cursor. Do not auto-spawn Cursor on fallback |
 | Review | different vendor than the writer. No other vendor → do not self-review |
+| After implement+verify ok | MAY start read-only review **and** seed/bulk with **disjoint listed files** in parallel. One wait on both ids. Until implement is ok: one child |
 | No extra CLIs | cheap same-CLI. Record it. That is success |
 
 Pin **full** model IDs (aliases drift). Codex / Grok / Claude / Cursor stay static pins. OpenCode / OMP / Pi / agy pins are **preferences**: `rig pick` and `run-worker.sh` list models from that CLI and pick one that exists. Catalog cache: `~/.rig/cache/model-catalogs.json` (TTL ~1 hour). `RIG_REFRESH_MODELS=1` refreshes. `RIG_SKIP_MODEL_CATALOG=1` keeps the static pin. Never Sol / Astra / Fable, even if the catalog lists them.
@@ -376,7 +377,7 @@ Never Fable / Sol / Astra as a child. Opus is allowed.
 
 A Grok child is **headless**. Codex will not show its TUI. While it runs, both you and the parent can see **which agent, which task, status, and the log**.
 
-Prefer MCP when present. First call: `rig_session` (memory + jobs + status + pick) when the host lists it. Instant tools stay MCP: `rig_session`, `rig_jobs`, `rig_job_show`, `rig_job_log`, `rig_job_allow`, `rig_job_deny`, `rig_memory`, `rig_memory_add`, `rig_pick`, `rig_status`, `rig_job_start`, `rig_job_finish`, `rig_job_record`. Launching a child is still bash `run-worker.sh` in the background; there is no spawn-from-MCP tool. Wait is one blocking `rig_job_wait` with **no timeout** (until ASK or result). If the parent host supports MCP progress, `rig_job_wait` may stream the child `doing` line while that wait is in flight. The wait **result** also includes `doing`. That is not a new wait API. If a parent host **kills** the MCP tool or returns early with an error, fall back to **one** bash `rig job wait <id>` with **no** `--timeout`. Do not poll 30s. Do not loop MCP wait with a short timeout. Bash is also fallback if MCP is missing (`rig session --case "..." --json`).
+Prefer MCP when present. First call: `rig_session` (memory + jobs + status + pick) when the host lists it. Instant tools stay MCP: `rig_session`, `rig_jobs`, `rig_job_show`, `rig_job_log`, `rig_job_allow`, `rig_job_deny`, `rig_memory`, `rig_memory_add`, `rig_pick`, `rig_status`, `rig_job_start`, `rig_job_finish`, `rig_job_record`. Launching a child is still bash `run-worker.sh` in the background; there is no spawn-from-MCP tool. Wait is one blocking `rig_job_wait` with **no timeout** (until ASK or result). After implement+verify ok, pass `ids` (or `rig job wait id1 id2`) to wait review+seed together; it wakes on first ASK. If the parent host supports MCP progress, `rig_job_wait` may stream the child `doing` line while that wait is in flight. The wait **result** also includes `doing`. That is not a new wait API. If a parent host **kills** the MCP tool or returns early with an error, fall back to **one** bash `rig job wait <id>` with **no** `--timeout`. Do not poll 30s. Do not loop MCP wait with a short timeout. Bash is also fallback if MCP is missing (`rig session --case "..." --json`).
 
 ```bash
 rig tui                 # jobs board (agent / task / status / live log)
@@ -384,6 +385,7 @@ rig jobs                # same data as a table (agents use this)
 rig jobs --json
 rig jobs --thread       # this parent thread
 rig job wait <id>       # one blocking wait until ASK (exit 2) or result; no --timeout
+rig job wait <id1> <id2>  # wait-all (review + seed after implement ok)
 rig job show            # running job, or latest
 rig job log <id> -f     # decoded activity (tools + text)
 ```
@@ -392,7 +394,7 @@ rig job log <id> -f     # decoded activity (tools + text)
 
 In Grok, Codex, OpenCode, OMP, Pi, or agy type `/rig`. Grok also gets a bottom status line after `rig setup` (restart Grok once).
 
-MCP tools load after `rig setup` + fully quit the parent CLI once. Instant tools stay MCP (pick, status, start, finish, record, list/show/log, allow/deny, memory). Launch is still bash. Wait is still one blocking `rig_job_wait` with no timeout; one bash `rig job wait` if the host drops the tool.
+MCP tools load after `rig setup` + fully quit the parent CLI once. Instant tools stay MCP (pick, status, start, finish, record, list/show/log, allow/deny, memory). Launch is still bash. Wait is still one blocking `rig_job_wait` with no timeout (`ids` for a review+seed panel); one bash `rig job wait` if the host drops the tool.
 
 Open the Grok child TUI yourself: `grok -r <session-id>` or `grok dashboard`. The job folder has `WATCH.md`.
 
@@ -487,7 +489,7 @@ Need the binary **and** `rig workers opencode=on` (or `omp=on` / `pi=on` / `agy=
 
 ## Parent agents
 
-Parent agents: load `.agents/skills/delegate-harness/SKILL.md`. Live wrapper is `RIG_LIVE=1` + `run-worker.sh` in the background, then one blocking `rig job wait` (MCP `rig_job_wait` if present; no `--timeout`). Default wrapper is dry-run. Claude `ask` → `rig job allow` / `rig job deny`. Never kill an asking job.
+Parent agents: load `.agents/skills/delegate-harness/SKILL.md`. Live wrapper is `RIG_LIVE=1` + `run-worker.sh` in the background, then one blocking `rig job wait` (MCP `rig_job_wait` if present; no `--timeout`; `ids` for review+seed after implement ok). Default wrapper is dry-run. Claude `ask` → `rig job allow` / `rig job deny`. Never kill an asking job.
 
 Cheap same-CLI spawns (Codex explorer/worker/bulk/reviewer, Grok explore, OpenCode/OMP/Pi/agy explore/worker/bulk) often do not use `run-worker.sh`. Record them so they still show under `.rig/jobs/`:
 

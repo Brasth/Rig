@@ -289,6 +289,155 @@ class WaitContract(unittest.TestCase):
         self.assertIn("doing", text.lower())
 
 
+class WaitPanel(unittest.TestCase):
+    def setUp(self):
+        self.td = tempfile.TemporaryDirectory()
+        self.repo = Path(self.td.name)
+        self.review = self.repo / ".rig" / "jobs" / "review-job"
+        self.seed = self.repo / ".rig" / "jobs" / "seed-job"
+        self.review.mkdir(parents=True)
+        self.seed.mkdir(parents=True)
+        (self.review / "brief.md").write_text("review the diff\n")
+        (self.seed / "brief.md").write_text("seed listed files\n")
+        self._write(self.review, "review-job", "running")
+        self._write(self.seed, "seed-job", "running")
+
+    def tearDown(self):
+        self.td.cleanup()
+
+    def _write(self, d: Path, job_id: str, status: str) -> None:
+        (d / "meta.json").write_text(
+            json.dumps(
+                {
+                    "job_id": job_id,
+                    "worker": "cursor" if job_id.startswith("review") else "grok",
+                    "role": "reviewer" if job_id.startswith("review") else "bulk",
+                    "status": status,
+                    "pid": os.getpid(),
+                    "model": "x",
+                    "effort": "high",
+                    "summary": "done" if status == "ok" else "",
+                }
+            )
+        )
+        if status in {"ok", "fail", "timeout"}:
+            (d / "result.json").write_text(json.dumps({"status": status}))
+
+    def test_both_ok_is_0(self):
+        self._write(self.review, "review-job", "ok")
+        self._write(self.seed, "seed-job", "ok")
+        code, text = _alarm_run(
+            3,
+            lambda: jobs.wait_job(
+                self.repo, None, ids=["review-job", "seed-job"]
+            ),
+        )
+        self.assertEqual(code, 0)
+        self.assertIn("review-job", text)
+        self.assertIn("seed-job", text)
+        self.assertIn("WAIT 2 jobs", text)
+
+    def test_ask_wakes_while_sibling_running(self):
+        ask.write_ask(self.review, "Bash", {"command": "git status"}, "t-panel-ask")
+        code, text = _alarm_run(
+            3,
+            lambda: jobs.wait_job(
+                self.repo, None, ids=["review-job", "seed-job"]
+            ),
+        )
+        self.assertEqual(code, 2)
+        self.assertIn("ASK review-job", text)
+        self.assertIn("also    RUNNING seed-job", text)
+
+    def test_one_fail_one_ok_is_1(self):
+        self._write(self.review, "review-job", "ok")
+        self._write(self.seed, "seed-job", "fail")
+        code, text = _alarm_run(
+            3,
+            lambda: jobs.wait_job(
+                self.repo, "review-job,seed-job"
+            ),
+        )
+        self.assertEqual(code, 1)
+        self.assertIn("seed-job", text)
+        self.assertIn("review-job", text)
+
+    def test_mcp_ids_both_ok(self):
+        self._write(self.review, "review-job", "ok")
+        self._write(self.seed, "seed-job", "ok")
+        out = _alarm_run(
+            3,
+            lambda: rig_mcp.call_tool(
+                "rig_job_wait",
+                {
+                    "repo": str(self.repo),
+                    "ids": ["review-job", "seed-job"],
+                },
+            ),
+        )
+        text = out["content"][0]["text"]
+        self.assertNotIn("isError", out)
+        self.assertIn("review-job", text)
+        self.assertIn("seed-job", text)
+
+    def test_bin_wait_two_ids(self):
+        (self.repo / ".git").mkdir(exist_ok=True)
+        (self.repo / ".rig" / "harness.toml").write_text(
+            'parent = "codex"\n\n[workers]\n'
+            "codex = true\ngrok = true\nclaude = false\ncursor = true\n"
+            "opencode = false\nomp = false\npi = false\nagy = false\n"
+        )
+        self._write(self.review, "review-job", "ok")
+        self._write(self.seed, "seed-job", "ok")
+        proc = _run_rig(self.repo, "job", "wait", "review-job", "seed-job")
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        self.assertIn("review-job", proc.stdout)
+        self.assertIn("seed-job", proc.stdout)
+
+    def test_jobs_py_wait_two_ids(self):
+        self._write(self.review, "review-job", "ok")
+        self._write(self.seed, "seed-job", "ok")
+        proc = subprocess.run(
+            [
+                sys.executable,
+                str(ROOT / "scripts" / "jobs.py"),
+                "wait",
+                "review-job",
+                "seed-job",
+                "--repo",
+                str(self.repo),
+            ],
+            text=True,
+            capture_output=True,
+            timeout=3,
+            check=False,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        self.assertIn("review-job", proc.stdout)
+        self.assertIn("seed-job", proc.stdout)
+
+    def test_blocking_until_both_ok(self):
+        def later():
+            time.sleep(0.3)
+            self._write(self.review, "review-job", "ok")
+            self._write(self.seed, "seed-job", "ok")
+
+        threading.Thread(target=later, daemon=True).start()
+        t0 = time.time()
+        code, text = _alarm_run(
+            3,
+            lambda: jobs.wait_job(
+                self.repo, None, timeout=None, ids=["review-job", "seed-job"]
+            ),
+        )
+        elapsed = time.time() - t0
+        self.assertEqual(code, 0)
+        self.assertIn("review-job", text)
+        self.assertIn("seed-job", text)
+        self.assertGreaterEqual(elapsed, 0.2)
+        self.assertLess(elapsed, 3.0)
+
+
 class InitAgentsWait(unittest.TestCase):
     def setUp(self):
         self.td = tempfile.TemporaryDirectory()
@@ -315,6 +464,12 @@ class InitAgentsWait(unittest.TestCase):
         self.assertIn("MCP", start)
         self.assertNotIn("Loop `rig job wait`", text)
         self.assertNotIn("'", start)
+        self.assertIn("After implement+verify ok", start)
+        self.assertIn("disjoint", start)
+        self.assertIn("ids", start)
+        skill = (self.repo / ".agents" / "skills" / "delegate-harness" / "SKILL.md").read_text()
+        self.assertIn("Stage-gated parallel", skill)
+        self.assertIn("rig job wait <id1> <id2>", skill)
 
 
 if __name__ == "__main__":
