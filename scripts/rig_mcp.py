@@ -1,8 +1,13 @@
 #!/usr/bin/env python3
-"""stdio MCP server: pick/status/jobs/wait/allow/memory for the parent agent."""
+"""stdio MCP server: pick/status/jobs/wait/allow/memory for the parent agent.
+
+When RIG_JOB_ID (or RIG_JOB_DIR) is set, this is the child surface: doing/note/ask
+only. Parent tools stay hidden.
+"""
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -10,7 +15,9 @@ HERE = Path(__file__).resolve().parent
 if str(HERE) not in sys.path:
     sys.path.insert(0, str(HERE))
 
+import ask as rig_ask  # noqa: E402
 import harness as rig_harness  # noqa: E402
+import inbox as rig_inbox  # noqa: E402
 import jobs as rig_jobs  # noqa: E402
 import memory as rig_memory  # noqa: E402
 import route as rig_route  # noqa: E402
@@ -309,6 +316,87 @@ TOOLS = [
             "required": ["case"],
         },
     },
+    {
+        "name": "rig_job_doing",
+        "description": (
+            "Child only. Set what this job is doing now. Writes job files. "
+            "Do not pick, wait, or spawn."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "text": {"type": "string", "description": "Short doing line."},
+            },
+            "required": ["text"],
+        },
+    },
+    {
+        "name": "rig_job_note",
+        "description": "Child only. Append a short activity note. Does not change ask state.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "text": {"type": "string"},
+            },
+            "required": ["text"],
+        },
+    },
+    {
+        "name": "rig_job_ask",
+        "description": (
+            "Child only. Ask the parent a question and block until allow/deny. "
+            "Same file protocol as Claude permission prompts."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "preview": {"type": "string"},
+                "text": {"type": "string"},
+                "tool_name": {"type": "string"},
+                "input": {"type": "object"},
+                "tool_input": {"type": "object"},
+                "tool_use_id": {"type": "string"},
+            },
+        },
+    },
+    {
+        "name": "permission_prompt",
+        "description": "Answer a Claude Code permission prompt for this Rig job.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "tool_name": {"type": "string"},
+                "input": {"type": "object"},
+                "tool_input": {"type": "object"},
+                "tool_use_id": {"type": "string"},
+                "description": {"type": "string"},
+            },
+        },
+    },
+    {
+        "name": "rig_job_inbox",
+        "description": (
+            "Child only. Pull the parent inbox message once and ack it. "
+            "Empty if the parent has not sent mail. Not ASK."
+        ),
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "rig_job_message",
+        "description": (
+            "Parent only. Leave one message for a running child. "
+            "The child pulls it with rig_job_inbox. Does not change ASK/wait."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "id": {"type": "string", "description": "Job id. Default: running."},
+                "text": {"type": "string"},
+                "repo": {"type": "string"},
+            },
+            "required": ["text"],
+        },
+    },
 ]
 
 TOOL_ORDER = (
@@ -326,11 +414,50 @@ TOOL_ORDER = (
     "rig_job_record",
     "rig_memory",
     "rig_memory_add",
+    "rig_job_message",
 )
+CHILD_TOOL_ORDER = (
+    "rig_job_doing",
+    "rig_job_note",
+    "rig_job_ask",
+    "permission_prompt",
+    "rig_job_inbox",
+    "rig_job_show",
+    "rig_memory",
+)
+PARENT_TOOL_NAMES = frozenset(TOOL_ORDER)
+CHILD_TOOL_NAMES = frozenset(CHILD_TOOL_ORDER)
 _TOOLS_BY_NAME = {t["name"]: t for t in TOOLS}
 TOOLS = [_TOOLS_BY_NAME[n] for n in TOOL_ORDER if n in _TOOLS_BY_NAME] + [
-    t for t in TOOLS if t["name"] not in TOOL_ORDER
+    t for t in TOOLS if t["name"] not in TOOL_ORDER and t["name"] in PARENT_TOOL_NAMES
 ]
+CHILD_TOOLS = [_TOOLS_BY_NAME[n] for n in CHILD_TOOL_ORDER if n in _TOOLS_BY_NAME]
+
+
+def child_job_id() -> str:
+    jid = (os.environ.get("RIG_JOB_ID") or "").strip()
+    if jid:
+        return jid
+    raw = (os.environ.get("RIG_JOB_DIR") or "").strip()
+    return Path(raw).name if raw else ""
+
+
+def is_child() -> bool:
+    return bool(child_job_id() or (os.environ.get("RIG_JOB_DIR") or "").strip())
+
+
+def listed_tools() -> list[dict]:
+    return list(CHILD_TOOLS) if is_child() else list(TOOLS)
+
+
+def child_job_dir(repo: Path) -> Path:
+    raw = (os.environ.get("RIG_JOB_DIR") or "").strip()
+    if raw:
+        return Path(raw)
+    jid = child_job_id()
+    if not jid:
+        raise SystemExit("child MCP needs RIG_JOB_ID")
+    return rig_jobs.jobs_dir(repo) / jid
 
 
 def _ok(text: str) -> dict:
@@ -423,10 +550,67 @@ def _progress_on_tick(token):
     return on_tick
 
 
+def _child_ask(job_dir: Path, args: dict, *, permission: bool) -> dict:
+    preview_text = str(args.get("preview") or args.get("text") or "").strip()
+    tool, inp, uid = rig_ask.parse_prompt_args(args)
+    if not permission:
+        if preview_text and (tool == "tool" or not args.get("tool_name")):
+            tool = str(args.get("tool_name") or "ask")
+            if not inp:
+                inp = {"text": preview_text}
+        rig_ask.write_ask(job_dir, tool, inp, uid, preview_text=preview_text)
+    else:
+        rig_ask.write_ask(job_dir, tool, inp, uid)
+    reply = rig_ask.wait_reply(job_dir)
+    decision = rig_ask.decision_from_reply(reply, inp)
+    rig_ask.consume_ask(job_dir)
+    return _ok(json.dumps(decision))
+
+
 def call_tool(name: str, args: dict, on_tick=None) -> dict:
     args = args or {}
     try:
+        child = is_child()
+        allowed = CHILD_TOOL_NAMES if child else PARENT_TOOL_NAMES
+        if name not in allowed:
+            who = "child" if child else "parent"
+            return _err(f"{name} is not a {who} tool")
         repo = _repo(args)
+        if child and name == "rig_job_show":
+            jid = child_job_id()
+            want = str(args.get("id") or jid).strip()
+            if want and jid and want != jid:
+                return _err("child can only show its own job")
+            args = {**args, "id": jid}
+        if name == "rig_job_doing":
+            text = str(args.get("text") or "").strip()
+            if not text:
+                return _err("rig_job_doing needs text")
+            return _ok(rig_jobs.set_doing(child_job_dir(repo), text))
+        if name == "rig_job_note":
+            text = str(args.get("text") or "").strip()
+            if not text:
+                return _err("rig_job_note needs text")
+            return _ok(rig_jobs.add_note(child_job_dir(repo), text))
+        if name == "permission_prompt":
+            return _child_ask(child_job_dir(repo), args, permission=True)
+        if name == "rig_job_ask":
+            preview = str(args.get("preview") or args.get("text") or "").strip()
+            if not preview and not args.get("tool_name") and not args.get("input"):
+                return _err("rig_job_ask needs preview or text")
+            return _child_ask(child_job_dir(repo), args, permission=False)
+        if name == "rig_job_inbox":
+            obj = rig_inbox.consume_inbox(child_job_dir(repo))
+            if not obj:
+                return _ok("(empty)")
+            return _ok(str(obj.get("text") or ""))
+        if name == "rig_job_message":
+            text = str(args.get("text") or "").strip()
+            if not text:
+                return _err("rig_job_message needs text")
+            job = rig_jobs.resolve_job(repo, args.get("id"))
+            obj = rig_inbox.write_inbox(Path(job["dir"]), text)
+            return _ok(f"message {job['job_id']} inbox pending\n{obj['text']}")
         if name == "rig_jobs":
             want_thread = str(args.get("thread") or "").strip() or None
             listing = rig_jobs.list_jobs(repo, thread=want_thread)
@@ -618,7 +802,7 @@ def handle(msg: dict) -> dict | None:
     if method == "notifications/initialized" or method == "initialized":
         return None
     if method == "tools/list":
-        return {"jsonrpc": "2.0", "id": mid, "result": {"tools": TOOLS}}
+        return {"jsonrpc": "2.0", "id": mid, "result": {"tools": listed_tools()}}
     if method == "tools/call":
         params = msg.get("params") or {}
         if not isinstance(params, dict):

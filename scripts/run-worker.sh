@@ -95,7 +95,7 @@ write_json() {
 import json, os, pathlib
 from datetime import datetime
 files = [f for f in os.environ.get("RESULT_FILES", "").split("\n") if f]
-keep = ("thread", "session_id", "pid", "open", "watch", "kind")
+keep = ("thread", "session_id", "pid", "open", "watch", "kind", "doing")
 old = {}
 mpath = pathlib.Path(os.environ["RESULT_META"])
 if mpath.is_file():
@@ -162,6 +162,14 @@ write_meta() {
   python3 - "$META_OUT" "$JOB_ID" "$WORKER" "$ROLE" "$status" "$STARTED" "$REPO" "$BIN" "${CHILD:-}" "${SESSION_ID:-}" "$JOB_DIR" "${MODEL:-}" "${EFFORT:-}" "${PARENT_THREAD:-}" <<'PY'
 import json, pathlib, sys
 path = pathlib.Path(sys.argv[1])
+old = {}
+if path.is_file():
+    try:
+        loaded = json.loads(path.read_text())
+        if isinstance(loaded, dict):
+            old = loaded
+    except Exception:
+        old = {}
 obj = {
     "job_id": sys.argv[2],
     "worker": sys.argv[3],
@@ -185,6 +193,9 @@ if effort:
 if thread:
     obj["thread"] = thread
 obj["watch"] = f"tail -f {job_dir}/stdout.log"
+for key, val in old.items():
+    if key not in obj and val not in (None, ""):
+        obj[key] = val
 tmp = path.with_name(path.name + ".tmp")
 tmp.write_text(json.dumps(obj, indent=2) + "\n")
 tmp.replace(path)
@@ -264,7 +275,7 @@ case "$WORKER" in
     # (can skip user auth), or --dangerously-skip-permissions (org
     # policy can disable bypass).
     CLAUDE_WORKER_MD="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../adapters/claude/CLAUDE.worker.md"
-    CLAUDE_ASK_PY="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/claude-ask.py"
+    CLAUDE_MCP_PY="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/rig_mcp.py"
     CLAUDE_MCP="$JOB_DIR/mcp.json"
     CLAUDE_PY=""
     for c in /opt/homebrew/bin/python3 /usr/local/bin/python3 /usr/bin/python3; do
@@ -276,9 +287,10 @@ case "$WORKER" in
     if [[ -z "$CLAUDE_PY" ]]; then
       CLAUDE_PY="$(command -v python3 || true)"
     fi
-    python3 - "$CLAUDE_MCP" "$CLAUDE_ASK_PY" "$JOB_DIR" "$CLAUDE_PY" <<'PY'
+    python3 - "$CLAUDE_MCP" "$CLAUDE_MCP_PY" "$JOB_DIR" "$CLAUDE_PY" "$JOB_ID" "$REPO" <<'PY'
 import json, pathlib, sys
-path, script, job_dir, py = map(pathlib.Path, sys.argv[1:])
+path, script, job_dir, py = map(pathlib.Path, sys.argv[1:5])
+job_id, repo = sys.argv[5], sys.argv[6]
 path.write_text(
     json.dumps(
         {
@@ -286,7 +298,11 @@ path.write_text(
                 "rig-ask": {
                     "command": str(py),
                     "args": [str(script)],
-                    "env": {"RIG_JOB_DIR": str(job_dir)},
+                    "env": {
+                        "RIG_JOB_DIR": str(job_dir),
+                        "RIG_JOB_ID": job_id,
+                        "RIG_REPO": repo,
+                    },
                 }
             }
         },
@@ -470,6 +486,10 @@ kill_tree() {
 set +e
 (
   cd "$REPO" || exit 1
+  export RIG_JOB_ID="$JOB_ID"
+  export RIG_JOB_DIR="$JOB_DIR"
+  export RIG_REPO="$REPO"
+  export RIG_ROLE="$ROLE"
   "${CMD[@]}"
 ) >"$LOG" 2>&1 &
 CHILD=$!
@@ -547,6 +567,10 @@ agy_restore_settings
 trap - EXIT
 
 SUMMARY="$(summary_from_log)"
+JOBS_PY="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/jobs.py"
+if [[ -f "$JOBS_PY" ]]; then
+  python3 "$JOBS_PY" persist --dir "$JOB_DIR" || true
+fi
 if [[ "$TIMED_OUT" == "1" ]]; then
   write_json "timeout" 124 "${SUMMARY:-timeout after ${TIMEOUT_SECS}s}" "$ENDED"
   exit 124
@@ -560,7 +584,9 @@ if [[ "$CHILD_RC" -eq 0 ]]; then
     fi
   fi
   write_json "ok" 0 "${SUMMARY:-ok}" "$ENDED"
-  rm -f "$LOG"
+  if [[ -f "$JOB_DIR/activity.json" ]]; then
+    rm -f "$LOG"
+  fi
   exit 0
 fi
 write_json "fail" "$CHILD_RC" "${SUMMARY:-child exited $CHILD_RC}" "$ENDED"

@@ -419,7 +419,8 @@ rig memory add "Codex sandbox must write ~/.grok"
 
 - `.rig/MEMORY.md` — durable bullets, about 120 lines. No transcripts. `add` drops duplicates and caps the file.
 - `.rig/STATE.md` — overwritten each run (last job / worker / status / summary).
-- `.rig/jobs/` — gitignored. Each job records the parent `thread` when known. `rig prune` drops jobs older than 7 days and keeps the last 20. Successful jobs delete `stdout.log` after `result.json` is written; fail/timeout logs stay for debug.
+- `.rig/jobs/` — gitignored. Each job records the parent `thread` when known. `rig prune` drops jobs older than 7 days and keeps the last 20. Successful jobs delete `stdout.log` after decoded activity is saved in `activity.json` (`rig job log` still works). If the log cannot be decoded, the raw log is kept. Fail/timeout logs stay for debug. Never read Cursor `state.vscdb` or other vendor sqlite to learn a Rig job — use `rig job log` / MCP.
+- Child MCP: when `RIG_JOB_ID` is set, Rig MCP is job-scoped (`rig_job_doing`, `rig_job_note`, `rig_job_ask`, `rig_job_inbox`). It cannot pick, wait, spawn, or allow. Parent MCP stays the orchestrator. `rig job message <id> --text "…"` leaves one inbox note; the child pulls it. Inbox is not ASK. Cursor print-mode has no isolated `--mcp-config`; do not install Rig into `~/.cursor/mcp.json`.
 - `.rig/thread` — gitignored (parent thread id).
 
 ## Troubleshooting
@@ -531,6 +532,7 @@ usage: rig <command> [args]
   job allow [id]
   job deny [id] [--reason TEXT]
   job wait [id] [--timeout SECS]
+  job message <id> --text TEXT
   pick [explore|mini|bulk|implement|hard|review|stay] [--case TEXT] [--json]
 ```
 

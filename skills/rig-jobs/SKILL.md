@@ -17,7 +17,7 @@ Do not guess. Run the commands. The parent checks this board and MUST spawn work
 
 If MCP tools are present, use them. Bash is fallback if MCP is missing.
 
-- Instant: `rig_session` / `rig_jobs` / `rig_job_show` / `rig_job_log` / `rig_job_allow` / `rig_job_deny` / `rig_memory` / `rig_pick` / `rig_status` / `rig_job_start` / `rig_job_finish` / `rig_job_record`
+- Instant: `rig_session` / `rig_jobs` / `rig_job_show` / `rig_job_log` / `rig_job_allow` / `rig_job_deny` / `rig_job_message` / `rig_memory` / `rig_pick` / `rig_status` / `rig_job_start` / `rig_job_finish` / `rig_job_record`
 - Wait: `rig_job_wait` (one blocking call, no timeout; pass `ids` to wait a review+seed panel)
 
 Launching a child is still bash `run-worker.sh` in the background. There is no spawn-from-MCP tool.
@@ -39,6 +39,7 @@ rig job wait [id ...] # one blocking wait; no --timeout; exit 2 = ASK; two ids =
 rig job show          # running job, or latest
 rig job show <id>
 rig job log <id>      # decoded activity
+rig job message <id> --text "steer"  # parent inbox; child pulls rig_job_inbox; not ASK
 rig tui               # interactive board (user terminal; do not launch inside this TUI)
 rig memory add "fact" # one standing bullet after a useful run
 ```
@@ -51,10 +52,11 @@ A new Grok/Codex/OpenCode/OMP/Pi/agy thread does not start a new job board. Jobs
 - role (implement, review, explorer, …)
 - status (`running`, `ask`, `ok`, `fail`, `timeout`, `stale`)
 - task (from the brief)
-- doing (last decoded log line: tool + path, or waiting for json)
+- doing (last decoded log line or `activity.json` after the raw log is pruned)
 - elapsed (from start/end, if present)
 - how to watch: `rig job log <id> -f` or `rig tui` in another pane
 - Grok child: `open` line is `grok -r <session-id>`
+- For a Rig job, use `rig job log` / MCP. Do not read Cursor `state.vscdb`, `~/.cursor` sqlite, or other vendor session stores.
 
 If status is `ask` or `running`, the child is still live. **You answer `ask`** — that is the interaction. Do not kill the job. Never spawn another worker because the child asked. After implement+verify ok, a second job with disjoint listed files may already be running (seed in parallel with read-only review); wait both ids; do not replace either. Spawn never started (`fail` with empty files / binary missing): one `--exclude` re-pick. Child ran and failed the patch: escalate.
 

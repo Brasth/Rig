@@ -78,7 +78,11 @@ class ClaudeWorkerArgv(unittest.TestCase):
         self.assertIn("python3", ask["command"])
         self.assertTrue(os.path.isabs(ask["command"]), ask["command"])
         self.assertTrue(os.path.isabs(ask["args"][0]), ask["args"])
-        self.assertTrue(str(ask["args"][0]).endswith("claude-ask.py"), ask["args"])
+        self.assertTrue(str(ask["args"][0]).endswith("rig_mcp.py"), ask["args"])
+        env = ask.get("env") or {}
+        self.assertEqual(env.get("RIG_JOB_ID"), "claude-stream")
+        self.assertEqual(Path(env.get("RIG_JOB_DIR") or "").name, "claude-stream")
+        self.assertTrue((env.get("RIG_JOB_DIR") or "").endswith("claude-stream"))
 
     def test_claude_haiku_dry_run_omits_effort_flag(self):
         env = {

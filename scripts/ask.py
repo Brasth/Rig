@@ -69,13 +69,24 @@ def parse_prompt_args(args: dict | None) -> tuple[str, dict, str]:
     return tool, inp if isinstance(inp, dict) else {}, uid
 
 
-def write_ask(job_dir: Path, tool_name: str, inp: dict, tool_use_id: str = "") -> dict:
+def write_ask(
+    job_dir: Path,
+    tool_name: str,
+    inp: dict,
+    tool_use_id: str = "",
+    preview_text: str = "",
+) -> dict:
     reply_path(job_dir).unlink(missing_ok=True)
+    shown = " ".join(str(preview_text).split())
+    if shown:
+        shown = shown if len(shown) <= 140 else shown[:139] + "…"
+    else:
+        shown = preview(tool_name, inp if isinstance(inp, dict) else {})
     obj = {
         "tool_name": tool_name,
         "input": inp if isinstance(inp, dict) else {},
         "tool_use_id": tool_use_id,
-        "preview": preview(tool_name, inp if isinstance(inp, dict) else {}),
+        "preview": shown,
         "asked_at": iso_now(),
     }
     _write_json(ask_path(job_dir), obj)

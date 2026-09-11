@@ -39,6 +39,7 @@ usage: rig <command> [args]
   job allow [id]
   job deny [id] [--reason TEXT]
   job wait [id ...] [--timeout SECS]
+  job message <id> --text TEXT
   pick [explore|mini|bulk|implement|hard|review|stay] [--case TEXT] [--exclude NAME] [--json]
   session [--role KIND] [--case TEXT] [--exclude NAME] [--json]
 
@@ -421,7 +422,7 @@ Pin Claude IDs: `claude-haiku-4-5-20251001` cheap, `claude-sonnet-5` implement, 
 OpenCode: `openai/gpt-5.4-mini` minimal cheap, `openai/gpt-5.6-luna` high implement, `openai/gpt-5.6-terra` max hard/review. OMP/Pi: `grok-4.5` low cheap, `grok-4.6` high implement/hard, `claude-opus-5` high review. agy: `gemini-3.8-flash-low` low cheap, `gemini-3.8-flash-high` high implement, `gemini-3.1-pro-high` high hard/review. Never Sol/Astra/Fable as a child. Opus is allowed.
 OpenCode/OMP/Pi/agy pins are preferences; Rig lists models from the CLI and picks one that exists. Cache ~/.rig/cache/model-catalogs.json.
 Grok Bot.app is not a worker. Do not spawn it.
-Watch: `rig jobs` / `rig job wait [id ...]` / `rig job show` / `rig job log <id>` / `rig tui` / `/rig`.
+Watch: `rig jobs` / `rig job wait [id ...]` / `rig job show` / `rig job log <id>` / `rig tui` / `/rig`. After ok, `stdout.log` is pruned; `activity.json` stays. Never read Cursor sqlite for a Rig job. Child MCP (`RIG_JOB_ID` set): doing/note/ask/inbox only — no pick/wait/spawn. Parent may `rig job message`.
 After a run: `rig memory add "one standing fact"` if there is one. No transcripts.
 <!-- rig:end -->
 EOF
@@ -910,7 +911,7 @@ cmd_prune() {
     echo "no jobs dir"
     return 0
   fi
-  python3 - "$jobs" <<'PY'
+  python3 - "$jobs" "$(py_script jobs.py)" <<'PY'
 import json
 import pathlib
 import shutil
@@ -918,6 +919,15 @@ import sys
 import time
 
 root = pathlib.Path(sys.argv[1])
+scripts = pathlib.Path(sys.argv[2]).resolve().parent
+rig_jobs = None
+try:
+    if str(scripts) not in sys.path:
+        sys.path.insert(0, str(scripts))
+    import jobs as rig_jobs  # noqa: E402
+except Exception:
+    rig_jobs = None
+
 now = time.time()
 removed = 0
 logs = 0
@@ -943,8 +953,14 @@ for p in root.iterdir():
         except Exception:
             continue
     if status == "ok":
-        log.unlink()
-        logs += 1
+        if rig_jobs is not None:
+            try:
+                rig_jobs.persist_activity(p)
+            except Exception:
+                pass
+        if (p / "activity.json").is_file():
+            log.unlink()
+            logs += 1
 print(f"prune ok  removed={removed} logs_dropped={logs} kept={len([p for p in root.iterdir() if p.is_dir()])}")
 PY
 }
@@ -1085,6 +1101,7 @@ parse_job_flags() {
   JOB_FOLLOW=0
   JOB_LINES=""
   JOB_REASON=""
+  JOB_TEXT=""
   JOB_TIMEOUT=""
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -1122,8 +1139,12 @@ parse_job_flags() {
         shift 2
         ;;
       --help|-h)
-        echo "usage: rig job start|finish|record|show|log|allow|deny|wait [--worker NAME] [--role ROLE] [--status ok|fail] [--summary TEXT] [--reason TEXT] [--timeout SECS] [id ...] [-f] [-n N]" >&2
+        echo "usage: rig job start|finish|record|show|log|allow|deny|wait|message [--worker NAME] [--role ROLE] [--status ok|fail] [--summary TEXT] [--reason TEXT] [--text TEXT] [--timeout SECS] [id ...] [-f] [-n N]" >&2
         exit 2
+        ;;
+      --text)
+        JOB_TEXT="${2:-}"
+        shift 2
         ;;
       --*)
         echo "rig job: unknown flag $1" >&2
@@ -1144,9 +1165,9 @@ cmd_job() {
   local sub="${1:-}"
   shift || true
   case "$sub" in
-    start|finish|record|show|log|allow|deny|wait) ;;
+    start|finish|record|show|log|allow|deny|wait|message) ;;
     *)
-      echo "usage: rig job start|finish|record|show|log|allow|deny|wait [--worker NAME] [--role ROLE] [--status ok|fail] [--summary TEXT] [--reason TEXT] [--timeout SECS] [id ...] [-f] [-n N]" >&2
+      echo "usage: rig job start|finish|record|show|log|allow|deny|wait|message [--worker NAME] [--role ROLE] [--status ok|fail] [--summary TEXT] [--reason TEXT] [--text TEXT] [--timeout SECS] [id ...] [-f] [-n N]" >&2
       exit 2
       ;;
   esac
@@ -1229,6 +1250,14 @@ cmd_job() {
     python3 "$(py_script jobs.py)" "${wait_args[@]}"
     return $?
   fi
+  if [[ "$sub" == "message" ]]; then
+    if [[ -z "$JOB_ID" || -z "$JOB_TEXT" ]]; then
+      echo "usage: rig job message <id> --text TEXT" >&2
+      exit 2
+    fi
+    python3 "$(py_script jobs.py)" message "$JOB_ID" --text "$JOB_TEXT"
+    return $?
+  fi
 
   if [[ "$sub" == "start" || "$sub" == "record" ]]; then
     if [[ "$JOB_WORKER" != "parent" ]]; then
@@ -1285,7 +1314,8 @@ cmd_job() {
   [[ "$JOB_STATUS" == "timeout" ]] && exit_code=124
   write_job_files "$job_dir" "$JOB_ID" "$JOB_WORKER" "$JOB_ROLE" "$JOB_STATUS" "$exit_code" "$started" "$now" "$JOB_SUMMARY" "native"
   write_state "$JOB_ID" "$JOB_WORKER" "$JOB_STATUS" "$JOB_SUMMARY"
-  if [[ "$JOB_STATUS" == "ok" ]]; then
+  python3 "$(py_script jobs.py)" persist --dir "$job_dir" || true
+  if [[ "$JOB_STATUS" == "ok" && -f "$job_dir/activity.json" ]]; then
     rm -f "$job_dir/stdout.log"
   fi
   echo "job $JOB_ID worker=$JOB_WORKER role=$JOB_ROLE status=$JOB_STATUS"

@@ -42,6 +42,16 @@ EXISTING_TOOLS = (
     "rig_job_deny",
     "rig_memory",
     "rig_memory_add",
+    "rig_job_message",
+)
+CHILD_TOOLS = (
+    "rig_job_doing",
+    "rig_job_note",
+    "rig_job_ask",
+    "permission_prompt",
+    "rig_job_inbox",
+    "rig_job_show",
+    "rig_memory",
 )
 
 
@@ -107,6 +117,8 @@ class McpDispatch(unittest.TestCase):
                 "CLAUDE_CODE",
                 "RIG_THREAD",
                 "RIG_SKIP_MODEL_CATALOG",
+                "RIG_JOB_ID",
+                "RIG_JOB_DIR",
             )
         }
         os.environ["PATH"] = _stub_path(self.bins)
@@ -115,6 +127,8 @@ class McpDispatch(unittest.TestCase):
         os.environ.pop("CLAUDECODE", None)
         os.environ.pop("CLAUDE_CODE", None)
         os.environ.pop("RIG_THREAD", None)
+        os.environ.pop("RIG_JOB_ID", None)
+        os.environ.pop("RIG_JOB_DIR", None)
 
     def tearDown(self):
         for key, val in self._env.items():
@@ -156,6 +170,9 @@ class McpDispatch(unittest.TestCase):
         listed_names = [t["name"] for t in listed["result"]["tools"]]
         for name in DISPATCH_TOOLS:
             self.assertIn(name, listed_names)
+        self.assertIn("rig_job_message", listed_names)
+        self.assertNotIn("rig_job_doing", listed_names)
+        self.assertNotIn("permission_prompt", listed_names)
 
     def test_live_parent_honors_rig_parent(self):
         os.environ["RIG_PARENT"] = "grok"
@@ -253,7 +270,10 @@ class McpDispatch(unittest.TestCase):
             {"repo": str(self.repo), "worker": "grok", "role": "explorer"},
         )
         job_id = self._text(start).strip()
-        (self.repo / ".rig" / "jobs" / job_id / "stdout.log").write_text("noise\n")
+        job_dir = self.repo / ".rig" / "jobs" / job_id
+        (job_dir / "stdout.log").write_text(
+            '{"type":"tool_call","toolName":"read_file","rawInput":{"path":"README.md"}}\n'
+        )
         out = rig_mcp.call_tool(
             "rig_job_finish",
             {
@@ -268,10 +288,38 @@ class McpDispatch(unittest.TestCase):
         self.assertIn(job_id, text)
         self.assertIn("status=ok", text)
         self.assertIn("result.json", text)
-        result = json.loads((self.repo / ".rig" / "jobs" / job_id / "result.json").read_text())
+        result = json.loads((job_dir / "result.json").read_text())
         self.assertEqual(result["status"], "ok")
         self.assertEqual(result["summary"], "one-line result")
-        self.assertFalse((self.repo / ".rig" / "jobs" / job_id / "stdout.log").exists())
+        self.assertFalse((job_dir / "stdout.log").exists())
+        activity = json.loads((job_dir / "activity.json").read_text())
+        self.assertTrue(any("read_file" in str(line) for line in activity.get("lines") or []))
+        logged = rig_mcp.call_tool("rig_job_log", {"repo": str(self.repo), "id": job_id})
+        self.assertIn("read_file", self._text(logged))
+
+    def test_job_finish_keeps_undecodable_log(self):
+        start = rig_mcp.call_tool(
+            "rig_job_start",
+            {"repo": str(self.repo), "worker": "grok", "role": "explorer"},
+        )
+        job_id = self._text(start).strip()
+        job_dir = self.repo / ".rig" / "jobs" / job_id
+        (job_dir / "stdout.log").write_text(
+            'remote managed settings (permissions.deny): Invalid permission rule '
+            '"Bash(eval $(wget*))" was skipped: Mismatched parentheses.\n'
+        )
+        out = rig_mcp.call_tool(
+            "rig_job_finish",
+            {
+                "id": job_id,
+                "repo": str(self.repo),
+                "status": "ok",
+                "summary": "native ok",
+            },
+        )
+        self.assertNotIn("isError", out)
+        self.assertTrue((job_dir / "stdout.log").is_file())
+        self.assertFalse((job_dir / "activity.json").is_file())
 
     def test_job_finish_fail(self):
         start = rig_mcp.call_tool(
@@ -314,6 +362,125 @@ class McpDispatch(unittest.TestCase):
         self.assertEqual(result["status"], "ok")
         self.assertEqual(result["worker"], "grok")
         self.assertEqual(result["role"], "explorer")
+
+    def test_child_tools_hide_parent_and_write_doing(self):
+        job_id = "child-mcp"
+        job_dir = self.repo / ".rig" / "jobs" / job_id
+        job_dir.mkdir(parents=True)
+        (job_dir / "meta.json").write_text(
+            json.dumps(
+                {
+                    "job_id": job_id,
+                    "worker": "grok",
+                    "role": "implement",
+                    "status": "running",
+                    "pid": os.getpid(),
+                }
+            )
+        )
+        os.environ["RIG_JOB_ID"] = job_id
+        os.environ["RIG_JOB_DIR"] = str(job_dir)
+        try:
+            names = [t["name"] for t in rig_mcp.listed_tools()]
+            for name in CHILD_TOOLS:
+                self.assertIn(name, names)
+            self.assertNotIn("rig_pick", names)
+            self.assertNotIn("rig_job_wait", names)
+            self.assertNotIn("rig_job_message", names)
+            blocked = rig_mcp.call_tool("rig_pick", {"case": "x", "repo": str(self.repo)})
+            self.assertTrue(blocked.get("isError"))
+            doing = rig_mcp.call_tool("rig_job_doing", {"text": "edit jobs.py"})
+            self.assertNotIn("isError", doing)
+            self.assertIn("edit jobs.py", self._text(doing))
+            job = jobs.load_job(job_dir)
+            self.assertEqual(job["doing"], "edit jobs.py")
+            note = rig_mcp.call_tool("rig_job_note", {"text": "checked tests"})
+            self.assertNotIn("isError", note)
+            msg = rig_mcp.call_tool(
+                "rig_job_message",
+                {"id": job_id, "text": "keep going", "repo": str(self.repo)},
+            )
+            self.assertTrue(msg.get("isError"))
+        finally:
+            os.environ.pop("RIG_JOB_ID", None)
+            os.environ.pop("RIG_JOB_DIR", None)
+
+        sent = rig_mcp.call_tool(
+            "rig_job_message",
+            {"id": job_id, "text": "use the listed files", "repo": str(self.repo)},
+        )
+        self.assertNotIn("isError", sent, sent)
+        os.environ["RIG_JOB_ID"] = job_id
+        os.environ["RIG_JOB_DIR"] = str(job_dir)
+        try:
+            pulled = rig_mcp.call_tool("rig_job_inbox", {})
+            self.assertEqual(self._text(pulled), "use the listed files")
+            empty = rig_mcp.call_tool("rig_job_inbox", {})
+            self.assertEqual(self._text(empty), "(empty)")
+        finally:
+            os.environ.pop("RIG_JOB_ID", None)
+            os.environ.pop("RIG_JOB_DIR", None)
+        shown = jobs.load_job(job_dir)
+        self.assertIn("edit jobs.py", "\n".join(shown["activities"]))
+        self.assertIn("checked tests", "\n".join(shown["activities"]))
+        os.environ["RIG_JOB_ID"] = job_id
+        os.environ["RIG_JOB_DIR"] = str(job_dir)
+        try:
+            mem = rig_mcp.call_tool("rig_memory", {"repo": str(self.repo)})
+            self.assertNotIn("isError", mem)
+            other = rig_mcp.call_tool(
+                "rig_job_show",
+                {"id": "not-this-job", "repo": str(self.repo)},
+            )
+            self.assertTrue(other.get("isError"))
+            self.assertIn("own job", self._text(other))
+            own = rig_mcp.call_tool("rig_job_show", {"repo": str(self.repo)})
+            self.assertNotIn("isError", own)
+            self.assertIn(job_id, self._text(own))
+        finally:
+            os.environ.pop("RIG_JOB_ID", None)
+            os.environ.pop("RIG_JOB_DIR", None)
+
+    def test_child_ask_round_trips_allow(self):
+        import threading
+        import time
+
+        job_id = "child-ask"
+        job_dir = self.repo / ".rig" / "jobs" / job_id
+        job_dir.mkdir(parents=True)
+        (job_dir / "meta.json").write_text(
+            json.dumps(
+                {
+                    "job_id": job_id,
+                    "worker": "claude",
+                    "role": "implement",
+                    "status": "running",
+                    "pid": os.getpid(),
+                }
+            )
+        )
+        os.environ["RIG_JOB_ID"] = job_id
+        os.environ["RIG_JOB_DIR"] = str(job_dir)
+
+        def later():
+            time.sleep(0.2)
+            jobs.answer_pending(jobs.load_job(job_dir), "allow")
+
+        threading.Thread(target=later, daemon=True).start()
+        try:
+            out = rig_mcp.call_tool(
+                "rig_job_ask",
+                {"preview": "ssh to the vm", "repo": str(self.repo)},
+            )
+            self.assertNotIn("isError", out)
+            self.assertIn("allow", self._text(out))
+        finally:
+            os.environ.pop("RIG_JOB_ID", None)
+            os.environ.pop("RIG_JOB_DIR", None)
+
+    def test_parent_cannot_call_child_doing(self):
+        out = rig_mcp.call_tool("rig_job_doing", {"text": "nope", "repo": str(self.repo)})
+        self.assertTrue(out.get("isError"))
 
     def test_existing_wait_allow_memory_still_work(self):
         listed = rig_mcp.call_tool("rig_jobs", {"repo": str(self.repo)})

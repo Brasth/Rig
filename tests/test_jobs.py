@@ -309,6 +309,122 @@ class JobBoard(unittest.TestCase):
         self.assertTrue(job["log_pruned"])
         self.assertIn("pruned after success", jobs.format_log(job))
 
+    def test_activity_survives_pruned_log(self):
+        d = self.repo / ".rig" / "jobs" / "done-with-activity"
+        d.mkdir()
+        (d / "meta.json").write_text(
+            json.dumps(
+                {
+                    "job_id": "done-with-activity",
+                    "worker": "cursor",
+                    "role": "implement",
+                    "status": "ok",
+                    "summary": "fixed the header",
+                }
+            )
+        )
+        (d / "stdout.log").write_text(STREAM + "\n")
+        lines = jobs.persist_activity(d)
+        self.assertTrue(lines)
+        (d / "stdout.log").unlink()
+        self.assertTrue((d / "activity.json").is_file())
+        job = jobs.load_job(d)
+        self.assertTrue(job["log_pruned"])
+        blob = "\n".join(job["activities"])
+        self.assertIn("read_file", blob)
+        self.assertTrue(job["doing"])
+        self.assertNotEqual(job["doing"], "fixed the header")
+        shown_log = jobs.format_log(job)
+        self.assertIn("read_file", shown_log)
+        self.assertNotIn("pruned after success", shown_log)
+
+    def test_persist_skips_empty_log(self):
+        d = self.repo / ".rig" / "jobs" / "native-ok"
+        d.mkdir()
+        (d / "meta.json").write_text(
+            json.dumps({"job_id": "native-ok", "worker": "grok", "role": "parent", "status": "ok"})
+        )
+        self.assertEqual(jobs.persist_activity(d), [])
+        self.assertFalse((d / "activity.json").is_file())
+
+    def test_persist_keeps_prior_activity_when_log_undecodable(self):
+        d = self.repo / ".rig" / "jobs" / "keep-prior"
+        d.mkdir()
+        (d / "meta.json").write_text(
+            json.dumps({"job_id": "keep-prior", "worker": "grok", "role": "implement", "status": "ok"})
+        )
+        jobs.write_activity(d, ["read_file README.md"], source="stdout")
+        (d / "stdout.log").write_text(
+            'remote managed settings (permissions.deny): Invalid permission rule '
+            '"Bash(eval $(wget*))" was skipped: Mismatched parentheses.\n'
+        )
+        lines = jobs.persist_activity(d)
+        self.assertEqual(lines, ["read_file README.md"])
+        stored = jobs.read_activity(d)
+        self.assertEqual(stored["lines"], ["read_file README.md"])
+
+    def test_persist_keeps_child_doing_with_decoded_log(self):
+        d = self.repo / ".rig" / "jobs" / "mix-activity"
+        d.mkdir()
+        (d / "meta.json").write_text(
+            json.dumps({"job_id": "mix-activity", "worker": "grok", "role": "implement", "status": "ok"})
+        )
+        jobs.set_doing(d, "writing activity.json")
+        (d / "stdout.log").write_text(STREAM + "\n")
+        lines = jobs.persist_activity(d)
+        self.assertIn("writing activity.json", lines)
+        self.assertTrue(any("read_file" in line for line in lines))
+
+    def test_child_doing_wins_over_log_decode(self):
+        d = self.repo / ".rig" / "jobs" / "child-doing"
+        d.mkdir()
+        (d / "meta.json").write_text(
+            json.dumps(
+                {
+                    "job_id": "child-doing",
+                    "worker": "grok",
+                    "role": "implement",
+                    "status": "running",
+                    "pid": os.getpid(),
+                }
+            )
+        )
+        (d / "stdout.log").write_text(STREAM + "\n")
+        jobs.set_doing(d, "writing activity.json")
+        job = jobs.load_job(d)
+        self.assertEqual(job["doing"], "writing activity.json")
+
+    def test_inbox_does_not_become_ask(self):
+        import inbox as rig_inbox
+
+        d = self.repo / ".rig" / "jobs" / "mail"
+        d.mkdir()
+        (d / "meta.json").write_text(
+            json.dumps(
+                {
+                    "job_id": "mail",
+                    "worker": "grok",
+                    "role": "implement",
+                    "status": "running",
+                    "pid": os.getpid(),
+                }
+            )
+        )
+        rig_inbox.write_inbox(d, "stay on the listed files")
+        job = jobs.load_job(d)
+        self.assertEqual(job["effective"], "running")
+        self.assertIn("stay on the listed files", jobs.format_show(job))
+        self.assertNotIn("ASK", job["doing"])
+
+    def test_inbox_truncates_long_text(self):
+        import inbox as rig_inbox
+
+        d = self.repo / ".rig" / "jobs" / "long-mail"
+        d.mkdir()
+        obj = rig_inbox.write_inbox(d, "x" * 3000)
+        self.assertEqual(len(obj["text"]), 2000)
+        self.assertTrue(obj["text"].endswith("…"))
+
     def test_thread_tag_and_filter(self):
         meta = self.repo / ".rig" / "jobs" / "260908-opencode-session-fix" / "meta.json"
         obj = json.loads(meta.read_text())

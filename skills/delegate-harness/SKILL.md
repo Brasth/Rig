@@ -32,7 +32,7 @@ Doing the worker's job yourself is a failure unless pick `parent_writes` is true
 
 Jobs and MEMORY are this repo, not this chat. A new parent thread still sees `.rig/jobs` and `.rig/MEMORY.md`. Running children keep going.
 
-Prefer MCP when present for session, pick, status, start, finish, record, wait, allow, deny, and memory. Instant MCP: `rig_session` / `rig_pick` / `rig_status` / `rig_job_start` / `rig_job_finish` / `rig_job_record` / `rig_jobs` / `rig_job_show` / `rig_job_log` / `rig_job_wait` / `rig_job_allow` / `rig_job_deny` / `rig_memory`. Bash fallback if MCP is missing. Do not spawn via MCP.
+Prefer MCP when present for session, pick, status, start, finish, record, wait, allow, deny, memory, and `rig_job_message`. Instant MCP: `rig_session` / `rig_pick` / `rig_status` / `rig_job_start` / `rig_job_finish` / `rig_job_record` / `rig_jobs` / `rig_job_show` / `rig_job_log` / `rig_job_wait` / `rig_job_allow` / `rig_job_deny` / `rig_job_message` / `rig_memory`. Bash fallback if MCP is missing. Do not spawn via MCP. A child with `RIG_JOB_ID` sees doing/note/ask/inbox only — never pick/wait/allow. Inbox is not ASK.
 
 Live parent is this CLI, not the `parent` key in toml. That key is only the preferred default (`rig use grok|codex|opencode|omp|pi|agy`). Switching preferred parent does not move the session — open that CLI. Parent model is this CLI’s model. Worker models come from `rig_pick` / `rig pick`.
 Claude Code (`claude`) and Cursor CLI (`cursor-agent`) are never the parent. OpenCode (`opencode`), OMP (`omp`), Pi (`pi`), and Antigravity (`agy`) can be the parent when you open that CLI. When live parent is agy, do not use nested agy `/agent` dispatch for coding; use `rig pick`. Claude is a worker when `[workers].claude = true` and `claude` is on PATH. Cursor is a worker when `[workers].cursor = true` and `cursor-agent` is on PATH (`rig workers cursor=on`). OpenCode / OMP / Pi / agy are workers when their flags are true and the binary is on PATH (`rig workers opencode=on` / `omp=on` / `pi=on` / `agy=on`) and they are not the live parent. Pin full model IDs. Never spawn Fable, Sol, or Astra as a child. Opus is allowed. Grok Bot.app is not a parent or worker. The Antigravity IDE/GUI is not a parent or worker.
@@ -69,7 +69,7 @@ A worker is on only when all of these hold:
 
 So: Codex parent → Grok/Claude/Cursor/OpenCode/OMP/Pi/agy can be children. Grok parent → Grok child is off; the others can be children. OpenCode/OMP/Pi/agy parent → that CLI is off as a child; Grok/Claude/others can be children. Missing binary: that worker is off for this session, not an error. Use cheaper same-CLI workers. That is success. If both OMP and Pi are effective as workers of a different parent, pick uses OMP. Do not pick agy just because it is on PATH.
 
-Check with MCP `rig_status` / `rig_jobs` (bash: `rig status`, `rig jobs`) or `/rig`. Those show the worker **model** and **reasoning** level. Live child: `rig tui` in another pane, or `rig job log <id> -f`. Fully quit OpenCode / OMP / Pi / agy once after `rig setup` so MCP `/rig` loads.
+Check with MCP `rig_status` / `rig_jobs` (bash: `rig status`, `rig jobs`) or `/rig`. Those show the worker **model** and **reasoning** level. Live child: `rig tui` in another pane, or `rig job log <id> -f`. After ok, raw `stdout.log` is pruned; `activity.json` remains — still use `rig job log` / MCP. Never read Cursor `state.vscdb` or vendor sqlite for a Rig job. Fully quit OpenCode / OMP / Pi / agy once after `rig setup` so MCP `/rig` loads.
 
 ## Route
 

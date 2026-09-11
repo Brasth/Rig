@@ -17,6 +17,7 @@ if str(HERE) not in sys.path:
 
 import ask as rig_ask  # noqa: E402
 import harness as rig_harness  # noqa: E402
+import inbox as rig_inbox  # noqa: E402
 
 PREAMBLE_MARKERS = (
     "you are a worker, not the orchestrator",
@@ -414,6 +415,129 @@ def read_log_tail(path: Path, nbytes: int = 120_000) -> str:
         return fh.read()
 
 
+ACTIVITY_NAME = "activity.json"
+ACTIVITY_CAP = 120
+
+
+def activity_path(job_dir: Path) -> Path:
+    return Path(job_dir) / ACTIVITY_NAME
+
+
+def read_activity(job_dir: Path) -> dict | None:
+    path = activity_path(job_dir)
+    if not path.is_file():
+        return None
+    try:
+        obj = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return None
+    return obj if isinstance(obj, dict) else None
+
+
+def activity_lines(job_dir: Path) -> list[str]:
+    obj = read_activity(job_dir)
+    if not obj:
+        return []
+    raw = obj.get("lines")
+    if not isinstance(raw, list):
+        return []
+    return [str(item).strip() for item in raw if str(item).strip()][-ACTIVITY_CAP:]
+
+
+def write_activity(
+    job_dir: Path,
+    lines: list[str],
+    source: str = "stdout",
+    job_id: str = "",
+) -> None:
+    job_dir = Path(job_dir)
+    cleaned = [str(item).strip() for item in lines if str(item).strip()][-ACTIVITY_CAP:]
+    if not cleaned:
+        return
+    job_dir.mkdir(parents=True, exist_ok=True)
+    obj = {
+        "job_id": job_id or job_dir.name,
+        "updated_at": iso_now(),
+        "source": source or "stdout",
+        "lines": cleaned,
+    }
+    path = activity_path(job_dir)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(obj, indent=2) + "\n")
+    tmp.replace(path)
+
+
+def persist_activity(job_dir: Path, source: str = "stdout") -> list[str]:
+    """Decode stdout.log into activity.json. Keep prior (child) lines if the log is empty."""
+    job_dir = Path(job_dir)
+    log_path = job_dir / "stdout.log"
+    decoded = decode_log_text(read_log_tail(log_path)) if log_path.is_file() else []
+    prior = activity_lines(job_dir)
+    if decoded:
+        extra = [line for line in prior if line not in decoded]
+        write_activity(job_dir, extra + decoded, source=source)
+        return activity_lines(job_dir)
+    return prior
+
+
+def patch_meta(job_dir: Path, **fields) -> dict:
+    job_dir = Path(job_dir)
+    job_dir.mkdir(parents=True, exist_ok=True)
+    obj = _read_meta_dict(job_dir)
+    if not obj.get("job_id"):
+        obj["job_id"] = job_dir.name
+    for key, val in fields.items():
+        if val is None:
+            continue
+        obj[key] = val
+    path = job_dir / "meta.json"
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(obj, indent=2) + "\n")
+    tmp.replace(path)
+    return obj
+
+
+def set_doing(job_dir: Path, text: str) -> str:
+    line = _first_line(text, 160)
+    if not line:
+        raise ValueError("doing text required")
+    patch_meta(job_dir, doing=line)
+    prior = activity_lines(job_dir)
+    if not prior or prior[-1] != line:
+        write_activity(job_dir, prior + [line], source="child")
+    return line
+
+
+def add_note(job_dir: Path, text: str) -> str:
+    line = _first_line(text, 160)
+    if not line:
+        raise ValueError("note text required")
+    prior = activity_lines(job_dir)
+    if not prior or prior[-1] != line:
+        write_activity(job_dir, prior + [line], source="child")
+    return line
+
+
+def _prune_stdout_log(job_dir: Path) -> None:
+    """Drop the raw log only when decoded activity was saved. Never delete the only copy."""
+    job_dir = Path(job_dir)
+    log = job_dir / "stdout.log"
+    if not log.is_file():
+        return
+    if not activity_path(job_dir).is_file():
+        return
+    try:
+        log.unlink()
+    except OSError:
+        pass
+
+
+def _doing_from_activities(activities: list[str]) -> str:
+    if not activities:
+        return ""
+    return next((a for a in reversed(activities) if not a.startswith("think")), activities[-1])
+
+
 def load_job(job_path: Path) -> dict | None:
     meta_path = job_path / "meta.json"
     if not meta_path.is_file():
@@ -450,8 +574,12 @@ def load_job(job_path: Path) -> dict | None:
     elif pending_ask and (alive or not pid_i):
         effective = "ask"
     log_path = job_path / "stdout.log"
-    activities = decode_log_text(read_log_tail(log_path))
+    activities = decode_log_text(read_log_tail(log_path)) if log_path.is_file() else []
+    if not activities:
+        activities = activity_lines(job_path)
     kind = str(obj.get("kind") or "")
+    child_doing = str(obj.get("doing") or "").strip()
+    pending_inbox = rig_inbox.load_inbox(job_path)
     doing = ""
     if effective == "ask" and pending_ask:
         doing = (
@@ -459,14 +587,16 @@ def load_job(job_path: Path) -> dict | None:
             f"→  rig job allow {job_id}"
         )
     elif effective == "running":
-        if activities:
-            doing = next((a for a in reversed(activities) if not a.startswith("think")), activities[-1])
+        if child_doing:
+            doing = child_doing
+        elif activities:
+            doing = _doing_from_activities(activities)
         elif kind == "native":
             doing = "native spawn (no stdout.log — finish with rig job finish)"
         else:
             doing = "running (no log yet)"
     elif activities:
-        doing = next((a for a in reversed(activities) if not a.startswith("think")), activities[-1])
+        doing = _doing_from_activities(activities)
     elif summary:
         doing = _first_line(summary)
     mtime = 0.0
@@ -518,6 +648,7 @@ def load_job(job_path: Path) -> dict | None:
         "task": task,
         "doing": doing,
         "ask": pending_ask,
+        "inbox": pending_inbox,
         "activities": activities,
         "dir": str(job_path),
         "log": str(log_path),
@@ -730,6 +861,8 @@ def format_table(jobs: list[dict]) -> str:
             extras.append(f"          thread {job['thread']}")
         if job["doing"]:
             extras.append(f"          doing  {job['doing']}")
+        if job.get("inbox") and job["effective"] in {"running", "ask"}:
+            extras.append(f"          inbox  pending")
         if job["effective"] == "ask":
             extras.append(f"          answer rig job allow {job['job_id']}  |  rig job deny {job['job_id']}")
         if job["effective"] == "running" and job.get("open"):
@@ -756,6 +889,12 @@ def format_show(job: dict, log_lines: int = 24) -> str:
     ]
     if job["doing"]:
         lines.append(f"doing   {job['doing']}")
+    if job.get("inbox"):
+        preview = str((job["inbox"] or {}).get("text") or "").strip()
+        if len(preview) > 120:
+            preview = preview[:119] + "…"
+        lines.append(f"inbox   {preview or 'pending'}")
+        lines.append("        child pulls with rig_job_inbox (not ASK)")
     if job.get("effective") == "ask":
         lines.append(f"answer  rig job allow {job['job_id']}")
         lines.append(f"        rig job deny {job['job_id']}")
@@ -921,7 +1060,7 @@ def write_job_files(
         "model": model,
         "effort": effort,
     }
-    for key in ("thread", "session_id", "pid", "open", "watch", "kind", "model", "effort"):
+    for key in ("thread", "session_id", "pid", "open", "watch", "kind", "model", "effort", "doing"):
         if not obj.get(key) and old.get(key) not in (None, ""):
             obj[key] = old[key]
     if thread:
@@ -1082,12 +1221,9 @@ def finish_job(
         thread=_job_thread(repo),
     )
     write_state(repo, job_id, worker, status, summary or "")
+    persist_activity(job_dir)
     if status == "ok":
-        log = job_dir / "stdout.log"
-        try:
-            log.unlink()
-        except OSError:
-            pass
+        _prune_stdout_log(job_dir)
     return _finish_text(job_id, worker, role, status, job_dir)
 
 
@@ -1193,10 +1329,23 @@ def main() -> int:
         "cmd",
         nargs="?",
         default="list",
-        choices=["list", "show", "log", "statusline", "thread", "allow", "deny", "wait"],
+        choices=[
+            "list",
+            "show",
+            "log",
+            "statusline",
+            "thread",
+            "allow",
+            "deny",
+            "wait",
+            "persist",
+            "message",
+        ],
     )
     parser.add_argument("job_id", nargs="*")
     parser.add_argument("--repo")
+    parser.add_argument("--dir")
+    parser.add_argument("--text", default="")
     parser.add_argument("--json", action="store_true")
     parser.add_argument("-f", "--follow", action="store_true")
     parser.add_argument("-n", "--lines", type=int, default=40)
@@ -1212,6 +1361,23 @@ def main() -> int:
     repo = repo_root(args.repo)
     wait_ids = [str(x).strip() for x in (args.job_id or []) if str(x).strip()]
     job_id = wait_ids[0] if wait_ids else None
+    if args.cmd == "message":
+        job = resolve_job(repo, job_id)
+        text = (args.text or "").strip()
+        if not text:
+            raise SystemExit("usage: jobs.py message <id> --text TEXT")
+        obj = rig_inbox.write_inbox(Path(job["dir"]), text)
+        print(f"message {job['job_id']} inbox pending")
+        print(obj["text"])
+        return 0
+    if args.cmd == "persist":
+        target = Path(args.dir) if args.dir else None
+        if target is None and job_id:
+            target = jobs_dir(repo) / job_id
+        if target is None:
+            raise SystemExit("usage: jobs.py persist --dir DIR")
+        persist_activity(target)
+        return 0
     if args.cmd == "thread":
         print(current_thread(repo))
         return 0

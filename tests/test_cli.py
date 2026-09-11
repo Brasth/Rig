@@ -66,6 +66,33 @@ class CliMemoryAndThread(unittest.TestCase):
         listed = run_rig(self.repo, "jobs")
         self.assertIn("parent-thread-cli", listed.stdout)
         self.assertIn(job_id, listed.stdout)
+        mailed = run_rig(self.repo, "job", "message", job_id, "--text", "use listed files")
+        self.assertEqual(mailed.returncode, 0, mailed.stderr + mailed.stdout)
+        self.assertIn("inbox pending", mailed.stdout)
+        shown = run_rig(self.repo, "job", "show", job_id)
+        self.assertIn("use listed files", shown.stdout)
+
+    def test_prune_persists_activity_then_drops_ok_log(self):
+        job_dir = self.repo / ".rig" / "jobs" / "prune-ok"
+        job_dir.mkdir(parents=True)
+        (job_dir / "meta.json").write_text(
+            json.dumps(
+                {
+                    "job_id": "prune-ok",
+                    "worker": "grok",
+                    "role": "implement",
+                    "status": "ok",
+                }
+            )
+        )
+        (job_dir / "stdout.log").write_text(
+            '{"type":"tool_call","toolName":"read_file","rawInput":{"path":"README.md"}}\n'
+        )
+        proc = run_rig(self.repo, "prune")
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        self.assertFalse((job_dir / "stdout.log").is_file())
+        activity = json.loads((job_dir / "activity.json").read_text())
+        self.assertTrue(any("read_file" in str(line) for line in activity.get("lines") or []))
 
 
 def _stub_path(extra: Path | None = None) -> str:
