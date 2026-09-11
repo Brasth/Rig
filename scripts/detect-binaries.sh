@@ -293,7 +293,7 @@ section = sys.argv[2]
 key = sys.argv[3]
 value = sys.argv[4]
 target = section or None
-lines = path.read_text().splitlines() if path.exists() else []
+lines = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
 
 
 def is_header(line: str) -> bool:
@@ -364,7 +364,7 @@ if text and not text.endswith("\n"):
     text += "\n"
 path.parent.mkdir(parents=True, exist_ok=True)
 tmp = path.with_name(path.name + ".tmp")
-tmp.write_text(text)
+tmp.write_text(text, encoding="utf-8")
 tmp.replace(path)
 PY
 }
@@ -376,7 +376,7 @@ rig_has_top_key() {
   python3 - "$file" "$key" <<'PY'
 import sys
 from pathlib import Path
-text = Path(sys.argv[1]).read_text()
+text = Path(sys.argv[1]).read_text(encoding="utf-8")
 key = sys.argv[2]
 for line in text.splitlines():
     s = line.strip()
@@ -397,7 +397,7 @@ rig_has_section_key() {
   python3 - "$file" "$section" "$key" <<'PY'
 import sys
 from pathlib import Path
-text = Path(sys.argv[1]).read_text()
+text = Path(sys.argv[1]).read_text(encoding="utf-8")
 section, key = sys.argv[2], sys.argv[3]
 current = None
 for line in text.splitlines():
@@ -429,7 +429,7 @@ from pathlib import Path
 
 path = Path(sys.argv[1])
 needed = sys.argv[2:]
-text = path.read_text()
+text = path.read_text(encoding="utf-8")
 changed = []
 
 if "network_access" not in text:
@@ -509,7 +509,7 @@ if missing:
 
 if changed:
     tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(text)
+    tmp.write_text(text, encoding="utf-8")
     tmp.replace(path)
     print(",".join(changed))
 else:
@@ -522,23 +522,31 @@ PY
 # Prints: updated | moved | prepended | wrote
 rig_upsert_marked_block() {
   local file="$1" start="$2" end="$3" block="$4"
+  local tmp
   if ! command -v python3 >/dev/null 2>&1; then
     echo "rig: python3 is required to edit $file" >&2
     return 1
   fi
-  RIG_UPSERT_FILE="$file" \
-  RIG_UPSERT_START="$start" \
-  RIG_UPSERT_END="$end" \
-  RIG_UPSERT_BLOCK="$block" \
-  python3 - <<'PY'
-import os
+  # Do not pass the block through env/argv: LANG=C Linux decodes those as
+  # ASCII and Path.write_text then fails on AGENTS.md arrows/dashes.
+  tmp="$(mktemp "${TMPDIR:-/tmp}/rig-upsert.XXXXXX")"
+  printf '%s\n' "$block" > "$tmp" || { rm -f "$tmp"; return 1; }
+  python3 - "$file" "$start" "$end" "$tmp" <<'PY'
+import sys
 from pathlib import Path
 
-path = Path(os.environ["RIG_UPSERT_FILE"])
-start = os.environ["RIG_UPSERT_START"]
-end = os.environ["RIG_UPSERT_END"]
-block = os.environ["RIG_UPSERT_BLOCK"].strip() + "\n"
-text = path.read_text() if path.exists() else ""
+path = Path(sys.argv[1])
+start = sys.argv[2]
+end = sys.argv[3]
+block_path = Path(sys.argv[4])
+try:
+    block = block_path.read_text(encoding="utf-8").strip() + "\n"
+finally:
+    try:
+        block_path.unlink()
+    except OSError:
+        pass
+text = path.read_text(encoding="utf-8") if path.exists() else ""
 path.parent.mkdir(parents=True, exist_ok=True)
 if start in text and end in text:
     i = text.find(start)
@@ -548,15 +556,15 @@ if start in text and end in text:
     j += len(end)
     rest = (text[:i] + text[j:]).strip("\n")
     new = block if not rest else block.rstrip() + "\n\n" + rest + "\n"
-    path.write_text(new if new.endswith("\n") else new + "\n")
+    path.write_text(new if new.endswith("\n") else new + "\n", encoding="utf-8")
     print("moved" if i > 0 else "updated")
 elif text:
     rest = text.strip("\n")
     new = block.rstrip() + "\n\n" + rest + "\n"
-    path.write_text(new)
+    path.write_text(new, encoding="utf-8")
     print("prepended")
 else:
-    path.write_text(block if block.endswith("\n") else block + "\n")
+    path.write_text(block if block.endswith("\n") else block + "\n", encoding="utf-8")
     print("wrote")
 PY
 }

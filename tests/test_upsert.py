@@ -50,6 +50,39 @@ class UpsertTop(unittest.TestCase):
         self.assertIn("edit locally", text)
         self.assertLess(text.find("MUST use Rig"), text.find("edit locally"))
 
+    def test_writes_unicode_when_locale_is_c(self):
+        block = (
+            "<!-- rig:start -->\n"
+            "stay \u2192 parent. Follow pick JSON \u2014 do not ask.\n"
+            "<!-- rig:end -->"
+        )
+        script = f"""
+source "{ROOT / "scripts" / "detect-binaries.sh"}"
+rig_upsert_marked_block "{self.path}" "<!-- rig:start -->" "<!-- rig:end -->" "$(cat <<'EOF'
+{block}
+EOF
+)"
+"""
+        proc = subprocess.run(
+            ["bash", "-lc", script],
+            text=True,
+            capture_output=True,
+            check=False,
+            env={
+                **os.environ,
+                "RIG_HOME": str(ROOT),
+                "LANG": "C",
+                "LC_ALL": "C",
+                "PYTHONUTF8": "0",
+            },
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        self.assertEqual(proc.stdout.strip(), "wrote")
+        text = self.path.read_text(encoding="utf-8")
+        self.assertIn("\u2192", text)
+        self.assertIn("\u2014", text)
+        self.assertTrue(self.path.exists())
+
     def test_moves_existing_block_to_top(self):
         self.path.write_text(
             "# VM\n\nMake code changes locally.\n\n"

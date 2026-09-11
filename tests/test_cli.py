@@ -278,6 +278,25 @@ class InitPresence(unittest.TestCase):
         )
         self.assertEqual(allowed.returncode, 0, allowed.stderr + allowed.stdout)
 
+    def test_init_writes_agents_when_locale_is_c(self):
+        proc = run_rig(
+            self.repo,
+            "init",
+            env={
+                "PATH": _stub_path(),
+                "LANG": "C",
+                "LC_ALL": "C",
+                "PYTHONUTF8": "0",
+            },
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        path = self.repo / "AGENTS.md"
+        self.assertTrue(path.is_file(), proc.stdout + proc.stderr)
+        text = path.read_text(encoding="utf-8")
+        self.assertIn("<!-- rig:start -->", text)
+        self.assertIn("MUST use Rig", text)
+        self.assertIn("\u2192", text)
+
     def test_init_agents_tells_parent_to_answer_ask(self):
         proc = run_rig(self.repo, "init", env={"PATH": _stub_path()})
         self.assertEqual(proc.returncode, 0, proc.stderr)
