@@ -693,6 +693,17 @@ def resolve_job(repo: Path, job_id: str | None) -> dict:
         for job in jobs:
             if job["job_id"] == job_id or job_id in job["job_id"]:
                 return job
+        folder = jobs_dir(repo) / str(job_id).strip()
+        if folder.is_dir() and not (folder / "meta.json").is_file():
+            if (folder / "brief.md").is_file():
+                raise SystemExit(
+                    f"rig: job {job_id} never started (brief.md only, no meta.json). "
+                    "Launch with run-worker.sh, then wait."
+                )
+            raise SystemExit(
+                f"rig: job {job_id} has a folder but no meta.json. "
+                "Launch with run-worker.sh, then wait."
+            )
         raise SystemExit(f"rig: no such job {job_id}")
     for job in jobs:
         if job["effective"] == "ask":

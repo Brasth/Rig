@@ -194,6 +194,13 @@ class QueueFiles(unittest.TestCase):
         block = rig_queue.format_block(self.repo)
         self.assertIn("occupied", block)
         self.assertIn("unknown", block)
+        self.assertIn("writer-empty", block)
+        with self.assertRaises(rig_queue.QueueError) as ctx:
+            rig_queue.check_start(
+                self.repo, "next", files=["src/other.py"], role="implement"
+            )
+        self.assertIn("writer-empty", str(ctx.exception))
+        self.assertIn("no listed files", str(ctx.exception))
 
     def test_format_block_caps_occupied_paths(self):
         files = [f"src/f{i}.py" for i in range(10)]

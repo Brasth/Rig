@@ -288,6 +288,18 @@ class WaitContract(unittest.TestCase):
         self.assertIn("wait-job", text)
         self.assertIn("doing", text.lower())
 
+    def test_wait_brief_only_never_started(self):
+        orphan = self.repo / ".rig" / "jobs" / "orphan-brief"
+        orphan.mkdir()
+        (orphan / "brief.md").write_text("deploy preview\n")
+        with self.assertRaises(SystemExit) as ctx:
+            jobs.resolve_job(self.repo, "orphan-brief")
+        self.assertIn("never started", str(ctx.exception))
+        self.assertIn("run-worker.sh", str(ctx.exception))
+        with self.assertRaises(SystemExit) as missing:
+            jobs.resolve_job(self.repo, "no-such-id")
+        self.assertIn("no such job", str(missing.exception))
+
 
 class WaitPanel(unittest.TestCase):
     def setUp(self):

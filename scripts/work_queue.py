@@ -277,6 +277,31 @@ def job_files(job: dict) -> list[str]:
     return normalize_files((job or {}).get("files"))
 
 
+def unlabeled_writers(
+    repo: Path,
+    *,
+    ignore_job_id: str = "",
+    include_claimed: bool = True,
+) -> list[str]:
+    """Live/claimed writers with no listed files (cannot prove disjoint)."""
+    names: list[str] = []
+    skip = str(ignore_job_id or "").strip()
+    for job in live_jobs(repo):
+        jid = str(job.get("job_id") or "")
+        if skip and jid == skip:
+            continue
+        if not is_writer(str(job.get("role") or "")):
+            continue
+        if not job_files(job) and jid and jid not in names:
+            names.append(jid)
+    if include_claimed:
+        for item in list_items(repo, status="claimed"):
+            qid = str(item.get("id") or "")
+            if not normalize_files(item.get("files")) and qid and qid not in names:
+                names.append(qid)
+    return names
+
+
 def occupied_files(
     repo: Path,
     *,
@@ -320,7 +345,14 @@ def overlap_reason(
         repo, ignore_job_id=ignore_job_id, include_claimed=include_claimed
     )
     if unknown:
-        return "a live writer has no listed files; wait for it (cannot prove disjoint)"
+        names = unlabeled_writers(
+            repo, ignore_job_id=ignore_job_id, include_claimed=include_claimed
+        )
+        who = ", ".join(names) if names else "unknown id"
+        return (
+            f"a live writer has no listed files ({who}); "
+            "wait for it or rig job finish (cannot prove disjoint)"
+        )
     hit = sorted(set(listed) & occ)
     if hit:
         return "files overlap live/claimed work: " + ", ".join(hit)
@@ -584,7 +616,9 @@ def cancel_item(repo: Path, item_id: str) -> dict:
 def format_occupied_line(repo: Path) -> str:
     occ, unknown = occupied_files(repo, include_claimed=True)
     if unknown:
-        return "occupied  unknown (a live writer has no listed files)"
+        names = unlabeled_writers(repo, include_claimed=True)
+        who = ", ".join(names) if names else "unknown id"
+        return f"occupied  unknown (a live writer has no listed files: {who})"
     if not occ:
         return ""
     paths = sorted(occ)
