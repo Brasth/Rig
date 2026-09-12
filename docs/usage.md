@@ -1,6 +1,8 @@
 # Rig usage
 
-Landing page: [README](../README.md).
+Landing page: [README](../README.md) (prompt diagram, queue diagram, what setup installs).
+
+In this file: [how your prompt is handled](#how-your-prompt-is-handled) · [queue](#how-the-queue-works) · [scenarios](#scenarios) · [install](#install) · [daily use](#daily-use) · [watch](#watch-jobs-memory) · [troubleshooting](#troubleshooting).
 
 ## What Rig is
 
@@ -96,9 +98,9 @@ That must print `$HOME/.local/bin/rig` (for example `/Users/you/.local/bin/rig`)
 
 Install already ran `rig setup`. Re-run `rig setup` after you update Rig (`rig update` or the curl install does this for you).
 
-1. Fully quit Grok, Codex, OpenCode, OMP, Pi, and/or agy **once** so MCP tools load (quit the apps, then reopen).
+1. Fully quit Grok, Codex, OpenCode, OMP, Pi, and/or agy **once** so MCP tools, `/queue` adapters, and HUDs load (quit the apps, then reopen).
 2. Run `rig doctor`. MCP lines should show `[mcp_servers.rig]` for grok and/or codex, plus OpenCode/OMP/Pi/agy JSON MCP when those files exist.
-3. After setup, Grok gets a **bottom status line**. Restart Grok once if you do not see it.
+3. After setup, Grok gets a **bottom status line** with QUEUE. Restart Grok once if you do not see it. agy: `/statusline` if the row is hidden. OMP/Pi: widget under the editor. OpenCode: sidebar/footer from `tui.json` (file-path plugin). Codex: no panel — `/plugins` install **Rig Queue**, then `/hooks` trust.
 4. Pi `/rig` also needs `pi install npm:pi-mcp-adapter` (setup writes `mcp.json` but does not install the package).
 
 ### What `rig doctor` should look like
@@ -321,6 +323,158 @@ rig use codex
 
 Then open Codex. Parent model is the CLI’s model. Worker models come from `rig pick`. Never spawn Sol, Astra, or Fable as a child.
 
+## How your prompt is handled
+
+You type in the **parent** CLI. That text is **not** forwarded as the child’s prompt. The parent classifies it, and only implement-like work is rewritten as `.rig/jobs/<id>/brief.md` (files to change, what to change, what not to change). The child sees that brief.
+
+```mermaid
+flowchart TD
+  you[You type in the parent]
+  you --> q{Starts with /queue?}
+  q -->|yes| park[Write .rig/queue - block the model - no spawn]
+  q -->|no| kind{Parent picks kind}
+  kind -->|ask plan advise vision| stay[Parent answers in this thread]
+  kind -->|docs skills only| mini[Cheap same-CLI write]
+  kind -->|gather locate| explore[Cheap explore only if parent cannot name files]
+  kind -->|implement fix SSH| check[Parent reads the repo names files writes brief.md]
+  check --> pick[MCP rig_pick]
+  pick -->|run-worker| child[run-worker.sh - listed files only]
+  pick -->|parent_writes| self[This parent writes - no second same-CLI session]
+  child --> wait[MCP rig_job_wait]
+  wait -->|ASK| allow[rig_job_allow or deny]
+  allow --> wait
+  wait -->|ok| you2[Parent tells you what shipped]
+```
+
+```mermaid
+sequenceDiagram
+  actor You
+  participant Parent
+  participant Brief as brief.md
+  participant Child
+  You->>Parent: Fix tests/test_cli.py
+  Parent->>Parent: Read the test name the files
+  Parent->>Brief: Write listed files plus the change
+  Parent->>Child: run-worker.sh
+  Child->>Brief: Do only that list
+  Child-->>Parent: wait until ok or ASK
+  alt child ASK
+    Parent->>Child: allow or deny
+  end
+  Parent-->>You: result
+```
+
+| Kind of prompt | Stays on parent? | Child? | Your chat reused as child prompt? |
+| --- | --- | --- | --- |
+| Question, plan, advise, “how does X work” | Yes | No | — |
+| Vision, Figma, computer-use, chrome-profile | Yes | No | — |
+| Docs/skills-only | Cheap same-CLI may edit docs | Mini, not implement | No — brief if it writes |
+| Implement / fix / SSH | Parent **checks first** | Yes, unless `parent_writes` | **No** — `brief.md` |
+| `/queue …` | Park only | Not from the hook | No |
+
+The parent does **not** ask you which model. `rig pick` maps kind → worker, model, effort.
+
+## How the queue works
+
+Park ≠ spawn. `/queue`, TUI `e`, `rig queue add`, and the Grok/Codex/OpenCode/OMP/Pi adapters only write `.rig/queue/`. The HUD (`jobs.py hud`) is read-only. Drain happens on a **free** parent turn, after the parent names files and writes a brief.
+
+```mermaid
+flowchart TD
+  park["You: /queue fix the sidebar"] --> file[".rig/queue/id.json status=pending"]
+  file --> busy{Child already running?}
+  busy -->|yes| waitFree[Stays pending - HUD shows QUEUE n]
+  busy -->|no| cap{Live running plus ASK less than max_running?}
+  cap -->|no| waitFree
+  cap -->|yes| list[Parent lists pending by id]
+  list --> name[Parent names files for that id]
+  name --> overlap{Those files overlap a live writer?}
+  overlap -->|yes| skip[Skip this id try the next]
+  skip --> list
+  overlap -->|no| claim[rig_queue_claim id plus files]
+  claim --> brief[Write brief.md]
+  brief --> spawn["run-worker.sh RIG_JOB_FILES=..."]
+  spawn --> waitAll[Wait every live id]
+```
+
+Rules that surprise people:
+
+- **Id is required** when more than one item is pending. Claiming without an id stamps files onto the wrong row.
+- **Skip overlap, do not abort.** Item B can still run if its files are free.
+- **ASK counts as live.** A Claude child waiting on allow fills a slot.
+- **`parent_writes` occupies this turn.** Do not drain more writers while this parent is writing.
+- **Stay/advise never become children** even if they were parked by mistake — the parent answers or leaves them pending.
+
+Cap: `[queue].max_running` (default 3). Optional `[queue].max_per_worker` (default 0 = off).
+
+## Scenarios
+
+### 1. One implement prompt, parent is free
+
+You: `tests/test_cli.py is failing — fix it.`
+
+1. Parent reads the test, names `tests/test_cli.py` and the production file it covers.
+2. Writes `brief.md` with those files and the failing assertion.
+3. `rig pick` implement → usually a Grok child (or Claude if Grok is the live parent).
+4. You watch `/rig` or the HUD (`QUEUE 0 · live 1/3`).
+5. Parent waits. When the child is ok, it tells you what changed.
+
+You did not pick a model. You did not run `rig run`.
+
+### 2. You ask a question
+
+You: `Why does pick skip Grok when I am in Grok?`
+
+Stay. Parent answers (live parent cannot spawn itself). No `brief.md`. No child.
+
+### 3. A child is already running; you think of more work
+
+Child is implementing pagination. You type:
+
+`/queue after that, fix the empty-state copy on the jobs list`
+
+Grok/Codex: the submit hook **blocks** that line from becoming a new Astra/Grok turn and writes `.rig/queue/`. OpenCode: `/queue` parks then throws so `prompt()` does not run (1.17.5+ may flash `__RIG_QUEUE_HANDLED__` — that is the skip). OMP/Pi: `/queue` runs even while streaming.
+
+The running child is not killed. HUD shows `QUEUE 1`. When the parent is free, it claims **that id**, names files, briefs, spawns.
+
+Same park without a slash: `rig tui` key `e`, or another pane `rig queue add "…"`.
+
+### 4. Two queued items, overlapping files
+
+Pending:
+
+- `abc` — `src/jobs.py`
+- `def` — `src/queue.py`
+
+A writer is already live on `src/jobs.py`. Drain: skip `abc`, claim `def` if those files are free. `abc` stays pending. List shows occupied files.
+
+### 5. Claude child needs permission (ASK)
+
+`rig jobs` / HUD shows `ASK`. Parent (not you clicking in the child TUI) answers MCP `rig_job_allow` or `rig_job_deny`. Human TUI: `y` / `n`.
+
+Do **not** kill that job. Do **not** spawn Grok “instead”. The same Claude continues after allow. The work timeout pauses during ASK.
+
+### 6. You are in Grok as parent
+
+Grok child is `effective=off (is live parent)`. `Fix the tests` still runs: Claude if effective, else this Grok writes (`parent_writes`). No second Grok session.
+
+### 7. Codex parent, you type `/queue` while Astra is streaming
+
+After `rig setup`, `/plugins` **Rig Queue**, `/hooks` trust, fully quit once: `/queue fix sidebar` parks and **does not** start an Astra implement turn. 0.154 has no `/prompts:queue` autocomplete. Companion `rig tui` if you want a board. Codex has no in-TUI HUD panel.
+
+### 8. Docs-only
+
+You: `Update README to mention the HUD.`
+
+Mini. Parent (or cheap same-CLI) edits `README.md` / `docs/usage.md`. Not an implement child unless the change is mixed with code.
+
+### 9. Review after a successful implement
+
+Implement is `ok`. Parent **may** start one read-only review (different vendor) and one seed/bulk whose files are **disjoint**. One wait on both ids. Until implement is ok: one writer on those files.
+
+### 10. Park on agy
+
+agy 1.2.0 has no `UserPromptSubmit`. `/queue` on a free turn can still park via the skill. Mid-wait: `rig tui` `e` or `rig queue add`. Statusline still shows QUEUE after setup (`/statusline` if hidden).
+
 ## Daily use
 
 Numbered path for a human:
@@ -328,14 +482,16 @@ Numbered path for a human:
 1. `cd` to the repo. Confirm `which rig` and that `.rig/harness.toml` exists (`rig init` if not).
 2. Open **Codex, Grok, OpenCode, OMP, Pi, or agy** in that repo. After init or setup, use a **new** thread.
 3. In a new thread, the parent’s first call is MCP `rig_session` (memory + jobs + status + pick). Humans can still run `rig tui` / `rig jobs` in a terminal.
-4. Type a normal prompt. Do not pick a model. Do not run `rig run`.
+4. Type a normal prompt. Do not pick a model. Do not run `rig run`. Walk-throughs: [scenarios](#scenarios).
 
    Examples:
 
-   - `Implement pagination on the jobs list.`
-   - `tests/test_cli.py is failing — fix it.`
-   - `Review the diff I just staged.`
-   - `SSH to the box and collect the app logs from the last deploy.`
+   - `Implement pagination on the jobs list.` → implement (brief + child)
+   - `tests/test_cli.py is failing — fix it.` → implement
+   - `Why is Grok off as a child while I am in Grok?` → stay
+   - `Review the diff I just staged.` → review
+   - `SSH to the box and collect the app logs from the last deploy.` → implement/SSH
+   - `/queue after this, fix the empty-state copy` → park, no spawn
 
 5. Ask / plan / advise stay with the parent. Docs/skills-only uses MCP `rig_pick` `role` mini. The parent checks first for implement: reads the code, names the files and the update, writes that in the brief, then MCP `rig_pick` `role` implement and spawns if needed. Spawn explore/mini for codebase gather only if the parent cannot name the files after a short check. If the implement brief already lists files, do not also spawn explore. It does **not** ask you which model. Child does not assume scope and does not hunt extra updates. `--case` is the task text (fallback English if the parent omitted kind). Pick does not ship device skill names.
 6. Watch the child: another terminal `rig tui` or `rig jobs`, or type `/rig` in Grok, Codex, OpenCode, OMP, Pi, or agy. Grok/agy statusline and OMP/Pi/OpenCode HUDs show QUEUE + live jobs after setup (restart / fully quit once). Codex has no custom panel — `/plugins` Rig Queue + hook toast, or companion `rig tui`.
@@ -501,6 +657,18 @@ Need `git` (or a logged-in `gh`). The installer clones `https://github.com/Brast
 **Child fails with `FS_PERMISSION_DENIED` creating a session**
 
 Codex sandbox must allow writing `$HOME/.grok` (and `$HOME/.claude` / `$HOME/.cursor` / `$HOME/.opencode` / `$HOME/.omp` / `$HOME/.pi` / `$HOME/.gemini` if used) plus outbound network. `rig setup` adds those writable roots. Re-run `rig setup`.
+
+**`/queue` still starts a model turn (Codex)**
+
+Need all of: `rig setup`, Codex `/plugins` install **Rig Queue** **or** a Rig `UserPromptSubmit` in `~/.codex/hooks.json` (not both after the plugin is enabled), `[features] codex_hooks = true`, **`/hooks` trust**, fully quit Codex once. 0.154 has no `/prompts:queue` slash. Bare `/queue` (list) is not blocked on purpose.
+
+**`/queue` flashes `__RIG_QUEUE_HANDLED__` in OpenCode**
+
+That is the 1.17 skip of `prompt()` after a successful park. Check `rig queue list`. Not a failed enqueue.
+
+**HUD missing after setup**
+
+Fully quit the parent app once. Grok: statusline command in `~/.grok/config.toml`. agy: `/statusline`. OpenCode: `tui.json` must list the **file path** to `rig-hud.tsx` (not an npm spec). Codex has no HUD panel — use `rig tui`.
 
 **OpenCode / OMP / Pi / agy not spawning**
 
