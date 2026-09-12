@@ -1,0 +1,20 @@
+{
+  "name": "rig",
+  "interface": {
+    "displayName": "Rig"
+  },
+  "plugins": [
+    {
+      "name": "rig-queue",
+      "source": {
+        "source": "local",
+        "path": "./plugin/rig-queue"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ${PLUGIN_ROOT}/hooks/forward.py",
+            "timeout": 10,
+            "statusMessage": "rig queue"
+          }
+        ]
+      }
+    ]
+  }
+}

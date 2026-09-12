@@ -6,4 +6,4 @@ if [[ ! -f "$JOBS" ]]; then
   HERE="$(cd "$(dirname "$0")" && pwd)"
   JOBS="$HERE/jobs.py"
 fi
-exec python3 "$JOBS" statusline
+exec python3 "$JOBS" hud

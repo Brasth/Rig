@@ -193,11 +193,16 @@ def install_codex_queue_hook(rig_home: Path) -> str:
     script = Path(rig_home) / "scripts" / "queue_submit_hook.py"
     if not script.is_file():
         return "skip Codex queue hook (script missing)"
-    py = shutil.which("python3") or sys.executable
-    command = f"{py} {script.resolve()}"
+    cfg = Path.home() / ".codex" / "config.toml"
     hook_path = Path.home() / ".codex" / "hooks.json"
-    lines = [merge_user_prompt_submit_hook(hook_path, command)]
-    lines.append(enable_codex_hooks_feature(Path.home() / ".codex" / "config.toml"))
+    lines = []
+    if codex_rig_plugin_enabled(cfg):
+        lines.append(remove_rig_user_prompt_submit(hook_path))
+    else:
+        py = shutil.which("python3") or sys.executable
+        command = f"{py} {script.resolve()}"
+        lines.append(merge_user_prompt_submit_hook(hook_path, command))
+    lines.append(enable_codex_hooks_feature(cfg))
     return "\n".join(lines)
 
 
@@ -311,6 +316,221 @@ def install_omp_pi_queue_extensions(rig_home: Path) -> str:
     else:
         lines.append("skip Pi queue extension (source missing)")
     return "\n".join(lines)
+
+
+def merge_agy_statusline(path: Path, command: str) -> str:
+    """Wire jobs.py hud as agy statusLine. Skip a foreign command."""
+    data, _existed = load_json_object(path)
+    sl = data.get("statusLine")
+    if isinstance(sl, dict):
+        cmd = str(sl.get("command") or "")
+        if cmd and "rig-statusline" not in cmd and "jobs.py" not in cmd:
+            return f"keep {path} statusLine (custom command)"
+    data["statusLine"] = {
+        "type": "command",
+        "command": command,
+        "enabled": True,
+        "stack_with_default": True,
+    }
+    write_json(path, data)
+    return f"set {path} statusLine (agy: /statusline if the row is hidden)"
+
+
+def install_agy_statusline(rig_home: Path) -> str:
+    script = Path(rig_home) / "scripts" / "rig-statusline.sh"
+    jobs_py = Path(rig_home) / "scripts" / "jobs.py"
+    if script.is_file():
+        command = str(script.resolve())
+    elif jobs_py.is_file():
+        py = shutil.which("python3") or sys.executable
+        command = f"{py} {jobs_py.resolve()} hud"
+    else:
+        return "skip agy statusline (script missing)"
+    dest = Path.home() / ".gemini" / "antigravity-cli" / "settings.json"
+    return merge_agy_statusline(dest, command)
+
+
+def copy_tree_files(src: Path, dest: Path) -> str:
+    """Copy a directory tree of files. Overwrites dest files."""
+    if not src.is_dir():
+        return f"skip {dest} (source missing)"
+    dest.mkdir(parents=True, exist_ok=True)
+    n = 0
+    for path in src.rglob("*"):
+        if not path.is_file():
+            continue
+        target = dest / path.relative_to(src)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(path, target)
+        n += 1
+    return f"wrote {dest} ({n} files)"
+
+
+def merge_tui_json_plugin(cfg: Path, spec: str) -> str:
+    """Append a TUI plugin spec to tui.json. Keep other plugins."""
+    data, existed = load_json_object(cfg)
+    plugins = data.get("plugin")
+    if not isinstance(plugins, list):
+        plugins = []
+        data["plugin"] = plugins
+    want = str(spec)
+    found = False
+    for item in plugins:
+        if item == want:
+            found = True
+            break
+        if isinstance(item, list) and item and str(item[0]) == want:
+            found = True
+            break
+        if isinstance(item, str) and "rig-hud" in item and "rig-hud" in want:
+            found = True
+            break
+    if not found:
+        plugins.append(want)
+    write_json(cfg, data)
+    if found:
+        return f"keep {cfg} plugin rig-hud"
+    extra = " (created tui.json)" if not existed else ""
+    return f"set {cfg} plugin rig-hud{extra}  (fully quit opencode once)"
+
+
+def install_opencode_tui_hud(rig_home: Path) -> str:
+    src = Path(rig_home) / "adapters" / "opencode" / "tui" / "rig-hud.tsx"
+    if not src.is_file():
+        src = Path(rig_home) / "adapters" / "opencode" / "tui" / "rig-hud.js"
+    if not src.is_file():
+        return "skip OpenCode TUI HUD (source missing)"
+    dest = Path.home() / ".config" / "opencode" / "tui-plugins" / src.name
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(src, dest)
+    cfg = Path.home() / ".config" / "opencode" / "tui.json"
+    copied = f"wrote {dest}"
+    merged = merge_tui_json_plugin(cfg, str(dest.resolve()))
+    return copied + "\n" + merged
+
+
+def codex_rig_plugin_enabled(cfg: Path) -> bool:
+    if not cfg.is_file():
+        return False
+    current = ""
+    in_ours = False
+    for line in cfg.read_text().splitlines():
+        s = line.strip()
+        if s.startswith("[") and s.endswith("]") and not s.startswith("[["):
+            current = s[1:-1]
+            in_ours = current.startswith("plugins.") and "rig-queue" in current
+            continue
+        if not in_ours:
+            continue
+        body = s.split("#", 1)[0].strip()
+        if body.startswith("enabled"):
+            val = body.split("=", 1)[-1].strip().strip('"').lower()
+            if val == "true":
+                return True
+    return False
+
+
+def remove_rig_user_prompt_submit(path: Path) -> str:
+    """Drop Rig UserPromptSubmit entries so the Codex plugin is the only park hook."""
+    if not path.is_file():
+        return f"skip {path} (missing)"
+    try:
+        obj = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return f"skip {path} (invalid JSON)"
+    if not isinstance(obj, dict):
+        return f"skip {path} (not a JSON object)"
+    hooks = obj.get("hooks")
+    if not isinstance(hooks, dict):
+        return f"keep {path} (no Rig UserPromptSubmit)"
+    groups = hooks.get("UserPromptSubmit")
+    if not isinstance(groups, list):
+        return f"keep {path} (no Rig UserPromptSubmit)"
+    kept: list = []
+    removed = 0
+    for group in groups:
+        if not isinstance(group, dict):
+            kept.append(group)
+            continue
+        inner = group.get("hooks")
+        if not isinstance(inner, list):
+            kept.append(group)
+            continue
+        stay = [
+            item
+            for item in inner
+            if not (isinstance(item, dict) and HOOK_MARKER in str(item.get("command") or ""))
+        ]
+        removed += len(inner) - len(stay)
+        if stay:
+            group = dict(group)
+            group["hooks"] = stay
+            kept.append(group)
+    if removed == 0:
+        return f"keep {path} (no Rig UserPromptSubmit)"
+    hooks["UserPromptSubmit"] = kept
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(obj, indent=2) + "\n")
+    tmp.replace(path)
+    return f"removed Rig UserPromptSubmit from {path} (Codex plugin owns park)"
+
+
+def merge_codex_marketplace(path: Path, plugin_rel: str) -> str:
+    data, existed = load_json_object(path)
+    if not data.get("name"):
+        data["name"] = "rig"
+    iface = data.get("interface")
+    if not isinstance(iface, dict):
+        iface = {}
+        data["interface"] = iface
+    iface.setdefault("displayName", "Rig")
+    plugins = data.get("plugins")
+    if not isinstance(plugins, list):
+        plugins = []
+        data["plugins"] = plugins
+    found = False
+    for item in plugins:
+        if isinstance(item, dict) and item.get("name") == "rig-queue":
+            item["source"] = {"source": "local", "path": plugin_rel}
+            item.setdefault(
+                "policy",
+                {"installation": "AVAILABLE", "authentication": "ON_INSTALL"},
+            )
+            found = True
+    if not found:
+        plugins.append(
+            {
+                "name": "rig-queue",
+                "source": {"source": "local", "path": plugin_rel},
+                "policy": {
+                    "installation": "AVAILABLE",
+                    "authentication": "ON_INSTALL",
+                },
+                "category": "Productivity",
+            }
+        )
+    write_json(path, data)
+    if found and existed:
+        return f"refreshed {path} rig-queue"
+    extra = " (created marketplace.json)" if not existed else ""
+    return f"set {path} rig-queue{extra}"
+
+
+def install_codex_marketplace(rig_home: Path) -> str:
+    src = Path(rig_home) / "adapters" / "codex" / "plugin" / "rig-queue"
+    if not src.is_dir():
+        return "skip Codex marketplace plugin (source missing)"
+    dest = Path.home() / ".agents" / "plugins" / "rig-queue"
+    copied = copy_tree_files(src, dest)
+    market = Path.home() / ".agents" / "plugins" / "marketplace.json"
+    merged = merge_codex_marketplace(market, "./rig-queue")
+    return (
+        copied
+        + "\n"
+        + merged
+        + "\nCodex: /plugins install Rig Queue, then /hooks trust "
+        "(do not auto-trust)"
+    )
 
 
 def strip_jsonc(text: str) -> str:
@@ -518,10 +738,13 @@ def main() -> int:
     print(install_statusline(rig_home, grok_home))
     print(install_mcp(grok_home / "config.toml", mcp, "grok"))
     print(install_mcp(Path.home() / ".codex" / "config.toml", mcp, "codex"))
+    print(install_codex_marketplace(rig_home))
     print(install_codex_queue_hook(rig_home))
     print(install_opencode_queue_plugin(rig_home))
+    print(install_opencode_tui_hud(rig_home))
     print(install_omp_pi_queue_extensions(rig_home))
     print(install_agy_queue_hook(rig_home))
+    print(install_agy_statusline(rig_home))
     print(refresh_codex_agents())
     oc = Path(
         os.environ.get("OPENCODE_CONFIG")

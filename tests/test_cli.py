@@ -679,6 +679,19 @@ class InitPresence(unittest.TestCase):
         pi_ext = home / ".pi" / "agent" / "extensions" / "rig-queue.js"
         self.assertTrue(pi_ext.is_file(), proc.stdout)
         self.assertIn("registerCommand", pi_ext.read_text())
+        self.assertIn("setWidget", omp_ext.read_text())
+        tui_hud = home / ".config" / "opencode" / "tui-plugins" / "rig-hud.tsx"
+        self.assertTrue(tui_hud.is_file(), proc.stdout)
+        self.assertIn("rig-hud", (home / ".config" / "opencode" / "tui.json").read_text())
+        self.assertTrue((home / ".agents" / "plugins" / "marketplace.json").is_file(), proc.stdout)
+        self.assertIn("rig-queue", (home / ".agents" / "plugins" / "marketplace.json").read_text())
+        self.assertTrue(
+            (home / ".agents" / "plugins" / "rig-queue" / ".codex-plugin" / "plugin.json").is_file(),
+            proc.stdout,
+        )
+        agy_settings = home / ".gemini" / "antigravity-cli" / "settings.json"
+        self.assertTrue(agy_settings.is_file(), proc.stdout)
+        self.assertIn("statusLine", agy_settings.read_text())
 
     def test_new_init_harness_has_no_parent_profile(self):
         proc = run_rig(self.repo, "init", env={"PATH": _stub_path()})

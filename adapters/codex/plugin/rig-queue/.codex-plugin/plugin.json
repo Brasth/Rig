@@ -1,0 +1,12 @@
+{
+  "name": "rig-queue",
+  "version": "0.1.0",
+  "description": "Park /queue and $queue into this repo's .rig/queue. Does not spawn a child.",
+  "license": "MIT",
+  "keywords": ["rig", "queue", "hooks"],
+  "hooks": "./hooks/hooks.json",
+  "interface": {
+    "displayName": "Rig Queue",
+    "shortDescription": "Park work for the Rig parent. No child spawn."
+  }
+}

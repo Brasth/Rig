@@ -282,6 +282,91 @@ class CodexQueueHook(unittest.TestCase):
         self.assertIn("skip agy queue hook", msg)
         self.assertIn("UserPromptSubmit", msg)
 
+    def test_agy_statusline_writes_and_skips_foreign(self):
+        path = self.home / ".gemini" / "antigravity-cli" / "settings.json"
+        path.parent.mkdir(parents=True)
+        msg = install_ui.merge_agy_statusline(path, "/tmp/rig-statusline.sh")
+        self.assertIn("set", msg)
+        data = json.loads(path.read_text())
+        self.assertEqual(data["statusLine"]["command"], "/tmp/rig-statusline.sh")
+        self.assertTrue(data["statusLine"]["stack_with_default"])
+        path.write_text(json.dumps({"statusLine": {"command": "custom-hud.sh"}}))
+        skip = install_ui.merge_agy_statusline(path, "/tmp/rig-statusline.sh")
+        self.assertIn("keep", skip)
+        self.assertIn("custom-hud.sh", path.read_text())
+
+    def test_tui_json_plugin_merge(self):
+        cfg = self.home / ".config" / "opencode" / "tui.json"
+        cfg.parent.mkdir(parents=True)
+        cfg.write_text(json.dumps({"theme": "dark", "plugin": ["other"]}) + "\n")
+        msg = install_ui.merge_tui_json_plugin(cfg, "/tmp/rig-hud.tsx")
+        self.assertIn("set", msg)
+        data = json.loads(cfg.read_text())
+        self.assertEqual(data["theme"], "dark")
+        self.assertEqual(data["plugin"][0], "other")
+        self.assertIn("/tmp/rig-hud.tsx", data["plugin"])
+        again = install_ui.merge_tui_json_plugin(cfg, "/tmp/rig-hud.tsx")
+        self.assertIn("keep", again)
+        self.assertEqual(json.loads(cfg.read_text())["plugin"].count("/tmp/rig-hud.tsx"), 1)
+
+    def test_codex_marketplace_merge_and_hook_dedupe(self):
+        market = self.home / ".agents" / "plugins" / "marketplace.json"
+        msg = install_ui.merge_codex_marketplace(market, "./rig-queue")
+        self.assertIn("set", msg)
+        data = json.loads(market.read_text())
+        self.assertEqual(data["name"], "rig")
+        self.assertEqual(data["plugins"][0]["source"]["path"], "./rig-queue")
+        market.write_text(
+            json.dumps(
+                {
+                    "name": "mine",
+                    "plugins": [{"name": "other", "source": {"source": "local", "path": "./x"}}],
+                }
+            )
+        )
+        install_ui.merge_codex_marketplace(market, "./rig-queue")
+        data = json.loads(market.read_text())
+        self.assertEqual(data["name"], "mine")
+        names = [p["name"] for p in data["plugins"]]
+        self.assertIn("other", names)
+        self.assertIn("rig-queue", names)
+        cfg = self.home / ".codex" / "config.toml"
+        cfg.parent.mkdir(parents=True)
+        cfg.write_text('[plugins."rig-queue@rig"]\nenabled = true\n')
+        self.assertTrue(install_ui.codex_rig_plugin_enabled(cfg))
+        hooks = self.home / ".codex" / "hooks.json"
+        hooks.write_text(
+            json.dumps(
+                {
+                    "hooks": {
+                        "UserPromptSubmit": [
+                            {
+                                "hooks": [
+                                    {
+                                        "type": "command",
+                                        "command": "python3 /tmp/other.py",
+                                    },
+                                    {
+                                        "type": "command",
+                                        "command": "python3 /tmp/queue_submit_hook.py",
+                                    },
+                                ]
+                            }
+                        ]
+                    }
+                }
+            )
+        )
+        gone = install_ui.remove_rig_user_prompt_submit(hooks)
+        self.assertIn("removed", gone)
+        cmds = [
+            item.get("command")
+            for g in json.loads(hooks.read_text())["hooks"]["UserPromptSubmit"]
+            for item in g.get("hooks") or []
+        ]
+        self.assertIn("python3 /tmp/other.py", cmds)
+        self.assertFalse(any("queue_submit_hook" in str(c) for c in cmds))
+
     def test_marked_file_skips_foreign(self):
         src = self.home / "src.js"
         src.write_text("// queue_submit_hook\nexport default function () {}\n")

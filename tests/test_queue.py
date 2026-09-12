@@ -319,7 +319,18 @@ class QueueFiles(unittest.TestCase):
         self.assertIn("chat.message", text)
         self.assertIn("command.execute.before", text)
         ext = ROOT / "adapters" / "omp" / "extensions" / "rig-queue.js"
-        self.assertIn("registerCommand", ext.read_text())
+        text_ext = ext.read_text()
+        self.assertIn("registerCommand", text_ext)
+        self.assertIn("setWidget", text_ext)
+        self.assertIn("hud", text_ext)
+        tui = ROOT / "adapters" / "opencode" / "tui" / "rig-hud.tsx"
+        self.assertTrue(tui.is_file())
+        tui_text = tui.read_text()
+        self.assertIn("slots.register", tui_text)
+        self.assertIn("hud", tui_text)
+        plugin = ROOT / "adapters" / "codex" / "plugin" / "rig-queue" / ".codex-plugin" / "plugin.json"
+        self.assertTrue(plugin.is_file())
+        self.assertIn("rig-queue", plugin.read_text())
 
     def test_per_worker_cap(self):
         _write_harness(

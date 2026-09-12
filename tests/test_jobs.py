@@ -490,6 +490,54 @@ class JobBoard(unittest.TestCase):
         self.assertIn("rig ·", text)
         self.assertIn("grok", text)
         self.assertIn("running", text)
+        self.assertIn("QUEUE", text)
+
+    def test_hud_idle_and_queue(self):
+        idle_repo = Path(self.td.name) / "idle"
+        idle_repo.mkdir()
+        (idle_repo / ".rig").mkdir()
+        snap = jobs.hud_snapshot(
+            {"cwd": str(idle_repo), "workspace": {"repo_root": str(idle_repo)}},
+            repo=idle_repo,
+        )
+        self.assertTrue(snap["idle"])
+        self.assertEqual(snap["queue_pending"], 0)
+        self.assertIn("QUEUE 0", snap["text"])
+        qdir = idle_repo / ".rig" / "queue"
+        qdir.mkdir()
+        (qdir / "item1.json").write_text(
+            json.dumps(
+                {
+                    "id": "item1",
+                    "status": "pending",
+                    "text": "fix pagination",
+                    "created_at": "2026-09-12T00:00:00Z",
+                    "priority": 0,
+                }
+            )
+            + "\n"
+        )
+        snap = jobs.hud_snapshot(
+            {"cwd": str(idle_repo), "workspace": {"repo_root": str(idle_repo)}},
+            repo=idle_repo,
+        )
+        self.assertEqual(snap["queue_pending"], 1)
+        self.assertIn("QUEUE 1", snap["text"])
+        self.assertIn("fix pagination", snap["text"])
+
+    def test_hud_ask_line(self):
+        job_dir = self.repo / ".rig" / "jobs" / "260908-opencode-session-fix"
+        (job_dir / "ask.json").write_text(
+            json.dumps({"tool_name": "Bash", "preview": "pytest"}) + "\n"
+        )
+        text = jobs.format_statusline(
+            {
+                "cwd": str(self.repo),
+                "workspace": {"repo_root": str(self.repo), "current_dir": str(self.repo)},
+            }
+        )
+        self.assertIn("ASK", text)
+        self.assertIn("QUEUE", text)
 
 
 class Elapsed(unittest.TestCase):

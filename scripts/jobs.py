@@ -1327,51 +1327,112 @@ def follow_log(job: dict) -> None:
         time.sleep(0.5)
 
 
-def format_statusline(payload: dict) -> str:
+def _hud_job(job: dict) -> dict:
+    return {
+        "id": job.get("job_id"),
+        "worker": job.get("worker"),
+        "role": job.get("role") or "",
+        "task": job.get("task") or "",
+        "doing": job.get("doing") or "",
+        "model": job.get("model") or "",
+        "effort": job.get("effort") or "",
+        "effective": job.get("effective"),
+    }
+
+
+def hud_snapshot(payload: dict | None = None, *, repo: Path | None = None) -> dict:
+    """Read-only jobs + queue snapshot for parent TUI HUDs. Does not spawn."""
+    payload = payload if isinstance(payload, dict) else {}
     ws = payload.get("workspace") if isinstance(payload.get("workspace"), dict) else {}
     model = payload.get("model") if isinstance(payload.get("model"), dict) else {}
     ctx = payload.get("context_window") if isinstance(payload.get("context_window"), dict) else {}
     cwd = ws.get("current_dir") or payload.get("cwd") or ""
-    repo = Path(ws.get("repo_root") or cwd or os.getcwd())
+    start = repo if repo is not None else Path(ws.get("repo_root") or cwd or os.getcwd())
+    root = repo_root(str(start))
     sid = str(payload.get("session_id") or "").strip()
     if sid:
         try:
-            remember_thread(repo_root(str(repo)), sid)
+            remember_thread(root, sid)
         except OSError:
             pass
-    name = Path(str(cwd)).name if cwd else repo.name
+    name = Path(str(cwd)).name if cwd else root.name
     model_name = str(model.get("display_name") or "")
     pct = ctx.get("used_percentage")
     bits = [x for x in [name, model_name, f"{pct}% ctx" if pct is not None else ""] if x]
     line1 = " · ".join(bits) or "rig"
     try:
-        jobs = list_jobs(repo_root(str(repo)))
+        listing = list_jobs(root)
     except OSError:
-        jobs = []
-    asking = [j for j in jobs if j["effective"] == "ask"]
-    running = [j for j in jobs if j["effective"] == "running"]
-    green, yellow, reset = "\033[32m", "\033[33m", "\033[0m"
+        listing = []
+    asking = [j for j in listing if j.get("effective") == "ask"]
+    running = [j for j in listing if j.get("effective") == "running"]
+    pending: list[dict] = []
+    cap = 3
+    n_live = len(asking) + len(running)
+    try:
+        import work_queue as rig_queue  # noqa: PLC0415 — avoid import cycle
+
+        pending = rig_queue.list_items(root, status="pending")
+        cap = rig_queue.max_running(root)
+        n_live = rig_queue.live_count(root)
+    except (OSError, ImportError, ValueError):
+        pass
+    first_pending = str(pending[0].get("text") or "")[:80] if pending else ""
+    queue_bit = f"QUEUE {len(pending)} · live {n_live}/{cap}"
+    status = "idle"
+    line2 = f"rig · idle · {queue_bit}"
+    line3 = first_pending
     if asking:
         job = asking[0]
         extra = f" +{len(asking) - 1}" if len(asking) > 1 else ""
-        line2 = f"{yellow}rig · {job['worker']} ASK{extra} · {job['task']}{reset}"
+        line2 = f"rig · {job['worker']} ASK{extra} · {job['task']}"
         line3 = job["doing"] if job.get("doing") else f"rig job allow {job['job_id']}"
-    elif not running:
-        return f"{line1}\nrig · idle"
-    else:
+        status = "ask"
+    elif running:
         job = running[0]
         extra = f" +{len(running) - 1}" if len(running) > 1 else ""
         spec = " ".join(x for x in [job.get("model"), job.get("effort")] if x)
         line2 = (
-            f"{green}rig · {job['worker']} {job['role'] or 'worker'} running{extra}"
+            f"rig · {job['worker']} {job['role'] or 'worker'} running{extra}"
             + (f" · {spec}" if spec else "")
-            + f" · {job['task']}{reset}"
+            + f" · {job['task']}"
         )
         line3 = job["doing"] if job.get("doing") else ""
-    out = [line1, line2]
+        status = "running"
+    lines = [line1, line2]
+    if status != "idle":
+        lines.append(queue_bit)
     if line3:
-        out.append(line3[:160])
-    return "\n".join(out)
+        lines.append(str(line3)[:160])
+    lines = lines[:5]
+    return {
+        "idle": status == "idle",
+        "status": status,
+        "cwd": str(cwd or root),
+        "repo": str(root),
+        "queue_pending": len(pending),
+        "live": n_live,
+        "cap": cap,
+        "asking": [_hud_job(j) for j in asking],
+        "running": [_hud_job(j) for j in running],
+        "pending_text": first_pending,
+        "lines": lines,
+        "text": "\n".join(lines),
+    }
+
+
+def format_statusline(payload: dict) -> str:
+    snap = hud_snapshot(payload)
+    lines = list(snap.get("lines") or [])
+    if not lines:
+        return "rig · idle · QUEUE 0"
+    status = snap.get("status")
+    green, yellow, reset = "\033[32m", "\033[33m", "\033[0m"
+    if status == "ask" and len(lines) > 1:
+        lines[1] = f"{yellow}{lines[1]}{reset}"
+    elif status == "running" and len(lines) > 1:
+        lines[1] = f"{green}{lines[1]}{reset}"
+    return "\n".join(lines)
 
 
 def main() -> int:
@@ -1387,6 +1448,7 @@ def main() -> int:
             "show",
             "log",
             "statusline",
+            "hud",
             "thread",
             "allow",
             "deny",
@@ -1469,7 +1531,18 @@ def main() -> int:
         payload = json.loads(raw or "{}")
     except json.JSONDecodeError:
         payload = {}
-    print(format_statusline(payload if isinstance(payload, dict) else {}))
+    if not isinstance(payload, dict):
+        payload = {}
+    if args.repo:
+        payload.setdefault("cwd", str(repo))
+        ws = payload.get("workspace")
+        if not isinstance(ws, dict):
+            payload["workspace"] = {"current_dir": str(repo), "repo_root": str(repo)}
+    snap = hud_snapshot(payload, repo=repo)
+    if args.json:
+        print(json.dumps(snap))
+    else:
+        print(format_statusline(payload))
     return 0
 
 

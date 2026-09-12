@@ -87,9 +87,25 @@ copy_dir_files() {
   done
 }
 
+copy_tree() {
+  local srcdir="$1" destdir="$2"
+  local f base
+  [[ -d "$srcdir" ]] || return 0
+  mkdir -p "$destdir"
+  for f in "$srcdir"/* "$srcdir"/.[!.]* "$srcdir"/..?*; do
+    [[ -e "$f" ]] || continue
+    base="$(basename "$f")"
+    if [[ -d "$f" ]]; then
+      copy_tree "$f" "$destdir/$base"
+    elif [[ -f "$f" ]]; then
+      install_file "$f" "$destdir/$base"
+    fi
+  done
+}
+
 copy_rig_tree() {
   local src="$1" dest="$2"
-  mkdir -p "$dest"/{bin,scripts,skills,adapters/codex/agents,adapters/codex/prompts,adapters/grok,adapters/claude,adapters/cursor,adapters/opencode/commands,adapters/opencode/plugin,adapters/omp/extensions,adapters/pi/extensions,adapters/agy,templates}
+  mkdir -p "$dest"/{bin,scripts,skills,adapters/codex/agents,adapters/codex/prompts,adapters/codex/plugin,adapters/grok,adapters/claude,adapters/cursor,adapters/opencode/commands,adapters/opencode/plugin,adapters/opencode/tui,adapters/omp/extensions,adapters/pi/extensions,adapters/agy,templates}
   if [[ "$(cd "$src" && pwd)" != "$(cd "$dest" && pwd)" ]]; then
     # mv onto dest so a running bin/rig keeps its old inode
     install_file "$src/bin/rig" "$dest/bin/rig"
@@ -124,8 +140,13 @@ copy_rig_tree() {
       done
     fi
     copy_dir_files "$src/adapters/opencode/plugin" "$dest/adapters/opencode/plugin"
+    copy_dir_files "$src/adapters/opencode/tui" "$dest/adapters/opencode/tui"
     copy_dir_files "$src/adapters/omp/extensions" "$dest/adapters/omp/extensions"
     copy_dir_files "$src/adapters/pi/extensions" "$dest/adapters/pi/extensions"
+    copy_tree "$src/adapters/codex/plugin" "$dest/adapters/codex/plugin"
+    if [[ -f "$src/adapters/codex/marketplace.json" ]]; then
+      install_file "$src/adapters/codex/marketplace.json" "$dest/adapters/codex/marketplace.json"
+    fi
     install_file "$src/adapters/grok/config.toml.snippet" "$dest/adapters/grok/config.toml.snippet"
     install_file "$src/adapters/claude/CLAUDE.worker.md" "$dest/adapters/claude/CLAUDE.worker.md"
     if [[ -f "$src/adapters/cursor/CURSOR.worker.md" ]]; then
@@ -800,7 +821,7 @@ cmd_doctor() {
   echo "  wait:   rig job wait [id ...]   (blocks until ASK or result; exit 2 = ASK — you allow/deny)"
   echo "  log:    rig job log [id] -f"
   echo "  memory: rig memory   |   rig memory add \"fact\""
-  echo "  slash:  /rig /queue in Grok, Codex, OpenCode, OMP, Pi, or agy (Codex: /hooks trust after setup; mid-wait: rig tui e)"
+  echo "  slash:  /rig /queue in Grok, Codex, OpenCode, OMP, Pi, or agy (Codex: /plugins Rig Queue + /hooks trust; mid-wait: rig tui e)"
   echo "  pick:   rig pick --case \"task\"   (agent chooses model; do not ask the user)"
 }
 

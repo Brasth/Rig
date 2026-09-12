@@ -30,8 +30,8 @@ Works in Grok, Codex, OpenCode, OMP, Pi, and agy. Same files for every parent.
 - Do not call `rig_job_wait`, allow, or deny.
 - Do not encode `/queue` into `rig pick --case`.
 - Do not spawn from `/queue` itself. Parking is this command. Drain is the parent on a **free** turn (claim → brief → spawn → wait all live ids).
-- On Grok and Codex, a UserPromptSubmit hook parks `/queue text` (Codex also `$queue park …`) and **blocks** the prompt. Codex: `rig setup`, then `/hooks` trust, fully quit once. Codex 0.154 has no `/prompts:queue` slash. Bare `/queue` still needs a free turn to list.
-- OpenCode plugin parks `/queue` / `$queue` (fully quit once after setup). `/queue` throws `__RIG_QUEUE_HANDLED__` after park so OpenCode 1.17 skips `prompt()` (TUI may show that error on 1.17.5+). OMP/Pi `/queue` is an extension command and runs even while streaming. agy: setup probes the binary for UserPromptSubmit; 1.2.0 does not have it — `rig tui` `e` or `rig queue add`.
+- On Grok and Codex, a UserPromptSubmit hook parks `/queue text` (Codex also `$queue park …`) and **blocks** the prompt. Codex: `rig setup`, then `/plugins` **Rig Queue** and `/hooks` trust, fully quit once. Codex 0.154 has no `/prompts:queue` slash. Bare `/queue` still needs a free turn to list.
+- OpenCode plugin parks `/queue` / `$queue` (fully quit once after setup). `/queue` throws `__RIG_QUEUE_HANDLED__` after park so OpenCode 1.17 skips `prompt()` (TUI may show that error on 1.17.5+). TUI HUD is `tui.json` → `rig-hud.tsx` (file path). OMP/Pi `/queue` is an extension command (HUD under the editor) and runs even while streaming. agy: setup probes the binary for UserPromptSubmit; 1.2.0 does not have it — `rig tui` `e` or `rig queue add`. agy/Grok statusline shows QUEUE. Codex: `/plugins` Rig Queue then `/hooks` (same hook; no custom panel).
 
 MCP drain (not this `/queue` command): `rig_queue_list` → `rig_queue_claim` with `id` + files → brief → `run-worker.sh` → `rig_queue_spawned` → MCP `rig_job_wait` on all live ids.
 

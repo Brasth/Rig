@@ -53,9 +53,9 @@ Update an existing machine: `rig update`. That fetches GitHub `main` through the
 
 - `~/.rig` (bin, scripts, skills, adapters, templates)
 - Skill links in `~/.agents/skills`, `~/.grok/skills`, `~/.codex/skills`, `~/.config/opencode/skill`, `~/.omp/agent/skills`, `~/.pi/agent/skills`, `~/.gemini/antigravity-cli/skills` (`delegate-harness`, `rig-jobs`, and `rig-queue`)
-- Codex `~/.codex/hooks.json` UserPromptSubmit (parks `/queue` / `$queue` and **blocks** the model; trust once with `/hooks`) plus leftover `~/.codex/prompts/queue.md` (not a 0.154 slash). OpenCode plugin `~/.config/opencode/plugins/rig-queue.js` and command `~/.config/opencode/commands/queue.md`. OMP/Pi extensions `~/.<omp|pi>/agent/extensions/rig-queue.js` (`/queue` even while streaming).
+- Codex `~/.codex/hooks.json` UserPromptSubmit (parks `/queue` / `$queue` and **blocks** the model; trust once with `/hooks`) plus leftover `~/.codex/prompts/queue.md` (not a 0.154 slash). After `/plugins` install **Rig Queue**, setup drops the duplicate hooks.json entry. OpenCode park plugin `~/.config/opencode/plugins/rig-queue.js` and TUI HUD `tui.json` → `tui-plugins/rig-hud.tsx` (file path, not npm). OMP/Pi extensions `~/.<omp|pi>/agent/extensions/rig-queue.js` (`/queue` even while streaming; HUD under the editor).
 - Codex agent files under `~/.codex/agents` when they are Rig agents
-- Grok bottom status line (`[ui.status_line]` → `rig-statusline`; restart Grok once)
+- Grok bottom status line (`[ui.status_line]` → `rig-statusline` with QUEUE; restart Grok once). agy `statusLine.command` in `~/.gemini/antigravity-cli/settings.json` (skip if you already have a custom line; `/statusline` if the row is hidden).
 - `[mcp_servers.rig]` in `~/.grok/config.toml` and `~/.codex/config.toml` **even if those files did not exist**
 - `mcp.rig` in `~/.config/opencode/opencode.json` (or `mcp.servers.rig` if that map already exists)
 - `mcpServers.rig` in `~/.omp/mcp.json`, `~/.pi/agent/mcp.json`, and `~/.gemini/config/mcp_config.json`
@@ -338,7 +338,7 @@ Numbered path for a human:
    - `SSH to the box and collect the app logs from the last deploy.`
 
 5. Ask / plan / advise stay with the parent. Docs/skills-only uses MCP `rig_pick` `role` mini. The parent checks first for implement: reads the code, names the files and the update, writes that in the brief, then MCP `rig_pick` `role` implement and spawns if needed. Spawn explore/mini for codebase gather only if the parent cannot name the files after a short check. If the implement brief already lists files, do not also spawn explore. It does **not** ask you which model. Child does not assume scope and does not hunt extra updates. `--case` is the task text (fallback English if the parent omitted kind). Pick does not ship device skill names.
-6. Watch the child: another terminal `rig tui` or `rig jobs`, or type `/rig` in Grok, Codex, OpenCode, OMP, Pi, or agy. Grok also gets a bottom status line after setup (restart Grok once).
+6. Watch the child: another terminal `rig tui` or `rig jobs`, or type `/rig` in Grok, Codex, OpenCode, OMP, Pi, or agy. Grok/agy statusline and OMP/Pi/OpenCode HUDs show QUEUE + live jobs after setup (restart / fully quit once). Codex has no custom panel — `/plugins` Rig Queue + hook toast, or companion `rig tui`.
 7. `rig jobs` is a table. Columns: **STATUS AGENT ROLE JOB TASK**. Example:
 
    ```text
@@ -414,15 +414,15 @@ rig queue cancel <id>
 
 In Grok, Codex, OpenCode, OMP, Pi, or agy type `/rig` or `/queue`. `/queue` parks a line in `.rig/queue/` and does **not** spawn.
 
-| Parent | In-composer park | Mid-wait |
-| --- | --- | --- |
-| Grok | `/queue fix pagination` (submit hook blocks the model) | same hook |
-| Codex | `/queue …` or `$queue park …` after `rig setup` + **`/hooks` trust** + fully quit once. No `/prompts:queue` slash in 0.154. | same hook, or `!rig queue add "…"` |
-| OpenCode | `/queue …` via plugin. On 1.17 the plugin **throws** after park so `prompt()` does not run (the only skip). 1.17.5+ may flash a TUI error `__RIG_QUEUE_HANDLED__`; that is the skip, not a failed park. `$queue park …` rewrites the user text (model may still answer). Fully quit once after setup. | same plugin if composer still accepts input; else `rig tui` `e` |
-| OMP / Pi | `/queue …` extension command (`~/.omp/agent/extensions/rig-queue.js`, `~/.pi/agent/extensions/rig-queue.js`). Runs even while streaming. Fully quit once. | same `/queue` |
-| agy | skill / `/queue` on a free turn (no UserPromptSubmit) | `rig tui` `e` or `rig queue add` |
+| Parent | In-composer park | HUD | Mid-wait |
+| --- | --- | --- | --- |
+| Grok | `/queue fix pagination` (submit hook blocks the model) | bottom status line includes QUEUE + live/ASK (restart Grok once) | same hook |
+| Codex | `/queue …` or `$queue park …` after `rig setup` + **`/hooks` trust** + fully quit once. Prefer `/plugins` **Rig Queue** (same hook). No `/prompts:queue` slash in 0.154. No custom TUI panel. | hook `systemMessage` on park; companion `rig tui` | same hook, or `!rig queue add "…"` |
+| OpenCode | `/queue …` via plugin. On 1.17 the plugin **throws** after park so `prompt()` does not run (the only skip). 1.17.5+ may flash a TUI error `__RIG_QUEUE_HANDLED__`; that is the skip, not a failed park. `$queue park …` rewrites the user text (model may still answer). Fully quit once after setup. | `tui.json` file-path plugin `rig-hud.tsx` (sidebar/footer). If the slot does not paint, use `rig tui`. | same park plugin if composer still accepts input; else `rig tui` `e` |
+| OMP / Pi | `/queue …` extension command (`~/.omp/agent/extensions/rig-queue.js`, `~/.pi/agent/extensions/rig-queue.js`). Runs even while streaming. Fully quit once. | widget under the editor + footer status | same `/queue` |
+| agy | skill / `/queue` on a free turn (no UserPromptSubmit) | `statusLine.command` → same `jobs.py hud` (`/statusline` if hidden) | `rig tui` `e` or `rig queue add` |
 
-Grok hook: `~/.grok/hooks/rig-queue-submit.json`. Codex hook: `~/.codex/hooks.json` + `[features] codex_hooks = true`. Bare `/queue` (list) is not blocked. `rig tui` key `e` always parks. Grok also gets a bottom status line after `rig setup` (restart Grok once). `rig setup` probes the `agy` binary for `UserPromptSubmit` and only then writes `~/.gemini/config/hooks.json`. agy 1.2.0 has PreInvocation, not UserPromptSubmit — skip (use `rig tui` `e`).
+Grok hook: `~/.grok/hooks/rig-queue-submit.json`. Codex: `/plugins` Rig Queue **or** `~/.codex/hooks.json` (not both) + `[features] codex_hooks = true`. Bare `/queue` (list) is not blocked. `rig tui` key `e` always parks. HUD refresh is read-only and never spawns. `rig setup` probes the `agy` binary for `UserPromptSubmit` and only then writes `~/.gemini/config/hooks.json`. agy 1.2.0 has PreInvocation, not UserPromptSubmit — skip (use `rig tui` `e`).
 
 MCP tools load after `rig setup` + fully quit the parent CLI once. Parent agents use MCP. Launch is still bash `run-worker.sh`. Wait is MCP `rig_job_wait` with no timeout (`ids` for a review+seed panel); one bash `rig job wait` only if the host drops the tool.
 
