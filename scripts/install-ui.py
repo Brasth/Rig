@@ -24,6 +24,36 @@ def section_value(text: str, section: str, key: str) -> str | None:
     return None
 
 
+def unset_key(path: Path, section: str, key: str) -> bool:
+    if not path.exists():
+        return False
+    lines = path.read_text().splitlines()
+    current = None
+    out = []
+    removed = False
+    for line in lines:
+        s = line.strip()
+        if s.startswith("[") and s.endswith("]") and not s.startswith("[["):
+            current = s[1:-1]
+            out.append(line)
+            continue
+        if current == section:
+            body = s.split("#", 1)[0].strip()
+            if body.startswith(key + "=") or body.startswith(key + " ="):
+                removed = True
+                continue
+        out.append(line)
+    if not removed:
+        return False
+    text = "\n".join(out)
+    if text and not text.endswith("\n"):
+        text += "\n"
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(text)
+    tmp.replace(path)
+    return True
+
+
 def set_key(path: Path, section: str, key: str, value: str) -> None:
     lines = path.read_text().splitlines() if path.exists() else []
     current = None
@@ -182,11 +212,24 @@ def merge_user_prompt_submit_hook(path: Path, command: str) -> str:
 
 
 def enable_codex_hooks_feature(cfg: Path) -> str:
+    """Enable Codex [features].hooks. Drop deprecated [features].codex_hooks."""
     ensure_cfg(cfg)
-    if section_value(cfg.read_text(), "features", "codex_hooks") is not None:
-        return f"keep {cfg} [features] codex_hooks"
-    set_key(cfg, "features", "codex_hooks", "true")
-    return f"set {cfg} [features] codex_hooks = true  (Codex: /hooks trust, fully quit once)"
+    text = cfg.read_text()
+    legacy = section_value(text, "features", "codex_hooks")
+    current = section_value(text, "features", "hooks")
+    if legacy is not None:
+        unset_key(cfg, "features", "codex_hooks")
+        if current is None:
+            set_key(cfg, "features", "hooks", legacy)
+            return (
+                f"migrated {cfg} [features] codex_hooks -> hooks = {legacy}  "
+                "(Codex: /hooks trust, fully quit once)"
+            )
+        return f"dropped {cfg} [features] codex_hooks (hooks already {current})"
+    if current is not None:
+        return f"keep {cfg} [features] hooks"
+    set_key(cfg, "features", "hooks", "true")
+    return f"set {cfg} [features] hooks = true  (Codex: /hooks trust, fully quit once)"
 
 
 def install_codex_queue_hook(rig_home: Path) -> str:

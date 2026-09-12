@@ -669,7 +669,9 @@ class InitPresence(unittest.TestCase):
         self.assertTrue(codex_hook.is_file(), proc.stdout)
         self.assertIn("queue_submit_hook", codex_hook.read_text())
         self.assertIn("UserPromptSubmit", codex_hook.read_text())
-        self.assertIn("codex_hooks = true", (home / ".codex" / "config.toml").read_text())
+        codex_cfg = (home / ".codex" / "config.toml").read_text()
+        self.assertIn("hooks = true", codex_cfg)
+        self.assertNotIn("codex_hooks", codex_cfg)
         oc_plugin = home / ".config" / "opencode" / "plugins" / "rig-queue.js"
         self.assertTrue(oc_plugin.is_file(), proc.stdout)
         self.assertIn("queue_submit_hook", oc_plugin.read_text())

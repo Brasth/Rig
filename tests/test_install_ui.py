@@ -220,17 +220,34 @@ class CodexQueueHook(unittest.TestCase):
         self.assertEqual(sum(1 for c in cmds if "queue_submit_hook" in str(c)), 1)
         self.assertIn("python3 /tmp/queue_submit_hook.py --refresh", cmds)
 
-    def test_enable_codex_hooks_keeps_existing(self):
+    def test_enable_codex_hooks_uses_hooks_not_codex_hooks(self):
         cfg = self.home / ".codex" / "config.toml"
         cfg.parent.mkdir(parents=True)
         cfg.write_text("[features]\ncodex_hooks = false\n")
         msg = install_ui.enable_codex_hooks_feature(cfg)
-        self.assertIn("keep", msg)
-        self.assertIn("codex_hooks = false", cfg.read_text())
+        self.assertIn("migrated", msg)
+        text = cfg.read_text()
+        self.assertIn("hooks = false", text)
+        self.assertNotIn("codex_hooks", text)
         missing = self.home / ".codex" / "fresh.toml"
         msg = install_ui.enable_codex_hooks_feature(missing)
         self.assertIn("set", msg)
-        self.assertIn("codex_hooks = true", missing.read_text())
+        fresh = missing.read_text()
+        self.assertIn("hooks = true", fresh)
+        self.assertNotIn("codex_hooks", fresh)
+        keep = self.home / ".codex" / "keep.toml"
+        keep.write_text("[features]\nhooks = false\n")
+        msg = install_ui.enable_codex_hooks_feature(keep)
+        self.assertIn("keep", msg)
+        self.assertIn("hooks = false", keep.read_text())
+        both = self.home / ".codex" / "both.toml"
+        both.write_text("[features]\ncodex_hooks = true\nhooks = true\nother = true\n")
+        msg = install_ui.enable_codex_hooks_feature(both)
+        self.assertIn("dropped", msg)
+        both_text = both.read_text()
+        self.assertIn("hooks = true", both_text)
+        self.assertIn("other = true", both_text)
+        self.assertNotIn("codex_hooks", both_text)
 
     def test_skip_invalid_hooks_json(self):
         path = self.home / "hooks.json"
