@@ -127,18 +127,31 @@ def clip_priority(raw) -> int:
 
 
 def parse_slash(text: str) -> dict | None:
-    """Parse /queue or /prompts:queue. None if this is a normal prompt."""
-    line = str(text or "").strip()
-    if line.startswith("/"):
-        line = line[1:]
+    """Parse /queue, /prompts:queue, $queue, $rig-queue. None if a normal prompt."""
+    raw = str(text or "").strip()
+    if not raw:
+        return None
+    sigil = raw[0]
+    if sigil not in {"/", "$"}:
+        return None
+    line = raw[1:]
     low = line.lower()
     rest = ""
-    if low.startswith("prompts:queue"):
+    dollar = sigil == "$"
+    if low.startswith("rig-queue"):
+        rest = line[len("rig-queue") :].strip()
+    elif low.startswith("prompts:queue"):
         rest = line[len("prompts:queue") :].strip()
     elif low.startswith("queue"):
         rest = line[len("queue") :].strip()
     else:
         return None
+    if dollar:
+        low_rest = rest.lower()
+        if low_rest == "park":
+            rest = ""
+        elif low_rest.startswith("park ") or low_rest.startswith("park\t"):
+            rest = rest[4:].strip()
     if not rest:
         return {"action": "list"}
     priority = 0

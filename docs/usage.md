@@ -53,7 +53,7 @@ Update an existing machine: `rig update`. That fetches GitHub `main` through the
 
 - `~/.rig` (bin, scripts, skills, adapters, templates)
 - Skill links in `~/.agents/skills`, `~/.grok/skills`, `~/.codex/skills`, `~/.config/opencode/skill`, `~/.omp/agent/skills`, `~/.pi/agent/skills`, `~/.gemini/antigravity-cli/skills` (`delegate-harness`, `rig-jobs`, and `rig-queue`)
-- Codex slash adapter `~/.codex/prompts/queue.md` (`/prompts:queue`) and OpenCode slash adapter `~/.config/opencode/commands/queue.md` (`/queue`)
+- Codex `~/.codex/hooks.json` UserPromptSubmit (parks `/queue` / `$queue` and **blocks** the model; trust once with `/hooks`) plus leftover `~/.codex/prompts/queue.md` (not a 0.154 slash). OpenCode plugin `~/.config/opencode/plugins/rig-queue.js` and command `~/.config/opencode/commands/queue.md`. OMP/Pi extensions `~/.<omp|pi>/agent/extensions/rig-queue.js` (`/queue` even while streaming).
 - Codex agent files under `~/.codex/agents` when they are Rig agents
 - Grok bottom status line (`[ui.status_line]` → `rig-statusline`; restart Grok once)
 - `[mcp_servers.rig]` in `~/.grok/config.toml` and `~/.codex/config.toml` **even if those files did not exist**
@@ -412,7 +412,17 @@ rig queue cancel <id>
 
 `--timeout SECS` is an optional cap, not the default. Omit timeout to block. `0` snapshots once. Exit 124 only if still running when a cap hits.
 
-In Grok, Codex, OpenCode, OMP, Pi, or agy type `/rig` or `/queue`. Codex slash menu also has `/prompts:queue`. `/queue` parks a line in `.rig/queue/` and does **not** spawn. Grok `UserPromptSubmit` hook (installed by `rig setup` into `~/.grok/hooks/rig-queue-submit.json`) parks `/queue …` and **blocks** that prompt from the model, so it can hit disk even while a wait is in flight. Bare `/queue` (list) is not blocked. Codex/OpenCode/OMP/Pi/agy still use `rig queue add` in another pane during wait. `rig tui` key `e` enqueues a line. Grok also gets a bottom status line after `rig setup` (restart Grok once).
+In Grok, Codex, OpenCode, OMP, Pi, or agy type `/rig` or `/queue`. `/queue` parks a line in `.rig/queue/` and does **not** spawn.
+
+| Parent | In-composer park | Mid-wait |
+| --- | --- | --- |
+| Grok | `/queue fix pagination` (submit hook blocks the model) | same hook |
+| Codex | `/queue …` or `$queue park …` after `rig setup` + **`/hooks` trust** + fully quit once. No `/prompts:queue` slash in 0.154. | same hook, or `!rig queue add "…"` |
+| OpenCode | `/queue …` via plugin. On 1.17 the plugin **throws** after park so `prompt()` does not run (the only skip). 1.17.5+ may flash a TUI error `__RIG_QUEUE_HANDLED__`; that is the skip, not a failed park. `$queue park …` rewrites the user text (model may still answer). Fully quit once after setup. | same plugin if composer still accepts input; else `rig tui` `e` |
+| OMP / Pi | `/queue …` extension command (`~/.omp/agent/extensions/rig-queue.js`, `~/.pi/agent/extensions/rig-queue.js`). Runs even while streaming. Fully quit once. | same `/queue` |
+| agy | skill / `/queue` on a free turn (no UserPromptSubmit) | `rig tui` `e` or `rig queue add` |
+
+Grok hook: `~/.grok/hooks/rig-queue-submit.json`. Codex hook: `~/.codex/hooks.json` + `[features] codex_hooks = true`. Bare `/queue` (list) is not blocked. `rig tui` key `e` always parks. Grok also gets a bottom status line after `rig setup` (restart Grok once). `rig setup` probes the `agy` binary for `UserPromptSubmit` and only then writes `~/.gemini/config/hooks.json`. agy 1.2.0 has PreInvocation, not UserPromptSubmit — skip (use `rig tui` `e`).
 
 MCP tools load after `rig setup` + fully quit the parent CLI once. Parent agents use MCP. Launch is still bash `run-worker.sh`. Wait is MCP `rig_job_wait` with no timeout (`ids` for a review+seed panel); one bash `rig job wait` only if the host drops the tool.
 
@@ -427,7 +437,7 @@ Memory is local only. Parent: MCP `rig_memory_add`. Do not edit the file. Human 
 - `.rig/MEMORY.md` — durable bullets, about 120 lines. No transcripts. `add` drops duplicates and caps the file.
 - `.rig/STATE.md` — overwritten each run (last job / worker / status / summary).
 - `.rig/jobs/` — gitignored. Each job records the parent `thread` when known. `rig prune` drops jobs older than 7 days and keeps the last 20. Successful jobs delete `stdout.log` after decoded activity is saved in `activity.json` (`rig job log` still works). If the log cannot be decoded, the raw log is kept. Fail/timeout logs stay for debug. Never read Cursor `state.vscdb` or other vendor sqlite to learn a Rig job — use `rig job log` / MCP.
-- Child MCP: when `RIG_JOB_ID` is set, Rig MCP is job-scoped (`rig_job_doing`, `rig_job_note`, `rig_job_ask`, `rig_job_inbox`). It cannot pick, wait, spawn, queue, or allow. Do not run the `rig` CLI as a child. Parent MCP stays the orchestrator. MCP `rig_job_message` leaves one inbox note; the child pulls `rig_job_inbox`. Inbox is not ASK. Cursor print-mode has no isolated `--mcp-config`; do not install Rig into `~/.cursor/mcp.json`.
+- Child MCP: when `RIG_JOB_ID` is set, Rig MCP is job-scoped (`rig_job_doing`, `rig_job_note`, `rig_job_ask`, `rig_job_inbox`). It cannot pick, wait, spawn, queue, or allow. Do not run the `rig` CLI as a child. Parent MCP stays the orchestrator. MCP `rig_job_message` leaves one inbox note; the child pulls `rig_job_inbox` **once per turn** (empty is fine). Inbox is not ASK and does not wake wait. Cursor print-mode has no isolated `--mcp-config`; do not install Rig into `~/.cursor/mcp.json`.
 - `.rig/queue/` — gitignored user work queue. MCP `rig_queue_add` / `/queue` parks text and does not spawn. On a free turn the parent claims a **disjoint subset by id** via `rig_queue_claim` (list shows occupied files; skip overlap and try the next id; omit id only if one pending), briefs, spawns, then MCP `rig_job_wait` on all live ids. Cap `[queue].max_running` (default 3). Mid-wait enqueue: MCP `rig_queue_add`.
 - `.rig/thread` — gitignored (parent thread id).
 

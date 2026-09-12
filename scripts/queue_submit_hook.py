@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Grok UserPromptSubmit: park /queue text and block it from the model turn."""
+"""UserPromptSubmit: park /queue or $queue text and block it from the model turn.
+
+Used by Grok and Codex. Same JSON: decision=block plus reason/systemMessage.
+"""
 from __future__ import annotations
 
 import json
@@ -37,10 +40,20 @@ def handle(payload: dict) -> dict | None:
         f"rig {label} {item.get('id') or ''} — {item.get('text') or ''}\n"
         f"{rig_queue.format_block(repo)}"
     )
-    return {"decision": "block", "reason": reason[:2000]}
+    shown = reason[:2000]
+    return {
+        "decision": "block",
+        "reason": shown,
+        "systemMessage": shown,
+    }
 
 
 def main() -> int:
+    if "--print-list" in sys.argv:
+        repo = rig_jobs.repo_root(os.getcwd())
+        text = rig_queue.format_block(repo)
+        print(text if text.endswith("\n") else text + "\n", end="")
+        return 0
     raw = sys.stdin.read()
     try:
         payload = json.loads(raw or "{}")

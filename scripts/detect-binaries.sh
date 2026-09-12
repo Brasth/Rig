@@ -574,4 +574,4 @@ rig_upsert_marked_block() {
   echo "$action"
 }
 
-WORKER_PREAMBLE='You are a worker, not the orchestrator. Do not spawn codex, grok, claude, cursor, opencode, omp, pi, or agy. Do not use computer-use, chrome-profile, or Figma MCP. Follow skill file paths listed in the brief. Write code, fix, review, SSH/debug, or gather facts. Do only the files and changes in the brief. Do not hunt extra updates. Print a short summary. Stop.'
+WORKER_PREAMBLE='You are a worker, not the orchestrator. Do not spawn codex, grok, claude, cursor, opencode, omp, pi, or agy. Do not use computer-use, chrome-profile, or Figma MCP. Follow skill file paths listed in the brief. Write code, fix, review, SSH/debug, or gather facts. Do only the files and changes in the brief. Do not hunt extra updates. Each turn, call rig_job_inbox once if listed (empty is fine). Inbox is not ASK. Print a short summary. Stop.'

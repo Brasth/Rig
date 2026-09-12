@@ -76,9 +76,20 @@ install_file() {
   mv "$tmp" "$destf"
 }
 
+copy_dir_files() {
+  local srcdir="$1" destdir="$2"
+  local f
+  [[ -d "$srcdir" ]] || return 0
+  mkdir -p "$destdir"
+  for f in "$srcdir/"*; do
+    [[ -f "$f" ]] || continue
+    install_file "$f" "$destdir/$(basename "$f")"
+  done
+}
+
 copy_rig_tree() {
   local src="$1" dest="$2"
-  mkdir -p "$dest"/{bin,scripts,skills,adapters/codex/agents,adapters/codex/prompts,adapters/grok,adapters/claude,adapters/cursor,adapters/opencode/commands,adapters/omp,adapters/pi,adapters/agy,templates}
+  mkdir -p "$dest"/{bin,scripts,skills,adapters/codex/agents,adapters/codex/prompts,adapters/grok,adapters/claude,adapters/cursor,adapters/opencode/commands,adapters/opencode/plugin,adapters/omp/extensions,adapters/pi/extensions,adapters/agy,templates}
   if [[ "$(cd "$src" && pwd)" != "$(cd "$dest" && pwd)" ]]; then
     # mv onto dest so a running bin/rig keeps its old inode
     install_file "$src/bin/rig" "$dest/bin/rig"
@@ -112,6 +123,9 @@ copy_rig_tree() {
         install_file "$f" "$dest/adapters/opencode/commands/$(basename "$f")"
       done
     fi
+    copy_dir_files "$src/adapters/opencode/plugin" "$dest/adapters/opencode/plugin"
+    copy_dir_files "$src/adapters/omp/extensions" "$dest/adapters/omp/extensions"
+    copy_dir_files "$src/adapters/pi/extensions" "$dest/adapters/pi/extensions"
     install_file "$src/adapters/grok/config.toml.snippet" "$dest/adapters/grok/config.toml.snippet"
     install_file "$src/adapters/claude/CLAUDE.worker.md" "$dest/adapters/claude/CLAUDE.worker.md"
     if [[ -f "$src/adapters/cursor/CURSOR.worker.md" ]]; then
@@ -786,7 +800,7 @@ cmd_doctor() {
   echo "  wait:   rig job wait [id ...]   (blocks until ASK or result; exit 2 = ASK — you allow/deny)"
   echo "  log:    rig job log [id] -f"
   echo "  memory: rig memory   |   rig memory add \"fact\""
-  echo "  slash:  /rig /queue in Grok, Codex, OpenCode, OMP, Pi, or agy (Codex also /prompts:queue)"
+  echo "  slash:  /rig /queue in Grok, Codex, OpenCode, OMP, Pi, or agy (Codex: /hooks trust after setup; mid-wait: rig tui e)"
   echo "  pick:   rig pick --case \"task\"   (agent chooses model; do not ask the user)"
 }
 

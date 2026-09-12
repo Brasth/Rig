@@ -120,6 +120,199 @@ def mcp_launcher(script: Path) -> Path:
     return launcher.resolve()
 
 
+HOOK_MARKER = "queue_submit_hook"
+QUEUE_ADAPTER_MARKERS = ("queue_submit_hook", "Park a Rig")
+
+
+def _submit_hook_entry(command: str) -> dict:
+    return {
+        "hooks": [
+            {
+                "type": "command",
+                "command": command,
+                "timeout": 10,
+                "statusMessage": "rig queue",
+            }
+        ]
+    }
+
+
+def merge_user_prompt_submit_hook(path: Path, command: str) -> str:
+    """Merge a Rig UserPromptSubmit command into hooks.json. Does not clobber others."""
+    obj: dict = {"hooks": {}}
+    existed = path.is_file()
+    if existed:
+        try:
+            loaded = json.loads(path.read_text())
+        except (OSError, json.JSONDecodeError):
+            return f"skip {path} (invalid JSON)"
+        if not isinstance(loaded, dict):
+            return f"skip {path} (not a JSON object)"
+        obj = loaded
+    hooks = obj.setdefault("hooks", {})
+    if not isinstance(hooks, dict):
+        return f"skip {path} (hooks is not a map)"
+    groups = hooks.get("UserPromptSubmit")
+    if not isinstance(groups, list):
+        groups = []
+        hooks["UserPromptSubmit"] = groups
+    found = False
+    for group in groups:
+        if not isinstance(group, dict):
+            continue
+        inner = group.get("hooks")
+        if not isinstance(inner, list):
+            continue
+        for item in inner:
+            if isinstance(item, dict) and HOOK_MARKER in str(item.get("command") or ""):
+                item["command"] = command
+                item["type"] = "command"
+                item["timeout"] = 10
+                item["statusMessage"] = "rig queue"
+                found = True
+    if not found:
+        groups.append(_submit_hook_entry(command))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(obj, indent=2) + "\n")
+    tmp.replace(path)
+    if found:
+        return f"refreshed {path} UserPromptSubmit rig queue"
+    return f"set {path} UserPromptSubmit rig queue"
+
+
+def enable_codex_hooks_feature(cfg: Path) -> str:
+    ensure_cfg(cfg)
+    if section_value(cfg.read_text(), "features", "codex_hooks") is not None:
+        return f"keep {cfg} [features] codex_hooks"
+    set_key(cfg, "features", "codex_hooks", "true")
+    return f"set {cfg} [features] codex_hooks = true  (Codex: /hooks trust, fully quit once)"
+
+
+def install_codex_queue_hook(rig_home: Path) -> str:
+    script = Path(rig_home) / "scripts" / "queue_submit_hook.py"
+    if not script.is_file():
+        return "skip Codex queue hook (script missing)"
+    py = shutil.which("python3") or sys.executable
+    command = f"{py} {script.resolve()}"
+    hook_path = Path.home() / ".codex" / "hooks.json"
+    lines = [merge_user_prompt_submit_hook(hook_path, command)]
+    lines.append(enable_codex_hooks_feature(Path.home() / ".codex" / "config.toml"))
+    return "\n".join(lines)
+
+
+def install_marked_file(src: Path, dest: Path) -> str:
+    """Copy a Rig adapter file. Skip dest that exists and is not ours."""
+    if not src.is_file():
+        return f"skip {dest} (source missing)"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    if dest.is_file():
+        old = dest.read_text(errors="replace")
+        if not any(m in old for m in QUEUE_ADAPTER_MARKERS):
+            return f"skip {dest} (exists, not a Rig queue adapter)"
+        shutil.copyfile(src, dest)
+        return f"refreshed {dest}"
+    shutil.copyfile(src, dest)
+    return f"wrote {dest}"
+
+
+def install_opencode_queue_plugin(rig_home: Path) -> str:
+    src = Path(rig_home) / "adapters" / "opencode" / "plugin" / "rig-queue.js"
+    if not src.is_file():
+        return "skip OpenCode queue plugin (source missing)"
+    lines = [
+        install_marked_file(src, Path.home() / ".config" / "opencode" / "plugins" / "rig-queue.js"),
+        install_marked_file(src, Path.home() / ".config" / "opencode" / "plugin" / "rig-queue.js"),
+    ]
+    return "\n".join(lines)
+
+
+def agy_binary_has_user_prompt_submit(binary: Path | None = None) -> bool:
+    """True when the agy binary advertises UserPromptSubmit (not PreInvocation)."""
+    path = binary
+    if path is None:
+        found = shutil.which("agy")
+        if not found:
+            return False
+        path = Path(found)
+    try:
+        data = Path(path).read_bytes()
+    except OSError:
+        return False
+    return b"UserPromptSubmit" in data
+
+
+def merge_agy_user_prompt_submit_hook(path: Path, command: str) -> str:
+    """Merge a named Rig hook into agy's hooks.json (not Codex shape)."""
+    obj: dict = {}
+    if path.is_file():
+        try:
+            loaded = json.loads(path.read_text())
+        except (OSError, json.JSONDecodeError):
+            return f"skip {path} (invalid JSON)"
+        if not isinstance(loaded, dict):
+            return f"skip {path} (not a JSON object)"
+        obj = loaded
+    name = "rig-queue"
+    existing = obj.get(name)
+    if isinstance(existing, dict) and existing.get("enabled") is False:
+        return f"keep {path} {name} disabled"
+    obj[name] = {
+        "enabled": True,
+        "UserPromptSubmit": [
+            {
+                "type": "command",
+                "command": command,
+                "timeout": 10,
+            }
+        ],
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(obj, indent=2) + "\n")
+    tmp.replace(path)
+    if existing:
+        return f"refreshed {path} {name} UserPromptSubmit"
+    return f"set {path} {name} UserPromptSubmit"
+
+
+def install_agy_queue_hook(rig_home: Path) -> str:
+    if not agy_binary_has_user_prompt_submit():
+        return (
+            "skip agy queue hook (agy has no UserPromptSubmit; "
+            "use rig tui e / rig queue add)"
+        )
+    script = Path(rig_home) / "scripts" / "queue_submit_hook.py"
+    if not script.is_file():
+        return "skip agy queue hook (script missing)"
+    py = shutil.which("python3") or sys.executable
+    command = f"{py} {script.resolve()}"
+    dest = Path.home() / ".gemini" / "config" / "hooks.json"
+    return merge_agy_user_prompt_submit_hook(dest, command)
+
+
+def install_omp_pi_queue_extensions(rig_home: Path) -> str:
+    root = Path(rig_home)
+    omp_src = root / "adapters" / "omp" / "extensions" / "rig-queue.js"
+    pi_src = root / "adapters" / "pi" / "extensions" / "rig-queue.js"
+    if not pi_src.is_file():
+        pi_src = omp_src
+    lines = []
+    if omp_src.is_file():
+        lines.append(
+            install_marked_file(omp_src, Path.home() / ".omp" / "agent" / "extensions" / "rig-queue.js")
+        )
+    else:
+        lines.append("skip OMP queue extension (source missing)")
+    if pi_src.is_file():
+        lines.append(
+            install_marked_file(pi_src, Path.home() / ".pi" / "agent" / "extensions" / "rig-queue.js")
+        )
+    else:
+        lines.append("skip Pi queue extension (source missing)")
+    return "\n".join(lines)
+
+
 def strip_jsonc(text: str) -> str:
     """Strip // and /* */ comments. Strings stay intact."""
     out: list[str] = []
@@ -325,6 +518,10 @@ def main() -> int:
     print(install_statusline(rig_home, grok_home))
     print(install_mcp(grok_home / "config.toml", mcp, "grok"))
     print(install_mcp(Path.home() / ".codex" / "config.toml", mcp, "codex"))
+    print(install_codex_queue_hook(rig_home))
+    print(install_opencode_queue_plugin(rig_home))
+    print(install_omp_pi_queue_extensions(rig_home))
+    print(install_agy_queue_hook(rig_home))
     print(refresh_codex_agents())
     oc = Path(
         os.environ.get("OPENCODE_CONFIG")

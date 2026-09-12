@@ -164,5 +164,138 @@ class InstallJsonMcp(unittest.TestCase):
         self.assertIn("refreshed launcher", msg)
 
 
+class CodexQueueHook(unittest.TestCase):
+    def setUp(self):
+        self.td = tempfile.TemporaryDirectory()
+        self.home = Path(self.td.name)
+
+    def tearDown(self):
+        self.td.cleanup()
+
+    def test_merge_keeps_other_submit_hooks(self):
+        path = self.home / ".codex" / "hooks.json"
+        path.parent.mkdir(parents=True)
+        path.write_text(
+            json.dumps(
+                {
+                    "hooks": {
+                        "UserPromptSubmit": [
+                            {
+                                "hooks": [
+                                    {
+                                        "type": "command",
+                                        "command": "python3 /tmp/other.py",
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                }
+            )
+        )
+        msg = install_ui.merge_user_prompt_submit_hook(
+            path, "python3 /tmp/queue_submit_hook.py"
+        )
+        self.assertIn("set", msg)
+        data = json.loads(path.read_text())
+        groups = data["hooks"]["UserPromptSubmit"]
+        cmds = [
+            item.get("command")
+            for g in groups
+            for item in g.get("hooks") or []
+        ]
+        self.assertIn("python3 /tmp/other.py", cmds)
+        self.assertTrue(any("queue_submit_hook" in str(c) for c in cmds))
+        again = install_ui.merge_user_prompt_submit_hook(
+            path, "python3 /tmp/queue_submit_hook.py --refresh"
+        )
+        self.assertIn("refreshed", again)
+        data = json.loads(path.read_text())
+        groups = data["hooks"]["UserPromptSubmit"]
+        cmds = [
+            item.get("command")
+            for g in groups
+            for item in g.get("hooks") or []
+        ]
+        self.assertEqual(sum(1 for c in cmds if "queue_submit_hook" in str(c)), 1)
+        self.assertIn("python3 /tmp/queue_submit_hook.py --refresh", cmds)
+
+    def test_enable_codex_hooks_keeps_existing(self):
+        cfg = self.home / ".codex" / "config.toml"
+        cfg.parent.mkdir(parents=True)
+        cfg.write_text("[features]\ncodex_hooks = false\n")
+        msg = install_ui.enable_codex_hooks_feature(cfg)
+        self.assertIn("keep", msg)
+        self.assertIn("codex_hooks = false", cfg.read_text())
+        missing = self.home / ".codex" / "fresh.toml"
+        msg = install_ui.enable_codex_hooks_feature(missing)
+        self.assertIn("set", msg)
+        self.assertIn("codex_hooks = true", missing.read_text())
+
+    def test_skip_invalid_hooks_json(self):
+        path = self.home / "hooks.json"
+        path.write_text("not-json")
+        msg = install_ui.merge_user_prompt_submit_hook(path, "python3 x")
+        self.assertIn("skip", msg)
+        self.assertEqual(path.read_text(), "not-json")
+
+    def test_agy_probe_and_merge(self):
+        fake = self.home / "agy"
+        fake.write_bytes(b"PreInvocation\nPreToolUse\n")
+        self.assertFalse(install_ui.agy_binary_has_user_prompt_submit(fake))
+        fake.write_bytes(b"PreInvocation\nUserPromptSubmit\nPreToolUse\n")
+        self.assertTrue(install_ui.agy_binary_has_user_prompt_submit(fake))
+        path = self.home / ".gemini" / "config" / "hooks.json"
+        path.parent.mkdir(parents=True)
+        path.write_text(json.dumps({"other": {"enabled": True, "Stop": []}}))
+        msg = install_ui.merge_agy_user_prompt_submit_hook(
+            path, "python3 /tmp/queue_submit_hook.py"
+        )
+        self.assertIn("set", msg)
+        data = json.loads(path.read_text())
+        self.assertIn("other", data)
+        self.assertEqual(
+            data["rig-queue"]["UserPromptSubmit"][0]["command"],
+            "python3 /tmp/queue_submit_hook.py",
+        )
+        data["rig-queue"]["enabled"] = False
+        path.write_text(json.dumps(data))
+        skip = install_ui.merge_agy_user_prompt_submit_hook(path, "python3 /tmp/x.py")
+        self.assertIn("keep", skip)
+        self.assertIn("disabled", skip)
+
+    def test_agy_install_skips_when_binary_lacks_event(self):
+        fake = self.home / "agy-bin"
+        fake.write_bytes(b"PreInvocation only")
+        real_which = install_ui.shutil.which
+
+        def which(name):
+            if name == "agy":
+                return str(fake)
+            return real_which(name)
+
+        install_ui.shutil.which = which
+        try:
+            msg = install_ui.install_agy_queue_hook(self.home / ".rig")
+        finally:
+            install_ui.shutil.which = real_which
+        self.assertIn("skip agy queue hook", msg)
+        self.assertIn("UserPromptSubmit", msg)
+
+    def test_marked_file_skips_foreign(self):
+        src = self.home / "src.js"
+        src.write_text("// queue_submit_hook\nexport default function () {}\n")
+        dest = self.home / "extensions" / "rig-queue.js"
+        dest.parent.mkdir()
+        dest.write_text("export default function other() {}\n")
+        msg = install_ui.install_marked_file(src, dest)
+        self.assertIn("skip", msg)
+        self.assertIn("export default function other", dest.read_text())
+        dest.write_text("// queue_submit_hook old\n")
+        msg = install_ui.install_marked_file(src, dest)
+        self.assertIn("refreshed", msg)
+        self.assertIn("export default function ()", dest.read_text())
+
+
 if __name__ == "__main__":
     unittest.main()

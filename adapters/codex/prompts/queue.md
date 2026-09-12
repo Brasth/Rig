@@ -1,5 +1,5 @@
 ---
-description: Park a Rig work item. Does not spawn a child.
+description: Park a Rig work item. Does not spawn a child. Codex 0.154 has no /prompts:queue slash — prefer the UserPromptSubmit hook or rig tui e.
 argument-hint: "[text|cancel <id>]"
 ---
 

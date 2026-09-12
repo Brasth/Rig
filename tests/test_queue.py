@@ -306,6 +306,20 @@ class QueueFiles(unittest.TestCase):
         self.assertEqual(parsed["text"], "fix pagination")
         cancel = rig_queue.parse_slash("/prompts:queue cancel abc")
         self.assertEqual(cancel, {"action": "cancel", "id": "abc"})
+        dollar = rig_queue.parse_slash("$queue park fix pagination")
+        self.assertEqual(dollar["action"], "add")
+        self.assertEqual(dollar["text"], "fix pagination")
+        self.assertEqual(
+            rig_queue.parse_slash("$rig-queue park --priority 2 later")["text"], "later"
+        )
+        self.assertIsNone(rig_queue.parse_slash("please $queue this"))
+        plugin = ROOT / "adapters" / "opencode" / "plugin" / "rig-queue.js"
+        self.assertTrue(plugin.is_file())
+        text = plugin.read_text()
+        self.assertIn("chat.message", text)
+        self.assertIn("command.execute.before", text)
+        ext = ROOT / "adapters" / "omp" / "extensions" / "rig-queue.js"
+        self.assertIn("registerCommand", ext.read_text())
 
     def test_per_worker_cap(self):
         _write_harness(
@@ -332,11 +346,32 @@ class QueueFiles(unittest.TestCase):
         out = hook.handle({"prompt": "/queue fix pagination", "cwd": str(self.repo)})
         self.assertEqual(out["decision"], "block")
         self.assertIn("queued", out["reason"])
+        self.assertIn("queued", out["systemMessage"])
         items = rig_queue.list_items(self.repo)
         self.assertEqual(len(items), 1)
         self.assertEqual(items[0]["text"], "fix pagination")
         self.assertIsNone(hook.handle({"prompt": "implement pagination", "cwd": str(self.repo)}))
         self.assertIsNone(hook.handle({"prompt": "/queue", "cwd": str(self.repo)}))
+        second = hook.handle({"prompt": "$queue park another item", "cwd": str(self.repo)})
+        self.assertEqual(second["decision"], "block")
+        self.assertEqual(len(rig_queue.list_items(self.repo)), 2)
+
+    def test_print_list_flag(self):
+        import subprocess
+        import sys
+
+        rig_queue.add_item(self.repo, "listed item")
+        script = ROOT / "scripts" / "queue_submit_hook.py"
+        proc = subprocess.run(
+            [sys.executable, str(script), "--print-list"],
+            cwd=str(self.repo),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("QUEUE", proc.stdout)
+        self.assertIn("listed item", proc.stdout)
 
 
 if __name__ == "__main__":

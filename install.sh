@@ -44,7 +44,7 @@ install_file() {
 }
 
 copy_into_home() {
-  mkdir -p "$RIG_HOME"/{bin,scripts,skills,adapters/codex/agents,adapters/codex/prompts,adapters/grok,adapters/claude,adapters/cursor,adapters/opencode/commands,adapters/omp,adapters/pi,adapters/agy,templates}
+  mkdir -p "$RIG_HOME"/{bin,scripts,skills,adapters/codex/agents,adapters/codex/prompts,adapters/grok,adapters/claude,adapters/cursor,adapters/opencode/commands,adapters/opencode/plugin,adapters/omp/extensions,adapters/pi/extensions,adapters/agy,templates}
   install_file "$SRC/bin/rig" "$RIG_HOME/bin/rig"
   local f skill
   for f in "$SRC/scripts/"*; do
@@ -74,6 +74,27 @@ copy_into_home() {
     for f in "$SRC/adapters/opencode/commands/"*; do
       [[ -f "$f" ]] || continue
       install_file "$f" "$RIG_HOME/adapters/opencode/commands/$(basename "$f")"
+    done
+  fi
+  if [[ -d "$SRC/adapters/opencode/plugin" ]]; then
+    mkdir -p "$RIG_HOME/adapters/opencode/plugin"
+    for f in "$SRC/adapters/opencode/plugin/"*; do
+      [[ -f "$f" ]] || continue
+      install_file "$f" "$RIG_HOME/adapters/opencode/plugin/$(basename "$f")"
+    done
+  fi
+  if [[ -d "$SRC/adapters/omp/extensions" ]]; then
+    mkdir -p "$RIG_HOME/adapters/omp/extensions"
+    for f in "$SRC/adapters/omp/extensions/"*; do
+      [[ -f "$f" ]] || continue
+      install_file "$f" "$RIG_HOME/adapters/omp/extensions/$(basename "$f")"
+    done
+  fi
+  if [[ -d "$SRC/adapters/pi/extensions" ]]; then
+    mkdir -p "$RIG_HOME/adapters/pi/extensions"
+    for f in "$SRC/adapters/pi/extensions/"*; do
+      [[ -f "$f" ]] || continue
+      install_file "$f" "$RIG_HOME/adapters/pi/extensions/$(basename "$f")"
     done
   fi
   install_file "$SRC/adapters/grok/config.toml.snippet" "$RIG_HOME/adapters/grok/config.toml.snippet"

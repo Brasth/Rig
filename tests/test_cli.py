@@ -665,6 +665,20 @@ class InitPresence(unittest.TestCase):
         prompt = (home / ".codex" / "prompts" / "queue.md").read_text()
         self.assertIn("rig queue", prompt)
         self.assertIn("Do not spawn", prompt)
+        codex_hook = home / ".codex" / "hooks.json"
+        self.assertTrue(codex_hook.is_file(), proc.stdout)
+        self.assertIn("queue_submit_hook", codex_hook.read_text())
+        self.assertIn("UserPromptSubmit", codex_hook.read_text())
+        self.assertIn("codex_hooks = true", (home / ".codex" / "config.toml").read_text())
+        oc_plugin = home / ".config" / "opencode" / "plugins" / "rig-queue.js"
+        self.assertTrue(oc_plugin.is_file(), proc.stdout)
+        self.assertIn("queue_submit_hook", oc_plugin.read_text())
+        omp_ext = home / ".omp" / "agent" / "extensions" / "rig-queue.js"
+        self.assertTrue(omp_ext.is_file(), proc.stdout)
+        self.assertIn("registerCommand", omp_ext.read_text())
+        pi_ext = home / ".pi" / "agent" / "extensions" / "rig-queue.js"
+        self.assertTrue(pi_ext.is_file(), proc.stdout)
+        self.assertIn("registerCommand", pi_ext.read_text())
 
     def test_new_init_harness_has_no_parent_profile(self):
         proc = run_rig(self.repo, "init", env={"PATH": _stub_path()})
