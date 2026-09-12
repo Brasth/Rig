@@ -25,6 +25,30 @@ def _elide(text: str, width: int) -> str:
     return "…" + text[-(width - 1) :]
 
 
+def _room(y: int, x: int, h: int, w: int) -> int:
+    """Cells we can write without hitting the bottom-right scroll cell."""
+    if y < 0 or y >= h or x < 0 or x >= w:
+        return 0
+    room = w - x
+    if y == h - 1:
+        room -= 1
+    return max(0, room)
+
+
+def _add(stdscr, y: int, x: int, text: str, attr: int = 0, width: int | None = None) -> None:
+    h, w = stdscr.getmaxyx()
+    room = _room(y, x, h, w)
+    if width is not None:
+        room = min(room, max(0, width))
+    if room <= 0:
+        return
+    snippet = text[:room]
+    try:
+        stdscr.addnstr(y, x, snippet, room, attr)
+    except curses.error:
+        pass
+
+
 def _paint(stdscr, repo: Path) -> None:
     curses.curs_set(0)
     curses.use_default_colors()
@@ -34,6 +58,7 @@ def _paint(stdscr, repo: Path) -> None:
     curses.init_pair(4, curses.COLOR_CYAN, -1)
     stdscr.nodelay(True)
     stdscr.timeout(400)
+    stdscr.scrollok(False)
     selected = 0
     log_off = 0
     follow = True
@@ -71,9 +96,9 @@ def _paint(stdscr, repo: Path) -> None:
             f" Rig  {asking} ask / {running} running / {len(listing)} jobs  "
             f"queue {pending}  live {running + asking}/{cap}   {repo} "
         )
-        stdscr.addnstr(0, 0, title[:w], w, curses.A_REVERSE)
+        _add(stdscr, 0, 0, title, curses.A_REVERSE, width=w)
         if h < 8 or w < 40:
-            stdscr.addnstr(1, 0, "terminal too small", w)
+            _add(stdscr, 1, 0, "terminal too small", width=w)
             stdscr.refresh()
         else:
             left_w = min(36, max(22, w // 3))
@@ -86,13 +111,13 @@ def _paint(stdscr, repo: Path) -> None:
                 attr = color_for(item["effective"])
                 if i == selected:
                     attr |= curses.A_REVERSE
-                stdscr.addnstr(i + 2, 0, label[:left_w], left_w, attr)
+                _add(stdscr, i + 2, 0, label, attr, width=left_w)
             rx = left_w + 1
             rw = max(0, w - rx)
             if rw > 10 and h > 4:
                 for y in range(2, h - 1):
                     if rx - 1 < w:
-                        stdscr.addnstr(y, rx - 1, "│", 1, curses.color_pair(4))
+                        _add(stdscr, y, rx - 1, "│", curses.color_pair(4), width=1)
                 if job:
                     detail = [
                         job["job_id"],
@@ -124,10 +149,10 @@ def _paint(stdscr, repo: Path) -> None:
                         y = 2 + i
                         if y >= h - 1:
                             break
-                        stdscr.addnstr(y, rx, line[:rw], rw)
+                        _add(stdscr, y, rx, line, width=rw)
                 else:
-                    stdscr.addnstr(2, rx, "No jobs in .rig/jobs", rw)
-            stdscr.addnstr(h - 1, 0, footer[:w], w, curses.A_REVERSE)
+                    _add(stdscr, 2, rx, "No jobs in .rig/jobs", width=rw)
+            _add(stdscr, h - 1, 0, footer, curses.A_REVERSE, width=w)
         stdscr.refresh()
         try:
             ch = stdscr.getch()
@@ -151,28 +176,43 @@ def _paint(stdscr, repo: Path) -> None:
                 job = listing[selected]
                 footer = job.get("open") or f"no session for {job['job_id']}"
         elif ch == ord("e"):
+            prompt = "enqueue: "
             stdscr.nodelay(False)
             stdscr.timeout(-1)
-            curses.curs_set(1)
-            curses.echo()
-            prompt = "enqueue: "
-            stdscr.addnstr(h - 1, 0, (prompt + " " * max(0, w - 1))[:w], w, curses.A_REVERSE)
-            stdscr.move(h - 1, min(len(prompt), max(0, w - 2)))
             try:
-                raw = stdscr.getstr(h - 1, len(prompt), max(8, w - len(prompt) - 1))
-                line = raw.decode("utf-8", "replace") if isinstance(raw, bytes) else str(raw or "")
-                line = line.strip()
-                if line:
-                    obj = rig_queue.add_item(repo, line)
-                    footer = f"queued {obj['id']}  {obj['text']}"
+                curses.curs_set(1)
+                curses.echo()
+                _add(stdscr, h - 1, 0, prompt + " " * max(0, w), curses.A_REVERSE)
+                col = min(len(prompt), max(0, w - 2))
+                n = _room(h - 1, col, h, w)
+                if n < 1:
+                    footer = "terminal too small to enqueue"
                 else:
-                    footer = "enqueue cancelled"
+                    try:
+                        stdscr.move(h - 1, col)
+                    except curses.error:
+                        pass
+                    raw = stdscr.getstr(h - 1, col, n)
+                    line = (
+                        raw.decode("utf-8", "replace")
+                        if isinstance(raw, bytes)
+                        else str(raw or "")
+                    )
+                    line = line.strip()
+                    if line:
+                        obj = rig_queue.add_item(repo, line)
+                        footer = f"queued {obj['id']}  {obj['text']}"
+                    else:
+                        footer = "enqueue cancelled"
+            except KeyboardInterrupt:
+                footer = "enqueue cancelled"
             except Exception as exc:
                 footer = f"enqueue failed: {exc}"
-            curses.noecho()
-            curses.curs_set(0)
-            stdscr.nodelay(True)
-            stdscr.timeout(400)
+            finally:
+                curses.noecho()
+                curses.curs_set(0)
+                stdscr.nodelay(True)
+                stdscr.timeout(400)
             last = 0
         elif ch in (ord("y"), ord("n")):
             if listing:
