@@ -2,7 +2,7 @@
 
 Landing page: [README](../README.md) (prompt diagram, queue diagram, what setup installs).
 
-In this file: [how your prompt is handled](#how-your-prompt-is-handled) · [queue](#how-the-queue-works) · [scenarios](#scenarios) · [install](#install) · [daily use](#daily-use) · [watch](#watch-jobs-memory) · [troubleshooting](#troubleshooting).
+In this file: [how your prompt is handled](#how-your-prompt-is-handled) · [why the queue](#why-the-queue-exists) · [queue](#how-the-queue-works) · [scenarios](#scenarios) · [install](#install) · [daily use](#daily-use) · [watch](#watch-jobs-memory) · [troubleshooting](#troubleshooting).
 
 ## What Rig is
 
@@ -374,6 +374,25 @@ sequenceDiagram
 
 The parent does **not** ask you which model. `rig pick` maps kind → worker, model, effort.
 
+## Why the queue exists
+
+Every parent CLI is one user message → one turn. While a child runs (often several minutes) and `rig_job_wait` blocks, that session does not run another command. You still think of more work. Sending it as a normal prompt would interrupt wait/ASK (illegal) or get lost until the child finishes. The queue lets you **park** those extras now; on a free turn the parent checks the lot, writes briefs, and spawns — so independent work finishes instead of sitting idle behind one job.
+
+Two locks force that design:
+
+1. **Parent chat turn.** One prompt at a time. Interrupting wait/ASK is illegal. Mid-wait you still park only: `/queue`, TUI `e`, or `rig queue add` in another pane — never a spawn from the hook/HUD/`e`.
+2. **One-child policy.** Until implement is ok, one writer on those files. Without a queue drain, that also serialized *independent* work. Drain allows up to **3** live children when listed files are **disjoint**. Same-file items stay serialized.
+
+| | Without queue | With queue |
+| --- | --- | --- |
+| Extra ideas while a child runs | Wait until the child is done, or interrupt wait/ASK | Park now (`/queue` / TUI `e` / `rig queue add`) |
+| Independent follow-ups | One live writer until that job ends | Free-turn drain: up to 3 live jobs if files do not overlap |
+| Who starts the child | — | Parent still names files and writes `brief.md` |
+
+What the queue is **not**: a dispatcher (park ≠ spawn), a daemon that auto-spawns with no parent brief, ASK / child inbox, or a forward of the parent chat as the child prompt.
+
+Cap 3 (`[queue].max_running`) is so independent work can overlap without a swarm. Set to `1` to restore strict one-child.
+
 ## How the queue works
 
 Park ≠ spawn. `/queue`, TUI `e`, `rig queue add`, and the Grok/Codex/OpenCode/OMP/Pi adapters only write `.rig/queue/`. The HUD (`jobs.py hud`) is read-only. Drain happens on a **free** parent turn, after the parent names files and writes a brief.
@@ -428,13 +447,19 @@ Stay. Parent answers (live parent cannot spawn itself). No `brief.md`. No child.
 
 ### 3. A child is already running; you think of more work
 
+This is the reason the queue exists: the child may run five minutes, and you remember two more unrelated fixes. You cannot send them as normal prompts without interrupting wait/ASK. Park both; they start when free / cap / disjoint allow.
+
 Child is implementing pagination. You type:
 
 `/queue after that, fix the empty-state copy on the jobs list`
 
+and later (still mid-wait):
+
+`/queue also fix the sidebar badge count`
+
 Grok/Codex: the submit hook **blocks** that line from becoming a new Astra/Grok turn and writes `.rig/queue/`. OpenCode: `/queue` parks then throws so `prompt()` does not run (1.17.5+ may flash `__RIG_QUEUE_HANDLED__` — that is the skip). OMP/Pi: `/queue` runs even while streaming.
 
-The running child is not killed. HUD shows `QUEUE 1`. When the parent is free, it claims **that id**, names files, briefs, spawns.
+The running child is not killed. HUD shows `QUEUE 2`. When the parent is free, it claims each **id** whose files are free (skip overlap), names files, briefs, spawns — up to the live cap.
 
 Same park without a slash: `rig tui` key `e`, or another pane `rig queue add "…"`.
 
@@ -578,7 +603,7 @@ In Grok, Codex, OpenCode, OMP, Pi, or agy type `/rig` or `/queue`. `/queue` park
 | OMP / Pi | `/queue …` extension command (`~/.omp/agent/extensions/rig-queue.js`, `~/.pi/agent/extensions/rig-queue.js`). Runs even while streaming. Fully quit once. | widget under the editor + footer status | same `/queue` |
 | agy | skill / `/queue` on a free turn (no UserPromptSubmit) | `statusLine.command` → same `jobs.py hud` (`/statusline` if hidden) | `rig tui` `e` or `rig queue add` |
 
-Grok hook: `~/.grok/hooks/rig-queue-submit.json`. Codex: `/plugins` Rig Queue **or** `~/.codex/hooks.json` (not both) + `[features] codex_hooks = true`. Bare `/queue` (list) is not blocked. `rig tui` key `e` always parks. HUD refresh is read-only and never spawns. `rig setup` probes the `agy` binary for `UserPromptSubmit` and only then writes `~/.gemini/config/hooks.json`. agy 1.2.0 has PreInvocation, not UserPromptSubmit — skip (use `rig tui` `e`).
+Grok hook: `~/.grok/hooks/rig-queue-submit.json`. Codex: `/plugins` Rig Queue **or** `~/.codex/hooks.json` (not both) + `[features] hooks = true`. Bare `/queue` (list) is not blocked. `rig tui` key `e` always parks. HUD refresh is read-only and never spawns. `rig setup` probes the `agy` binary for `UserPromptSubmit` and only then writes `~/.gemini/config/hooks.json`. agy 1.2.0 has PreInvocation, not UserPromptSubmit — skip (use `rig tui` `e`).
 
 MCP tools load after `rig setup` + fully quit the parent CLI once. Parent agents use MCP. Launch is still bash `run-worker.sh`. Wait is MCP `rig_job_wait` with no timeout (`ids` for a review+seed panel); one bash `rig job wait` only if the host drops the tool.
 
@@ -660,7 +685,7 @@ Codex sandbox must allow writing `$HOME/.grok` (and `$HOME/.claude` / `$HOME/.cu
 
 **`/queue` still starts a model turn (Codex)**
 
-Need all of: `rig setup`, Codex `/plugins` install **Rig Queue** **or** a Rig `UserPromptSubmit` in `~/.codex/hooks.json` (not both after the plugin is enabled), `[features] codex_hooks = true`, **`/hooks` trust**, fully quit Codex once. 0.154 has no `/prompts:queue` slash. Bare `/queue` (list) is not blocked on purpose.
+Need all of: `rig setup`, Codex `/plugins` install **Rig Queue** **or** a Rig `UserPromptSubmit` in `~/.codex/hooks.json` (not both after the plugin is enabled), `[features] hooks = true`, **`/hooks` trust**, fully quit Codex once. 0.154 has no `/prompts:queue` slash. Bare `/queue` (list) is not blocked on purpose. `codex_hooks` is deprecated — `rig setup` migrates it to `hooks`.
 
 **`/queue` flashes `__RIG_QUEUE_HANDLED__` in OpenCode**
 

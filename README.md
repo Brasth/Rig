@@ -59,6 +59,12 @@ flowchart TD
 
 Details and walk-throughs: [Usage](docs/usage.md#how-your-prompt-is-handled).
 
+## Why the queue exists
+
+The parent takes **one prompt at a time**. While a child runs (often minutes), you think of more work but cannot send it without interrupting wait/ASK. Park the extras; on a free turn the parent drains, briefs, and spawns — up to 3 live jobs when listed files are disjoint. Park does **not** spawn.
+
+Longer why (two locks, without vs with): [Usage](docs/usage.md#why-the-queue-exists).
+
 ## How the queue works
 
 `/queue` is a **parking lot**, not a dispatcher. Nothing in the hook, HUD, or TUI `e` key calls `run-worker.sh`.
