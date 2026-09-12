@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import signal
 import sys
 import time
 from collections.abc import Callable
@@ -732,6 +733,55 @@ def answer_pending(job: dict, behavior: str, message: str = "") -> str:
     return f"{behavior} {job['job_id']}  {preview}"
 
 
+def write_cancel_flag(job_dir: Path, reason: str) -> None:
+    path = job_dir / "cancel.json"
+    job_dir.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps({"reason": reason, "at": iso_now()}, indent=2) + "\n")
+    tmp.replace(path)
+
+
+def cancel_job(repo: Path, job_id: str | None, reason: str = "parent") -> str:
+    """Abort a live job. Wrapper kill_tree + status cancelled. Does not touch the queue."""
+    job = resolve_job(repo, job_id)
+    jid = str(job["job_id"])
+    eff = str(job.get("effective") or "")
+    if eff == "cancelled":
+        return f"cancelled {jid} (already)"
+    if eff in {"ok", "fail", "timeout"}:
+        return f"rig: job {jid} already {eff}"
+    job_dir = Path(job["dir"])
+    write_cancel_flag(job_dir, reason)
+    pid = job.get("pid")
+    if pid_alive(pid):
+        try:
+            os.kill(int(pid), signal.SIGTERM)
+        except (OSError, ValueError, TypeError):
+            pass
+    meta = _read_meta_dict(job_dir)
+    worker = str(meta.get("worker") or job.get("worker") or "parent")
+    role = str(meta.get("role") or job.get("role") or "worker")
+    started = str(meta.get("started_at") or job.get("started_at") or iso_now())
+    summary = f"cancelled ({reason})"
+    write_job_files(
+        job_dir,
+        jid,
+        worker,
+        role,
+        "cancelled",
+        130,
+        started,
+        iso_now(),
+        summary,
+        kind=str(meta.get("kind") or ""),
+        thread=str(meta.get("thread") or ""),
+        model=str(meta.get("model") or job.get("model") or ""),
+        effort=str(meta.get("effort") or job.get("effort") or ""),
+    )
+    write_state(repo, jid, worker, "cancelled", summary)
+    return f"cancelled {jid}"
+
+
 def format_wait(job: dict, others: list[dict] | None = None) -> str:
     job_id = job["job_id"]
     eff = job.get("effective")
@@ -754,6 +804,12 @@ def format_wait(job: dict, others: list[dict] | None = None) -> str:
             f"agent   {job.get('worker') or '?'}",
             f"doing   {doing}",
             f"next    rig job wait {job_id}",
+        ]
+    elif eff == "cancelled":
+        lines = [
+            f"CANCELLED {job_id}",
+            f"agent   {job.get('worker') or '?'}",
+            "Do not re-pick. User aborted this wait.",
         ]
     else:
         lines = [format_show(job)]
@@ -847,12 +903,17 @@ def wait_job(
             return 2, format_wait(asks[0], others=jobs)
         live = [job for job in jobs if job.get("effective") == "running"]
         if not live:
+            cancelled = [job for job in jobs if job.get("effective") == "cancelled"]
             fails = [
                 job
                 for job in jobs
                 if job.get("effective") in {"fail", "timeout", "stale"}
             ]
             text = format_wait_many(jobs)
+            if cancelled and not fails:
+                if len(jobs) == 1:
+                    return 130, format_wait(jobs[0])
+                return 130, text
             return (1 if fails else 0), text
         if deadline is not None and time.time() >= deadline:
             running = live[0]
@@ -977,7 +1038,7 @@ def format_log(job: dict, n: int = 40) -> str:
 JOB_WORKERS = frozenset(
     {"grok", "codex", "claude", "cursor", "opencode", "omp", "pi", "agy", "parent"}
 )
-JOB_STATUSES = frozenset({"ok", "fail", "timeout", "running"})
+JOB_STATUSES = frozenset({"ok", "fail", "timeout", "running", "cancelled"})
 JOB_ID_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 
 
@@ -1135,7 +1196,7 @@ def _validate_worker(worker: str) -> str:
 
 def _validate_status(status: str) -> str:
     if status not in JOB_STATUSES:
-        raise SystemExit("rig job: status must be ok|fail|timeout|running")
+        raise SystemExit("rig job: status must be ok|fail|timeout|running|cancelled")
     return status
 
 
@@ -1170,6 +1231,8 @@ def _exit_code(status: str) -> int:
         return 0
     if status == "timeout":
         return 124
+    if status == "cancelled":
+        return 130
     return 1
 
 
@@ -1452,6 +1515,7 @@ def main() -> int:
             "thread",
             "allow",
             "deny",
+            "cancel",
             "wait",
             "persist",
             "message",
@@ -1522,6 +1586,10 @@ def main() -> int:
         text = answer_pending(job, args.cmd, args.reason)
         print(text)
         return 0 if text.startswith(args.cmd) else 1
+    if args.cmd == "cancel":
+        text = cancel_job(repo, job_id, args.reason or "parent")
+        print(text)
+        return 0 if text.startswith("cancelled") else 1
     if args.cmd == "wait":
         code, text = wait_job(repo, job_id, args.timeout, ids=wait_ids or None)
         print(text)

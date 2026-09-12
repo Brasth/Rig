@@ -476,27 +476,37 @@ A writer is already live on `src/jobs.py`. Drain: skip `abc`, claim `def` if tho
 
 `rig jobs` / HUD shows `ASK`. Parent (not you clicking in the child TUI) answers MCP `rig_job_allow` or `rig_job_deny`. Human TUI: `y` / `n`.
 
-Do **not** kill that job. Do **not** spawn Grok “instead”. The same Claude continues after allow. The work timeout pauses during ASK.
+Do **not** kill that job because it asked. Do **not** spawn Grok “instead”. The same Claude continues after allow. The work timeout pauses during ASK.
 
-### 6. You are in Grok as parent
+### 6. You press Esc / Stop while a child is running
+
+The parent turn dies. Rig aborts **the job ids that wait was blocking on** (`cancel.json` → wrapper `kill_tree` → status `cancelled`). Parked `/queue` items stay. Jobs in another thread stay. Do not re-pick a cancelled job.
+
+Human: `rig tui` `x`, or `rig job cancel <id>`. MCP: `rig_job_cancel`, or the host `notifications/cancelled` on `rig_job_wait`.
+
+A **new parent thread** still sees repo jobs; those keep going unless you cancel them. Host-dropped wait still bash-waits once — that is not Esc.
+
+Cancel can leave a half-written tree. `git status` after.
+
+### 7. You are in Grok as parent
 
 Grok child is `effective=off (is live parent)`. `Fix the tests` still runs: Claude if effective, else this Grok writes (`parent_writes`). No second Grok session.
 
-### 7. Codex parent, you type `/queue` while Astra is streaming
+### 8. Codex parent, you type `/queue` while Astra is streaming
 
 After `rig setup`, `/plugins` **Rig Queue**, `/hooks` trust, fully quit once: `/queue fix sidebar` parks and **does not** start an Astra implement turn. 0.154 has no `/prompts:queue` autocomplete. Companion `rig tui` if you want a board. Codex has no in-TUI HUD panel.
 
-### 8. Docs-only
+### 9. Docs-only
 
 You: `Update README to mention the HUD.`
 
 Mini. Parent (or cheap same-CLI) edits `README.md` / `docs/usage.md`. Not an implement child unless the change is mixed with code.
 
-### 9. Review after a successful implement
+### 10. Review after a successful implement
 
 Implement is `ok`. Parent **may** start one read-only review (different vendor) and one seed/bulk whose files are **disjoint**. One wait on both ids. Until implement is ok: one writer on those files.
 
-### 10. Park on agy
+### 11. Park on agy
 
 agy 1.2.0 has no `UserPromptSubmit`. `/queue` on a free turn can still park via the skill. Mid-wait: `rig tui` `e` or `rig queue add`. Statusline still shows QUEUE after setup (`/statusline` if hidden).
 
@@ -529,8 +539,8 @@ Numbered path for a human:
              log    rig job log 20260909T032405Z-82424 -f
    ```
 
-8. If a Claude child is `ask`: the **parent** answers MCP `rig_job_allow` or `rig_job_deny` (human TUI `y` / `n`). Never kill that job. Never spawn another worker because Claude asked. The same child continues after you allow. After implement+verify ok, seed (disjoint listed files) may already be running next to a read-only review — MCP `rig_job_wait` `ids`; do not replace either. Spawn never started: one MCP `rig_pick` `exclude` (last-resort opencode, omp, pi, agy, codex). Do not auto-spawn Cursor.
-9. Jobs and MEMORY are **this repo**, not the chat. A new thread still sees `.rig/jobs`. Running children keep going.
+8. If a Claude child is `ask`: the **parent** answers MCP `rig_job_allow` or `rig_job_deny` (human TUI `y` / `n`). Never kill that job because it asked. Never spawn another worker because Claude asked. The same child continues after you allow. User Esc/Stop aborts the waited ids (`rig_job_cancel`; status `cancelled`; do not re-pick). After implement+verify ok, seed (disjoint listed files) may already be running next to a read-only review — MCP `rig_job_wait` `ids`; do not replace either. Spawn never started: one MCP `rig_pick` `exclude` (last-resort opencode, omp, pi, agy, codex). Do not auto-spawn Cursor.
+9. Jobs and MEMORY are **this repo**, not the chat. A new thread still sees `.rig/jobs`. Running children keep going across threads. Esc on this wait cancels those ids.
 
 **Parent keeps:** ask / plan / advise, check (name files and the update), vision, Figma, computer-use, chrome-profile, talk to you. Native implement/hard (`parent_writes`): this parent writes + MCP `rig_job_record`.
 
@@ -567,7 +577,7 @@ Never Fable / Sol / Astra as a child. Opus is allowed.
 
 A Grok child is **headless**. Codex will not show its TUI. While it runs, both you and the parent can see **which agent, which task, status, and the log**.
 
-Parent agent: MCP. First call: `rig_session`. Instant: `rig_jobs`, `rig_job_show`, `rig_job_log`, `rig_job_allow`, `rig_job_deny`, `rig_job_message`, `rig_memory`, `rig_memory_add`, `rig_pick`, `rig_status`, `rig_job_start`, `rig_job_finish`, `rig_job_record`, `rig_queue_add`, `rig_queue_list`, `rig_queue_cancel`, `rig_queue_claim`. Launching a child is still bash `run-worker.sh`; there is no spawn-from-MCP tool. Wait is one blocking `rig_job_wait` with **no timeout**. After implement+verify ok, pass `ids` to wait review+seed together. If the parent host supports MCP progress, `rig_job_wait` may stream the child `doing` line. If a parent host **kills** the MCP tool, fall back to **one** bash `rig job wait <id>` with **no** `--timeout`. Do not poll 30s.
+Parent agent: MCP. First call: `rig_session`. Instant: `rig_jobs`, `rig_job_show`, `rig_job_log`, `rig_job_allow`, `rig_job_deny`, `rig_job_cancel`, `rig_job_message`, `rig_memory`, `rig_memory_add`, `rig_pick`, `rig_status`, `rig_job_start`, `rig_job_finish`, `rig_job_record`, `rig_queue_add`, `rig_queue_list`, `rig_queue_cancel`, `rig_queue_claim`. Launching a child is still bash `run-worker.sh`; there is no spawn-from-MCP tool. Wait is one blocking `rig_job_wait` with **no timeout**. After implement+verify ok, pass `ids` to wait review+seed together. If the parent host supports MCP progress, `rig_job_wait` may stream the child `doing` line. If a parent host **kills** the MCP tool, fall back to **one** bash `rig job wait <id>` with **no** `--timeout`. Do not poll 30s.
 
 Human terminal (not the parent agent):
 
@@ -584,6 +594,7 @@ Bash fallback if MCP is missing:
 ```bash
 rig job wait <id>
 rig job wait <id1> <id2>
+rig job cancel <id>
 rig job show
 rig job log <id> -f
 rig queue add "text"
@@ -611,7 +622,7 @@ Open the Grok child TUI yourself: `grok -r <session-id>` or `grok dashboard`. Th
 
 Claude has no TTY as a child. When it needs permission, the job status becomes `ask` and MCP `rig_job_wait` returns ASK. The **parent agent** answers MCP `rig_job_allow` / `rig_job_deny`. Do not ignore it, kill the job, or spawn another worker. Human TUI: `y` / `n`. The child work timeout pauses while status is `ask` and restarts after allow.
 
-Jobs are this repo, not this chat. A new parent thread still sees `.rig/jobs`. Running children keep going. First call in a new thread: MCP `rig_session`. Else MCP `rig_memory` then `rig_jobs` then `rig_status` then `rig_pick`. Bash fallback if MCP is missing: `rig session --case "..." --json`.
+Jobs are this repo, not this chat. A new parent thread still sees `.rig/jobs`. Running children keep going across threads. Esc on this wait cancels those ids. First call in a new thread: MCP `rig_session`. Else MCP `rig_memory` then `rig_jobs` then `rig_status` then `rig_pick`. Bash fallback if MCP is missing: `rig session --case "..." --json`.
 
 Memory is local only. Parent: MCP `rig_memory_add`. Do not edit the file. Human / fallback: `rig memory add "Codex sandbox must write ~/.grok"`.
 
@@ -701,7 +712,7 @@ Need the binary **and** `rig workers opencode=on` (or `omp=on` / `pi=on` / `agy=
 
 ## Parent agents
 
-Parent agents: load `.agents/skills/delegate-harness/SKILL.md`. Live wrapper is `RIG_LIVE=1` + `run-worker.sh` in the background, then one blocking `rig job wait` (MCP `rig_job_wait` if present; no `--timeout`; `ids` for review+seed after implement ok). Default wrapper is dry-run. Claude `ask` → `rig job allow` / `rig job deny`. Never kill an asking job.
+Parent agents: load `.agents/skills/delegate-harness/SKILL.md`. Live wrapper is `RIG_LIVE=1` + `run-worker.sh` in the background, then one blocking `rig job wait` (MCP `rig_job_wait` if present; no `--timeout`; `ids` for review+seed after implement ok). Default wrapper is dry-run. Claude `ask` → `rig job allow` / `rig job deny`. Never kill an asking job because it asked. User Esc → `rig job cancel` / MCP `rig_job_cancel` those wait ids.
 
 Cheap same-CLI spawns (Codex explorer/worker/bulk/reviewer, Grok explore, OpenCode/OMP/Pi/agy explore/worker/bulk) often do not use `run-worker.sh`. Record them so they still show under `.rig/jobs/`:
 
@@ -742,6 +753,7 @@ usage: rig <command> [args]
   job log [id] [-f] [-n N]
   job allow [id]
   job deny [id] [--reason TEXT]
+  job cancel [id]
   job wait [id] [--timeout SECS]
   job message <id> --text TEXT
   pick [explore|mini|bulk|implement|hard|review|stay] [--case TEXT] [--json]

@@ -165,7 +165,7 @@ agy = false
 - HUD: Grok/agy statusline, OMP/Pi widget, OpenCode sidebar. Codex: `/plugins` **Rig Queue** then `/hooks` (no panel)
 - Pi `/rig` also needs `pi install npm:pi-mcp-adapter`
 
-Jobs and MEMORY are this repo, not the chat. A new thread still sees `.rig/jobs`. Running children keep going.
+Jobs and MEMORY are this repo, not the chat. A new thread still sees `.rig/jobs`. Running children keep going across threads. Esc/Stop on **this wait** aborts those job ids (`cancelled`) — it does not empty the queue.
 
 Parent orchestration is MCP (`rig_session`, `rig_job_wait`, `rig_job_allow` / `rig_job_deny`). Launching a child is still `run-worker.sh`. Claude `ask` → allow/deny; never kill that job.
 

@@ -40,6 +40,7 @@ EXISTING_TOOLS = (
     "rig_job_wait",
     "rig_job_allow",
     "rig_job_deny",
+    "rig_job_cancel",
     "rig_memory",
     "rig_memory_add",
     "rig_job_message",
@@ -392,6 +393,7 @@ class McpDispatch(unittest.TestCase):
                 self.assertIn(name, names)
             self.assertNotIn("rig_pick", names)
             self.assertNotIn("rig_job_wait", names)
+            self.assertNotIn("rig_job_cancel", names)
             self.assertNotIn("rig_job_message", names)
             self.assertNotIn("rig_queue_add", names)
             self.assertNotIn("rig_queue_claim", names)

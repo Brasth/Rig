@@ -16,7 +16,7 @@ import jobs as rig_jobs  # noqa: E402
 import work_queue as rig_queue  # noqa: E402
 
 
-HELP = "j/k select   e enqueue   y allow   n deny   l log   o open   r refresh   q quit"
+HELP = "j/k select   e enqueue   y allow   n deny   x cancel   l log   o open   r refresh   q quit"
 
 
 def _elide(text: str, width: int) -> str:
@@ -48,7 +48,7 @@ def _paint(stdscr, repo: Path) -> None:
             return curses.color_pair(3) | curses.A_BOLD
         if status in {"fail", "stale"}:
             return curses.color_pair(2)
-        if status == "timeout":
+        if status in {"timeout", "cancelled"}:
             return curses.color_pair(3)
         return curses.A_NORMAL
 
@@ -179,6 +179,11 @@ def _paint(stdscr, repo: Path) -> None:
                 job = listing[selected]
                 behavior = "allow" if ch == ord("y") else "deny"
                 footer = rig_jobs.answer_pending(job, behavior)
+                last = 0
+        elif ch == ord("x"):
+            if listing:
+                job = listing[selected]
+                footer = rig_jobs.cancel_job(repo, str(job.get("job_id") or ""), "tui")
                 last = 0
         elif ch == ord("l"):
             if not listing:

@@ -38,6 +38,7 @@ usage: rig <command> [args]
   job log [id] [-f] [-n N]
   job allow [id]
   job deny [id] [--reason TEXT]
+  job cancel [id]
   job wait [id ...] [--timeout SECS]
   job message <id> --text TEXT
   queue add [--priority N] [--worker NAME] "text"
@@ -535,7 +536,8 @@ Follow pick JSON; never spawn a worker whose harness flag is false; never spawn 
    Do not parse a TUI.
    ASK: YOU answer MCP `rig_job_allow` or `rig_job_deny`. Bash fallback: `rig job allow <id>` or `rig job deny <id>`. Safe worker work (read/edit/test/ssh gather/git) → allow. Destructive/prod/secrets → deny or ask the user.
    Then wait once more (no timeout). Same ids if you waited a panel. exit 0 ok, exit 1 fail.
-   Never kill, close, or finish an asking or running job. Never spawn another worker because the child asked. The child is waiting on you.
+   Never kill, close, or finish an asking or running job because the child asked. Never spawn another worker because the child asked. The child is waiting on you.
+   User Esc / MCP notifications/cancelled on `rig_job_wait`: abort those waited ids (`rig_job_cancel` / `rig job cancel`). Status cancelled. Do not re-pick. A new thread does not abort other jobs. Host-dropped wait still bash-waits once (that is not cancel).
    After implement+verify ok, parent MAY start at most one read-only review (different vendor) and one seed/bulk with listed files disjoint from the review set, in parallel. Until that write is ok: one child on those files. Other queued items may run at the same time, up to max_running (default 3 live running+ask), if listed files are disjoint. Parent selects a disjoint subset by id (skip overlap; try next). Claim needs id when more than one pending. List shows occupied files. Never spawn a second writer on the same files. Never spawn explore/fix/QA as extra teammates. parent_writes occupies this turn; do not drain more writers then. Claim then brief then spawn; unclaim if the brief fails. Wait all live ids. ASK: allow/deny that id; wait the same ids again; do not claim during ASK.
    Spawn never started (binary missing, refuse, native tool error, empty argv): one re-pick with `--exclude <dead worker>`. Same brief, new job id. Last-resort: opencode, omp, pi, agy, codex. Do not auto-spawn Cursor. Child ran and failed the patch: escalate. Do not vendor-shop. One fallback per task.
 
@@ -1294,9 +1296,9 @@ cmd_job() {
   local sub="${1:-}"
   shift || true
   case "$sub" in
-    start|finish|record|show|log|allow|deny|wait|message) ;;
+    start|finish|record|show|log|allow|deny|cancel|wait|message) ;;
     *)
-      echo "usage: rig job start|finish|record|show|log|allow|deny|wait|message [--worker NAME] [--role ROLE] [--status ok|fail] [--summary TEXT] [--reason TEXT] [--text TEXT] [--timeout SECS] [id ...] [-f] [-n N]" >&2
+      echo "usage: rig job start|finish|record|show|log|allow|deny|cancel|wait|message [--worker NAME] [--role ROLE] [--status ok|fail] [--summary TEXT] [--reason TEXT] [--text TEXT] [--timeout SECS] [id ...] [-f] [-n N]" >&2
       exit 2
       ;;
   esac
@@ -1366,6 +1368,13 @@ cmd_job() {
     [[ -n "$JOB_ID" ]] && ask_args+=("$JOB_ID")
     [[ -n "$JOB_REASON" ]] && ask_args+=(--reason "$JOB_REASON")
     python3 "$(py_script jobs.py)" "${ask_args[@]}"
+    return $?
+  fi
+  if [[ "$sub" == "cancel" ]]; then
+    local cancel_args=(cancel)
+    [[ -n "$JOB_ID" ]] && cancel_args+=("$JOB_ID")
+    [[ -n "$JOB_REASON" ]] && cancel_args+=(--reason "$JOB_REASON")
+    python3 "$(py_script jobs.py)" "${cancel_args[@]}"
     return $?
   fi
   if [[ "$sub" == "wait" ]]; then

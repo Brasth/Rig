@@ -510,9 +510,17 @@ write_meta "running"
 write_watch
 ELAPSED=0
 TIMED_OUT=0
+CANCELLED=0
 ASK_NOTIFIED=0
 IN_ASK=0
 while kill -0 "$CHILD" 2>/dev/null; do
+  if [[ -f "$JOB_DIR/cancel.json" ]]; then
+    CANCELLED=1
+    kill_tree "$CHILD"
+    sleep 1
+    kill -KILL "$CHILD" 2>/dev/null || true
+    break
+  fi
   if [[ -f "$JOB_DIR/ask.json" && ! -f "$JOB_DIR/ask-reply.json" ]]; then
     IN_ASK=1
     if [[ "$ASK_NOTIFIED" -eq 0 ]]; then
@@ -583,6 +591,10 @@ SUMMARY="$(summary_from_log)"
 JOBS_PY="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/jobs.py"
 if [[ -f "$JOBS_PY" ]]; then
   python3 "$JOBS_PY" persist --dir "$JOB_DIR" || true
+fi
+if [[ "$CANCELLED" == "1" || -f "$JOB_DIR/cancel.json" ]]; then
+  write_json "cancelled" 130 "${SUMMARY:-cancelled by parent}" "$ENDED"
+  exit 130
 fi
 if [[ "$TIMED_OUT" == "1" ]]; then
   write_json "timeout" 124 "${SUMMARY:-timeout after ${TIMEOUT_SECS}s}" "$ENDED"
