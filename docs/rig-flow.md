@@ -4,7 +4,7 @@ Rig lets you stay with one parent agent while it assigns work, checks the result
 
 ## Start with your usual command
 
-After installing Rig, initialize each repository with `rig init`. To add the companion, install tmux **3.3+** and enable the bash/zsh integration once:
+After installing Rig, initialize each repository with `rig init`. Installation and `rig update` attempt to provide tmux **3.3+**; follow their manual instructions if needed. To add the companion, enable the bash/zsh integration once:
 
 ```bash
 rig setup --shell-ui

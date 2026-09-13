@@ -42,6 +42,7 @@ What that does:
 
 - No GitHub login. `curl` pipes `install.sh` into bash.
 - `install.sh` clones `https://github.com/Brasth/Rig.git` over HTTPS into a **temp** dir (needs `git`; if HTTPS clone fails and `gh` is logged in, it tries `gh repo clone`).
+- Attempts to install or upgrade tmux to **3.3+** using existing Homebrew (macOS), apt-get, or dnf (Linux); skips compatible tmux.
 - Copies bin, scripts, skills, adapters, and templates into `~/.rig`.
 - Symlinks `~/.local/bin/rig` → `~/.rig/bin/rig`.
 - Runs `rig setup`.
@@ -50,6 +51,8 @@ What that does:
 From a checkout you already have: `./install.sh` (same copy + `rig setup`, no clone). That is the **dev** path; it copies the local tree, not GitHub `main`.
 
 Before updating an active repository, follow [safe upgrade and rollback](#safe-upgrade-and-rollback). Update an existing machine: `rig update`. That fetches GitHub `main` through the same `install.sh` (not your checkout). The same `curl | bash` still works (idempotent). An older `rig` without `update` still needs the curl once. It updates the skill and scripts. It does **not** overwrite project `.rig/harness.toml` or `.rig/MEMORY.md`. It already runs `rig setup`.
+
+Tmux package operations are noninteractive and time out after five minutes per operation. Linux needs root or passwordless sudo. Missing package managers, permissions, or a suitable package produce manual recovery instructions and allow Rig installation to continue. Set `RIG_SKIP_TMUX_INSTALL=1 ./install.sh` or `RIG_SKIP_TMUX_INSTALL=1 rig update` to manage tmux yourself; for the piped installer, use `curl -fsSL https://raw.githubusercontent.com/Brasth/Rig/main/install.sh | RIG_SKIP_TMUX_INSTALL=1 bash`. The companion remains opt-in; explicit `--shell-ui` still fails if tmux 3.3+ is unavailable.
 
 **`rig setup` writes:**
 
@@ -96,7 +99,7 @@ That must print `$HOME/.local/bin/rig` (for example `/Users/you/.local/bin/rig`)
 
 ## Optional terminal companion
 
-Install tmux **3.3 or newer**, then run `rig setup --shell-ui`. The version check must pass before shell startup files or the enable marker change. Open a new shell, run `rig init` in the project if needed, and launch plain `codex` or `grok`.
+The installer attempts to provide tmux **3.3 or newer**; install it manually if that attempt was unavailable. Then run `rig setup --shell-ui`. The version check must pass before shell startup files or the enable marker change. Open a new shell, run `rig init` in the project if needed, and launch plain `codex` or `grok`.
 
 The parent occupies the main terminal. A tmux status row shows observed activity, queue count, attention, and snapshot freshness. The observer runs independently of the parent's turn; it neither forwards prompts nor starts workers. Milestones distinguish finished execution from verified results, and stop requests from confirmed termination. Notices remain available in the popup after their brief status-row display expires.
 
