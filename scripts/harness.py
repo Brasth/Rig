@@ -182,6 +182,20 @@ def assert_spawn_allowed(repo: Path, worker: str, live: str | None = None) -> No
     raise SystemExit(f"rig job: worker {worker} is off in harness")
 
 
+CURSOR_MCP_REASON = (
+    "Cursor CLI has no isolated job-scoped MCP; excluded until a safe --mcp-config exists"
+)
+
+
+def worker_mcp_reason(name: str) -> str:
+    import child_mcp
+
+    ready, reason = child_mcp.worker_mcp_ready(name)
+    if ready:
+        return ""
+    return reason or CURSOR_MCP_REASON if (name or "").strip() == "cursor" else reason
+
+
 def effective_workers(repo: Path, live: str | None = None) -> list[str]:
     if live is None:
         live = live_parent()
@@ -193,6 +207,8 @@ def effective_workers(repo: Path, live: str | None = None) -> list[str]:
         if not find_worker_bin(name):
             continue
         if name == live:
+            continue
+        if worker_mcp_reason(name):
             continue
         out.append(name)
     return out
@@ -222,6 +238,9 @@ def format_status(
         f"effective: {' '.join(effs) if effs else 'none'}",
         f"jobs: {n_jobs}",
     ]
+    cursor_reason = worker_mcp_reason("cursor")
+    if harness["workers"].get("cursor") == "true" and cursor_reason and find_worker_bin("cursor"):
+        lines.append(f"cursor: excluded ({cursor_reason})")
     thread = rig_jobs.current_thread(repo)
     if thread:
         lines.append(f"thread: {thread}")

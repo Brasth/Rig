@@ -571,7 +571,15 @@ def reserve(repo, *, job_id="", worker="", role="worker", model="", files=None,
             if source.get("claim_consumed") and (source.get("role"), source.get("model")) != (role, model):
                 raise AdmissionError("admitted role and model are immutable")
             previous = source["owner"]
-            if source.get("claim_consumed") and (previous.get("pid"), previous.get("start_id")) != (actor.get("pid"), actor.get("start_id")):
+            adopting = (
+                previous.get("kind") == "parent"
+                and actor.get("kind") == "wrapper"
+                and previous.get("session_id")
+                and previous.get("session_id") == actor.get("session_id")
+                and not source.get("launch_started")
+                and not source.get("process")
+            )
+            if source.get("claim_consumed") and not adopting and (previous.get("pid"), previous.get("start_id")) != (actor.get("pid"), actor.get("start_id")):
                 raise AdmissionError("claim already consumed by another executor")
             if source.get("launch_started") or source.get("process") or source.get("stage") != "reserved":
                 raise AdmissionError("attempt already launched; credentials cannot authorize another launch")

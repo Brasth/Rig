@@ -1222,6 +1222,10 @@ def format_show(job: dict, log_lines: int = 24) -> str:
     lines.append(f"model      {job['display_model']}")
     lines.append(f"reasoning  {job.get('effort') or '-'}")
     lines.append(f"execution  {job.get('execution_mode') or 'unknown'}")
+    import child_mcp as rig_child_mcp
+    lines.append(
+        f"child_mcp  {rig_child_mcp.display_status(_read_meta_dict(job_dir), running=job.get('effective') in {'running', 'ask'})}"
+    )
     lines.append(f"verification  {assessment.get('state', 'unknown')} ({assessment.get('reason') or assessment.get('acceptance', 'pending')})")
     try:
         snapshot = change_evidence.snapshot(repo, job.get("files") or [], cache=hash_cache)

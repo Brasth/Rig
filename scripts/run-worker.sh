@@ -22,6 +22,7 @@ TIMEOUT_SECS="${RIG_TIMEOUT:-1200}"
 ROUTE_PY="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/route.py"
 EVIDENCE_PY="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/change_evidence.py"
 ADMISSION_PY="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/admission.py"
+CHILD_MCP_PY="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/child_mcp.py"
 EXECUTION_MODE="dry_run"
 [[ "${RIG_LIVE:-0}" == "1" ]] && EXECUTION_MODE="live"
 OWNER_CREDENTIALS=""
@@ -619,42 +620,7 @@ case "$WORKER" in
     # (can skip user auth), or --dangerously-skip-permissions (org
     # policy can disable bypass).
     CLAUDE_WORKER_MD="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../adapters/claude/CLAUDE.worker.md"
-    CLAUDE_MCP_PY="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/rig_mcp.py"
     CLAUDE_MCP="$JOB_DIR/mcp.json"
-    CLAUDE_PY=""
-    for c in /opt/homebrew/bin/python3 /usr/local/bin/python3 /usr/bin/python3; do
-      if [[ -x "$c" ]]; then
-        CLAUDE_PY="$c"
-        break
-      fi
-    done
-    if [[ -z "$CLAUDE_PY" ]]; then
-      CLAUDE_PY="$(command -v python3 || true)"
-    fi
-    python3 - "$CLAUDE_MCP" "$CLAUDE_MCP_PY" "$JOB_DIR" "$CLAUDE_PY" "$JOB_ID" "$REPO" <<'PY'
-import json, pathlib, sys
-path, script, job_dir, py = map(pathlib.Path, sys.argv[1:5])
-job_id, repo = sys.argv[5], sys.argv[6]
-path.write_text(
-    json.dumps(
-        {
-            "mcpServers": {
-                "rig-ask": {
-                    "command": str(py),
-                    "args": [str(script)],
-                    "env": {
-                        "RIG_JOB_DIR": str(job_dir),
-                        "RIG_JOB_ID": job_id,
-                        "RIG_REPO": repo,
-                    },
-                }
-            }
-        },
-        indent=2,
-    )
-    + "\n"
-)
-PY
     CMD=(
       claude -p
       --model "${MODEL:-claude-sonnet-5}"
@@ -757,6 +723,7 @@ PY
     [[ -n "$EFFORT" ]] && CMD+=(--effort "$EFFORT")
     ;;
 esac
+CHILD_MCP_PREPARE="$(python3 "$CHILD_MCP_PY" prepare "$JOB_DIR" "$JOB_ID" "$REPO" "$WORKER")"
 CMD_STR="$(shell_join "${CMD[@]}")"
 
 write_meta "reserved"
@@ -783,11 +750,18 @@ if [[ -z "$BIN" ]]; then
 fi
 
 # Default is dry-run. Live child only when RIG_LIVE=1.
+# Dry-run still prepares Claude --mcp-config argv; readiness is live-only.
 if [[ "${RIG_LIVE:-0}" != "1" ]]; then
   echo "run-worker: dry-run ($WORKER job=$JOB_ID)"
   echo "would run: $CMD_STR"
   write_json "ok" 0 "dry-run" "$(iso_now)"
   exit 0
+fi
+
+CHILD_MCP_READY="$(printf '%s' "$CHILD_MCP_PREPARE" | python3 -c 'import json,sys; print("1" if json.load(sys.stdin).get("ready") else "0")')"
+if [[ "$CHILD_MCP_READY" != "1" ]]; then
+  CHILD_MCP_REASON="$(printf '%s' "$CHILD_MCP_PREPARE" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("reason") or "child MCP not ready")')"
+  refuse "$CHILD_MCP_REASON"
 fi
 
 if [[ "$WORKER" == "agy" ]]; then
@@ -977,6 +951,10 @@ if [[ "$CHILD_RC" -eq 0 ]]; then
       write_json "fail" 1 "${SUMMARY:-denied_actions: $AGY_DENIED}" "$ENDED"
       exit 1
     fi
+  fi
+  if [[ "$EXECUTION_MODE" == "live" ]] && ! python3 "$CHILD_MCP_PY" require-success "$JOB_DIR"; then
+    write_json "fail" 1 "child MCP handshake missing" "$ENDED"
+    exit 1
   fi
   write_json "ok" 0 "${SUMMARY:-ok}" "$ENDED"
   if [[ -f "$JOB_DIR/activity.json" ]]; then

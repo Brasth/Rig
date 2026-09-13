@@ -56,12 +56,14 @@ def routing_observations():
 
 def native_mini_observation():
     choice = route.pick("codex", [], "mini", "Documentation only", catalogs={})
-    adapter = ROOT / "adapters" / "codex" / "agents" / (choice["native_agent"] + ".toml")
-    import tomllib
-    spec = tomllib.loads(adapter.read_text())
-    return {"choice": choice, "adapter": str(adapter.relative_to(ROOT)),
-            "sandbox_mode": spec["sandbox_mode"], "adapter_model": spec["model"],
-            "write_capable": spec["sandbox_mode"] == "workspace-write"}
+    # No native child: empty effective mini is parent_writes (no adapters/codex/agents/.toml).
+    return {
+        "choice": choice,
+        "adapter": "",
+        "adapter_model": choice.get("model") or "",
+        "sandbox_mode": "",
+        "write_capable": bool(choice.get("parent_writes")),
+    }
 
 
 def seed_job(repo, name, status, *, labeled=True):

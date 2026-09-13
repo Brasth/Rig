@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import json
+import sys
 import os
 import subprocess
 import tempfile
@@ -360,12 +361,13 @@ class InitPresence(unittest.TestCase):
         self.assertIn("grok-bot", doc.stdout)
         self.assertIn("curl https://cursor.com/install", doc.stdout)
         self.assertIn("MCP", doc.stdout)
-        self.assertRegex(doc.stdout, r"grok:.*(mcp_servers\.rig|missing)")
-        self.assertRegex(doc.stdout, r"codex:.*(mcp_servers\.rig|missing)")
-        self.assertRegex(doc.stdout, r"opencode:.*(mcp\.rig|missing)")
-        self.assertRegex(doc.stdout, r"omp:.*(mcpServers\.rig|missing)")
-        self.assertRegex(doc.stdout, r"pi:.*(mcpServers\.rig|missing)")
-        self.assertRegex(doc.stdout, r"agy:.*(mcpServers\.rig|missing)")
+        self.assertRegex(doc.stdout, r"cursor: excluded")
+        self.assertRegex(doc.stdout, r"grok: unavailable \(binary 'grok' not on PATH\)")
+        self.assertRegex(doc.stdout, r"codex: unavailable \(binary 'codex' not on PATH\)")
+        self.assertRegex(doc.stdout, r"opencode: unavailable \(binary 'opencode' not on PATH\)")
+        self.assertRegex(doc.stdout, r"omp: unavailable \(binary 'omp' not on PATH\)")
+        self.assertRegex(doc.stdout, r"pi: unavailable \(binary 'pi' not on PATH\)")
+        self.assertRegex(doc.stdout, r"agy: unavailable \(binary 'agy' not on PATH\)")
 
     def test_new_init_opencode_omp_pi_agy_on_when_cli_present(self):
         _fake_bin(self.bins, "opencode")
@@ -655,17 +657,21 @@ class InitPresence(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         home = self.repo / "empty-home"
         home.mkdir()
+        bins = self.repo / "mcp-bins-missing"
+        bins.mkdir()
+        for name in ("opencode", "omp", "pi", "agy"):
+            _fake_bin(bins, name)
         doc = run_rig(
             self.repo,
             "doctor",
-            env={"PATH": _stub_path(), "RIG_PARENT": "codex", "HOME": str(home)},
+            env={"PATH": _stub_path(bins), "RIG_PARENT": "codex", "HOME": str(home)},
         )
         self.assertEqual(doc.returncode, 0, doc.stderr)
-        self.assertRegex(doc.stdout, r"opencode:.*missing")
-        self.assertRegex(doc.stdout, r"omp:.*missing")
-        self.assertRegex(doc.stdout, r"pi:.*missing")
-        self.assertRegex(doc.stdout, r"agy:.*missing")
-        self.assertIn("pi install npm:pi-mcp-adapter", doc.stdout)
+        self.assertRegex(doc.stdout, r"opencode: unavailable \(.*MCP missing")
+        self.assertRegex(doc.stdout, r"omp: unavailable \(.*MCP missing")
+        self.assertRegex(doc.stdout, r"pi: unavailable \(.*MCP missing")
+        self.assertRegex(doc.stdout, r"agy: unavailable \(.*MCP missing")
+        self.assertRegex(doc.stdout, r"cursor: excluded")
         self.assertIn("/rig /queue in Grok, Codex, OpenCode, OMP, Pi, or agy", doc.stdout)
         self.assertIn(".config/opencode/skill/delegate-harness", doc.stdout)
         self.assertIn(".omp/agent/skills/delegate-harness", doc.stdout)
@@ -673,45 +679,34 @@ class InitPresence(unittest.TestCase):
         self.assertIn(".gemini/antigravity-cli/skills/delegate-harness", doc.stdout)
 
     def test_doctor_reports_json_mcp_present(self):
+        sys.path.insert(0, str(ROOT / "tests"))
+        from mcp_test_support import seed_installed_mcp
+
         proc = run_rig(self.repo, "init", env={"PATH": _stub_path()})
         self.assertEqual(proc.returncode, 0, proc.stderr)
         home = self.repo / "mcp-home"
-        oc = home / ".config" / "opencode" / "opencode.json"
-        oc.parent.mkdir(parents=True)
-        launcher = str(home / "rig-mcp.sh")
-        oc.write_text(
-            json.dumps(
-                {
-                    "mcp": {
-                        "rig": {
-                            "type": "local",
-                            "command": [launcher],
-                            "enabled": True,
-                        }
-                    }
-                }
-            )
-        )
-        omp = home / ".omp" / "mcp.json"
-        omp.parent.mkdir(parents=True)
-        omp.write_text(json.dumps({"mcpServers": {"rig": {"command": launcher}}}))
-        pi = home / ".pi" / "agent" / "mcp.json"
-        pi.parent.mkdir(parents=True)
-        pi.write_text(json.dumps({"mcpServers": {"rig": {"command": launcher}}}))
-        agy = home / ".gemini" / "config" / "mcp_config.json"
-        agy.parent.mkdir(parents=True)
-        agy.write_text(json.dumps({"mcpServers": {"rig": {"command": launcher}}}))
+        home.mkdir()
+        bins = self.repo / "mcp-bins-ready"
+        bins.mkdir()
+        for name in ("opencode", "omp", "pi", "agy"):
+            _fake_bin(bins, name)
+        launcher = home / "rig-mcp.sh"
+        seed_installed_mcp(home, launcher=launcher)
+        # Invalid/disabled config must not report ready.
+        bad = home / ".config" / "opencode" / "opencode-disabled.json"
+        self.assertFalse(bad.exists())
         doc = run_rig(
             self.repo,
             "doctor",
-            env={"PATH": _stub_path(), "RIG_PARENT": "codex", "HOME": str(home)},
+            env={"PATH": _stub_path(bins), "RIG_PARENT": "codex", "HOME": str(home)},
         )
         self.assertEqual(doc.returncode, 0, doc.stderr)
-        self.assertRegex(doc.stdout, r"opencode:.*mcp\.rig")
-        self.assertRegex(doc.stdout, r"omp:.*mcpServers\.rig")
-        self.assertRegex(doc.stdout, r"pi:.*mcpServers\.rig")
-        self.assertRegex(doc.stdout, r"agy:.*mcpServers\.rig")
-        self.assertIn("pi install npm:pi-mcp-adapter", doc.stdout)
+        self.assertRegex(doc.stdout, r"opencode: ready \(mcp\.rig")
+        self.assertRegex(doc.stdout, r"omp: ready \(mcpServers\.rig")
+        self.assertRegex(doc.stdout, r"pi: ready \(mcpServers\.rig")
+        self.assertRegex(doc.stdout, r"agy: ready \(mcpServers\.rig")
+        self.assertNotIn("pi MCP adapter missing", doc.stdout)
+        self.assertRegex(doc.stdout, r"cursor: excluded")
 
     def test_doctor_pi_adapter_present_skips_hint(self):
         proc = run_rig(self.repo, "init", env={"PATH": _stub_path()})

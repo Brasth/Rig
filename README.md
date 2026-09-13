@@ -46,14 +46,14 @@ After `rig setup` + fully quit the parent once:
 | --- | --- |
 | `/queue …` in Grok, Codex, OpenCode, OMP, Pi | Parks work in **this repo’s** `.rig/queue/`. Does **not** spawn a child. Codex: `/plugins` **Rig Queue** then `/hooks` trust (0.154 has no `/prompts:queue` slash). |
 | HUD | Grok/agy statusline, OMP/Pi widget under the editor, OpenCode sidebar/footer. Shows QUEUE + live/ASK. For Codex, use the optional terminal companion below or `rig tui`; the native hook provides a queue receipt. |
-| Optional shell UI | `rig setup --shell-ui` adds a tmux status row to interactive `codex`/`grok` launches. F8 opens Jobs/Queue/Notices; F9 adds work while the parent runs. Requires tmux 3.3+. |
-| Drain | On a **free** parent turn the parent claims by **id**, names files, writes `brief.md`, then `run-worker.sh`. HUD refresh never spawns. |
+| Optional shell UI | `rig setup --shell-ui` adds a tmux status row to interactive `codex`/`grok` launches. F8 opens Jobs/Queue/Notices; F9 adds work while the parent runs. Requires tmux 3.3+. Session-local mouse: wheel in the main parent pane scrolls history (WheelUp enters copy-mode -e and moves five lines; WheelDown consumed outside copy-mode; returning to the live bottom exits copy-mode). Keyboard Up/Down history remains; F8/F9/popups unchanged. No global/root tmux changes. Needs updated runtime/restart. |
+| Drain | On a **free** parent turn the parent claims by **id**, names files, prepares brief TEXT, then MCP `rig_job_launch` (tool creates `brief.md`). HUD refresh never spawns. |
 
 Before updating an active repository, stop new admissions, finish or cancel existing work, confirm it stopped, and close or reconcile held reservations. Then update every launcher and fully restart all parent/MCP sessions. Mixed old/new admission writers are unsupported. See [safe rollout](docs/usage.md#safe-upgrade-and-rollback).
 
 ## How your prompt is handled
 
-You type in the **parent**. Rig does **not** forward that chat as the child’s prompt. The parent chooses a semantic role and requests `rig_session(role=..., compact=true, terminal_limit=10, case=...)`. Questions and plans stay local. Work assigned to a child becomes a scoped `brief.md`; the chat itself is not forwarded. Full session output remains the API/CLI default.
+You type in the **parent**. Rig does **not** forward that chat as the child’s prompt. The parent chooses a semantic role and requests `rig_session(role=..., compact=true, terminal_limit=10, case=...)`. Questions and plans stay local. Work assigned to a child is prepared as brief TEXT and passed to `rig_job_launch`, which creates the scoped `brief.md`; the chat itself is not forwarded. Full session output remains the API/CLI default.
 
 ```mermaid
 flowchart TD
@@ -63,9 +63,9 @@ flowchart TD
   q -->|no| kind{What kind of request?}
   kind -->|question plan advise| stay[Parent answers here]
   kind -->|docs only| mini[Capable mini writer]
-  kind -->|implement fix SSH| check[Parent reads code names files writes brief.md]
+  kind -->|implement fix SSH| check[Parent reads code names files prepares brief TEXT]
   check --> pick[rig pick]
-  pick -->|run-worker| child[Child edits only the listed files]
+  pick -->|run-worker| child[MCP rig_job_launch creates brief.md → child edits listed files]
   pick -->|parent_writes| self[Register scope then this parent writes]
   mini --> miniStart[Register scope before mini edits]
   miniStart --> evidence
@@ -88,9 +88,11 @@ flowchart TD
 
 Details and walk-throughs: [Usage](docs/usage.md#how-your-prompt-is-handled).
 
+Parent agents launch with MCP `rig_job_launch` (shell `run-worker.sh` is human/internal fallback). Children must call `rig_job_inbox` first; missing handshake fails with exact `child MCP handshake missing` while preserving evidence and ownership. Cursor remains excluded until safe scoped MCP exists.
+
 ## Why the queue exists
 
-While the parent is busy, you can think of more work without wanting to interrupt its current turn. Use **F9** in the companion to save it directly to Rig; this entry does not wait for the host to process another chat prompt. On a free turn the parent claims, briefs, and spawns — up to 3 reserved/running/ASK executions when scopes permit. File protection continues through parent verification and review. Park does **not** spawn.
+While the parent is busy, you can think of more work without wanting to interrupt its current turn. Use **F9** in the companion to save it directly to Rig; this entry does not wait for the host to process another chat prompt. On a free turn the parent claims, prepares brief TEXT, and launches via MCP — up to 3 reserved/running/ASK executions when scopes permit. File protection continues through parent verification and review. Park does **not** spawn.
 
 Longer why (two locks, without vs with): [Usage](docs/usage.md#why-the-queue-exists).
 
@@ -108,8 +110,8 @@ flowchart TD
   name --> overlap{Files conflict with a held scope?}
   overlap -->|yes| skip[Skip this id try the next]
   overlap -->|no| claim[Claim id worker access and files]
-  claim --> brief[Write brief.md]
-  brief --> spawn[run-worker.sh]
+  claim --> brief[Prepare brief TEXT]
+  brief --> spawn[MCP rig_job_launch creates brief.md]
   spawn --> execution["Track execution and answer approvals"]
   execution --> verify["Parent checks requirements and evidence"]
   verify -->|Changes needed| feedback["Parent gives scoped feedback"]
@@ -233,7 +235,7 @@ Jobs and MEMORY are this repo, not the chat. A new thread still sees `.rig/jobs`
 
 In `rig tui`, Tab switches Jobs/Queue; `e` opens the Unicode queue editor, Enter saves, and Esc cancels the draft. Drafts survive a failed save. `x` cancels the selected job or queue item, `l` toggles the activity view, and `q` exits the board without stopping jobs. Snapshots and actions run in the background; the board shows snapshot age and refresh errors.
 
-Parent orchestration is MCP (`rig_session`, `rig_job_wait`, `rig_job_allow` / `rig_job_deny`, requirement/check/accept tools). Launching a child is still `run-worker.sh`. Claude `ask` → allow/deny; never kill that job.
+Parent orchestration is MCP (`rig_session`, `rig_job_launch`, `rig_job_wait`, `rig_job_allow` / `rig_job_deny`, requirement/check/accept tools). REQUIRED agent launch is MCP `rig_job_launch`; shell `run-worker.sh` is human/internal fallback. Claude `ask` → allow/deny; never kill that job.
 
 Execution `ok` means the worker exited successfully. **Verified** means the parent accepted the current scoped content against its requirements; later edits invalidate that acceptance. Job details show actual model provenance, held reservations, checks, and independent-review status separately. Never infer verification from a successful exit.
 

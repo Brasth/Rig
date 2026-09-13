@@ -1,0 +1,435 @@
+#!/usr/bin/env python3
+"""Job-scoped child MCP config and the required inbox handshake."""
+from __future__ import annotations
+
+import json
+import os
+import shutil
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+if str(HERE) not in sys.path:
+    sys.path.insert(0, str(HERE))
+
+import jobs as rig_jobs  # noqa: E402
+
+PROTOCOL = 1
+CONNECTED = "connected"
+UNKNOWN = "unknown"
+LEGACY = "legacy"
+MISSING_REASON = "child MCP handshake missing"
+INBOX_FIRST = "first Rig operation must be rig_job_inbox"
+CURSOR_REASON = (
+    "Cursor CLI has no isolated job-scoped MCP; excluded until a safe --mcp-config exists"
+)
+SCOPED_WORKERS = frozenset({"grok", "codex", "claude", "opencode", "omp", "pi", "agy"})
+BOOTSTRAP_TOOLS = frozenset({"rig_job_inbox", "permission_prompt"})
+HANDSHAKE_TOOL = "rig_job_inbox"
+
+
+def iso_now() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def python_bin() -> str:
+    for path in ("/opt/homebrew/bin/python3", "/usr/local/bin/python3", "/usr/bin/python3"):
+        if os.path.isfile(path) and os.access(path, os.X_OK):
+            return path
+    return sys.executable or "python3"
+
+
+def _home() -> Path:
+    return Path.home()
+
+
+SCHEMA_LABEL = {
+    "grok": "mcp_servers.rig",
+    "codex": "mcp_servers.rig",
+    "opencode": "mcp.rig",
+    "omp": "mcpServers.rig",
+    "pi": "mcpServers.rig",
+    "agy": "mcpServers.rig",
+    "claude": "job mcp.json",
+}
+
+
+def schema_label(worker: str) -> str:
+    return SCHEMA_LABEL.get((worker or "").strip(), "mcp")
+
+
+def config_path(worker: str, home: Path | None = None) -> Path | None:
+    """Installed MCP config path from `rig setup` / doctor. Claude is per-job."""
+    name = (worker or "").strip()
+    root = Path(home) if home is not None else _home()
+    if name == "grok":
+        return root / ".grok" / "config.toml"
+    if name == "codex":
+        return root / ".codex" / "config.toml"
+    if name == "opencode":
+        raw = os.environ.get("OPENCODE_CONFIG", "").strip()
+        return Path(raw).expanduser() if raw else root / ".config" / "opencode" / "opencode.json"
+    if name == "omp":
+        raw = os.environ.get("OMP_MCP", "").strip()
+        return Path(raw).expanduser() if raw else root / ".omp" / "mcp.json"
+    if name == "pi":
+        raw = os.environ.get("PI_CODING_AGENT_DIR") or os.environ.get("PI_AGENT_DIR") or ""
+        base = Path(raw).expanduser() if raw.strip() else root / ".pi" / "agent"
+        return base / "mcp.json"
+    if name == "agy":
+        raw = os.environ.get("AGY_MCP", "").strip()
+        return Path(raw).expanduser() if raw else root / ".gemini" / "config" / "mcp_config.json"
+    return None
+
+
+def _toml_loads():
+    try:
+        import tomllib
+        return tomllib.loads
+    except ImportError:
+        try:
+            import tomli
+            return tomli.loads
+        except ImportError:
+            return None
+
+
+def _simple_toml_value(raw: str):
+    text = raw.strip()
+    if " #" in text and not (text.startswith('"') or text.startswith("'")):
+        text = text.split(" #", 1)[0].strip()
+    if text in {"true", "True"}:
+        return True
+    if text in {"false", "False"}:
+        return False
+    if text.startswith("[") and text.endswith("]"):
+        inner = text[1:-1].strip()
+        if not inner:
+            return []
+        items = []
+        for part in inner.split(","):
+            items.append(_simple_toml_value(part))
+        return items
+    if len(text) >= 2 and text[0] == text[-1] and text[0] in {'"', "'"}:
+        return text[1:-1]
+    if text.lstrip("-").isdigit():
+        return int(text)
+    raise ValueError("unsupported toml value")
+
+
+def _simple_toml(text: str) -> dict | None:
+    tables: dict[str, dict] = {}
+    root: dict = {}
+    current = None
+    try:
+        for line in text.splitlines():
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            if stripped.startswith("[") and stripped.endswith("]"):
+                current = stripped[1:-1].strip()
+                if not current:
+                    return None
+                tables.setdefault(current, {})
+                continue
+            if "=" not in stripped:
+                return None
+            key, _, rest = stripped.partition("=")
+            key = key.strip()
+            if not key:
+                return None
+            value = _simple_toml_value(rest)
+            if current is None:
+                root[key] = value
+            else:
+                tables[current][key] = value
+    except ValueError:
+        return None
+    nested: dict = dict(root)
+    for name, values in tables.items():
+        cursor = nested
+        parts = [part for part in name.split(".") if part]
+        if not parts:
+            return None
+        for part in parts[:-1]:
+            nxt = cursor.get(part)
+            if not isinstance(nxt, dict):
+                nxt = {}
+                cursor[part] = nxt
+            cursor = nxt
+        leaf = cursor.get(parts[-1])
+        if isinstance(leaf, dict):
+            leaf.update(values)
+        else:
+            cursor[parts[-1]] = dict(values)
+    return nested
+
+
+def _load_toml(path: Path) -> dict | None:
+    try:
+        text = path.read_text()
+    except OSError:
+        return None
+    loader = _toml_loads()
+    if loader is not None:
+        try:
+            data = loader(text)
+        except (SystemExit, Exception):
+            return None
+        return data if isinstance(data, dict) else None
+    return _simple_toml(text)
+
+
+def _command_executable(command: str) -> bool:
+    if not command or "\0" in command:
+        return False
+    path = Path(command).expanduser()
+    try:
+        if path.is_file() and os.access(path, os.X_OK):
+            return True
+    except OSError:
+        return False
+    return bool(shutil.which(command))
+
+
+def _bool_flag(value):
+    if value is True or value is False:
+        return value
+    if value in (1, 0):
+        return bool(value)
+    if isinstance(value, str) and value in {"true", "True", "false", "False"}:
+        return value in {"true", "True"}
+    return None
+
+
+def _stdio_entry_ready(entry) -> bool:
+    if not isinstance(entry, dict):
+        return False
+    if "disabled" in entry:
+        disabled = _bool_flag(entry.get("disabled"))
+        if disabled is None or disabled is True:
+            return False
+    if "enabled" in entry:
+        enabled = _bool_flag(entry.get("enabled"))
+        if enabled is None or enabled is False:
+            return False
+    kind = str(entry.get("type") or "stdio").strip().lower()
+    if kind not in {"", "stdio", "local", "command"}:
+        return False
+    command = entry.get("command")
+    args = entry.get("args")
+    if isinstance(command, list):
+        argv = command
+        if args not in (None, []):
+            return False
+    elif isinstance(command, str):
+        if args is None:
+            args = []
+        if not isinstance(args, list):
+            return False
+        argv = [command] + list(args)
+    else:
+        return False
+    if not argv or any(not isinstance(item, str) or not item or "\0" in item for item in argv):
+        return False
+    return _command_executable(argv[0])
+
+
+def _toml_has_rig(path: Path) -> bool:
+    if not path.is_file():
+        return False
+    data = _load_toml(path)
+    if not isinstance(data, dict):
+        return False
+    servers = data.get("mcp_servers")
+    entry = servers.get("rig") if isinstance(servers, dict) else None
+    return _stdio_entry_ready(entry)
+
+
+def _json_rig_entry(data: dict, worker: str):
+    if worker == "opencode":
+        mcp = data.get("mcp")
+        if not isinstance(mcp, dict):
+            return None
+        servers = mcp.get("servers") if isinstance(mcp.get("servers"), dict) else mcp
+        return servers.get("rig")
+    servers = data.get("mcpServers")
+    if not isinstance(servers, dict):
+        return None
+    return servers.get("rig")
+
+
+def _json_has_rig(path: Path, worker: str) -> bool:
+    if not path.is_file():
+        return False
+    try:
+        data = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+        return False
+    if not isinstance(data, dict):
+        return False
+    return _stdio_entry_ready(_json_rig_entry(data, worker))
+
+
+def _contains_pi_adapter(value) -> bool:
+    if isinstance(value, str):
+        return "pi-mcp-adapter" in value
+    if isinstance(value, list):
+        return any(_contains_pi_adapter(item) for item in value)
+    if isinstance(value, dict):
+        return any(_contains_pi_adapter(item) for item in value.values())
+    return False
+
+
+def _pi_adapter_ready(mcp_path: Path) -> bool:
+    settings = mcp_path.parent / "settings.json"
+    try:
+        data = json.loads(settings.read_text()) if settings.is_file() else None
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+        return False
+    return _contains_pi_adapter(data)
+
+
+def worker_binary(worker: str) -> str:
+    name = "cursor-agent" if worker == "cursor" else (worker or "").strip()
+    return shutil.which(name) or ""
+
+
+def worker_mcp_ready(worker: str, *, home: Path | None = None) -> tuple[bool, str]:
+    name = (worker or "").strip()
+    if name == "cursor":
+        return False, CURSOR_REASON
+    if not name or name == "parent":
+        return False, "parent work does not use child MCP"
+    if name not in SCOPED_WORKERS:
+        return False, f"{name} has no isolated job-scoped MCP"
+    if not worker_binary(name):
+        return False, f"binary '{name}' not on PATH"
+    if name == "claude":
+        return True, ""
+    path = config_path(name, home)
+    if path is None:
+        return False, f"{name} has no isolated job-scoped MCP"
+    if name in {"grok", "codex"}:
+        if not _toml_has_rig(path):
+            return False, f"{name} MCP missing — run: rig setup"
+        return True, ""
+    if not _json_has_rig(path, name):
+        return False, f"{name} MCP missing — run: rig setup"
+    if name == "pi" and not _pi_adapter_ready(path):
+        return False, "pi MCP adapter missing — pi install npm:pi-mcp-adapter"
+    return True, ""
+
+
+def job_env(job_dir: Path, job_id: str, repo: Path) -> dict[str, str]:
+    return {
+        "RIG_JOB_DIR": str(Path(job_dir)),
+        "RIG_JOB_ID": str(job_id),
+        "RIG_REPO": str(Path(repo)),
+    }
+
+
+def _server(job_dir: Path, job_id: str, repo: Path) -> dict:
+    return {
+        "command": python_bin(),
+        "args": [str(HERE / "rig_mcp.py")],
+        "env": job_env(job_dir, job_id, repo),
+    }
+
+
+def mcp_payload(job_dir: Path, job_id: str, repo: Path) -> dict:
+    server = _server(job_dir, job_id, repo)
+    return {"mcpServers": {"rig-ask": dict(server), "rig": dict(server)}}
+
+
+def write_job_mcp(job_dir: Path, job_id: str, repo: Path, worker: str) -> dict:
+    """Claude gets explicit --mcp-config. Others inherit RIG_JOB_ID/RIG_JOB_DIR."""
+    job_dir = Path(job_dir)
+    job_dir.mkdir(parents=True, exist_ok=True)
+    ready, reason = worker_mcp_ready(worker)
+    path = job_dir / "mcp.json"
+    path.write_text(json.dumps(mcp_payload(job_dir, job_id, repo), indent=2) + "\n")
+    env = dict(job_env(job_dir, job_id, repo))
+    argv: list[str] = []
+    if worker == "claude":
+        argv = ["--mcp-config", str(path), "--strict-mcp-config"]
+    return {"ready": ready, "reason": reason, "path": str(path), "argv": argv, "env": env}
+
+
+def display_status(meta: dict | None, *, running: bool = False) -> str:
+    obj = meta if isinstance(meta, dict) else {}
+    status = str(obj.get("child_mcp_status") or "").strip()
+    if status:
+        return status
+    if "child_mcp_protocol" in obj or "child_mcp_connected_at" in obj:
+        return UNKNOWN
+    return UNKNOWN if running else LEGACY
+
+
+def handshake_connected(job_dir: Path) -> bool:
+    meta = rig_jobs._read_meta_dict(Path(job_dir))
+    try:
+        protocol = int(meta.get("child_mcp_protocol") or 0)
+    except (TypeError, ValueError):
+        protocol = 0
+    return str(meta.get("child_mcp_status") or "") == CONNECTED and protocol == PROTOCOL
+
+
+def record_handshake(job_dir: Path) -> dict:
+    return rig_jobs.patch_meta(
+        Path(job_dir),
+        child_mcp_status=CONNECTED,
+        child_mcp_connected_at=iso_now(),
+        child_mcp_protocol=PROTOCOL,
+    )
+
+
+def mark_unknown(job_dir: Path) -> dict:
+    """Stamp unknown onto an existing complete job record. Never create a stub."""
+    meta = rig_jobs._read_meta_dict(Path(job_dir))
+    if meta.get("child_mcp_status"):
+        return meta
+    if not meta.get("job_id") or not meta.get("worker") or not meta.get("status"):
+        return meta
+    return rig_jobs.patch_meta(Path(job_dir), child_mcp_status=UNKNOWN, child_mcp_protocol=PROTOCOL)
+
+
+def require_inbox(job_dir: Path, name: str) -> str | None:
+    if name in BOOTSTRAP_TOOLS:
+        return None
+    if handshake_connected(job_dir):
+        return None
+    return INBOX_FIRST
+
+
+def require_success(job_dir: Path) -> str | None:
+    if handshake_connected(job_dir):
+        return None
+    return MISSING_REASON
+
+
+def main(argv: list[str]) -> int:
+    if len(argv) < 2:
+        print("usage: child_mcp.py prepare|require-success <job-dir> [job-id repo worker]", file=sys.stderr)
+        return 2
+    cmd = argv[1]
+    if cmd == "prepare":
+        if len(argv) < 6:
+            print("usage: child_mcp.py prepare <job-dir> <job-id> <repo> <worker>", file=sys.stderr)
+            return 2
+        spec = write_job_mcp(argv[2], argv[3], argv[4], argv[5])
+        print(json.dumps(spec))
+        return 0
+    if cmd == "require-success":
+        reason = require_success(argv[2] if len(argv) > 2 else "")
+        if reason:
+            print(reason, file=sys.stderr)
+            return 1
+        return 0
+    print(f"unknown child_mcp command {cmd}", file=sys.stderr)
+    return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv))

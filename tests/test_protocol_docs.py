@@ -86,6 +86,63 @@ class ProtocolDocumentation(unittest.TestCase):
             meta = json.loads((folder / "meta.json").read_text())
             self.assertNotEqual(verification.assessment(repo, meta, refresh=True)["state"], "verified")
 
+
+    def test_mcp_launch_and_handshake_policy(self):
+        sources = self.protocol_sources()
+        sources["skills/rig-queue/SKILL.md"] = (ROOT / "skills" / "rig-queue" / "SKILL.md").read_text()
+        sources["docs/rig-flow.md"] = (ROOT / "docs" / "rig-flow.md").read_text()
+        for name, source in sources.items():
+            with self.subTest(source=name):
+                self.assertNotIn("Launching a child is still bash", source)
+                self.assertNotIn("There is no spawn-from-MCP tool", source)
+                self.assertIn("rig_job_launch", source)
+        handshake_sources = {
+            "docs/usage.md": sources["docs/usage.md"],
+            "skills/delegate-harness/SKILL.md": sources["skills/delegate-harness/SKILL.md"],
+            "skills/rig-jobs/SKILL.md": sources["skills/rig-jobs/SKILL.md"],
+            "generated parent protocol": sources["generated parent protocol"],
+        }
+        for name, source in handshake_sources.items():
+            with self.subTest(handshake=name):
+                self.assertIn("rig_job_inbox", source)
+                self.assertIn("child MCP handshake missing", source)
+                self.assertRegex(
+                    source.lower(),
+                    r"(human|internal|fallback).{0,100}run-worker|run-worker.{0,100}(human|internal|fallback)",
+                )
+
+    def test_mcp_agent_steps_do_not_precreate_brief_before_launch(self):
+        sources = {
+            "generated parent protocol": (ROOT / "bin" / "rig").read_text().split(
+                "<!-- rig:start -->", 1)[1].split("<!-- rig:end -->", 1)[0],
+            "AGENTS.md": (ROOT / "AGENTS.md").read_text(),
+            "skills/delegate-harness/SKILL.md": (ROOT / "skills" / "delegate-harness" / "SKILL.md").read_text(),
+            "skills/rig-jobs/SKILL.md": (ROOT / "skills" / "rig-jobs" / "SKILL.md").read_text(),
+            "skills/rig-queue/SKILL.md": (ROOT / "skills" / "rig-queue" / "SKILL.md").read_text(),
+        }
+        bad = re.compile(
+            r"(?:write|writes)\s+`?\.rig/jobs/<id>/brief\.md`?\s+then\s+MCP\s+`?rig_job_launch",
+            re.IGNORECASE,
+        )
+        bad_step = re.compile(r"(?m)^\d+\.\s+Write\s+`\.rig/jobs/<id>/brief\.md`")
+        for name, source in sources.items():
+            with self.subTest(source=name):
+                self.assertIsNone(bad.search(source), f"{name} still instructs precreate-then-MCP-launch")
+                self.assertIsNone(bad_step.search(source), f"{name} still has Write .rig/jobs brief step")
+                self.assertRegex(
+                    source.lower(),
+                    r"prepare brief text|pass(?:es)? brief text|brief text \(do not",
+                )
+                self.assertRegex(
+                    source.lower(),
+                    r"(tool|launch)\s+creates|do not (?:mkdir|precreate)|do not mkdir or write",
+                )
+        delegate = sources["skills/delegate-harness/SKILL.md"]
+        self.assertRegex(
+            delegate.lower(),
+            r"human/internal fallback.{0,120}write `?\.rig/jobs/<id>/brief\.md`?",
+        )
+
     def test_documented_mcp_tools_exist_in_server_schema(self):
         sources = [ROOT / "README.md", ROOT / "docs" / "usage.md"]
         sources.extend(ROOT / "skills" / name / "SKILL.md" for name in ("delegate-harness", "rig-jobs", "rig-queue"))

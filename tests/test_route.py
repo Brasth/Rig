@@ -170,43 +170,42 @@ class Pick(unittest.TestCase):
         self.assertEqual(c["worker"], "grok")
         self.assertEqual(c["model"], "")
 
-    def test_codex_explore_is_native_mini(self):
+    def test_codex_explore_stays_with_parent(self):
         c = route.pick("codex", ["grok"], "explore", "trace remaining gates")
-        self.assertEqual(c["spawn"], "native")
-        self.assertEqual(c["worker"], "codex")
-        self.assertEqual(c["native_agent"], "explorer")
-        self.assertEqual(c["model"], "gpt-5.3-codex-mini")
-        self.assertEqual(c["effort"], "low")
+        self.assertEqual(c["spawn"], "run-worker")
+        self.assertEqual(c["worker"], "grok")
+        self.assertEqual(c["native_agent"], "")
+        self.assertFalse(c["parent_writes"])
+        self.assertEqual(c["executor_kind"], "wrapper")
+        stay = route.pick("codex", [], "explore", "trace remaining gates")
+        self.assertEqual(stay["spawn"], "stay")
+        self.assertEqual(stay["executor_kind"], "parent")
 
-    def test_codex_mini_matches_shipped_write_capable_worker(self):
-        agents = Path(__file__).resolve().parents[1] / "adapters" / "codex" / "agents"
-        for kind, agent, sandbox in (
-            ("mini", "worker", "workspace-write"),
-            ("explore", "explorer", "read-only"),
-        ):
-            with self.subTest(kind=kind):
-                template = (agents / f"{agent}.toml").read_text()
-                choice = route.pick("codex", ["grok"], kind, "update the skill")
-                self.assertEqual(choice["native_agent"], agent)
-                self.assertIn(f'model = "{choice["model"]}"', template.splitlines())
-                self.assertIn(f'model_reasoning_effort = "{choice["effort"]}"', template.splitlines())
-                self.assertIn(f'sandbox_mode = "{sandbox}"', template.splitlines())
-                self.assertFalse(choice["parent_writes"])
-                self.assertEqual(choice["executor_kind"], "native_child")
-                self.assertEqual(choice["model_source"], "selected")
+    def test_codex_mini_without_child_is_parent_writes(self):
+        choice = route.pick("codex", [], "mini", "update the skill")
+        self.assertEqual(choice["spawn"], "native")
+        self.assertTrue(choice["parent_writes"])
+        self.assertEqual(choice["executor_kind"], "parent")
+        self.assertEqual(choice["native_agent"], "")
+        child = route.pick("codex", ["grok"], "mini", "update the skill")
+        self.assertEqual(child["spawn"], "run-worker")
+        self.assertEqual(child["worker"], "grok")
+        self.assertFalse(child["parent_writes"])
 
-    def test_other_native_mini_mappings_are_preserved(self):
+    def test_other_native_mini_is_parent_writes(self):
         for live in route.NATIVE_PARENTS - {"codex"}:
             with self.subTest(live=live):
                 choice = route.pick(live, [], "mini", "update the skill")
-                self.assertEqual(choice["native_agent"], "explore")
-                self.assertEqual((choice["model"], choice["effort"]), route.model_for(live, "mini"))
+                self.assertTrue(choice["parent_writes"])
+                self.assertEqual(choice["spawn"], "native")
+                self.assertEqual(choice["worker"], live)
+                self.assertEqual(choice["native_agent"], "")
 
-    def test_codex_bulk_luna_low(self):
+    def test_codex_bulk_uses_mcp_child_when_available(self):
         c = route.pick("codex", ["grok"], "bulk", "rename the helper")
-        self.assertEqual(c["native_agent"], "bulk")
-        self.assertEqual(c["model"], "gpt-5.6-luna")
-        self.assertEqual(c["effort"], "low")
+        self.assertEqual(c["spawn"], "run-worker")
+        self.assertEqual(c["worker"], "grok")
+        self.assertFalse(c["parent_writes"])
 
     def test_hard_codex_parent_has_no_invented_model(self):
         c = route.pick("codex", ["cursor"], "hard", "multi-file architecture")
@@ -274,23 +273,25 @@ class Pick(unittest.TestCase):
         c = route.pick("codex", ["cursor"], "implement", "add a header")
         self.assertEqual(c["spawn"], "native")
         self.assertEqual(c["worker"], "codex")
-        self.assertEqual(c["native_agent"], "worker")
+        self.assertEqual(c["native_agent"], "")
+        self.assertTrue(c["parent_writes"])
 
-    def test_cursor_last_resort_when_parent_cannot_native(self):
+    def test_cursor_only_is_unavailable(self):
         c = route.pick("", ["cursor"], "implement", "add a header")
-        self.assertEqual(c["worker"], "cursor")
-        self.assertEqual(c["spawn"], "run-worker")
-        self.assertEqual(c["model"], "composer-2.5")
-        self.assertEqual(c["effort"], "")
+        self.assertEqual(c["worker"], "")
+        self.assertEqual(c["spawn"], "none")
+        self.assertIn("Cursor", c["reason"])
 
     def test_grok_still_beats_cursor(self):
         c = route.pick("codex", ["grok", "cursor"], "implement", "add a header")
         self.assertEqual(c["worker"], "grok")
 
-    def test_cursor_review_model(self):
+    def test_cursor_review_is_unavailable(self):
         c = route.pick("grok", ["cursor"], "review", "review the writer diff")
-        self.assertEqual(c["worker"], "cursor")
-        self.assertEqual(c["model"], "claude-opus-5-thinking-high")
+        self.assertEqual(c["spawn"], "none")
+        self.assertEqual(c["worker"], "")
+        self.assertEqual(c["independence"], "unavailable")
+        self.assertIn("Cursor", c["reason"])
 
     def test_cursor_explore_model(self):
         self.assertEqual(route.model_for("cursor", "explore"), ("composer-2.5-fast", ""))
@@ -364,25 +365,29 @@ class Pick(unittest.TestCase):
         self.assertEqual(c["worker"], "opencode")
         self.assertEqual(c["model"], "")
         self.assertEqual(c["effort"], "")
-        self.assertEqual(c["native_agent"], "worker")
+        self.assertEqual(c["native_agent"], "")
+        self.assertTrue(c["parent_writes"])
         c = route.pick("opencode", ["cursor", "codex"], "implement", "add a header")
         self.assertEqual(c["spawn"], "native")
         self.assertEqual(c["worker"], "opencode")
         self.assertEqual(c["model"], "")
 
-    def test_opencode_live_explore_is_native(self):
+    def test_opencode_live_explore_stays_with_parent(self):
         c = route.pick("opencode", ["cursor", "codex"], "explore", "trace remaining gates")
-        self.assertEqual(c["spawn"], "native")
-        self.assertEqual(c["worker"], "opencode")
-        self.assertEqual(c["native_agent"], "explore")
-        self.assertEqual(c["model"], "openai/gpt-5.4-mini")
-        self.assertEqual(c["effort"], "minimal")
+        self.assertEqual(c["spawn"], "run-worker")
+        self.assertEqual(c["worker"], "codex")
+        self.assertEqual(c["native_agent"], "")
+        self.assertFalse(c["parent_writes"])
+        self.assertEqual(c["executor_kind"], "wrapper")
+        stay = route.pick("opencode", ["cursor"], "explore", "trace remaining gates")
+        self.assertEqual(stay["spawn"], "stay")
+        self.assertEqual(stay["worker"], "opencode")
 
-    def test_opencode_live_bulk_native_agent(self):
+    def test_opencode_live_bulk_uses_mcp_child_when_available(self):
         c = route.pick("opencode", ["grok"], "bulk", "rename the helper")
-        self.assertEqual(c["spawn"], "native")
-        self.assertEqual(c["worker"], "opencode")
-        self.assertEqual(c["native_agent"], "bulk")
+        self.assertEqual(c["spawn"], "run-worker")
+        self.assertEqual(c["worker"], "grok")
+        self.assertFalse(c["parent_writes"])
 
     def test_omp_live_plus_pi_is_native_omp(self):
         c = route.pick("omp", ["pi"], "implement", "add a header")
@@ -406,19 +411,22 @@ class Pick(unittest.TestCase):
         self.assertEqual(c["worker"], "omp")
         self.assertEqual(c["spawn"], "run-worker")
 
-    def test_agy_live_explore_is_native(self):
+    def test_agy_live_explore_stays_with_parent(self):
         c = route.pick("agy", ["cursor", "codex"], "explore", "trace remaining gates")
-        self.assertEqual(c["spawn"], "native")
-        self.assertEqual(c["worker"], "agy")
-        self.assertEqual(c["native_agent"], "explore")
-        self.assertEqual(c["model"], "gemini-3.8-flash-low")
-        self.assertEqual(c["effort"], "low")
+        self.assertEqual(c["spawn"], "run-worker")
+        self.assertEqual(c["worker"], "codex")
+        self.assertEqual(c["native_agent"], "")
+        self.assertFalse(c["parent_writes"])
+        stay = route.pick("agy", ["cursor"], "explore", "trace remaining gates")
+        self.assertEqual(stay["spawn"], "stay")
+        self.assertEqual(stay["worker"], "agy")
 
     def test_agy_live_implement_is_native_when_grok_claude_off(self):
         c = route.pick("agy", ["cursor", "codex"], "implement", "add a header")
         self.assertEqual(c["spawn"], "native")
         self.assertEqual(c["worker"], "agy")
-        self.assertEqual(c["native_agent"], "worker")
+        self.assertEqual(c["native_agent"], "")
+        self.assertTrue(c["parent_writes"])
         self.assertEqual(c["model"], "")
         self.assertEqual(c["effort"], "")
 
@@ -487,8 +495,9 @@ class Pick(unittest.TestCase):
 
     def test_first_pick_cursor_only_still_cursor(self):
         c = route.pick("", ["cursor"], "implement", "add a header")
-        self.assertEqual(c["worker"], "cursor")
-        self.assertEqual(c["spawn"], "run-worker")
+        self.assertEqual(c["worker"], "")
+        self.assertEqual(c["spawn"], "none")
+        self.assertIn("Cursor", c["reason"])
 
     def test_native_implement_parent_writes(self):
         c = route.pick("grok", ["cursor", "codex"], "implement", "add a header")
@@ -503,9 +512,14 @@ class Pick(unittest.TestCase):
 
     def test_native_explore_is_not_parent_writes(self):
         c = route.pick("grok", ["claude"], "explore", "trace remaining gates")
-        self.assertEqual(c["spawn"], "native")
+        self.assertEqual(c["spawn"], "run-worker")
+        self.assertEqual(c["worker"], "claude")
         self.assertFalse(c["parent_writes"])
-        self.assertEqual(c["model"], "grok-4.5")
+        self.assertEqual(c["model"], "claude-haiku-4-5-20251001")
+        stay = route.pick("grok", [], "explore", "trace remaining gates")
+        self.assertEqual(stay["spawn"], "stay")
+        self.assertFalse(stay["parent_writes"])
+        self.assertIn("no MCP-capable child", stay["reason"])
 
     def test_native_hard_parent_writes_on_each_parent(self):
         for live in route.NATIVE_PARENTS:
@@ -563,23 +577,32 @@ class Pick(unittest.TestCase):
                         self.assertNotIn(route.model_for(live, role)[0], choice["reason"])
 
     def test_child_choices_ignore_parent_metadata(self):
-        for live, effective, role, executor in (
-            ("codex", [], "mini", "native_child"),
-            ("codex", ["grok"], "implement", "wrapper"),
-        ):
-            with self.subTest(executor=executor):
-                choice = route.pick(
-                    live, effective, role, "fix the parser",
-                    parent_model="gpt-6-astra", parent_effort="max",
-                )
-                self.assertNotEqual(choice["model"], "gpt-6-astra")
-                self.assertEqual(choice["executor_kind"], executor)
-                self.assertEqual(choice["model_source"], "selected")
+        choice = route.pick(
+            "codex", ["grok"], "implement", "fix the parser",
+            parent_model="gpt-6-astra", parent_effort="max",
+        )
+        self.assertNotEqual(choice["model"], "gpt-6-astra")
+        self.assertEqual(choice["executor_kind"], "wrapper")
+        self.assertEqual(choice["model_source"], "selected")
+        # No native child: empty effective mini is parent_writes with observed parent model.
+        parent = route.pick(
+            "codex", [], "mini", "fix the parser",
+            parent_model="gpt-6-astra", parent_effort="max",
+        )
+        self.assertTrue(parent["parent_writes"])
+        self.assertEqual(parent["executor_kind"], "parent")
+        self.assertEqual(parent["model"], "gpt-6-astra")
+        self.assertEqual(parent["model_source"], "observed")
+        # Mini with last-resort wrapper prefers wrapper before parent_writes.
+        wrapped = route.pick("codex", ["opencode"], "mini", "docs only")
+        self.assertEqual(wrapped["spawn"], "run-worker")
+        self.assertEqual(wrapped["worker"], "opencode")
+        self.assertFalse(wrapped["parent_writes"])
 
     def test_only_selected_child_catalog_is_loaded(self):
         for live, effective, role, expected in (
             ("", ["opencode", "omp", "pi", "agy"], "implement", "opencode"),
-            ("pi", ["opencode", "omp", "agy"], "explore", "pi"),
+            ("pi", ["opencode", "omp", "agy"], "explore", "opencode"),
         ):
             with self.subTest(expected=expected):
                 with patch.object(route.rig_catalog, "load_catalog", return_value=[]) as load:

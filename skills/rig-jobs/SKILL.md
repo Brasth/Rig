@@ -18,13 +18,17 @@ Do not guess. Use MCP. The parent checks this board and MUST spawn workers for c
 Do not shell `rig` for jobs, wait, allow, deny, log, or message when MCP is listed.
 
 - Ownership/assessment: `rig_job_requirements` / `rig_job_check` / `rig_job_accept` / `rig_job_close` / `rig_job_reconcile`.
-- Instant: `rig_session` / `rig_jobs` / `rig_job_show` / `rig_job_log` / `rig_job_allow` / `rig_job_deny` / `rig_job_cancel` / `rig_job_message` / `rig_queue_list` / `rig_queue_claim` / `rig_memory` / `rig_pick` / `rig_status` / `rig_job_start` / `rig_job_finish` / `rig_job_record`
+- Instant: `rig_session` / `rig_jobs` / `rig_job_show` / `rig_job_log` / `rig_job_launch` / `rig_job_allow` / `rig_job_deny` / `rig_job_cancel` / `rig_job_message` / `rig_queue_list` / `rig_queue_claim` / `rig_queue_spawned` / `rig_memory` / `rig_pick` / `rig_status` / `rig_job_start` / `rig_job_finish` / `rig_job_record`
 - Wait: `rig_job_wait` (one blocking call, no timeout for observable wrappers; pass `ids` for live wrappers in a review+seed or queue-drain panel)
 - Steer a live child: `rig_job_message` (child pulls `rig_job_inbox`; not ASK)
 
-Launching a child is still bash `run-worker.sh` in the background. There is no spawn-from-MCP tool. Human watch: `rig tui` / `/rig` (do not launch a TUI inside this session).
+REQUIRED parent launch is MCP `rig_job_launch` (pass brief TEXT with files/access/worker/model/effort + owner credentials; the tool creates `.rig/jobs/<id>/` and brief.md — do not precreate that path). Shell `run-worker.sh` is internal/human fallback only (that path may write the brief file first). Human watch: `rig tui` / `/rig` (do not launch a TUI inside this session).
 
 `rig_job_wait`: call **once**, no timeout for normal observable wrapper work. Returns on ASK, result, cancellation, or an explicit reconciliation outcome. After allow, wait **once** more (same ids). Native agents use the owning host's native wait/interrupt and authenticated completion. If MCP wait errors or the transport drops the tool, take one bounded `rig job wait ID --timeout 0` snapshot, then inspect/reconcile; do not blindly resume an indefinite wait. Explicit cancellation never enters this fallback. After implement+verify ok, wait wrapper review+seed together: MCP `ids`.
+
+## Child handshake
+
+Children MUST call `rig_job_inbox` first. Handshake records connected/time/protocol 1. No success without it; fail exact `child MCP handshake missing` while preserving evidence and ownership. Permission bootstrap does not count as handshake. Restricted child tools: inbox/doing/note/ask/own show/project memory. Parent steering uses `rig_job_message`. Legacy/unknown jobs are not retroactively failed. Cursor remains excluded (no safe scoped MCP). Durable `.rig/jobs/<id>/` files: `launcher.log` (prechild), `stdout.log`, `activity.json`, `meta.json`, `result.json`, `inbox.json`, ask/reply, evidence. Detached wrapper survives parent/MCP shutdown. `stdout.log` prunes only after successful decoded activity; failures retain it.
 
 ## First call
 

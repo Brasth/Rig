@@ -17,7 +17,7 @@ Plain interactive `codex` and `grok` launches then open with a Rig status row. E
 
 ## From request to checked result
 
-The parent reads your request and decides what work is needed. Questions and planning can stay in the conversation. For execution, it selects a worker, names the files involved, and reserves that scope before edits begin. Queued work is claimed by item ID. The child receives a focused `brief.md` containing its task and boundaries.
+The parent reads your request and decides what work is needed. Questions and planning can stay in the conversation. For execution, it selects a worker, names the files involved, and reserves that scope before edits begin. Queued work is claimed by item ID. The parent prepares brief TEXT and passes it to `rig_job_launch`, which creates the focused `brief.md` the child receives.
 
 ```mermaid
 flowchart TD
@@ -26,9 +26,10 @@ flowchart TD
     decide -->|Yes| scope[Select worker and reserve file scope]
     pending[Persisted queue item] --> free[Parent has a free orchestration turn]
     free --> claim[Claim item by ID with worker and files]
-    scope --> brief[Write scoped brief.md]
+    scope --> brief[Prepare scoped brief TEXT]
     claim --> brief
-    brief --> execute[Worker executes]
+    brief --> launch[MCP rig_job_launch creates brief.md]
+    launch --> execute[Worker executes]
     execute --> verify[Parent inspects evidence and runs checks]
     verify -->|Needs correction| feedback[Parent gives feedback]
     feedback --> execute
@@ -60,7 +61,7 @@ The parent stays in the main terminal; there is no permanent side panel. Esc lea
 | What you use | Where the work goes | What starts execution |
 | --- | --- | --- |
 | Host's native prompt queue | Managed by that CLI for its conversation | Host behavior; not a Rig claim |
-| Rig F9, popup `e`, `/queue …`, or `rig queue add` | This repository's persisted `.rig/queue/` | Parent later claims, briefs, and launches on a free turn |
+| Rig F9, popup `e`, `/queue …`, or `rig queue add` | This repository's persisted `.rig/queue/` | Parent later claims, prepares brief TEXT, and MCP-launches on a free turn |
 
 Typing into a host's native prompt queue is not a receipt for a Rig queue item. Host submit hooks also depend on when that host processes input. F9 talks directly to the companion service and returns a saved queue receipt independently of the parent's turn. `/queue` availability varies by host; see the [adapter table](usage.md#watch-jobs-memory).
 
@@ -78,6 +79,10 @@ Parking, refreshing the status row, and opening a popup **never dispatch workers
 | Confirmed stopped | Execution slot is free; explicitly close cancelled work to release held files. |
 
 Closing a popup does not undo a submitted action. If an action receipt becomes uncertain after an observer restart, inspect the item before retrying. After explicit cancellation, the parent must not automatically re-wait, re-pick, or drain pending work. See [recovery](usage.md#queue-ownership-and-recovery).
+
+## Session-local mouse (companion)
+
+Mouse is session-local only (no global/root tmux changes). Wheel in the main parent pane controls scrollback history: WheelUp enters `copy-mode -e` and scrolls five lines immediately; WheelDown is consumed outside copy-mode; returning to the live bottom exits copy-mode. Keyboard Up/Down history remains. F8/F9 and popups are unchanged. Requires an updated Rig runtime and a companion session restart. Manual mouse/trackpad acceptance on Codex+Grok (private/nested tmux, alternate screen, detach) remains a physical check, not covered by this suite.
 
 ## Companion coverage
 
