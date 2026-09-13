@@ -4,6 +4,8 @@ import os
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -738,112 +740,76 @@ class McpDispatch(unittest.TestCase):
 
     def test_wait_request_pins_partial_target_for_refresh_and_cancel(self):
         target = self._session_job("original-target", "running")
-        message = {
-            "jsonrpc": "2.0", "id": "pinned-request", "method": "tools/call",
-            "params": {"name": "rig_job_wait", "arguments": {
-                "repo": str(self.repo), "id": "original", "timeout": 0,
-            }},
-        }
-        with mock.patch.object(rig_mcp.threading, "Thread") as thread:
-            self.assertIsNone(rig_mcp.handle(message))
-            run_wait = thread.call_args.kwargs["target"]
-        target.rename(self.repo / "retired-target")
-        replacement = self._session_job("new-original-target", "running")
-        try:
-            rig_mcp._abort_wait("pinned-request")
-            self.assertFalse((replacement / "cancel.json").exists())
-            with mock.patch.object(rig_mcp, "write_message") as write:
-                run_wait()
-            result = write.call_args.args[0]["result"]
-            self.assertTrue(result.get("isError"))
-            self.assertIn("original-target", self._text(result))
-        finally:
-            rig_mcp._inflight_waits.pop("pinned-request", None)
-            rig_mcp._wait_threads.remove(thread.return_value)
+        bound, resume = threading.Event(), threading.Event()
+        results = []
+        runtime = rig_mcp.Runtime(rig_mcp._execute_request, results.append, rig_mcp._abort_request)
+        original = jobs.wait_job
+        def held_wait(*args, **kwargs):
+            bound.set()
+            resume.wait(2)
+            return original(*args, **kwargs)
+        with mock.patch.object(rig_mcp, "_runtime", runtime), mock.patch.object(jobs, "wait_job", side_effect=held_wait):
+            runtime.start("pinned-request", "rig_job_wait", {"repo": str(self.repo), "id": "original"}, {})
+            self.assertTrue(bound.wait(2))
+            target.rename(self.repo / "retired-target")
+            replacement = self._session_job("new-original-target", "running")
+            runtime.cancel("pinned-request")
+            resume.set()
+            runtime.shutdown()
+        self.assertFalse((replacement / "cancel.json").exists())
+        self.assertFalse(target.exists())
+        self.assertEqual(results, [])
 
     def test_child_wait_rejected_before_history_lookup_or_registration(self):
-        message = {
-            "jsonrpc": "2.0", "id": "child-wait", "method": "tools/call",
-            "params": {"name": "rig_job_wait", "arguments": {"repo": str(self.repo)}},
-        }
-        with (
-            mock.patch.dict(os.environ, {"RIG_JOB_ID": "child"}),
-            mock.patch.object(jobs, "resolve_job_paths", side_effect=AssertionError("child history access")),
-            mock.patch.object(rig_mcp.threading, "Thread", side_effect=AssertionError("child wait thread")),
-        ):
+        message = {"id": "child-wait", "method": "tools/call", "params": {
+            "name": "rig_job_wait", "arguments": {"repo": str(self.repo)}}}
+        with (mock.patch.dict(os.environ, {"RIG_JOB_ID": "child"}),
+              mock.patch.object(jobs, "resolve_job_paths", side_effect=AssertionError("child history access")),
+              mock.patch.object(rig_mcp.threading, "Thread", side_effect=AssertionError("child wait thread"))):
             reply = rig_mcp.handle(message)
         self.assertTrue(reply["result"].get("isError"))
         self.assertIn("not a child tool", self._text(reply["result"]))
-        self.assertNotIn("child-wait", rig_mcp._inflight_waits)
 
-    def test_wait_lookup_io_failure_is_an_error_without_registering_a_wait(self):
-        message = {
-            "jsonrpc": "2.0", "id": "missing-history", "method": "tools/call",
-            "params": {"name": "rig_job_wait", "arguments": {
-                "repo": str(self.repo), "id": "partial",
-            }},
-        }
+    def test_wait_lookup_io_failure_returns_error_and_prunes_request(self):
         for error in (FileNotFoundError("history disappeared"), PermissionError("history unreadable")):
             with self.subTest(error=type(error).__name__):
-                with (
-                    mock.patch.object(jobs, "resolve_job_paths", side_effect=error),
-                    mock.patch.object(rig_mcp.threading, "Thread", side_effect=AssertionError("unexpected wait thread")),
-                ):
-                    reply = rig_mcp.handle(message)
-                self.assertTrue(reply["result"].get("isError"))
-                self.assertIn(str(error), self._text(reply["result"]))
-                self.assertNotIn("missing-history", rig_mcp._inflight_waits)
+                arrived = threading.Event()
+                results = []
+                def write(value):
+                    results.append(value)
+                    arrived.set()
+                runtime = rig_mcp.Runtime(rig_mcp._execute_request, write, rig_mcp._abort_request)
+                with mock.patch.object(jobs, "resolve_job_paths", side_effect=error):
+                    runtime.start("missing-history", "rig_job_wait", {"repo": str(self.repo), "id": "partial"}, {})
+                    self.assertTrue(arrived.wait(2))
+                self.assertTrue(results[0]["result"].get("isError"))
+                self.assertIn(str(error), self._text(results[0]["result"]))
+                self.assertEqual(runtime.requests, {})
                 self.assertEqual(rig_mcp.handle({"method": "ping", "id": "alive"})["result"], {})
 
     def test_exact_mcp_wait_loads_targets_once_without_history_enumeration(self):
+        from mcp_runtime import Request
         self._session_job("exact-one", "running")
         self._session_job("exact-two", "running")
-        message = {
-            "jsonrpc": "2.0", "id": "exact-request", "method": "tools/call",
-            "params": {"name": "rig_job_wait", "arguments": {
-                "repo": str(self.repo), "ids": ["exact-one", "exact-two"], "timeout": 0,
-            }},
-        }
-        with (
-            mock.patch.object(rig_mcp.threading, "Thread") as thread,
-            mock.patch.object(jobs, "list_jobs", side_effect=AssertionError("unexpected history scan")),
-            mock.patch.object(jobs, "load_job", wraps=jobs.load_job) as load,
-            mock.patch.object(rig_mcp, "write_message") as write,
-        ):
-            self.assertIsNone(rig_mcp.handle(message))
-            thread.call_args.kwargs["target"]()
-            self.assertEqual(load.call_count, 2)
-            self.assertNotIn("isError", write.call_args.args[0]["result"])
-        rig_mcp._wait_threads.remove(thread.return_value)
+        request = Request("exact-request", "rig_job_wait", {
+            "repo": str(self.repo), "ids": ["exact-one", "exact-two"], "timeout": 0}, {})
+        with (mock.patch.object(jobs, "list_jobs", side_effect=AssertionError("unexpected history scan")),
+              mock.patch.object(jobs, "load_job", wraps=jobs.load_job) as load):
+            result = rig_mcp._execute_request(request)
+        self.assertEqual(load.call_count, 2)
+        self.assertNotIn("isError", result)
 
     def test_wait_without_id_scans_once_and_cancel_keeps_selected_job(self):
-        target = self._session_job("selected-running", "running")
-        message = {
-            "jsonrpc": "2.0", "id": "default-request", "method": "tools/call",
-            "params": {"name": "rig_job_wait", "arguments": {
-                "repo": str(self.repo), "timeout": 0,
-            }},
-        }
-        with (
-            mock.patch.object(rig_mcp.threading, "Thread") as thread,
-            mock.patch.object(jobs, "list_jobs", wraps=jobs.list_jobs) as listing,
-        ):
-            self.assertIsNone(rig_mcp.handle(message))
-            self.assertEqual(listing.call_count, 1)
-            run_wait = thread.call_args.kwargs["target"]
-        newer = self._session_job("new-asking", "ask")
-        try:
-            rig_mcp._abort_wait("default-request")
-            self.assertTrue((target / "cancel.json").is_file())
-            self.assertFalse((newer / "cancel.json").exists())
-            with (
-                mock.patch.object(jobs, "list_jobs", side_effect=AssertionError("unexpected rescan")),
-                mock.patch.object(rig_mcp, "write_message"),
-            ):
-                run_wait()
-        finally:
-            rig_mcp._inflight_waits.pop("default-request", None)
-            rig_mcp._wait_threads.remove(thread.return_value)
+        from mcp_runtime import Request
+        original = self._session_job("original", "running")
+        request = Request("default-request", "rig_job_wait", {"repo": str(self.repo), "timeout": 0}, {})
+        with mock.patch.object(jobs, "list_jobs", wraps=jobs.list_jobs) as listing:
+            rig_mcp._execute_request(request)
+        self.assertEqual(listing.call_count, 1)
+        replacement = self._session_job("new-job", "running")
+        rig_mcp._abort_request(request)
+        self.assertTrue(jobs.cancellation.requested(original))
+        self.assertFalse(jobs.cancellation.requested(replacement))
 
     def test_pick_exclude_skips_native(self):
         out = rig_mcp.call_tool(

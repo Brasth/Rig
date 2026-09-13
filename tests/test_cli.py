@@ -13,6 +13,8 @@ RIG = ROOT / "bin" / "rig"
 def run_rig(repo: Path, *args: str, env: dict | None = None) -> subprocess.CompletedProcess:
     merged = os.environ.copy()
     merged["RIG_HOME"] = str(ROOT)
+    # CLI behavior fixtures use the checkout as a read-only runtime.
+    merged["RIG_INSTALL_TRANSACTION"] = "1"
     merged["PATH"] = f"{ROOT / 'bin'}:{merged.get('PATH', '')}"
     merged["RIG_SKIP_UPDATE_CHECK"] = "1"
     merged["RIG_SKIP_MODEL_CATALOG"] = "1"

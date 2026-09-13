@@ -520,6 +520,44 @@ class AdmissionTests(unittest.TestCase):
         with self.assertRaisesRegex(admission.AdmissionError, "overlap"):
             self.reserve("intruder")
 
+    def test_late_cancellation_preserves_confirmed_queue_outcome(self):
+        for outcome in ("ok", "fail", "timeout"):
+            with self.subTest(outcome=outcome):
+                item = work_queue.add_item(self.repo, "work " + outcome)
+                lease = self.reserve("late-" + outcome, queue_id=item["id"], files=[outcome + ".py"])
+                self.activate(lease)
+                # The marker arrives after the confirmed reservation commit but
+                # before the queue projection can be replayed.
+                with mock.patch.object(admission, "_queue_update", side_effect=OSError("crash")):
+                    with self.assertRaises(OSError):
+                        self.finish(lease, status=outcome, completion={"kind": "parent_task", "completed": True})
+                folder = self.repo / ".rig" / "jobs" / lease["job_id"] / "cancellation"
+                folder.mkdir(parents=True, exist_ok=True)
+                (folder / (lease["attempt_id"] + ".json")).write_text(json.dumps({
+                    "attempt_id": lease["attempt_id"], "reservation_id": lease["reservation_id"]}))
+                result = self.finish(lease, status=outcome)
+                self.assertEqual(result["execution_status"], outcome)
+                self.assertEqual(work_queue.load_item(self.repo, item["id"])["status"], "done")
+                self.close(lease)
+                self.assertEqual(work_queue.load_item(self.repo, item["id"])["status"], "done")
+
+    def test_finish_replays_queue_projection_after_write_failure(self):
+        lease = self.reserve()
+        self.activate(lease)
+        with mock.patch.object(admission, "_queue_update", side_effect=OSError("projection unavailable")):
+            with self.assertRaises(OSError):
+                self.finish(lease, completion={"kind": "parent_task", "completed": True})
+        record = admission.get_reservation(self.repo, lease["reservation_id"])
+        self.assertTrue(record["stopped"])
+        self.assertFalse(record["slot_held"])
+        self.assertEqual(record["pending_operation"], "queue_done")
+        with mock.patch.object(admission, "_queue_update") as projection, \
+             mock.patch.object(admission, "_stopped", side_effect=AssertionError("terminal state must not be reopened")):
+            retried = self.finish(lease)
+        projection.assert_called_once()
+        self.assertNotIn("pending_operation", retried)
+        self.assertTrue(retried["stopped"])
+
     def test_finished_execution_result_cannot_be_promoted(self):
         lease = self.reserve()
         self.activate(lease)

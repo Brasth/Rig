@@ -4,6 +4,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -25,7 +26,7 @@ class VerificationFlow(unittest.TestCase):
         (self.repo / ".gitignore").write_text(".rig/\n")
         subprocess.run(["git", "init", "-q", str(self.repo)], check=True, capture_output=True)
         self.enterContext(patch.dict(os.environ, {
-            "RIG_PARENT": "codex", "RIG_HOME": str(ROOT), "RIG_SKIP_UPDATE_CHECK": "1",
+            "RIG_PARENT": "codex", "RIG_HOME": str(ROOT), "RIG_INSTALL_TRANSACTION": "1", "RIG_SKIP_UPDATE_CHECK": "1",
             "RIG_SKIP_MODEL_CATALOG": "1", "RIG_JOB_ID": "", "RIG_JOB_DIR": "",
             "RIG_JOB_FILES": "", "RIG_JOB_FILES_JSON": "",
             "RIG_THREAD": "verification-flow-parent",
@@ -104,16 +105,21 @@ class VerificationFlow(unittest.TestCase):
         argv = [sys.executable, "-c", "print('checked')"]
         self.value(self.tool("rig_job_requirements", id=name, requirements=[{"id": "check", "argv": argv}], manual_criteria=[], **self.auth(name)))
         sent = []
-        with patch.object(rig_mcp, "write_message", sent.append):
+        completed = threading.Event()
+        def record(message):
+            sent.append(message)
+            if message.get("id") == 91:
+                completed.set()
+        with patch.object(rig_mcp, "write_message", record):
             reply = rig_mcp.handle({"jsonrpc": "2.0", "id": 91, "method": "tools/call", "params": {
                 "name": "rig_job_check", "arguments": {"repo": str(self.repo), "id": name, "name": "check", "argv": argv, **self.auth(name)},
                 "_meta": {"progressToken": "check-request-token"},
             }})
-            rig_mcp._wait_threads[-1].join(timeout=10)
+            self.assertTrue(completed.wait(10), "check response was not delivered")
         self.assertIsNone(reply)
         reply = next(event for event in sent if event.get("id") == 91)
         self.assertFalse(reply["result"].get("isError"), reply)
-        self.assertTrue(sent)
+        self.assertTrue(any(event.get("method") == "notifications/progress" for event in sent))
         for event in (event for event in sent if event.get("method") == "notifications/progress"):
             self.assertEqual(event["params"]["progressToken"], "check-request-token")
             self.assertNotIn("total", event["params"])

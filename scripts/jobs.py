@@ -8,6 +8,8 @@ import re
 import signal
 import sys
 import time
+import threading
+import cancellation
 from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
@@ -64,7 +66,7 @@ def repo_root(start: str | None = None) -> Path:
                 marker = None
             if kit is None or marker != kit:
                 return p
-        if (p / ".git").is_dir():
+        if (p / ".git").is_dir() or (p / ".git").is_file():
             return p
     return d
 
@@ -502,7 +504,7 @@ def set_doing(job_dir: Path, text: str) -> str:
     line = _first_line(text, 160)
     if not line:
         raise ValueError("doing text required")
-    patch_meta(job_dir, doing=line)
+    patch_meta(job_dir, doing=line, doing_updated_at=iso_now())
     prior = activity_lines(job_dir)
     if not prior or prior[-1] != line:
         write_activity(job_dir, prior + [line], source="child")
@@ -544,6 +546,8 @@ def job_display_state(job: dict, reservation: dict | None = None, verification: 
     reservation = reservation if reservation is not None else job.get("reservation") or {}
     verification = verification if verification is not None else job.get("verification_summary") or job.get("verification") or {}
     effective = job.get("effective") or job.get("status")
+    if effective == "cancel_requested":
+        return "needs-input"
     if effective == "ask":
         return "needs-input"
     if effective == "cancelled":
@@ -571,6 +575,9 @@ def project_job(job: dict, repo: Path | None = None, *, refresh: bool = False, c
     import verification
 
     row = dict(job)
+    row["cancellation_state"] = cancellation.state(row)
+    if row["cancellation_state"] and row.get("effective") not in cancellation.TERMINAL:
+        row["effective"] = "cancel_requested"
     assessment = row.get("verification_summary") or row.get("verification") or {}
     if refresh and row.get("dir"):
         root = repo if repo is not None else Path(row["dir"]).parents[2]
@@ -585,7 +592,11 @@ def project_job(job: dict, repo: Path | None = None, *, refresh: bool = False, c
     held = bool(reservation and reservation.get("stage") != "released")
     jid = row.get("job_id") or ""
     action = ""
-    if row.get("effective") == "ask":
+    if row.get("effective") == "cancel_requested":
+        reason = row.get("cancellation_state") or "stop-unconfirmed"
+        action = (f"Owning host: interrupt agent {row.get('native_agent_id') or 'unknown'}; confirm terminal completion"
+                  if reason == "native-cancel-required" else f"rig job reconcile {jid}")
+    elif row.get("effective") == "ask":
         pending = row.get("ask") or {}
         reason = pending.get("preview") or pending.get("tool_name") or "Permission required"
         action = f"rig job allow {jid} | rig job deny {jid}"
@@ -633,7 +644,7 @@ def project_job(job: dict, repo: Path | None = None, *, refresh: bool = False, c
     return row
 
 
-def load_job(job_path: Path) -> dict | None:
+def load_job(job_path: Path, *, include_activity: bool = True) -> dict | None:
     meta_path = job_path / "meta.json"
     if not meta_path.is_file():
         return None
@@ -646,7 +657,7 @@ def load_job(job_path: Path) -> dict | None:
     job_id = str(obj.get("job_id") or job_path.name)
     brief = ""
     brief_path = job_path / "brief.md"
-    if brief_path.is_file():
+    if include_activity and brief_path.is_file():
         try:
             brief = brief_path.read_text(errors="replace")
         except OSError:
@@ -669,8 +680,8 @@ def load_job(job_path: Path) -> dict | None:
     elif pending_ask and (alive or not pid_i):
         effective = "ask"
     log_path = job_path / "stdout.log"
-    activities = decode_log_text(read_log_tail(log_path)) if log_path.is_file() else []
-    if not activities:
+    activities = decode_log_text(read_log_tail(log_path)) if include_activity and log_path.is_file() else []
+    if include_activity and not activities:
         activities = activity_lines(job_path)
     kind = str(obj.get("kind") or "")
     child_doing = str(obj.get("doing") or "").strip()
@@ -763,6 +774,7 @@ def load_job(job_path: Path) -> dict | None:
         "elapsed_s": elapsed_i,
         "task": task,
         "doing": doing,
+        "doing_updated_at": str(obj.get("doing_updated_at") or ""),
         "ask": pending_ask,
         "inbox": pending_inbox,
         "activities": activities,
@@ -928,91 +940,51 @@ def answer_pending(job: dict, behavior: str, message: str = "") -> str:
     if job.get("effective") != "ask":
         return f"rig: job {job['job_id']} is not waiting (status {job.get('effective')})"
     pending = job.get("ask") if isinstance(job.get("ask"), dict) else {}
-    rig_ask.write_reply(
-        Path(job["dir"]),
-        behavior,
-        message,
-        str(pending.get("tool_use_id") or ""),
-    )
+    try:
+        rig_ask.write_reply(
+            Path(job["dir"]), behavior, message,
+            str(pending.get("tool_use_id") or ""), expected=pending,
+        )
+    except ValueError as error:
+        return f"rig: {error}"
     preview = str(pending.get("preview") or pending.get("tool_name") or "tool")
     return f"{behavior} {job['job_id']}  {preview}"
 
 
 def write_cancel_flag(job_dir: Path, reason: str) -> None:
-    path = job_dir / "cancel.json"
-    job_dir.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(json.dumps({"reason": reason, "at": iso_now()}, indent=2) + "\n")
-    tmp.replace(path)
+    cancellation.publish(cancellation.capture(job_dir), reason)
 
 
-def cancel_job(repo: Path, job_id: str | None, reason: str = "parent", *, job_path: Path | None = None) -> str:
-    """Abort a live job. Wrapper kill_tree + status cancelled. Does not touch the queue."""
-    import admission
+def cancel_target(target: dict, reason: str = "parent", *, return_details=False):
+    result = cancellation.publish(target, reason)
+    jid = target["job_id"]
+    if result["state"] == "already-terminal":
+        text = f"already {result['status']} {jid}"
+        return {**result, "text": text} if return_details else text
+    cancellation.dispatch(target)
+    meta = cancellation.current(target)
+    native = meta.get("executor_kind") == "native_child"
+    state = "native-cancel-required" if native else "stop-unconfirmed"
+    action = (f"; owning host must interrupt agent {meta.get('native_agent_id') or 'unknown'} and confirm completion"
+              if native else "; worker shutdown requested; protection remains until stop confirmation")
+    text = f"cancellation requested {jid}: {state}{action}"
+    return {"job_id": jid, "state": state, "requested": True, "text": text} if return_details else text
 
-    with admission.transaction(repo):
-        return _cancel_job_locked(repo, job_id, reason, job_path=job_path)
 
-
-def _cancel_job_locked(repo: Path, job_id: str | None, reason: str, *, job_path: Path | None = None) -> str:
-    job = _load_selected_job(job_path) if job_path is not None else resolve_job(repo, job_id)
-    jid = str(job["job_id"])
-    eff = str(job.get("effective") or "")
-    if eff == "cancelled":
-        return f"cancelled {jid} (already)"
-    if eff in {"ok", "fail", "timeout"}:
-        return f"rig: job {jid} already {eff}"
-    job_dir = Path(job["dir"])
-    write_cancel_flag(job_dir, reason)
-    meta = _read_meta_dict(job_dir)
-    reservation = job.get("reservation") or {}
-    owner = reservation.get("owner") or {}
-    # Signal the wrapper so its trap terminates the child tree and restores
-    # launcher state. meta.pid may identify the child, never the wrapper.
-    pid = owner.get("pid")
-    matching_wrapper = (
-        owner.get("kind") == "wrapper" and isinstance(pid, int) and pid > 0
-        and reservation.get("attempt_id") == meta.get("attempt_id")
-        and owner.get("start_id")
-    )
-    if matching_wrapper:
-        import admission
-
-        current = admission.process_identity(pid)
-        matching_wrapper = current.get("start_id") == owner["start_id"]
-    if matching_wrapper and pid_alive(pid):
-        try:
-            os.kill(int(pid), signal.SIGTERM)
-        except (OSError, ValueError, TypeError):
-            pass
-    worker = str(meta.get("worker") or job.get("worker") or "parent")
-    role = str(meta.get("role") or job.get("role") or "worker")
-    started = str(meta.get("started_at") or job.get("started_at") or iso_now())
-    summary = f"cancelled ({reason})"
-    write_job_files(
-        job_dir,
-        jid,
-        worker,
-        role,
-        "cancelled",
-        130,
-        started,
-        iso_now(),
-        summary,
-        kind=str(meta.get("kind") or ""),
-        thread=str(meta.get("thread") or ""),
-        model_source=str(meta.get("model_source") or "unknown"),
-        capture_evidence=False,
-        legacy_cancel_requested=not bool(meta.get("reservation_id")),
-    )
-    write_state(repo, jid, worker, "cancelled", summary)
-    return f"cancelled {jid}"
+def cancel_job(repo: Path, job_id: str | None, reason: str = "parent", *, job_path: Path | None = None, return_details=False):
+    """Persist intent promptly. Execution completion belongs to its authenticated owner."""
+    path = job_path if job_path is not None else resolve_job_paths(repo, _normalize_wait_ids(job_id))[0]
+    return cancel_target(cancellation.capture(path), reason, return_details=return_details)
 
 
 def format_wait(job: dict, others: list[dict] | None = None) -> str:
     job = project_job(job)
     job_id = job["job_id"]
     eff = job.get("effective")
+    if eff == "cancel_requested":
+        return (f"CANCELLATION REQUESTED {job_id}\n{job.get('cancellation_state') or 'stop-unconfirmed'}; files held\n"
+                f"{job.get('display_action') or 'Confirm termination before closing the job'}\n"
+                "Do not re-pick, re-wait, or drain queued work after this cancellation.")
     if eff == "ask":
         pending = job.get("ask") if isinstance(job.get("ask"), dict) else {}
         preview = str(pending.get("preview") or pending.get("tool_name") or "tool")
@@ -1096,62 +1068,84 @@ def _normalize_wait_ids(
 
 
 def wait_job(
-    repo: Path,
-    job_id: str | None,
-    timeout: float | None = None,
-    on_tick: Callable | None = None,
-    ids: str | list | tuple | set | None = None,
-    resolved_paths: list[Path] | None = None,
+    repo: Path, job_id: str | None, timeout: float | None = None,
+    on_tick: Callable | None = None, ids: str | list | tuple | set | None = None,
+    resolved_paths: list[Path] | None = None, cancel_event=None, targets=None,
 ) -> tuple[int, str]:
-    timeout_s: float | None
-    if timeout is None:
+    """Wait only on observable execution; observer lifetime is independently bounded."""
+    try:
+        timeout_s = None if timeout is None else max(0.0, float(timeout))
+    except (TypeError, ValueError):
         timeout_s = None
-    else:
-        try:
-            timeout_s = float(timeout)
-        except (TypeError, ValueError):
-            timeout_s = None
-    deadline = None if timeout_s is None else time.time() + max(0.0, timeout_s)
-    last_tick: dict[str, tuple[str, str]] = {}
-    names = _normalize_wait_ids(job_id, ids)
-    paths = resolve_job_paths(repo, names) if resolved_paths is None else resolved_paths
+    deadline = None if timeout_s is None else time.monotonic() + timeout_s
+    stop = cancel_event if cancel_event is not None else threading.Event()
+    paths = resolve_job_paths(repo, _normalize_wait_ids(job_id, ids)) if resolved_paths is None else resolved_paths
     if not paths:
         raise SystemExit("rig: no jobs")
-    while True:
-        jobs = [_load_selected_job(path) for path in paths]
-        if on_tick is not None:
-            for job in jobs:
-                key = (str(job.get("effective") or ""), str(job.get("doing") or ""))
-                jid = str(job.get("job_id") or "")
-                prev = last_tick.get(jid)
-                if prev is None:
-                    if job.get("effective") == "running":
+    pinned = targets if targets is not None else [cancellation.capture(path) for path in paths]
+    last_tick = {}
+    unknown_since = {}
+    try:
+        while True:
+            if stop.is_set():
+                return 130, "CANCELLED WAIT: observer stopped; execution stop confirmation is separate. Do not re-wait."
+            try:
+                for target in pinned:
+                    cancellation.current(target)
+                listing = [_load_selected_job(path) for path in paths]
+            except (OSError, ValueError, SystemExit) as error:
+                return 1, f"NEEDS_RECONCILIATION: {error}; protection remains held"
+            if on_tick is not None:
+                for job in listing:
+                    key = (job.get("effective"), job.get("doing"))
+                    jid = job["job_id"]
+                    if key != last_tick.get(jid) and (jid in last_tick or job.get("effective") == "running"):
                         on_tick(job)
                         last_tick[jid] = key
-                elif key != prev:
-                    on_tick(job)
-                    last_tick[jid] = key
-        asks = [job for job in jobs if job.get("effective") == "ask"]
-        if asks:
-            return 2, format_wait(asks[0], others=jobs)
-        live = [job for job in jobs if job.get("effective") == "running"]
-        if not live:
-            cancelled = [job for job in jobs if job.get("effective") == "cancelled"]
-            fails = [
-                job
-                for job in jobs
-                if job.get("effective") in {"fail", "timeout", "stale"}
-            ]
-            text = format_wait_many(jobs)
-            if cancelled and not fails:
-                if len(jobs) == 1:
-                    return 130, format_wait(jobs[0])
-                return 130, text
-            return (1 if fails else 0), text
-        if deadline is not None and time.time() >= deadline:
-            running = live[0]
-            return 124, format_wait(running, others=jobs)
-        time.sleep(0.4)
+            stopping = [job for job in listing if job.get("effective") == "cancel_requested"]
+            if stopping:
+                return 130, "\n".join(format_wait(job) for job in stopping)
+            asks = [job for job in listing if job.get("effective") == "ask"]
+            if asks:
+                return 2, format_wait(asks[0], others=listing)
+            live = [job for job in listing if job.get("effective") == "running"]
+            if not live:
+                cancelled = any(job.get("effective") == "cancelled" for job in listing)
+                # Unknown/nonterminal metadata is never a successful completion.
+                failed = any(job.get("effective") not in {"ok", "cancelled"} for job in listing)
+                text = format_wait_many(listing)
+                return (1 if failed else 130 if cancelled else 0), text
+            if deadline is not None and time.monotonic() >= deadline:
+                return 124, format_wait(live[0], others=listing)
+            for job in live:
+                jid = job["job_id"]
+                if job.get("executor_kind") in {"native_child", "parent"}:
+                    return 1, (f"NEEDS_RECONCILIATION {jid}: native observation required; use the owning host to wait on "
+                               f"agent {job.get('native_agent_id') or 'unknown'} and submit authenticated completion. "
+                               "Parent/MCP liveness is not task completion; protection remains held.")
+                reservation = job.get("reservation") or {}
+                identity = reservation.get("process") or {}
+                if identity:
+                    import admission
+                    liveness = admission._process_state(identity)
+                else:
+                    liveness = "alive" if job.get("pid") and job.get("alive") else "unknown"
+                if liveness == "dead":
+                    return 1, f"NEEDS_RECONCILIATION {jid}: execution process stopped without completion; files held"
+                if liveness == "unknown":
+                    start = unknown_since.setdefault(jid, time.monotonic())
+                    if time.monotonic() - start >= 5:
+                        return 1, f"NEEDS_RECONCILIATION {jid}: execution liveness unavailable; slot and files held"
+                else:
+                    unknown_since.pop(jid, None)
+            stop.wait(min(0.4, max(0, deadline - time.monotonic())) if deadline is not None else 0.4)
+    except KeyboardInterrupt:
+        for target in pinned:
+            try:
+                cancel_target(target, "wait-cancelled")
+            except (OSError, ValueError, SystemExit):
+                pass
+        return 130, "CANCELLATION REQUESTED: stop confirmation is separate. Do not re-wait."
 
 
 def format_table(jobs: list[dict], repo: Path | None = None, *, jobs_snapshot=None) -> str:
@@ -1746,8 +1740,10 @@ def finish_job(
     transition = None
     with admission.transaction(repo):
         meta = _read_meta_dict(job_dir)
-        if meta.get("reservation_id") and (job_dir / "cancel.json").exists() and status != "cancelled":
-            raise ValueError("rig job: cancellation was requested; preserve the cancelled outcome")
+        if meta.get("reservation_id") and cancellation.requested(job_dir) and status != "cancelled":
+            existing = admission.get_reservation(repo, meta["reservation_id"]) or {}
+            if not (existing.get("stopped") and existing.get("execution_status") == status):
+                raise ValueError("rig job: cancellation was requested; preserve the cancelled outcome")
         role = (role or "").strip() or str(meta.get("role") or "").strip() or "worker"
         worker = _resolve_worker(worker, live, preferred, meta)
         credentials = dict(reservation_id=reservation_id, attempt_id=attempt_id, owner_token=owner_token)
@@ -1766,16 +1762,18 @@ def finish_job(
             raise ValueError("rig job: supplied credentials do not belong to this legacy job")
         now = iso_now()
         started = _started_at(job_dir, meta, now)
-        write_job_files(job_dir, job_id, worker, role, status, _exit_code(status), started, now,
+        observed_status = status if transition is None or transition.get("stopped") else "running"
+        write_job_files(job_dir, job_id, worker, role, observed_status, _exit_code(status) if observed_status != "running" else 0,
+                        started, now if observed_status != "running" else "",
                         summary or "", str(meta.get("kind") or "native"), thread=_job_thread(repo),
                         model=model, effort=effort, executor_kind=executor_kind,
                         execution_mode=execution_mode or str(meta.get("execution_mode") or "unknown"),
                         capture_evidence=transition is None or transition.get("stopped") is True)
-        write_state(repo, job_id, worker, status, summary or "")
+        write_state(repo, job_id, worker, observed_status, summary or "")
     persist_activity(job_dir)
-    if status == "ok":
+    if status == "ok" and observed_status == "ok":
         _prune_stdout_log(job_dir)
-    text = _finish_text(job_id, worker, role, status, job_dir)
+    text = _finish_text(job_id, worker, role, observed_status, job_dir)
     if transition and transition.get("needs_reconciliation"):
         text += "\nneeds_reconciliation: completion is unconfirmed; slot and files remain held"
     return {"job_id": job_id, "text": text, "reservation": transition} if return_details else text
@@ -2158,7 +2156,7 @@ def main() -> int:
     if args.cmd == "cancel":
         text = cancel_job(repo, job_id, args.reason or "parent")
         print(text)
-        return 0 if text.startswith("cancelled") else 1
+        return 0 if text.startswith(("cancelled", "cancellation requested", "already")) else 1
     if args.cmd == "wait":
         code, text = wait_job(repo, job_id, args.timeout, ids=wait_ids or None)
         print(text)

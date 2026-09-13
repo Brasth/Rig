@@ -101,9 +101,9 @@ def _ps_field(pid: int, field: str) -> str:
             ["ps", "-o", f"{field}=", "-p", str(pid)],
             capture_output=True,
             text=True,
-            check=False,
+            check=False, timeout=1.0,
         )
-    except OSError:
+    except (OSError, subprocess.TimeoutExpired):
         return ""
     return proc.stdout or ""
 

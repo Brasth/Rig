@@ -19,12 +19,12 @@ Do not shell `rig` for jobs, wait, allow, deny, log, or message when MCP is list
 
 - Ownership/assessment: `rig_job_requirements` / `rig_job_check` / `rig_job_accept` / `rig_job_close` / `rig_job_reconcile`.
 - Instant: `rig_session` / `rig_jobs` / `rig_job_show` / `rig_job_log` / `rig_job_allow` / `rig_job_deny` / `rig_job_cancel` / `rig_job_message` / `rig_queue_list` / `rig_queue_claim` / `rig_memory` / `rig_pick` / `rig_status` / `rig_job_start` / `rig_job_finish` / `rig_job_record`
-- Wait: `rig_job_wait` (one blocking call, no timeout; pass `ids` for every live job, including a review+seed or queue-drain panel)
+- Wait: `rig_job_wait` (one blocking call, no timeout for observable wrappers; pass `ids` for live wrappers in a review+seed or queue-drain panel)
 - Steer a live child: `rig_job_message` (child pulls `rig_job_inbox`; not ASK)
 
 Launching a child is still bash `run-worker.sh` in the background. There is no spawn-from-MCP tool. Human watch: `rig tui` / `/rig` (do not launch a TUI inside this session).
 
-`rig_job_wait`: call **once**, no timeout. Blocks until ASK or result. After allow, wait **once** more (same ids). Do not poll. If MCP wait errors or the host drops the tool, bash `rig job wait` once (no `--timeout`). Do not go back to a 30s poll loop. After implement+verify ok, wait review+seed together: MCP `ids`.
+`rig_job_wait`: call **once**, no timeout for normal observable wrapper work. Returns on ASK, result, cancellation, or an explicit reconciliation outcome. After allow, wait **once** more (same ids). Native agents use the owning host's native wait/interrupt and authenticated completion. If MCP wait errors or the transport drops the tool, take one bounded `rig job wait ID --timeout 0` snapshot, then inspect/reconcile; do not blindly resume an indefinite wait. Explicit cancellation never enters this fallback. After implement+verify ok, wait wrapper review+seed together: MCP `ids`.
 
 ## First call
 
@@ -56,6 +56,7 @@ A new Grok/Codex/OpenCode/OMP/Pi/agy thread does not start a new job board. Jobs
 - display state and its reason: reserved, working, needs-input, verifying, completed-unverified, verified, failed, cancelled; preserve underlying execution `status`/`effective` separately
 - actual model/effort and provenance; unknown means unknown, not the preferred model
 - held reservation scope and whether an execution slot is still held; never owner tokens
+- cancellation state separately: `stop-requested` / `stop-unconfirmed` / `native-cancel-required` are not `stopped`
 - parent verification: current snapshot, checks/manual method, missing/failed requirements, and independent-review status separately
 - task (from the brief)
 - doing (last decoded log line or `activity.json` after the raw log is pruned)
@@ -64,7 +65,7 @@ A new Grok/Codex/OpenCode/OMP/Pi/agy thread does not start a new job board. Jobs
 - Grok child: `open` line is `grok -r <session-id>`
 - For a Rig job, use MCP `rig_job_log`. Do not read Cursor `state.vscdb`, `~/.cursor` sqlite, or other vendor session stores.
 
-If status is `ask` or `running`, the child is still live. **You answer `ask`** with MCP `rig_job_allow` / `rig_job_deny`. Do not kill the job because the child asked. Never spawn another worker because the child asked. User Esc / cancelled wait: MCP `rig_job_cancel` those ids (status `cancelled`; do not re-pick). After implement+verify ok, a second job with disjoint listed files may already be running (seed in parallel with read-only review); wait both ids; do not replace either. Only confirmed spawn-never-started failure permits one `--exclude` re-pick with a fresh ID; empty changed files alone do not prove that. Child ran and failed the patch: escalate.
+**You answer `ask`** with MCP `rig_job_allow` / `rig_job_deny`. Do not kill or replace a job because the child asked. A `running` label without trustworthy execution observation needs reconciliation; it does not justify waiting forever. User Esc / cancelled wait records durable cancellation for attached attempts and returns promptly; `rig_job_cancel` is the explicit equivalent. Never re-wait, re-pick, or drain queued work automatically after explicit cancellation. Pending queue items and unattached jobs stay. After implement+verify ok, a second job with disjoint listed files may already be running (seed in parallel with read-only review); wait observable wrapper IDs together and use host-native wait for native agents. Only confirmed spawn-never-started failure permits one `--exclude` re-pick with a fresh ID; empty changed files alone do not prove that. Child ran and failed the patch: escalate.
 
 Safe worker work (read/edit/test/ssh gather/git) → allow. Destructive/prod/secrets → deny or ask the user. Do not leave `ask` hanging. After allow, wait **once** more (no timeout). Do not poll.
 
@@ -84,7 +85,9 @@ Execution `ok` means the process/task ended successfully. It is completed-unveri
 
 Register native/parent writes with `rig_job_start` before editing. Preserve `structuredContent` credentials (`reservation_id`, `attempt_id`, `owner_token`, initiating owner/session) and the returned private `credentials_path`. CLI `--json` gives the same explicit launch response; shell token transport is `RIG_OWNER_TOKEN`. Never load credentials just from a guessed job ID or HUD thread cache, and never show tokens to the user.
 
-Native finish authenticates the same owner and explicit `parent_task` completion or the specific native agent ID/terminal outcome. Missing completion keeps protection. A cancelled wrapper may still be stopping; files remain held until its process/group/observed descendants stop. Close requires confirmed termination, exact credentials, and rationale; it releases ownership without accepting or retrying work. Reconcile is report-only unless explicitly applied; live/ASK/unknown ownership never expires by age.
+Native finish authenticates the same owner and explicit `parent_task` completion or the specific native agent ID/terminal outcome. Obtain that result through host-native wait/interrupt; Rig MCP cannot invoke host tools or signal the parent instead. Parent/MCP PID is not native completion proof. `native-cancel-required` and missing completion keep protection. A wrapper stop request may still be unconfirmed; files and execution slots remain held until its process/group/observed descendants stop. After confirmed termination the slot can be free, while close still requires exact credentials and rationale to release files without acceptance or retry. Reconcile is report-only unless explicitly applied; live/ASK/unknown ownership never expires by age.
+
+Human TUI: Tab switches Jobs/Queue; `e` opens a nonblocking Unicode editor, Enter saves, Esc cancels the draft, and failed saves retain it. Paste is capped at 2,000 characters. `x` cancels the selected target, `l` toggles in-board activity, and `q` closes the board without stopping jobs. Snapshot age/errors remain visible during slow refreshes.
 
 Parent acceptance with `next=review` retains scope for a fresh independent reviewer attempt, gated by the original writer's current accepted snapshot and actual provider. Use the new holder credentials after transfer. Failed review launch retains protected scope without a slot until a fresh retry or explicit close.
 
