@@ -26,11 +26,11 @@ After `rig setup` + fully quit the parent once:
 | HUD | Grok/agy statusline, OMP/Pi widget under the editor, OpenCode sidebar/footer. Shows QUEUE + live/ASK. Codex has no custom panel — use the hook toast or `rig tui`. |
 | Drain | On a **free** parent turn the parent claims by **id**, names files, writes `brief.md`, then `run-worker.sh`. HUD refresh never spawns. |
 
-Update an existing machine: `rig update`. Then fully quit the parent once.
+Before updating an active repository, finish or cancel its work, confirm it stopped, and close or reconcile held reservations. Then update every launcher and fully restart all parent/MCP sessions. Mixed old/new admission writers are unsupported. See [safe rollout](docs/usage.md#safe-upgrade-and-rollback).
 
 ## How your prompt is handled
 
-You type in the **parent**. Rig does **not** forward that chat as the child’s prompt. The parent classifies the request, and only implement-like work becomes a `brief.md` for a child.
+You type in the **parent**. Rig does **not** forward that chat as the child’s prompt. The parent chooses a semantic role and requests `rig_session(role=..., compact=true, terminal_limit=10, case=...)`. Questions and plans stay local. Work assigned to a child becomes a scoped `brief.md`; the chat itself is not forwarded. Full session output remains the API/CLI default.
 
 ```mermaid
 flowchart TD
@@ -39,15 +39,21 @@ flowchart TD
   q -->|yes| park["Park in .rig/queue - no spawn"]
   q -->|no| kind{What kind of request?}
   kind -->|question plan advise| stay[Parent answers here]
-  kind -->|docs only| mini[Cheap same-CLI write]
+  kind -->|docs only| mini[Capable mini writer]
   kind -->|implement fix SSH| check[Parent reads code names files writes brief.md]
   check --> pick[rig pick]
   pick -->|run-worker| child[Child edits only the listed files]
-  pick -->|parent_writes| self[This parent writes]
+  pick -->|parent_writes| self[Register scope then this parent writes]
+  mini --> miniStart[Register scope before mini edits]
+  miniStart --> evidence
+  self --> evidence[Parent inspects scoped evidence]
   child --> wait[Parent waits]
   wait -->|child asks| allow[allow or deny]
   allow --> wait
-  wait -->|ok| report[Parent reports back to you]
+  wait -->|execution ends| evidence
+  evidence --> checks[Declare requirements and run checks or manual review]
+  checks --> accept[Parent accepts current snapshot or records failure]
+  accept --> report[Parent reports behavior validation and limitations]
 ```
 
 | You type | What happens |
@@ -55,13 +61,13 @@ flowchart TD
 | `How does pick choose a worker?` | Stay. Parent answers. No child. |
 | `Fix the failing tests in tests/test_cli.py` | Parent names files → brief → child (or `parent_writes`). |
 | `/queue fix the sidebar after this job` | Park only. The running child is not interrupted. |
-| `Review the diff I staged` | Review worker, different vendor than the writer. |
+| `Review the diff I staged` | Standalone review; independence stays unknown unless actual writer provenance supports it. |
 
 Details and walk-throughs: [Usage](docs/usage.md#how-your-prompt-is-handled).
 
 ## Why the queue exists
 
-The parent takes **one prompt at a time**. While a child runs (often minutes), you think of more work but cannot send it without interrupting wait/ASK. Park the extras; on a free turn the parent drains, briefs, and spawns — up to 3 live jobs when listed files are disjoint. Park does **not** spawn.
+The parent takes **one prompt at a time**. While a child runs (often minutes), you think of more work but cannot send it without interrupting wait/ASK. Park the extras; on a free turn the parent drains, briefs, and spawns — up to 3 reserved/running/ASK executions when scopes permit. File protection continues through parent verification and review. Park does **not** spawn.
 
 Longer why (two locks, without vs with): [Usage](docs/usage.md#why-the-queue-exists).
 
@@ -76,15 +82,16 @@ flowchart TD
   free -->|no| stayPending[Stays pending]
   free -->|yes| list[List pending by id]
   list --> name[Parent names files]
-  name --> overlap{Files overlap a live writer?}
+  name --> overlap{Files conflict with a held scope?}
   overlap -->|yes| skip[Skip this id try the next]
-  overlap -->|no| claim[Claim that id plus files]
+  overlap -->|no| claim[Claim id worker access and files]
   claim --> brief[Write brief.md]
   brief --> spawn[run-worker.sh]
   spawn --> waitAll[Wait all live ids]
+  waitAll --> verify[Parent checks accepts or closes confirmed-stopped work]
 ```
 
-Cap is `[queue].max_running` (default 3 live `running`+`ask`). Claim **by id** when more than one item is pending. Mid-wait: `/queue` / TUI `e` / `rig queue add` — never a second writer on the same files.
+Cap is `[queue].max_running` (default 3 reserved + running + ASK executions). A stopped job frees its execution slot while its files stay protected until accepted completion or explicit close. Read/read overlap is allowed; writers conflict with held writers and readers. Unknown write scope is exclusive. Claim **by id** when more than one item is pending. Mid-wait: `/queue` / TUI `e` / `rig queue add` — never a second writer on the same files.
 
 ## Install
 
@@ -167,7 +174,9 @@ agy = false
 
 Jobs and MEMORY are this repo, not the chat. A new thread still sees `.rig/jobs`. Running children keep going across threads. Esc/Stop on **this wait** aborts those job ids (`cancelled`) — it does not empty the queue.
 
-Parent orchestration is MCP (`rig_session`, `rig_job_wait`, `rig_job_allow` / `rig_job_deny`). Launching a child is still `run-worker.sh`. Claude `ask` → allow/deny; never kill that job.
+Parent orchestration is MCP (`rig_session`, `rig_job_wait`, `rig_job_allow` / `rig_job_deny`, requirement/check/accept tools). Launching a child is still `run-worker.sh`. Claude `ask` → allow/deny; never kill that job.
+
+Execution `ok` means the worker exited successfully. **Verified** means the parent accepted the current scoped content against its requirements; later edits invalidate that acceptance. Job details show actual model provenance, held reservations, checks, and independent-review status separately. Never infer verification from a successful exit.
 
 More: [Usage](docs/usage.md) (prompt routing, queue scenarios, setup, doctor, troubleshooting).
 Parent spawn protocol: `.agents/skills/delegate-harness/SKILL.md` (also the `<!-- rig:start -->` block in `AGENTS.md`).

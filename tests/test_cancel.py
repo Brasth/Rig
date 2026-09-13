@@ -132,7 +132,11 @@ class CancelJob(unittest.TestCase):
 
     def test_mcp_wait_cancelled_notification_aborts(self):
         sleeper = subprocess.Popen(["sleep", "30"])
-        self.addCleanup(lambda: sleeper.poll() is not None or sleeper.kill())
+        def stop_sleeper():
+            if sleeper.poll() is None:
+                sleeper.kill()
+            sleeper.wait(timeout=5)
+        self.addCleanup(stop_sleeper)
         meta = json.loads((self.d / "meta.json").read_text())
         meta["pid"] = sleeper.pid
         (self.d / "meta.json").write_text(json.dumps(meta) + "\n")
@@ -174,6 +178,9 @@ class CancelJob(unittest.TestCase):
         self.assertEqual(jobs.load_job(self.d)["effective"], "cancelled")
 
     def test_wrapper_honors_cancel_json(self):
+        # This test launches a fresh attempt; pre-existing live metadata is no
+        # longer authorization to reuse a job ID.
+        (self.d / "meta.json").unlink()
         bins = self.repo / "bins"
         bins.mkdir()
         grok = bins / "grok"

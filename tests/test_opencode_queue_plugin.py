@@ -104,6 +104,48 @@ console.log(JSON.stringify({{ parts: (output.parts || []).map((p) => p.text) }})
         self.assertEqual(len(items), 1)
         self.assertIn(marker, json.loads(items[0].read_text()).get("text", ""))
 
+    def test_two_line_hud_keeps_actions_with_old_and_new_payloads(self):
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("node not on PATH")
+        source = ROOT / "adapters" / "opencode" / "tui" / "rig-hud.tsx"
+        cases = [
+            ({"status": "ask", "display_state": "needs-input", "lines": ["rig ASK new-job", "new-job: rig job allow new-job / rig job deny new-job"]}, "rig job allow new-job"),
+            ({"status": "ask", "text": "rig ASK old-job\nagent codex\npermission question\nrig job allow old-job / rig job deny old-job"}, "rig job allow old-job"),
+            ({"status": "running", "lines": ["rig needs-input owner-job", "files held", "rig job reconcile owner-job"]}, "rig job reconcile owner-job"),
+            ({"status": "idle", "lines": ["rig idle", "QUEUE 0"]}, "QUEUE 0"),
+        ]
+        script = f"""
+import * as module from 'node:module';
+import {{ readFileSync }} from 'node:fs';
+import {{ join }} from 'node:path';
+if (typeof module.stripTypeScriptTypes !== 'function') {{
+  console.log(JSON.stringify({{unsupported:true}}));
+}} else {{
+  const source = readFileSync({json.dumps(str(source))}, 'utf8');
+  const helpers = source.slice(source.indexOf('function jobsPy'), source.indexOf('function HudLines'));
+  const code = module.stripTypeScriptTypes(helpers);
+  const calls = [];
+  const run = new Function('spawnSync', 'existsSync', 'homedir', 'join', code + "\\nreturn compactLines(hudLines('/fixture'), 2);");
+  const results = {json.dumps([payload for payload, _ in cases])}.map((payload) => run(
+    (binary, args) => {{ calls.push([binary,args]); return {{stdout:JSON.stringify(payload)}}; }},
+    () => true, () => '/fixture', join
+  ));
+  console.log(JSON.stringify({{results,calls}}));
+}}
+"""
+        result = subprocess.run([node, "--input-type=module"], input=script, capture_output=True, text=True,
+                                cwd=self.repo, timeout=20)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        rendered = json.loads(result.stdout.strip().splitlines()[-1])
+        if rendered.get("unsupported"):
+            self.skipTest("Node TypeScript stripping is unavailable")
+        for lines, (_, expected) in zip(rendered["results"], cases):
+            self.assertLessEqual(len(lines), 2)
+            self.assertTrue(any(expected in line for line in lines), lines)
+        self.assertTrue(all(binary == "python3" and args[1:] == ["hud", "--json"] for binary, args in rendered["calls"]))
+        self.assertFalse((self.repo / ".rig" / "queue").exists())
+
 
 if __name__ == "__main__":
     unittest.main()

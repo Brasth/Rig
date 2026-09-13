@@ -67,7 +67,8 @@ function paint(ctx, cwd) {
   }
   try {
     if (typeof ctx.ui.setStatus === "function") {
-      ctx.ui.setStatus("rig", lines[1] || lines[0] || "rig");
+      const action = lines.find((line) => /\brig job (?:allow|deny|reconcile)\b/.test(line));
+      ctx.ui.setStatus("rig", action || lines[1] || lines[0] || "rig");
     }
   } catch {
     /* no status */

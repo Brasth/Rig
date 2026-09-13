@@ -6,6 +6,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
@@ -237,6 +238,30 @@ class LiveParent(unittest.TestCase):
         self.assertEqual(harness._comm_parent("pi-coding-agent", 1), "pi")
         self.assertEqual(harness._comm_parent("node", 1), "")
         self.assertEqual(harness._comm_parent("pip", 1), "")
+
+
+class StatusSnapshot(unittest.TestCase):
+    def test_status_uses_supplied_empty_snapshot_and_effective_set(self):
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td)
+            _write_harness(repo, 'parent = "codex"\n')
+            root = repo / ".rig" / "jobs"
+            root.mkdir()
+            (root / "empty").mkdir()
+            (root / "corrupt").mkdir()
+            (root / "corrupt" / "meta.json").write_text("not-json")
+            snapshot = jobs.list_jobs(repo)
+            with (
+                mock.patch.object(jobs, "list_jobs", side_effect=AssertionError("unexpected rescan")),
+                mock.patch.object(harness, "effective_workers", side_effect=AssertionError("unexpected worker discovery")),
+            ):
+                status = harness.format_status(
+                    repo, live="grok", jobs_snapshot=snapshot, effective=[], include_jobs=False,
+                )
+            self.assertIn("jobs: 2", status)
+            self.assertIn("effective: none", status)
+            self.assertNotIn("no jobs", status)
+            self.assertNotIn("QUEUE", status)
 
 
 if __name__ == "__main__":

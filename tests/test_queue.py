@@ -10,6 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 import ask as rig_ask  # noqa: E402
+import admission  # noqa: E402
 import harness  # noqa: E402
 import jobs  # noqa: E402
 import work_queue as rig_queue  # noqa: E402
@@ -147,7 +148,7 @@ class QueueFiles(unittest.TestCase):
         self.assertEqual(claimed["id"], item["id"])
         self.assertEqual(claimed["status"], "claimed")
         self.assertEqual(claimed["files"], ["src/jobs.py"])
-        back = rig_queue.unclaim(self.repo, item["id"])
+        back = rig_queue.unclaim(self.repo, item["id"], **admission.credentials(claimed))
         self.assertEqual(back["status"], "pending")
 
     def test_claim_needs_id_when_several_pending(self):
@@ -226,11 +227,11 @@ class QueueFiles(unittest.TestCase):
         with self.assertRaises(rig_queue.QueueError) as ctx:
             rig_queue.check_start(self.repo, "live-3", files=["f3.py"], role="implement")
         self.assertIn("3/3", str(ctx.exception))
-        with self.assertRaises(SystemExit) as start_ctx:
+        with self.assertRaises((SystemExit, admission.AdmissionError)) as start_ctx:
             jobs.start_job(self.repo, worker="grok", role="implement", job_id="live-3")
         self.assertIn("3/3", str(start_ctx.exception))
-        existing = jobs.start_job(self.repo, worker="grok", role="implement", job_id="live-0")
-        self.assertEqual(existing, "live-0")
+        with self.assertRaisesRegex(admission.AdmissionError, "existing job id"):
+            jobs.start_job(self.repo, worker="grok", role="implement", job_id="live-0")
 
     def test_overlap_and_empty_files_block(self):
         self._live_job("writer-a", files=["src/foo.py"])
@@ -240,7 +241,7 @@ class QueueFiles(unittest.TestCase):
         self.assertIn("overlap", str(ctx.exception))
         other = rig_queue.claim_next(self.repo, files=["src/bar.py"])
         self.assertEqual(other["id"], item["id"])
-        rig_queue.unclaim(self.repo, item["id"])
+        rig_queue.unclaim(self.repo, item["id"], **admission.credentials(other))
         self._live_job("writer-empty", files=[], role="implement")
         with self.assertRaises(rig_queue.QueueError) as empty_ctx:
             rig_queue.claim_next(self.repo, files=["src/other.py"])
@@ -254,6 +255,7 @@ class QueueFiles(unittest.TestCase):
         )
         self.assertNotIn("isError", claimed, claimed)
         self.assertIn("claimed", claimed["content"][0]["text"])
+        credentials = admission.credentials(claimed["structuredContent"])
         os.environ["RIG_JOB_FILES"] = "tests/test_queue.py"
         try:
             job_id = jobs.start_job(
@@ -262,6 +264,8 @@ class QueueFiles(unittest.TestCase):
                 role="implement",
                 job_id="q-spawn",
                 summary="add tests",
+                queue_id=item["id"],
+                **credentials,
             )
             spawned = rig_mcp.call_tool(
                 "rig_queue_spawned",
@@ -270,12 +274,14 @@ class QueueFiles(unittest.TestCase):
                     "job_id": job_id,
                     "files": ["tests/test_queue.py"],
                     "repo": str(self.repo),
+                    **credentials,
                 },
             )
         finally:
             os.environ.pop("RIG_JOB_FILES", None)
         self.assertNotIn("isError", spawned, spawned)
-        jobs.finish_job(self.repo, job_id, status="ok", summary="done")
+        jobs.finish_job(self.repo, job_id, status="ok", summary="done", **credentials,
+                        completion={"kind": "native_child", "agent_id": "queue-agent", "terminal": True, "outcome": "ok"})
         loaded = rig_queue.load_item(self.repo, item["id"])
         self.assertEqual(loaded["status"], "done")
 
