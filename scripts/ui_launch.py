@@ -93,6 +93,9 @@ def session_commands(session, repo, host, executable, args, launch_file=None):
         ['set-option', '-t', session, 'status-right', ''],
         ['set-option', '-t', session, 'status-format[0]', '#(' + cli + ' status ' + context + ' --width #{client_width} --manager-key ' + manager + ' --add-key ' + add + ')'],
         ['set-option', '-t', session, 'key-table', table],
+        ['set-option', '-t', session, 'mouse', 'on'],
+        ['bind-key', '-T', table, 'WheelUpPane', 'select-pane -t = ; copy-mode -e ; send-keys -X -N 5 scroll-up'],
+        ['bind-key', '-T', table, 'WheelDownPane', 'select-pane -t ='],
         ['bind-key', '-T', table, manager, 'display-popup', '-E', '-w', '85%', '-h', '80%', cli + ' popup ' + context],
         ['bind-key', '-T', table, add, 'display-popup', '-E', '-w', '85%', '-h', '80%', cli + ' popup ' + context + ' --add'],
     ]
