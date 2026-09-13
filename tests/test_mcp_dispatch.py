@@ -59,6 +59,7 @@ EXISTING_TOOLS = (
     "rig_queue_claim",
     "rig_queue_unclaim",
     "rig_queue_spawned",
+    "rig_job_recover_cancelled",
 )
 CHILD_TOOLS = (
     "rig_job_doing",
@@ -392,6 +393,17 @@ class McpDispatch(unittest.TestCase):
         self.assertEqual(result["worker"], "grok")
         self.assertEqual(result["role"], "explorer")
 
+    def test_finish_status_enum_includes_cancelled_record_does_not(self):
+        schema = {tool["name"]: tool for tool in rig_mcp.TOOLS}
+        self.assertIn("cancelled", schema["rig_job_finish"]["inputSchema"]["properties"]["status"]["enum"])
+        self.assertNotIn("cancelled", schema["rig_job_record"]["inputSchema"]["properties"]["status"]["enum"])
+        denied = rig_mcp.call_tool(
+            "rig_job_record",
+            {"repo": str(self.repo), "worker": "grok", "status": "cancelled", "summary": "no"},
+        )
+        self.assertTrue(denied.get("isError"))
+        self.assertIn("ok|fail|timeout", self._text(denied))
+
     def test_child_tools_hide_parent_and_write_doing(self):
         job_id = "child-mcp"
         job_dir = self.repo / ".rig" / "jobs" / job_id
@@ -416,11 +428,19 @@ class McpDispatch(unittest.TestCase):
             self.assertNotIn("rig_pick", names)
             self.assertNotIn("rig_job_wait", names)
             self.assertNotIn("rig_job_cancel", names)
+            self.assertNotIn("rig_job_recover_cancelled", names)
             self.assertNotIn("rig_job_message", names)
             self.assertNotIn("rig_queue_add", names)
             self.assertNotIn("rig_queue_claim", names)
             blocked = rig_mcp.call_tool("rig_pick", {"case": "x", "repo": str(self.repo)})
             self.assertTrue(blocked.get("isError"))
+            recover = rig_mcp.call_tool(
+                "rig_job_recover_cancelled",
+                {"id": job_id, "repo": str(self.repo), "reservation_id": "x", "attempt_id": "y",
+                 "owner_token": "z", "rationale": "child must not recover"},
+            )
+            self.assertTrue(recover.get("isError"))
+            self.assertIn("not a child tool", self._text(recover))
             inbox0 = rig_mcp.call_tool("rig_job_inbox", {})
             self.assertNotIn("isError", inbox0)
             self.assertEqual(self._text(inbox0), "(empty)")

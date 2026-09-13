@@ -575,7 +575,8 @@ def pick(
         model_source = "observed" if model else "unknown"
         reason = (
             f"{kind}: this parent writes. "
-            "record with rig job record. do not spawn a second same-CLI session."
+            "MCP rig_job_start BEFORE editing: concrete files, access=write, executor_kind=parent; "
+            "retain ownership and finish authenticated. do not spawn a second same-CLI session."
         )
     else:
         model, effort = resolved_model_for(worker, kind, catalogs)

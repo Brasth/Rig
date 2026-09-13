@@ -148,11 +148,69 @@ class LaunchTests(unittest.TestCase):
             commands,
         )
         self.assertIn(['bind-key', '-T', table, 'WheelDownPane', 'select-pane -t ='], commands)
+        self.assertIn(['bind-key', '-T', table, 'MouseDrag1Pane', 'select-pane -t = ; copy-mode -M'], commands)
+        f10 = next(command for command in commands if command[:4] == ['bind-key', '-T', table, 'F10'])
+        self.assertEqual(f10[4:6], ['run-shell', '-b'])
+        self.assertIn('ui_clipboard.py', f10[-1])
+        self.assertIn('--buffer', f10[-1])
+        self.assertIn('-L', f10[-1])
+        self.assertIn('rig-ui', f10[-1])
         self.assertTrue(all('-g' not in command for command in commands))
         self.assertTrue(all('-T' not in command or 'root' not in command for command in commands))
         self.assertTrue(all(command[:2] != ['bind-key', '-n'] for command in commands))
+        self.assertTrue(all(command[:3] != ['bind-key', '-T', 'copy-mode'] for command in commands))
+        self.assertTrue(all(command[:3] != ['set-option', '-s', 'copy-command'] for command in commands))
+        self.assertTrue(all('set-clipboard' not in command for command in commands))
         self.assertEqual(commands[-2][3], 'F8')
         self.assertEqual(commands[-1][3], 'F9')
+
+    def test_clipboard_tmux_target_uses_socket_or_private_name(self):
+        self.assertEqual(ui_launch.clipboard_tmux_target({}), ['-L', 'rig-ui'])
+        self.assertEqual(ui_launch.clipboard_tmux_target({'TMUX': '/tmp/tmux-501/default,1234,0'}), ['-S', '/tmp/tmux-501/default'])
+        self.assertEqual(ui_launch.clipboard_tmux_target({'TMUX': '/tmp/tmux 501/default sock,99,0'}), ['-S', '/tmp/tmux 501/default sock'])
+        self.assertEqual(ui_launch.clipboard_tmux_target({'TMUX': ''}), ['-L', 'rig-ui'])
+
+    def test_existing_server_buffer_copy_targets_current_socket(self):
+        with patch.dict(os.environ, {'TMUX': '/tmp/tmux-501/default,1234,0'}):
+            commands = ui_launch.session_commands('rig-123456abcdef', Path('/repo'), 'codex', '/bin/host', [])
+        table = 'rig-rig-123456abcdef'
+        f10 = next(command for command in commands if command[:4] == ['bind-key', '-T', table, 'F10'])
+        self.assertIn('-S', f10[-1])
+        self.assertIn('/tmp/tmux-501/default', f10[-1])
+        self.assertNotIn('rig-ui', f10[-1])
+        self.assertIn('--buffer', f10[-1])
+        self.assertTrue(all(command[:3] != ['set-option', '-s', 'copy-command'] for command in commands))
+        self.assertEqual(commands[-2][3], 'F8')
+        self.assertEqual(commands[-1][3], 'F9')
+
+    def test_existing_server_buffer_copy_quotes_socket_with_spaces(self):
+        import shlex
+        with patch.dict(os.environ, {'TMUX': '/tmp/tmux 501/default sock,1234,0'}):
+            commands = ui_launch.session_commands('rig-123456abcdef', Path('/repo'), 'codex', '/bin/host', [])
+        table = 'rig-rig-123456abcdef'
+        f10 = next(command for command in commands if command[:4] == ['bind-key', '-T', table, 'F10'])
+        argv = shlex.split(f10[-1])
+        self.assertIn('--buffer', argv)
+        self.assertIn('-S', argv)
+        self.assertEqual(argv[argv.index('-S') + 1], '/tmp/tmux 501/default sock')
+        self.assertNotIn('rig-ui', argv)
+        self.assertNotIn('-L', argv)
+
+    def test_clipboard_hotkey_omits_f10_when_configured_as_manager_or_add(self):
+        table = 'rig-rig-123456abcdef'
+        with patch.dict(os.environ, {'RIG_UI_MANAGER_KEY': 'F10', 'RIG_UI_ADD_KEY': 'F7'}):
+            commands = ui_launch.session_commands('rig-123456abcdef', Path('/repo'), 'codex', '/bin/host', [])
+        self.assertEqual(commands[-2][3], 'F10')
+        self.assertEqual(commands[-1][3], 'F7')
+        self.assertFalse(any(command[:4] == ['bind-key', '-T', table, 'F10'] and command[4] == 'run-shell' for command in commands))
+        self.assertTrue(all('ui_clipboard.py' not in command[-1] for command in commands if command[0] == 'bind-key'))
+        manager = next(command for command in commands if command[:4] == ['bind-key', '-T', table, 'F10'])
+        self.assertEqual(manager[4], 'display-popup')
+        with patch.dict(os.environ, {'RIG_UI_MANAGER_KEY': 'F8', 'RIG_UI_ADD_KEY': 'F10'}):
+            commands = ui_launch.session_commands('rig-123456abcdef', Path('/repo'), 'codex', '/bin/host', [])
+        self.assertEqual(commands[-2][3], 'F8')
+        self.assertEqual(commands[-1][3], 'F10')
+        self.assertFalse(any(command[4] == 'run-shell' for command in commands if command[0] == 'bind-key'))
 
 
 class IsolatedTmuxServer(unittest.TestCase):
@@ -181,6 +239,8 @@ class IsolatedTmuxServer(unittest.TestCase):
         before_root = self._run(['list-keys', '-T', 'root'])
         before_copy = self._run(['list-keys', '-T', 'copy-mode'])
         before_copy_vi = self._run(['list-keys', '-T', 'copy-mode-vi'])
+        before_copy_command = self._run(['show-options', '-s', 'copy-command'])
+        before_set_clipboard = self._run(['show-options', '-s', 'set-clipboard'])
         self.assertEqual(before_global.returncode, 0, before_global.stderr)
         self.assertEqual(before_root.returncode, 0, before_root.stderr)
         commands = ui_launch.session_commands(self.session, Path('/repo'), 'codex', '/bin/host', [])
@@ -197,16 +257,27 @@ class IsolatedTmuxServer(unittest.TestCase):
         self.assertIn('copy-mode -e', keys.stdout)
         self.assertIn('scroll-up', keys.stdout)
         self.assertIn('WheelDownPane', keys.stdout)
+        self.assertIn('MouseDrag1Pane', keys.stdout)
+        self.assertIn('copy-mode -M', keys.stdout)
+        self.assertIn('select-pane -t =', keys.stdout)
         self.assertIn('F8', keys.stdout)
         self.assertIn('F9', keys.stdout)
+        self.assertIn('F10', keys.stdout)
+        self.assertIn('ui_clipboard.py', keys.stdout)
+        drag = self._run(['copy-mode', '-M', '-t', self.session])
+        self.assertEqual(drag.returncode, 0, drag.stderr)
         after_global = self._run(['show-options', '-g', 'mouse'])
         after_root = self._run(['list-keys', '-T', 'root'])
         after_copy = self._run(['list-keys', '-T', 'copy-mode'])
         after_copy_vi = self._run(['list-keys', '-T', 'copy-mode-vi'])
+        after_copy_command = self._run(['show-options', '-s', 'copy-command'])
+        after_set_clipboard = self._run(['show-options', '-s', 'set-clipboard'])
         self.assertEqual(after_global.stdout, before_global.stdout)
         self.assertEqual(after_root.stdout, before_root.stdout)
         self.assertEqual(after_copy.stdout, before_copy.stdout)
         self.assertEqual(after_copy_vi.stdout, before_copy_vi.stdout)
+        self.assertEqual(after_copy_command.stdout, before_copy_command.stdout)
+        self.assertEqual(after_set_clipboard.stdout, before_set_clipboard.stdout)
         self.assertNotIn(table, after_root.stdout)
         # History + copy-mode -e: scroll five up, then enough down proves autoexit.
         self._run(['set-option', '-t', self.session, 'history-limit', '1000'])
@@ -225,5 +296,51 @@ class IsolatedTmuxServer(unittest.TestCase):
         self.assertEqual(cleaned.returncode, 0, cleaned.stderr)
         after_unbind = self._run(['list-keys', '-T', table])
         self.assertNotIn('WheelUpPane', after_unbind.stdout)
+        self.assertNotIn('MouseDrag1Pane', after_unbind.stdout)
         self.assertEqual(self._run(['list-keys', '-T', 'root']).stdout, before_root.stdout)
         self.assertEqual(self._run(['show-options', '-g', 'mouse']).stdout, before_global.stdout)
+        self.assertEqual(self._run(['show-options', '-s', 'copy-command']).stdout, before_copy_command.stdout)
+        self.assertEqual(self._run(['list-keys', '-T', 'copy-mode']).stdout, before_copy.stdout)
+
+    def test_private_server_sets_copy_command_helper(self):
+        import ui_clipboard
+        created = self._run(['new-session', '-d', '-s', self.session, '-c', os.getcwd(), 'sleep', '30'])
+        self.assertEqual(created.returncode, 0, created.stderr)
+        before_root = self._run(['list-keys', '-T', 'root'])
+        before_copy = self._run(['list-keys', '-T', 'copy-mode'])
+        before_copy_vi = self._run(['list-keys', '-T', 'copy-mode-vi'])
+        before_set_clipboard = self._run(['show-options', '-s', 'set-clipboard'])
+        for command in ui_launch.private_server_commands():
+            applied = self._run(command)
+            self.assertEqual(applied.returncode, 0, applied.stderr + ' ' + str(command))
+        copy_command = self._run(['show-options', '-s', '-v', 'copy-command'])
+        self.assertEqual(copy_command.returncode, 0, copy_command.stderr)
+        self.assertEqual(copy_command.stdout.strip(), ui_clipboard.copy_command())
+        self.assertIn('ui_clipboard.py', copy_command.stdout)
+        self.assertEqual(self._run(['list-keys', '-T', 'root']).stdout, before_root.stdout)
+        self.assertEqual(self._run(['list-keys', '-T', 'copy-mode']).stdout, before_copy.stdout)
+        self.assertEqual(self._run(['list-keys', '-T', 'copy-mode-vi']).stdout, before_copy_vi.stdout)
+        self.assertEqual(self._run(['show-options', '-s', 'set-clipboard']).stdout, before_set_clipboard.stdout)
+
+    def test_clipboard_helper_copies_targeted_buffer_and_retains_it(self):
+        import ui_clipboard
+        created = self._run(['new-session', '-d', '-s', self.session, 'sleep', '30'])
+        self.assertEqual(created.returncode, 0, created.stderr)
+        payload = 'café 你好 🎯\nsecond line'
+        loaded = subprocess.run(self.base + ['load-buffer', '-'], input=payload.encode(), capture_output=True)
+        self.assertEqual(loaded.returncode, 0, loaded.stderr)
+        import tempfile
+        with tempfile.TemporaryDirectory() as directory:
+            sink = Path(directory) / 'clip'
+            script = 'import sys; open(sys.argv[1], "wb").write(sys.stdin.buffer.read())'
+            command = [sys.executable, '-c', script, str(sink)]
+            with patch('ui_clipboard.provider', return_value=command):
+                self.assertEqual(ui_clipboard.copy_tmux_buffer(self.base), 0)
+            self.assertEqual(sink.read_bytes(), payload.encode())
+        retained = self._run(['save-buffer', '-'])
+        self.assertEqual(retained.returncode, 0, retained.stderr)
+        self.assertEqual(retained.stdout, payload)
+        with patch('ui_clipboard.provider', return_value=None):
+            self.assertEqual(ui_clipboard.copy_tmux_buffer(self.base), 1)
+        still = self._run(['save-buffer', '-'])
+        self.assertEqual(still.stdout, payload)

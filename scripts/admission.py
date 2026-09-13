@@ -255,6 +255,31 @@ def _legacy_process_state(identity):
     return state
 
 
+def initiating_identity(owner):
+    """Stable recorded actor identity. Session wins; otherwise parent pid+start."""
+    owner = owner or {}
+    session = str(owner.get("session_id") or "").strip()
+    if session:
+        return "session:" + session
+    pid, start = owner.get("parent_pid"), str(owner.get("parent_start_id") or "").strip()
+    if pid and start:
+        return f"parent:{pid}:{start}"
+    return ""
+
+
+def _bind_initiating_identity(actor, existing=""):
+    actor = copy.deepcopy(actor) if isinstance(actor, dict) else {}
+    kept = str(existing or actor.get("initiating_identity") or "").strip()
+    if kept:
+        actor["initiating_identity"] = kept
+        return actor
+    ident = initiating_identity(actor)
+    if not ident:
+        raise AdmissionError("initiating owner identity required")
+    actor["initiating_identity"] = ident
+    return actor
+
+
 def caller_owner(executor_kind, *, owner_session="", owner_pid=None, native_agent_id=""):
     if executor_kind not in {"parent", "native_child", "wrapper"}:
         raise AdmissionError("executor kind must be parent|native_child|wrapper")
@@ -275,10 +300,14 @@ def caller_owner(executor_kind, *, owner_session="", owner_pid=None, native_agen
             break
     parent = process_identity(parent_pid)
     executor = process_identity(owner_pid if owner_pid is not None else os.getpid())
-    return {"kind": executor_kind, "session_id": session,
-            "parent_cli": harness.live_parent(), "parent_pid": parent.get("pid"),
-            "parent_start_id": parent.get("start_id", ""), **executor,
-            "native_agent_id": native_agent_id}
+    owner = {"kind": executor_kind, "session_id": session,
+             "parent_cli": harness.live_parent(), "parent_pid": parent.get("pid"),
+             "parent_start_id": parent.get("start_id", ""), **executor,
+             "native_agent_id": native_agent_id}
+    ident = initiating_identity(owner)
+    if ident:
+        owner["initiating_identity"] = ident
+    return owner
 
 
 def _owner(owner, owner_session="", kind="parent"):
@@ -300,13 +329,21 @@ def _same_actor(left, right):
     ) == (right.get("parent_pid"), right.get("parent_start_id"))
 
 
-def _auth(root, reservation_id, attempt_id, owner_token, owner=None, owner_session=""):
+def match_credentials(root, reservation_id, attempt_id, owner_token, job_id=""):
+    """Token/attempt/job match without requiring the initiating actor to still be alive."""
     _id(attempt_id, "attempt id")
     if not isinstance(owner_token, str) or not owner_token:
         raise AdmissionError("owner credentials required")
     record = _read(_reservation_path(root, reservation_id), required=True)
     if record.get("attempt_id") != attempt_id or not hmac.compare_digest(record.get("owner_token", ""), owner_token):
         raise AdmissionError("reservation attempt or owner credentials mismatch")
+    if job_id and record.get("job_id") != job_id:
+        raise AdmissionError("credentials belong to another job")
+    return record
+
+
+def _auth(root, reservation_id, attempt_id, owner_token, owner=None, owner_session=""):
+    record = match_credentials(root, reservation_id, attempt_id, owner_token)
     actor = _owner(owner, owner_session, record["owner"]["kind"])
     if not _same_actor(record["owner"], actor):
         raise AdmissionError("initiating owner session mismatch")
@@ -527,6 +564,7 @@ def _retain_failed_review(root, record, reason):
 
 def _new_record(*, actor, job_id, queue_id, worker, role, model, access, canonical, declared,
                 source=None, writer_job_id="", writer_snapshot_id=""):
+    actor = _bind_initiating_identity(actor)
     return {"version": 1, "reservation_id": source["reservation_id"] if source else uuid.uuid4().hex,
             "attempt_id": uuid.uuid4().hex, "owner_token": secrets.token_hex(16), "owner": actor,
             "job_id": job_id, "queue_id": queue_id, "writer_job_id": writer_job_id,
@@ -600,8 +638,10 @@ def reserve(repo, *, job_id="", worker="", role="worker", model="", files=None,
                     "files": canonical, "declared_files": declared, "owner": actor, "dry_run": True}
         if source and not writer_job_id:
             record = source
+            previous_ident = (source.get("owner") or {}).get("initiating_identity") or ""
+            keep = previous_ident if _same_actor(source["owner"], actor) else ""
             record.update(job_id=job_id, worker=worker, role=role, model=model,
-                          owner=actor, claim_consumed=bool(job_id))
+                          owner=_bind_initiating_identity(actor, existing=keep), claim_consumed=bool(job_id))
         else:
             record = _new_record(actor=actor, job_id=job_id, queue_id=queue_id, worker=worker, role=role,
                                  model=model, access=access, canonical=canonical, declared=declared,

@@ -31,7 +31,8 @@ import child_mcp as rig_child_mcp  # noqa: E402
 
 PICK_ROLES = ("explore", "mini", "bulk", "implement", "hard", "review", "stay")
 JOB_WORKERS = ("grok", "codex", "claude", "cursor", "opencode", "omp", "pi", "agy", "parent")
-JOB_FINISH_STATUSES = ("ok", "fail", "timeout")
+JOB_RECORD_STATUSES = ("ok", "fail", "timeout")
+JOB_FINISH_STATUSES = ("ok", "fail", "timeout", "cancelled")
 REVIEW_PROPERTIES = {
     "writer_job_id": {"type": "string"},
     "writer_cli": {"type": "string"},
@@ -306,7 +307,8 @@ TOOLS = [
     {
         "name": "rig_job_finish",
         "description": (
-            "Finish a recorded job (ok|fail|timeout). Writes result.json. "
+            "Finish a recorded job (ok|fail|timeout|cancelled). Writes result.json. "
+            "Native cancelled finish still requires matching host completion, not caller attestation. "
             "Does not kill a process."
         ),
         "inputSchema": {
@@ -341,7 +343,7 @@ TOOLS = [
                 "role": {"type": "string"},
                 "status": {
                     "type": "string",
-                    "enum": list(JOB_FINISH_STATUSES),
+                    "enum": list(JOB_RECORD_STATUSES),
                     "description": "Default ok.",
                 },
                 "summary": {"type": "string"},
@@ -667,10 +669,15 @@ TOOLS.extend([
          "files": {"type": "array", "items": {"type": "string"}},
          "rationale": {"type": "string"}, "completion": {"type": "object"},
      }}},
+    {"name": "rig_job_recover_cancelled", "description": "Parent-only. Recover a cancelled native child after the original parent CLI is dead, using exact credentials and Codex host evidence. Dry-run unless apply=true. Does not accept caller terminal=true attestation. Releases files without acceptance.",
+     "inputSchema": {"type": "object", "properties": {
+         **_JOB_REF_PROPERTIES, **_OWNERSHIP_PROPERTIES, "rationale": {"type": "string"},
+         "apply": {"type": "boolean", "default": False},
+     }, "required": ["id", "reservation_id", "attempt_id", "owner_token", "rationale"]}},
 ])
 for _tool in TOOLS:
     _properties = _tool["inputSchema"]["properties"]
-    if _tool["name"] in {"rig_job_start", "rig_job_launch", "rig_job_finish", "rig_job_requirements", "rig_job_check", "rig_job_accept", "rig_job_reconcile", "rig_queue_unclaim", "rig_queue_spawned"}:
+    if _tool["name"] in {"rig_job_start", "rig_job_launch", "rig_job_finish", "rig_job_requirements", "rig_job_check", "rig_job_accept", "rig_job_reconcile", "rig_job_recover_cancelled", "rig_queue_unclaim", "rig_queue_spawned"}:
         _properties.update(_OWNERSHIP_PROPERTIES)
     if _tool["name"] == "rig_job_start":
         _properties.update({"access": {"type": "string", "enum": ["read", "write"]},
@@ -702,6 +709,7 @@ TOOL_ORDER = (
     "rig_job_check",
     "rig_job_close",
     "rig_job_reconcile",
+    "rig_job_recover_cancelled",
     "rig_job_accept",
     "rig_memory",
     "rig_memory_add",
@@ -1218,6 +1226,17 @@ def call_tool(name: str, args: dict, on_tick=None, *, wait_paths: list[Path] | N
                 rationale=_optional_string(args, "rationale"), completion=args.get("completion"),
             )
             return _ok(json.dumps(result, indent=2))
+        if name == "rig_job_recover_cancelled":
+            if not isinstance(args.get("apply", False), bool):
+                raise ValueError("apply must be a boolean")
+            job_id = _optional_string(args, "id").strip()
+            if not job_id:
+                return _err("rig_job_recover_cancelled needs id")
+            result = rig_jobs.recover_cancelled_job(
+                repo, job_id, rationale=_optional_string(args, "rationale"),
+                apply=args.get("apply", False), **_ownership_args(args),
+            )
+            return {**_ok(json.dumps(result, indent=2)), "structuredContent": result}
         if name in {"rig_job_requirements", "rig_job_check", "rig_job_accept"}:
             job_id = _optional_string(args, "id").strip()
             if not job_id:
@@ -1269,6 +1288,8 @@ def call_tool(name: str, args: dict, on_tick=None, *, wait_paths: list[Path] | N
                 return {**_ok(result["job_id"]), "structuredContent": result}
             status = str(args.get("status") or "ok")
             if name == "rig_job_finish":
+                if status not in JOB_FINISH_STATUSES:
+                    return _err("status must be ok|fail|timeout|cancelled")
                 result = rig_jobs.finish_job(
                         repo,
                         job_id,
@@ -1281,6 +1302,8 @@ def call_tool(name: str, args: dict, on_tick=None, *, wait_paths: list[Path] | N
                         completion=args.get("completion"), return_details=True, **_ownership_args(args),
                 )
                 return {**_ok(result["text"]), "structuredContent": result}
+            if status not in JOB_RECORD_STATUSES:
+                return _err("record status must be ok|fail|timeout")
             return _ok(
                 rig_jobs.record_job(
                     repo,

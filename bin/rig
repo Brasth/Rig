@@ -53,6 +53,7 @@ usage: rig <command> [args]
   pick [explore|mini|bulk|implement|hard|review|stay] [--case TEXT] [--exclude NAME] [--json]
   session [--role KIND] [--case TEXT] [--exclude NAME] [--compact] [--terminal-limit 0..100] [--json]
     pick/session metadata: [--parent-model MODEL] [--parent-effort EFFORT] (actual session only)
+  diagram PATH [--ascii] [--popup] [--output PATH]
 
 Stay in Codex, Grok, OpenCode, OMP, Pi, or agy. They can invoke Claude, Cursor, OpenCode, OMP, Pi, agy, or each other.
 EOF
@@ -1312,6 +1313,7 @@ main() {
     job) cmd_job "$@" ;;
     pick) cmd_pick "$@" ;;
     session) cmd_session "$@" ;;
+    diagram) python3 "$(py_script diagram_preview.py)" "$@" ;;
     -h|--help|help|"") usage ;;
     *)
       echo "rig: unknown command '$cmd'" >&2

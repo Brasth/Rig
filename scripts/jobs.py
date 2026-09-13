@@ -1812,6 +1812,21 @@ def reconcile_jobs(repo: Path, job_id: str = "", **options) -> dict:
     return admission.reconcile(repo, job_id=job_id, **options)
 
 
+def recover_cancelled_job(repo: Path, job_id: str, *, reservation_id: str = "", attempt_id: str = "",
+                          owner_token: str = "", owner_session: str = "", rationale: str = "",
+                          apply: bool = False) -> dict:
+    _require_harness(repo)
+    _native_parent_only()
+    import native_recovery
+
+    if not job_id:
+        raise ValueError("rig job: recover-cancelled requires a job ID")
+    return native_recovery.recover_cancelled(
+        repo, job_id=job_id, reservation_id=reservation_id, attempt_id=attempt_id,
+        owner_token=owner_token, owner_session=owner_session, rationale=rationale, apply=apply,
+    )
+
+
 def record_job(
     repo: Path,
     worker: str = "",
@@ -1837,6 +1852,9 @@ def record_job(
     rig_harness.assert_spawn_allowed(repo, worker, live)
     if files is not None:
         raise SystemExit("rig job record is retrospective; start scoped writes before editing")
+    status = (status or "ok").strip() or "ok"
+    if status not in {"ok", "fail", "timeout"}:
+        raise SystemExit("rig job record status must be ok|fail|timeout")
     if meta or status == "running":
         raise SystemExit("rig job record requires a fresh ID and a terminal read-only result")
     return finish_job(
@@ -2035,7 +2053,7 @@ def main() -> int:
             "wait",
             "persist",
             "message",
-            "start", "finish", "record", "close", "reconcile",
+            "start", "finish", "record", "close", "reconcile", "recover-cancelled",
         ],
     )
     parser.add_argument("job_id", nargs="*")
@@ -2077,7 +2095,7 @@ def main() -> int:
     repo = repo_root(args.repo)
     wait_ids = [str(x).strip() for x in (args.job_id or []) if str(x).strip()]
     job_id = wait_ids[0] if wait_ids else None
-    if args.cmd in {"start", "finish", "record", "close", "reconcile"}:
+    if args.cmd in {"start", "finish", "record", "close", "reconcile", "recover-cancelled"}:
         if len(wait_ids) > 1:
             parser.error("this command accepts one job ID")
         ownership = {"reservation_id": args.reservation_id, "attempt_id": args.attempt_id,
@@ -2103,6 +2121,9 @@ def main() -> int:
                 print(result)
             elif args.cmd == "close":
                 print(json.dumps(close_job(repo, job_id or "", rationale=args.rationale, **ownership)))
+            elif args.cmd == "recover-cancelled":
+                print(json.dumps(recover_cancelled_job(repo, job_id or "", rationale=args.rationale,
+                                                       apply=args.apply, **ownership)))
             else:
                 print(json.dumps(reconcile_jobs(repo, job_id or "", queue_id=args.queue_id,
                     apply=args.apply, action=args.action, **ownership,

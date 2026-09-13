@@ -510,6 +510,37 @@ class Pick(unittest.TestCase):
         self.assertEqual(c["worker"], "claude")
         self.assertFalse(c["parent_writes"])
 
+    def test_parent_writes_reason_requires_start_before_edit(self):
+        roles = (
+            ("implement", "add a header"),
+            ("hard", "multi-file architecture"),
+            ("mini", "update the skill"),
+            ("bulk", "rename the helper"),
+        )
+        for live in route.NATIVE_PARENTS:
+            for role, case in roles:
+                with self.subTest(live=live, role=role):
+                    choice = route.pick(live, [], role, case)
+                    self.assertTrue(choice["parent_writes"])
+                    self.assertEqual(choice["spawn"], "native")
+                    self.assertEqual(choice["executor_kind"], "parent")
+                    self.assertEqual(choice["worker"], live)
+                    reason = choice["reason"]
+                    self.assertIn("this parent writes", reason)
+                    self.assertIn("rig_job_start", reason)
+                    self.assertIn("BEFORE editing", reason)
+                    self.assertIn("files", reason)
+                    self.assertIn("access=write", reason)
+                    self.assertIn("executor_kind=parent", reason)
+                    self.assertIn("do not spawn a second same-CLI session", reason)
+                    self.assertNotIn("rig job record", reason)
+                    self.assertNotIn("rig_job_record", reason)
+                    rendered = route.format_text(choice)
+                    self.assertIn("rig_job_start", rendered)
+                    self.assertIn("BEFORE editing", rendered)
+                    self.assertNotIn("rig job record", rendered)
+                    self.assertNotIn("rig_job_record", rendered)
+
     def test_native_explore_is_not_parent_writes(self):
         c = route.pick("grok", ["claude"], "explore", "trace remaining gates")
         self.assertEqual(c["spawn"], "run-worker")
