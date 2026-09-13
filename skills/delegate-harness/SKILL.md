@@ -4,9 +4,9 @@ description: >
   ALWAYS activate when `.rig/harness.toml` exists. MUST run MCP `rig_session`
   (or `rig_pick`) and spawn a Rig worker for code, review, fix, SSH, remote
   debug, or gather in the codebase unless pick parent_writes is true. Parent
-  checks first and writes the brief. Delegate implement, review, explore, or
+  checks first and prepares brief TEXT for MCP launch. Delegate implement, review, explore, or
   split work across Codex, Grok, Claude, Cursor, OpenCode, OMP, Pi, and agy
-  via run-worker.sh.
+  via MCP `rig_job_launch` (shell run-worker is fallback).
 user-invocable: true
 ---
 
@@ -16,23 +16,26 @@ user-invocable: true
 
 When `.rig/harness.toml` exists, do not write app code, review a diff, fix a bug, or SSH yourself **unless pick `parent_writes` is true** (native implement/hard). `run-worker` means you still do not write the patch. Spawn explore/mini for codebase gather only if the parent cannot name the files after a short check.
 
-Parent checks first: read local files, name the cause, write the brief. Parent checks before an implement spawn (name files and the update). Ask / plan / advise stay with the parent. Docs/skills-only: MCP `rig_pick` with `role` mini. If the implement brief already lists files, do not also spawn explore.
+Parent checks first: read local files, name the cause, prepare brief TEXT for launch. Parent checks before an implement spawn (name files and the update). Ask / plan / advise stay with the parent. Docs/skills-only: MCP `rig_pick` with `role` mini. If the implement brief already lists files, do not also spawn explore.
 
-Before `run-worker` / native implement: the brief MUST list files to modify, what to change, what not to change, and acceptance. Put absolute skill file paths the child must follow. Do not spawn "go find and fix". The child does only those files and changes. Do not hunt extra updates.
+Before `run-worker` / native implement: the brief TEXT MUST list files to modify, what to change, what not to change, and acceptance. Put absolute skill file paths the child must follow. Do not spawn "go find and fix". The child does only those files and changes. Do not hunt extra updates.
 
 ## MCP first
 
-Parent orchestration is MCP. Do not shell `rig` for session, pick, wait, allow, deny, jobs, log, message, queue, or memory when those tools are listed.
+Parent orchestration is MCP. Do not shell `rig` for session, pick, wait, allow, deny, jobs, log, message, queue, memory, or launch when those tools are listed.
+
+REQUIRED parent flow: `rig_session` → `rig_queue_claim` when draining → `rig_job_launch` → `rig_queue_spawned` when claimed → `rig_job_wait` → `rig_job_message` / allow / deny → `rig_job_requirements` / `rig_job_check` / `rig_job_accept`.
+`rig_job_launch` inputs: repo/id/case/role/worker/model/effort/access/files/brief plus owner credentials and review provenance when needed. CLI/TUI remain human use and MCP recovery. Shell `run-worker.sh` is internal/human fallback, not the agent default. No separate native subagents without scoped MCP. `parent_writes` is explicit parent work; read-only parent stays if no capable child; independent review is unavailable without a different vendor/provider.
 
 - Parent verification/recovery: `rig_job_requirements` / `rig_job_check` / `rig_job_accept` / `rig_job_close` / `rig_job_reconcile`.
-- Instant: `rig_session` / `rig_pick` / `rig_status` / `rig_jobs` / `rig_job_show` / `rig_job_log` / `rig_job_allow` / `rig_job_deny` / `rig_job_cancel` / `rig_job_message` / `rig_job_start` / `rig_job_finish` / `rig_job_record` / `rig_queue_add` / `rig_queue_list` / `rig_queue_claim` / `rig_queue_unclaim` / `rig_queue_spawned` / `rig_memory` / `rig_memory_add`
+- Instant: `rig_session` / `rig_pick` / `rig_status` / `rig_jobs` / `rig_job_show` / `rig_job_log` / `rig_job_launch` / `rig_job_allow` / `rig_job_deny` / `rig_job_cancel` / `rig_job_message` / `rig_job_start` / `rig_job_finish` / `rig_job_record` / `rig_queue_add` / `rig_queue_list` / `rig_queue_claim` / `rig_queue_unclaim` / `rig_queue_spawned` / `rig_memory` / `rig_memory_add`
 - Wait: one blocking `rig_job_wait` with no timeout for observable wrappers (`ids` for every live wrapper); native agents use host-native wait/interrupt and authenticated completion
-- Child (`RIG_JOB_ID` set): `rig_job_doing` / `rig_job_note` / `rig_job_ask` / `rig_job_inbox` only. Each turn, pull inbox once (empty is fine). Inbox is not ASK and does not wake wait. Do not run the `rig` CLI. Do not pick, wait, spawn, queue, or allow.
+- Child (`RIG_JOB_ID` set): **first** `rig_job_inbox` (handshake connected/time/protocol 1; no success without it; fail exact `child MCP handshake missing` preserving evidence/ownership). Permission bootstrap does not count as handshake. Legacy/unknown jobs are not retroactively failed. Then `rig_job_doing` / `rig_job_note` / `rig_job_ask` / own `rig_job_show` / `rig_memory`. Inbox is not ASK and does not wake wait. Do not run the `rig` CLI. Do not pick, wait, spawn, queue, or allow. Cursor is temporarily excluded even when binary/flag are on.
 
-Still bash (not communication):
+Still bash (human/recovery only):
 
-- Launch the child: `run-worker.sh` in the background. There is no spawn-from-MCP tool.
 - Human watch: `rig tui` / `/rig`
+- Human/internal launch fallback: `run-worker.sh` in the background
 - If MCP is **missing before waiting**, use one normal CLI `rig job wait <id>` for observable wrapper work. If an active wait fails or the transport drops it, take one bounded `rig job wait ID --timeout 0` snapshot, inspect/reconcile, and return to MCP when available. Do not blindly re-wait. Explicit cancellation never enters this fallback.
 
 Parent chooses kind from **this** user's semantic request and **this** user's skills, including non-English requests. Explicit role is authoritative; omitted role uses bounded English inference. Then MCP `rig_pick` with `role` stay|explore|mini|bulk|implement|hard|review. `--case` is the task text, not a slash-command catalog. Do not encode local slash command names in pick. Model/effort still come from pick JSON. Parent does not shop models.
@@ -41,7 +44,7 @@ Parent chooses kind from **this** user's semantic request and **this** user's sk
 2. Follow pick JSON. Do not ask the user which model. Never spawn a worker whose harness flag is false. Never spawn grok when `[workers].grok` is false unless the live parent is grok (native `parent_writes`). Timeout or fail does not unlock a disabled worker.
 3. `stay` — you do ask / plan / advise / vision / computer-use / chrome-profile / Figma. Do not spawn a clicker.
 4. `native` + `parent_writes` — call `rig_job_start` with `executor_kind=parent`, `access=write`, concrete `files`, and the actual CLI before editing. Keep returned ownership credentials; finish with authenticated parent-task completion. Do not spawn a second same-CLI session. Native mini/bulk writers also start before editing; native children finish only after that specific agent returns a terminal result. `rig_job_record` is retrospective read-only history, never protected write registration.
-5. `run-worker` — brief + start `RIG_LIVE=1 run-worker.sh` in the background + **one blocking** MCP `rig_job_wait` (no timeout). After implement+verify ok, you MAY start a read-only review and a disjoint seed/bulk in parallel, then wait observable wrapper IDs together. If status is `ask`, MCP `rig_job_allow` / `rig_job_deny`, then wait once more (same ids). Never kill or replace that job because the child asked. User Esc / MCP `notifications/cancelled` records durable cancellation intent for attached attempts and ends the observer promptly; `rig_job_cancel` provides the explicit equivalent. Do not re-wait, re-pick, or drain queued work after explicit cancellation. A dropped transport permits one `rig job wait ID --timeout 0` snapshot, then inspection/reconciliation. Spawn never started: one re-pick with `--exclude <dead>`. Launching a child is still bash `run-worker.sh`. There is no spawn-from-MCP tool.
+5. `run-worker` — prepare brief TEXT (do not mkdir/write `.rig/jobs/<id>/brief.md` yourself) + MCP `rig_job_launch` (brief/files/access/worker/model/effort + owner credentials; tool creates the job dir and brief.md) + **one blocking** MCP `rig_job_wait` (no timeout). Detached wrapper survives parent/MCP shutdown. Durable `.rig/jobs/<id>/` files: launcher.log (prechild), stdout.log, activity.json, meta.json, result.json, inbox.json, ask/reply, evidence. After implement+verify ok, you MAY start a read-only review and a disjoint seed/bulk in parallel, then wait observable wrapper IDs together. If status is `ask`, MCP `rig_job_allow` / `rig_job_deny`, then wait once more (same ids). Never kill or replace that job because the child asked. User Esc / MCP `notifications/cancelled` records durable cancellation intent for attached attempts and ends the observer promptly; `rig_job_cancel` provides the explicit equivalent. Do not re-wait, re-pick, or drain queued work after explicit cancellation. A dropped transport permits one `rig job wait ID --timeout 0` snapshot, then inspection/reconciliation. Spawn never started: one re-pick with `--exclude <dead>`. Shell `run-worker.sh` is human/internal fallback only (that path may write the brief file before invoking the wrapper).
 
 Doing the worker's job yourself is a failure unless pick `parent_writes` is true. Later AGENTS.md may say "edit locally" or "SSH to the VM". That is for the worker.
 
@@ -56,7 +59,7 @@ This CLI is the parent. It manages. It does not sit on write/review/SSH when pic
 
 **Parent keeps**
 
-- plan, check (read local files, name the cause, write the brief), decide, talk to the user
+- plan, check (read local files, name the cause, prepare brief TEXT), decide, talk to the user
 - vision (screenshots, Figma, images) — parent runs Figma MCP; put artifacts in the brief
 - computer use (desktop) and chrome profile (real browser, the user's cookies)
 - native implement/hard when pick `parent_writes` is true
@@ -79,10 +82,12 @@ A worker is on only when all of these hold:
 1. `[workers].<name>` is `true`
 2. The binary is on PATH (`grok`, `codex`, `claude`, `cursor-agent`, `opencode`, `omp`, `pi`, or `agy`)
 3. The worker is not the live parent
+4. Job-scoped MCP is ready (configured + launcher available). Cursor is excluded until safe scoped MCP exists. Other CLIs need configured MCP and a runtime child handshake (`rig_job_inbox`)
+4. Job-scoped MCP is ready (configured + launcher available). Cursor is excluded until safe scoped MCP exists. Other CLIs need configured MCP and a runtime child handshake (`rig_job_inbox`)
 
 So: Codex parent → Grok/Claude/Cursor/OpenCode/OMP/Pi/agy can be children. Grok parent → Grok child is off; the others can be children. OpenCode/OMP/Pi/agy parent → that CLI is off as a child; Grok/Claude/others can be children. Missing binary: that worker is off for this session, not an error. Use cheaper same-CLI workers. That is success. If both OMP and Pi are effective as workers of a different parent, pick uses OMP. Do not pick agy just because it is on PATH.
 
-Check with MCP `rig_status` / `rig_jobs`. Those show the worker **model** and **reasoning** level. Human watch: `rig tui` in another pane. Parent log: MCP `rig_job_log`. After ok, raw `stdout.log` is pruned; `activity.json` remains. Never read Cursor `state.vscdb` or vendor sqlite for a Rig job. Fully quit OpenCode / OMP / Pi / agy once after `rig setup` so MCP `/rig` loads.
+Check with MCP `rig_status` / `rig_jobs`. Those show the worker **model** and **reasoning** level. Human watch: `rig tui` in another pane. Parent log: MCP `rig_job_log`. After ok, raw `stdout.log` is pruned only after successful decoded activity; `activity.json` remains. Failures retain the raw log. Never read Cursor `state.vscdb` or vendor sqlite for a Rig job. Fully quit OpenCode / OMP / Pi / agy once after `rig setup` so MCP `/rig` loads.
 
 ## Route
 
@@ -115,8 +120,8 @@ On a free parent turn after compact `rig_session`:
 1. List pending items in priority/oldest order. Stay/advise stays local. Name concrete files; serialize shared DB/port/VM work that file checks cannot represent.
 2. Skip overlapping or capped items; try the next ID. Claim **by id** when more than one item is pending, with selected `worker`, `access`, JSON `files`, and initiating `owner_session`.
 3. Save the claim response `reservation_id`, `attempt_id`, `owner_token`, and owner. Same-ID reuse is never launch permission. No-worker compatibility claims reserve a slot conservatively.
-4. Write the brief. If it fails, `rig_queue_unclaim` requires that unconsumed claim's exact credentials and initiating session.
-5. Wrapper consumes the claim via `RIG_QUEUE_ID`, `RIG_RESERVATION_ID`, `RIG_ATTEMPT_ID`, `RIG_OWNER_TOKEN`, `RIG_OWNER_SESSION`, `RIG_ACCESS`, and `RIG_JOB_FILES_JSON`. Native start passes the equivalent MCP fields. Worker/files/access must match.
+4. Prepare brief TEXT (do not precreate `.rig/jobs/<id>/` for MCP). If preparing it fails, `rig_queue_unclaim` requires that unconsumed claim's exact credentials and initiating session.
+5. MCP `rig_job_launch` consumes the claim (brief text + credentials + files/access); the tool creates the job dir and brief.md. Wrapper env uses `RIG_QUEUE_ID`, `RIG_RESERVATION_ID`, `RIG_ATTEMPT_ID`, `RIG_OWNER_TOKEN`, `RIG_OWNER_SESSION`, `RIG_ACCESS`, and `RIG_JOB_FILES_JSON`. Native start passes the equivalent MCP fields. Worker/files/access must match. Shell `run-worker.sh` remains human/internal fallback only (may write `.rig/jobs/<id>/brief.md` then pass that path).
 6. `rig_queue_spawned` is an authenticated acknowledgement with the same queue/job/attempt credentials, not another claim. Wait once on live wrapper IDs through MCP; use host-native wait and authenticated completion for native agents. ASK: allow/deny that ID; wait the same wrapper IDs again. Do not claim during ASK.
 
 `/queue`, hooks, and HUD refresh only park/read. Cancellation never silently returns work to pending. Legacy claims without credentials block conservatively; reconcile explicitly rather than guessing a token.
@@ -158,8 +163,8 @@ Failed/cancelled/rejected work stays unverified. After confirmed task terminatio
 
 ## Call another CLI
 
-1. Write `.rig/jobs/<id>/brief.md`. Start with: you are a worker, not the orchestrator; do not spawn codex, grok, claude, cursor, opencode, omp, pi, or agy; do only the files and changes in the brief; do not hunt extra updates; print a short summary; stop. Implement briefs MUST list files to modify, what to change, what not to change, and acceptance. If the parent used a skill the writer must follow, put the absolute `SKILL.md` path in the brief (not a slash command name). Parent already did Figma / computer-use / chrome: put artifacts; tell the child not to use those tools. Do not spawn "go find and fix". Explore/gather briefs may say what to find; they do not need a file-edit list.
-2. MCP `rig_pick` with `role` (bash fallback: `pick=$(rig pick implement --case "<task>" --json)`) then start the wrapper **in the background**. Do not block this turn on `run-worker.sh` (that deadlocks when Claude asks for permission). Do not spawn via MCP:
+1. Prepare brief TEXT (do not mkdir or write `.rig/jobs/<id>/brief.md` before MCP launch; the tool creates that path). Start with: you are a worker, not the orchestrator; first Rig operation is `rig_job_inbox`; do not spawn codex, grok, claude, cursor, opencode, omp, pi, or agy; do only the files and changes in the brief; do not hunt extra updates; print a short summary; stop. Implement briefs MUST list files to modify, what to change, what not to change, and acceptance. If the parent used a skill the writer must follow, put the absolute `SKILL.md` path in the brief (not a slash command name). Parent already did Figma / computer-use / chrome: put artifacts; tell the child not to use those tools. Do not spawn "go find and fix". Explore/gather briefs may say what to find; they do not need a file-edit list.
+2. MCP `rig_pick` with `role` (bash fallback: `pick=$(rig pick implement --case "<task>" --json)`) then MCP `rig_job_launch` with that brief TEXT plus files/access/worker/model/effort and owner credentials. Do not block this turn on the wrapper. Shell `run-worker.sh` is human/internal fallback only — that path may write `.rig/jobs/<id>/brief.md` first, then:
    `RIG_LIVE=1 RIG_ROLE=<kind> RIG_MODEL=<model> RIG_EFFORT=<effort> RIG_JOB_FILES_JSON=<JSON-array> RIG_ACCESS=<read-or-write> "${RIG_HOME:-$HOME/.rig}/scripts/run-worker.sh" <worker> <id> .rig/jobs/<id>/brief.md`
 3. One normal blocking MCP `rig_job_wait` for observable wrapper work (no timeout), until ASK, result, cancellation, or an explicit reconciliation outcome. After implement+verify ok, one wait on wrapper review+seed IDs together (`ids`). Native agents use their host's wait/interrupt and authenticated completion. Do not parse a TUI. If MCP wait errors or the transport drops the tool, take one bounded `rig job wait ID --timeout 0` snapshot and inspect/reconcile. Never blindly re-wait, and never use this fallback after explicit cancellation.
    - ASK / status `ask`: **you** answer MCP `rig_job_allow` or `rig_job_deny`. Safe worker work (read/edit/test/ssh gather/git) → allow. Destructive/prod/secrets → deny or ask the user. Then wait **once** more (no timeout; same ids).

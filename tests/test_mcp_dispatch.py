@@ -421,6 +421,9 @@ class McpDispatch(unittest.TestCase):
             self.assertNotIn("rig_queue_claim", names)
             blocked = rig_mcp.call_tool("rig_pick", {"case": "x", "repo": str(self.repo)})
             self.assertTrue(blocked.get("isError"))
+            inbox0 = rig_mcp.call_tool("rig_job_inbox", {})
+            self.assertNotIn("isError", inbox0)
+            self.assertEqual(self._text(inbox0), "(empty)")
             doing = rig_mcp.call_tool("rig_job_doing", {"text": "edit jobs.py"})
             self.assertNotIn("isError", doing)
             self.assertIn("edit jobs.py", self._text(doing))
@@ -500,6 +503,8 @@ class McpDispatch(unittest.TestCase):
 
         threading.Thread(target=later, daemon=True).start()
         try:
+            inbox0 = rig_mcp.call_tool("rig_job_inbox", {})
+            self.assertNotIn("isError", inbox0)
             out = rig_mcp.call_tool(
                 "rig_job_ask",
                 {"preview": "ssh to the vm", "repo": str(self.repo)},

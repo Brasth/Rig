@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """stdio MCP server: pick/status/jobs/wait/allow/memory for the parent agent.
 
-When RIG_JOB_ID (or RIG_JOB_DIR) is set, this is the child surface: doing/note/ask
-only. Parent tools stay hidden.
+When RIG_JOB_ID (or RIG_JOB_DIR) is set, this is the child surface: inbox/doing/note/ask
+plus own show and project memory. Parent tools stay hidden. First Rig operation is inbox.
 """
 from __future__ import annotations
 
@@ -26,6 +26,8 @@ import work_queue as rig_queue  # noqa: E402
 import memory as rig_memory  # noqa: E402
 import route as rig_route  # noqa: E402
 import verification as rig_verification  # noqa: E402
+import worker_launch as rig_launch  # noqa: E402
+import child_mcp as rig_child_mcp  # noqa: E402
 
 PICK_ROLES = ("explore", "mini", "bulk", "implement", "hard", "review", "stay")
 JOB_WORKERS = ("grok", "codex", "claude", "cursor", "opencode", "omp", "pi", "agy", "parent")
@@ -447,10 +449,51 @@ TOOLS = [
         },
     },
     {
+        "name": "rig_job_launch",
+        "description": (
+            "Parent only. Admit a scoped wrapper child and detach the installed "
+            "run-worker.sh. Returns immediately with job_id, worker, role, "
+            "wrapper_pid, and status. Does not wait. Shell launch is the "
+            "internal/human fallback only."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "repo": {"type": "string"},
+                "id": {"type": "string", "description": "Job id. Allocated if omitted."},
+                "case": {"type": "string", "description": "Task text used when role is omitted."},
+                "role": {"type": "string", "description": "Pick kind or job role."},
+                "worker": {
+                    "type": "string",
+                    "enum": ["grok", "codex", "claude", "opencode", "omp", "pi", "agy"],
+                },
+                "model": {"type": "string"},
+                "effort": {"type": "string"},
+                "access": {"type": "string", "enum": ["read", "write"]},
+                "files": {"type": "array", "items": {"type": "string"}},
+                "brief": {"type": "string", "description": "Worker brief markdown."},
+                "queue_id": {"type": "string"},
+                "writer_job_id": {"type": "string"},
+                "writer_snapshot_id": {"type": "string"},
+                "writer_cli": {"type": "string"},
+                "writer_model": {"type": "string"},
+                "writer_provider": {"type": "string"},
+                "review_mode": {"type": "string", "enum": ["standalone", "independent"], "default": "standalone"},
+                "reservation_id": {"type": "string"},
+                "attempt_id": {"type": "string"},
+                "owner_token": {"type": "string"},
+                "owner_session": {"type": "string"},
+            },
+            "required": ["brief"],
+            "additionalProperties": False,
+        },
+    },
+    {
         "name": "rig_job_inbox",
         "description": (
-            "Child only. Pull the parent inbox message once and ack it. "
-            "Empty if the parent has not sent mail. Not ASK."
+            "Child only. Required first Rig operation each session: pull the parent "
+            "inbox once and ack it. Records the child MCP handshake. Empty if the "
+            "parent has not sent mail. Not ASK."
         ),
         "inputSchema": {"type": "object", "properties": {}},
     },
@@ -627,7 +670,7 @@ TOOLS.extend([
 ])
 for _tool in TOOLS:
     _properties = _tool["inputSchema"]["properties"]
-    if _tool["name"] in {"rig_job_start", "rig_job_finish", "rig_job_requirements", "rig_job_check", "rig_job_accept", "rig_job_reconcile", "rig_queue_unclaim", "rig_queue_spawned"}:
+    if _tool["name"] in {"rig_job_start", "rig_job_launch", "rig_job_finish", "rig_job_requirements", "rig_job_check", "rig_job_accept", "rig_job_reconcile", "rig_queue_unclaim", "rig_queue_spawned"}:
         _properties.update(_OWNERSHIP_PROPERTIES)
     if _tool["name"] == "rig_job_start":
         _properties.update({"access": {"type": "string", "enum": ["read", "write"]},
@@ -650,6 +693,7 @@ TOOL_ORDER = (
     "rig_pick",
     "rig_status",
     "rig_job_start",
+    "rig_job_launch",
     "rig_job_show",
     "rig_job_log",
     "rig_job_finish",
@@ -723,6 +767,31 @@ def _err(text: str) -> dict:
 
 def _repo(args: dict) -> Path:
     return rig_jobs.repo_root(args.get("repo") if isinstance(args, dict) else None)
+
+
+def _bound_child_repo(args: dict) -> Path:
+    env_repo = (os.environ.get("RIG_REPO") or "").strip()
+    if env_repo:
+        bound = rig_jobs.repo_root(env_repo)
+    else:
+        raw = (os.environ.get("RIG_JOB_DIR") or "").strip()
+        if not raw:
+            raise ValueError("child MCP needs RIG_REPO or RIG_JOB_DIR")
+        bound = rig_jobs.repo_root(Path(raw).resolve().parent.parent.parent)
+    requested = args.get("repo") if isinstance(args, dict) else None
+    if requested not in (None, ""):
+        got = rig_jobs.repo_root(requested)
+        if got != bound:
+            raise ValueError("child cannot bind a different repo")
+    return bound
+
+
+LAUNCH_ARG_NAMES = frozenset({
+    "repo", "id", "case", "role", "worker", "model", "effort", "access", "files", "brief",
+    "queue_id", "reservation_id", "attempt_id", "owner_token", "owner_session",
+    "writer_job_id", "writer_snapshot_id", "writer_cli", "writer_model",
+    "writer_provider", "review_mode",
+})
 
 
 def _optional_string(args: dict, name: str) -> str:
@@ -923,7 +992,12 @@ def call_tool(name: str, args: dict, on_tick=None, *, wait_paths: list[Path] | N
         if name not in allowed:
             who = "child" if child else "parent"
             return _err(f"{name} is not a {who} tool")
-        repo = _repo(args)
+        repo = _bound_child_repo(args) if child else _repo(args)
+        if child:
+            job_dir = child_job_dir(repo)
+            blocked = rig_child_mcp.require_inbox(job_dir, name)
+            if blocked:
+                return _err(blocked)
         if child and name == "rig_job_show":
             jid = child_job_id()
             want = str(args.get("id") or jid).strip()
@@ -948,6 +1022,7 @@ def call_tool(name: str, args: dict, on_tick=None, *, wait_paths: list[Path] | N
                 return _err("rig_job_ask needs preview or text")
             return _child_ask(child_job_dir(repo), args, permission=False)
         if name == "rig_job_inbox":
+            rig_child_mcp.record_handshake(child_job_dir(repo))
             obj = rig_inbox.consume_inbox(child_job_dir(repo))
             if not obj:
                 return _ok("(empty)")
@@ -1219,6 +1294,43 @@ def call_tool(name: str, args: dict, on_tick=None, *, wait_paths: list[Path] | N
                     **_execution_args(args),
                 )
             )
+        if name == "rig_job_launch":
+            extra = sorted(set(args) - LAUNCH_ARG_NAMES)
+            if extra:
+                return _err(f"unknown launch argument: {extra[0]}")
+            files = args.get("files")
+            if files is not None and not isinstance(files, list):
+                return _err("files must be a JSON array of nonempty paths")
+            review_mode = args.get("review_mode", "standalone")
+            if review_mode is not None and not isinstance(review_mode, str):
+                return _err("review_mode must be a string")
+            try:
+                result = rig_launch.launch(
+                    repo,
+                    id=_optional_string(args, "id"),
+                    case=_optional_string(args, "case"),
+                    role=_optional_string(args, "role"),
+                    worker=_optional_string(args, "worker"),
+                    model=_optional_string(args, "model"),
+                    effort=_optional_string(args, "effort"),
+                    access=_optional_string(args, "access"),
+                    files=files,
+                    brief=_optional_string(args, "brief"),
+                    queue_id=_optional_string(args, "queue_id"),
+                    writer_job_id=_optional_string(args, "writer_job_id"),
+                    writer_snapshot_id=_optional_string(args, "writer_snapshot_id"),
+                    writer_cli=_optional_string(args, "writer_cli"),
+                    writer_model=_optional_string(args, "writer_model"),
+                    writer_provider=_optional_string(args, "writer_provider"),
+                    review_mode=review_mode if review_mode is not None else "standalone",
+                    **_ownership_args(args),
+                )
+            except rig_launch.LaunchError as exc:
+                return _err(str(exc))
+            return {**_ok(json.dumps({
+                "job_id": result["job_id"], "worker": result["worker"], "role": result["role"],
+                "wrapper_pid": result["wrapper_pid"], "status": result["status"],
+            }, indent=2)), "structuredContent": result}
         return _err(f"unknown tool {name}")
     except SystemExit as exc:
         return _err(str(exc) or "rig error")

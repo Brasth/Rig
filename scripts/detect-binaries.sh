@@ -249,7 +249,39 @@ live_parent() {
   printf '%s\n' ""
 }
 
-# effective = flag true AND binary on PATH AND worker != live parent
+# Match Python harness.effective_workers: flag + binary + not live + MCP ready.
+worker_mcp_ready() {
+  local name="$1"
+  local py
+  py="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/child_mcp.py"
+  [[ -f "$py" ]] || return 1
+  python3 - "$py" "$name" <<'PY' 2>/dev/null
+import sys
+sys.path.insert(0, __import__("pathlib").Path(sys.argv[1]).resolve().parent.as_posix())
+import child_mcp
+ready, _reason = child_mcp.worker_mcp_ready(sys.argv[2])
+raise SystemExit(0 if ready else 1)
+PY
+}
+
+worker_mcp_reason() {
+  local name="$1"
+  local py
+  py="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/child_mcp.py"
+  [[ -f "$py" ]] || { printf '%s\n' "child MCP unavailable"; return 0; }
+  python3 - "$py" "$name" <<'PY' 2>/dev/null
+import sys
+sys.path.insert(0, __import__("pathlib").Path(sys.argv[1]).resolve().parent.as_posix())
+import child_mcp
+ready, reason = child_mcp.worker_mcp_ready(sys.argv[2])
+if ready:
+    print("")
+else:
+    print(reason or "child MCP not ready")
+PY
+}
+
+# effective = flag true AND binary on PATH AND worker != live parent AND MCP ready
 effective_worker() {
   local name="$1"
   local live flag bin
@@ -259,6 +291,7 @@ effective_worker() {
   [[ "$flag" == "true" ]] || return 1
   [[ -n "$bin" ]] || return 1
   [[ "$name" != "$live" ]] || return 1
+  worker_mcp_ready "$name" || return 1
   return 0
 }
 
@@ -574,4 +607,4 @@ rig_upsert_marked_block() {
   echo "$action"
 }
 
-WORKER_PREAMBLE='You are a worker, not the orchestrator. Do not spawn codex, grok, claude, cursor, opencode, omp, pi, or agy. Do not use computer-use, chrome-profile, or Figma MCP. Follow skill file paths listed in the brief. Write code, fix, review, SSH/debug, or gather facts. Do only the files and changes in the brief. Do not hunt extra updates. Each turn, call rig_job_inbox once if listed (empty is fine). Inbox is not ASK. Print a short summary. Stop.'
+WORKER_PREAMBLE='You are a worker, not the orchestrator. Do not spawn codex, grok, claude, cursor, opencode, omp, pi, or agy. Do not use computer-use, chrome-profile, or Figma MCP. Follow skill file paths listed in the brief. Write code, fix, review, SSH/debug, or gather facts. Do only the files and changes in the brief. Do not hunt extra updates. First Rig operation must be rig_job_inbox (strict child MCP handshake). Each turn, call rig_job_inbox once if listed (empty is fine); pull inbox/messages periodically. Inbox is not ASK. Doing/note/ask require the handshake. Print a short summary. Stop.'

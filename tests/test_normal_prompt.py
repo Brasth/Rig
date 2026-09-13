@@ -52,8 +52,13 @@ class RoutingCorpus(unittest.TestCase):
 
     def test_native_mini_matches_shipped_model_and_write_contract(self):
         observed = native_mini_observation()
-        self.assertEqual(observed["choice"]["model"], observed["adapter_model"])
-        self.assertEqual(observed["choice"]["kind"], "mini")
+        choice = observed["choice"]
+        self.assertEqual(choice["kind"], "mini")
+        self.assertTrue(choice["parent_writes"], observed)
+        self.assertEqual(choice["spawn"], "native")
+        self.assertEqual(choice["executor_kind"], "parent")
+        self.assertEqual(choice["native_agent"], "")
+        self.assertEqual(observed["adapter"], "")
         self.assertTrue(observed["write_capable"], observed)
 
 

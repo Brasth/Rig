@@ -9,6 +9,8 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "tests"))
+import mcp_test_support  # noqa: E402
 
 
 class NormalPromptFlow(unittest.TestCase):
@@ -20,12 +22,14 @@ class NormalPromptFlow(unittest.TestCase):
         self.repo.mkdir()
         self.home = self.base / "home"
         self.home.mkdir()
+        mcp_test_support.seed_installed_mcp(self.home)
         self.env = {**os.environ, "HOME": str(self.home), "RIG_HOME": str(ROOT), "RIG_INSTALL_TRANSACTION": "1",
                     "RIG_PARENT": "codex", "RIG_THREAD": "normal-prompt-parent",
                     "RIG_SKIP_UPDATE_CHECK": "1", "RIG_SKIP_MODEL_CATALOG": "1",
-                    "RIG_JOB_ID": "", "RIG_JOB_DIR": "", "RIG_JOB_FILES": "",
-                    "RIG_JOB_FILES_JSON": "", "RIG_OWNER_TOKEN": "",
-                    "RIG_RESERVATION_ID": "", "RIG_ATTEMPT_ID": ""}
+                    "RIG_JOB_ID": "", "RIG_JOB_DIR": "", "RIG_REPO": "", "RIG_ACCESS": "",
+                    "RIG_JOB_FILES": "", "RIG_JOB_FILES_JSON": "", "RIG_OWNER_TOKEN": "",
+                    "RIG_RESERVATION_ID": "", "RIG_ATTEMPT_ID": "", "RIG_QUEUE_ID": "",
+                    "RIG_WRITER_JOB_ID": "", "RIG_REVIEW_MODE": ""}
         self.run_process(["git", "init", "-q", str(self.repo)])
         self.cli("init")
         self.subject = self.repo / "guide.md"
@@ -141,13 +145,16 @@ class NormalPromptFlow(unittest.TestCase):
         binaries = self.base / "binaries"
         binaries.mkdir()
         worker = binaries / "grok"
-        worker.write_text(f"#!{sys.executable}\n" +
-                          "import os\nfrom pathlib import Path\n" +
-                          "assert (Path(os.environ['RIG_JOB_DIR']) / 'change-before.json').is_file()\n" +
-                          "Path('guide.md').write_text('wrapper changed guide\\n')\n" +
-                          "print('{\"type\":\"text\",\"text\":\"Updated guide\"}')\n")
+        worker.write_text(
+            f"#!{sys.executable}\n"
+            + mcp_test_support.inbox_handshake_prelude(ROOT)
+            + "import os\nfrom pathlib import Path\n"
+            + "assert (Path(os.environ['RIG_JOB_DIR']) / 'change-before.json').is_file()\n"
+            + "Path('guide.md').write_text('wrapper changed guide\\n')\n"
+            + "print('{\"type\":\"text\",\"text\":\"Updated guide\"}')\n"
+        )
         worker.chmod(0o755)
-        self.env.update(PATH=str(binaries) + os.pathsep + self.env.get("PATH", ""),
+        self.env.update(PATH=mcp_test_support.stub_path(binaries),
                         RIG_LIVE="1", RIG_ROLE="mini", RIG_MODEL="grok-4.6", RIG_JOB_FILES_JSON='["guide.md"]')
         (self.repo / ".rig" / "harness.toml").write_text('parent = "codex"\n[workers]\ngrok = true\n')
         brief = self.repo / "brief.md"

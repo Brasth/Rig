@@ -1,4 +1,5 @@
 import os
+import subprocess
 import sys
 import unittest
 from pathlib import Path
@@ -98,3 +99,93 @@ class LaunchTests(unittest.TestCase):
             commands = ui_launch.session_commands('rig-123456abcdef', Path('/repo'), 'codex', '/bin/host', [])
         self.assertEqual(commands[-2][3], 'F8')
         self.assertEqual(commands[-1][3], 'F9')
+
+    def test_session_mouse_and_wheel_are_table_local(self):
+        with patch.dict(os.environ, {}, clear=True):
+            commands = ui_launch.session_commands('rig-123456abcdef', Path('/repo'), 'codex', '/bin/host', [])
+        table = 'rig-rig-123456abcdef'
+        self.assertIn(['set-option', '-t', 'rig-123456abcdef', 'mouse', 'on'], commands)
+        self.assertIn(
+            ['bind-key', '-T', table, 'WheelUpPane', 'select-pane -t = ; copy-mode -e ; send-keys -X -N 5 scroll-up'],
+            commands,
+        )
+        self.assertIn(['bind-key', '-T', table, 'WheelDownPane', 'select-pane -t ='], commands)
+        self.assertTrue(all('-g' not in command for command in commands))
+        self.assertTrue(all('-T' not in command or 'root' not in command for command in commands))
+        self.assertTrue(all(command[:2] != ['bind-key', '-n'] for command in commands))
+        self.assertEqual(commands[-2][3], 'F8')
+        self.assertEqual(commands[-1][3], 'F9')
+
+
+class IsolatedTmuxServer(unittest.TestCase):
+    def setUp(self):
+        import shutil
+        import uuid
+        self.binary = shutil.which('tmux')
+        if not self.binary or not ui_launch.tmux_available(self.binary):
+            self.skipTest('tmux 3.3+ required')
+        self.socket = 'rig-test-' + uuid.uuid4().hex[:12]
+        self.base = [self.binary, '-L', self.socket, '-f', '/dev/null']
+        self.session = 'rig-123456abcdef'
+
+    def tearDown(self):
+        if not getattr(self, 'base', None):
+            return
+        subprocess.run(self.base + ['kill-server'], capture_output=True)
+
+    def _run(self, args):
+        return subprocess.run(self.base + args, capture_output=True, text=True)
+
+    def test_isolated_server_keeps_global_and_root_unchanged(self):
+        created = self._run(['new-session', '-d', '-s', self.session, '-c', os.getcwd(), 'sleep', '30'])
+        self.assertEqual(created.returncode, 0, created.stderr)
+        before_global = self._run(['show-options', '-g', 'mouse'])
+        before_root = self._run(['list-keys', '-T', 'root'])
+        before_copy = self._run(['list-keys', '-T', 'copy-mode'])
+        before_copy_vi = self._run(['list-keys', '-T', 'copy-mode-vi'])
+        self.assertEqual(before_global.returncode, 0, before_global.stderr)
+        self.assertEqual(before_root.returncode, 0, before_root.stderr)
+        commands = ui_launch.session_commands(self.session, Path('/repo'), 'codex', '/bin/host', [])
+        for command in commands[1:]:
+            applied = self._run(command)
+            self.assertEqual(applied.returncode, 0, applied.stderr + ' ' + str(command))
+        mouse = self._run(['show-options', '-t', self.session, 'mouse'])
+        self.assertEqual(mouse.returncode, 0, mouse.stderr)
+        self.assertRegex(mouse.stdout.strip(), r'mouse\s+on')
+        table = 'rig-' + self.session
+        keys = self._run(['list-keys', '-T', table])
+        self.assertEqual(keys.returncode, 0, keys.stderr)
+        self.assertIn('WheelUpPane', keys.stdout)
+        self.assertIn('copy-mode -e', keys.stdout)
+        self.assertIn('scroll-up', keys.stdout)
+        self.assertIn('WheelDownPane', keys.stdout)
+        self.assertIn('F8', keys.stdout)
+        self.assertIn('F9', keys.stdout)
+        after_global = self._run(['show-options', '-g', 'mouse'])
+        after_root = self._run(['list-keys', '-T', 'root'])
+        after_copy = self._run(['list-keys', '-T', 'copy-mode'])
+        after_copy_vi = self._run(['list-keys', '-T', 'copy-mode-vi'])
+        self.assertEqual(after_global.stdout, before_global.stdout)
+        self.assertEqual(after_root.stdout, before_root.stdout)
+        self.assertEqual(after_copy.stdout, before_copy.stdout)
+        self.assertEqual(after_copy_vi.stdout, before_copy_vi.stdout)
+        self.assertNotIn(table, after_root.stdout)
+        # History + copy-mode -e: scroll five up, then enough down proves autoexit.
+        self._run(['set-option', '-t', self.session, 'history-limit', '1000'])
+        for _ in range(40):
+            self._run(['send-keys', '-t', self.session, 'line-' + str(_) , 'Enter'])
+        entered = self._run(['copy-mode', '-e', '-t', self.session])
+        self.assertEqual(entered.returncode, 0, entered.stderr)
+        mode = self._run(['display-message', '-p', '-t', self.session, '#{pane_in_mode}'])
+        self.assertEqual(mode.stdout.strip(), '1', mode.stdout + mode.stderr)
+        self._run(['send-keys', '-X', '-t', self.session, '-N', '5', 'scroll-up'])
+        self._run(['send-keys', '-X', '-t', self.session, '-N', '50', 'scroll-down'])
+        exited = self._run(['display-message', '-p', '-t', self.session, '#{pane_in_mode}'])
+        self.assertEqual(exited.stdout.strip(), '0', exited.stdout + exited.stderr)
+        # Custom table cleanup unbind (no root/global edits).
+        cleaned = self._run(['unbind-key', '-a', '-T', table])
+        self.assertEqual(cleaned.returncode, 0, cleaned.stderr)
+        after_unbind = self._run(['list-keys', '-T', table])
+        self.assertNotIn('WheelUpPane', after_unbind.stdout)
+        self.assertEqual(self._run(['list-keys', '-T', 'root']).stdout, before_root.stdout)
+        self.assertEqual(self._run(['show-options', '-g', 'mouse']).stdout, before_global.stdout)

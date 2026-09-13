@@ -119,7 +119,7 @@ NATIVE = {
 }
 
 NATIVE_PARENTS = frozenset({"codex", "grok", "opencode", "omp", "pi", "agy"})
-LAST_RESORT = ("opencode", "omp", "pi", "agy", "codex", "cursor")
+LAST_RESORT = ("opencode", "omp", "pi", "agy", "codex")
 WORKER_NAMES = frozenset(
     {"grok", "claude", "cursor", "opencode", "omp", "pi", "agy", "codex", "native"}
 )
@@ -388,12 +388,16 @@ def choose_worker(
 ) -> tuple[str, str]:
     """Return (worker, spawn) where spawn is run-worker, native, stay, or none."""
     blocked = parse_exclude(exclude)
-    avail = [w for w in effective if w not in blocked]
+    avail = [w for w in effective if w not in blocked and w != "cursor"]
     skip_native = bool(live) and (live in blocked or "native" in blocked)
     if kind == "stay":
         return live, "stay"
-    if kind in {"explore", "mini", "bulk"} and live in NATIVE_PARENTS and not skip_native:
-        return live, "native"
+    if kind == "explore":
+        # Read-only: MCP-capable wrapper if available, else parent stays (no native child).
+        for worker in ("grok", "claude") + LAST_RESORT:
+            if worker in avail:
+                return worker, "run-worker"
+        return live, "stay"
     if kind == "review":
         order = ("claude", "grok") + LAST_RESORT
     else:
@@ -401,18 +405,18 @@ def choose_worker(
     for worker in order:
         if worker in avail:
             return worker, "run-worker"
-    if kind in {"implement", "hard"} and live in NATIVE_PARENTS and not skip_native:
+    # Mini/bulk are writes: prefer an eligible wrapper before parent_writes.
+    if kind in {"mini", "bulk"}:
+        for worker in LAST_RESORT:
+            if worker in avail:
+                return worker, "run-worker"
+    if kind in {"implement", "hard", "mini", "bulk"} and live in NATIVE_PARENTS and not skip_native:
         return live, "native"
-    last_avail = [w for w in LAST_RESORT if w in avail]
-    if blocked and last_avail == ["cursor"]:
-        return "", "none"
     for worker in LAST_RESORT:
         if worker in avail:
             return worker, "run-worker"
     if kind == "review":
         return "", "none"
-    if live in NATIVE_PARENTS and not skip_native:
-        return live, "native"
     return "", "none"
 
 
@@ -484,12 +488,22 @@ def pick(
         failures = []
         remaining = [w for w in effective if w != live]
         while not reason:
-            if blocked and {w for w in remaining if w not in blocked} == {"cursor"}:
-                reason = "confirm before live Cursor; do not auto-spawn cursor"
+            eligible = {w for w in remaining if w not in blocked}
+            if eligible <= {"cursor"} and "cursor" in remaining:
+                model, _effort = resolved_model_for("cursor", kind, catalogs)
+                _independence, rejection = _review_model(model, context)
+                if rejection:
+                    failures.append(f"cursor: {rejection}")
+                reason = "review needs a different vendor; Cursor has no isolated job-scoped MCP"
+                if failures:
+                    reason += ": " + "; ".join(failures)
                 break
             worker, spawn = choose_worker(kind, remaining, live, exclude=exclude)
             if not worker or spawn == "none":
-                reason = "review needs a different vendor; no eligible reviewer"
+                if "cursor" in {str(x).strip().lower() for x in remaining}:
+                    reason = "review needs a different vendor; Cursor has no isolated job-scoped MCP"
+                else:
+                    reason = "review needs a different vendor; no eligible reviewer"
                 if failures:
                     reason += ": " + "; ".join(failures)
                 break
@@ -512,6 +526,16 @@ def pick(
     actual_model = (parent_model or "").strip()
     actual_effort = (parent_effort or "").strip() if actual_model else ""
     if spawn == "stay":
+        if kind == "explore":
+            stay_reason = (
+                "explore: no MCP-capable child; parent stays read-only. "
+                "no native child."
+            )
+        else:
+            stay_reason = (
+                "parent keeps ask / plan / advise / vision / computer-use / chrome-profile. "
+                "Figma, computer-use, and chrome-profile stay with the parent."
+            )
         return _base_choice(
             kind,
             worker or live,
@@ -521,10 +545,7 @@ def pick(
             effort=actual_effort,
             executor_kind="parent",
             model_source="observed" if actual_model else "unknown",
-            reason=(
-                "parent keeps ask / plan / advise / vision / computer-use / chrome-profile. "
-                "Figma, computer-use, and chrome-profile stay with the parent."
-            ),
+            reason=stay_reason,
         )
     if spawn == "none" or not worker:
         if kind == "review":
@@ -533,19 +554,21 @@ def pick(
             )
         elif blocked:
             leftover = [w for w in LAST_RESORT if w in effective and w not in blocked]
-            if leftover == ["cursor"] or (
-                not leftover and "cursor" in {str(x).strip().lower() for x in effective}
-            ):
-                reason = "confirm before live Cursor; do not auto-spawn cursor"
+            if not leftover and "cursor" in {str(x).strip().lower() for x in effective}:
+                reason = "Cursor CLI has no isolated job-scoped MCP; excluded until a safe --mcp-config exists"
             else:
                 reason = (
                     "no effective worker after exclude; do not unlock a disabled worker."
                 )
         else:
-            reason = "no effective worker; use cheaper same-CLI workers. That is success."
+            names = {str(x).strip().lower() for x in effective}
+            if names and names <= {"cursor"}:
+                reason = "Cursor CLI has no isolated job-scoped MCP; excluded until a safe --mcp-config exists"
+            else:
+                reason = "no effective worker; use cheaper same-CLI workers. That is success."
         return _base_choice(kind, "", "none", classification=classification, reason=reason)
-    native_agent = NATIVE.get((worker, kind), "") if spawn == "native" else ""
-    parent_writes = spawn == "native" and kind in {"implement", "hard"}
+    parent_writes = spawn == "native" and kind in {"implement", "hard", "mini", "bulk"}
+    native_agent = "" if parent_writes else (NATIVE.get((worker, kind), "") if spawn == "native" else "")
     if parent_writes:
         model, effort = actual_model, actual_effort
         executor_kind = "parent"

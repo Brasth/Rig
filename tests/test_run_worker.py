@@ -13,10 +13,23 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 RUN = ROOT / "scripts" / "run-worker.sh"
 sys.path.insert(0, str(ROOT / "scripts"))
+sys.path.insert(0, str(ROOT / "tests"))
+
+import mcp_test_support  # noqa: E402
+
+
+_CLEAR_RIG = (
+    "RIG_JOB_ID", "RIG_JOB_DIR", "RIG_REPO", "RIG_ACCESS", "RIG_QUEUE_ID",
+    "RIG_RESERVATION_ID", "RIG_ATTEMPT_ID", "RIG_OWNER_TOKEN", "RIG_OWNER_SESSION",
+    "RIG_JOB_FILES", "RIG_JOB_FILES_JSON", "RIG_WRITER_JOB_ID", "RIG_WRITER_SNAPSHOT_ID",
+    "RIG_WRITER_CLI", "RIG_WRITER_MODEL", "RIG_WRITER_PROVIDER", "RIG_REVIEW_MODE",
+)
 
 
 def run_worker(repo: Path, *args: str, env: dict | None = None) -> subprocess.CompletedProcess:
     merged = os.environ.copy()
+    for key in _CLEAR_RIG:
+        merged.pop(key, None)
     merged["RIG_HOME"] = str(ROOT)
     merged["PATH"] = f"{ROOT / 'bin'}:{merged.get('PATH', '')}"
     merged["RIG_PARENT"] = "grok"
@@ -128,6 +141,8 @@ class ClaudeWorkerArgv(unittest.TestCase):
         detect = (ROOT / "scripts" / "detect-binaries.sh").read_text()
         self.assertIn("Do not use computer-use, chrome-profile, or Figma MCP", detect)
         self.assertIn("Follow skill file paths listed in the brief", detect)
+        self.assertIn("First Rig operation must be rig_job_inbox", detect)
+        self.assertIn("strict child MCP handshake", detect)
         self.assertIn("Restart the work clock", src)
 
     def test_wrapper_syntax_works_with_system_bash(self):
@@ -192,11 +207,28 @@ class CursorWorkerArgv(unittest.TestCase):
         out = proc.stdout + proc.stderr
         self.assertIn("--mode=ask", out, out)
 
+    def test_cursor_live_refuses_mcp_readiness(self):
+        env = {
+            "PATH": f"{self.bins}:/usr/bin:/bin",
+            "RIG_PARENT": "grok",
+            "RIG_LIVE": "1",
+            "RIG_MODEL": "composer-2.5",
+            "RIG_ROLE": "implement",
+        }
+        proc = run_worker(self.repo, "cursor", "cursor-stream", str(self.brief), env=env)
+        out = proc.stdout + proc.stderr
+        self.assertNotEqual(proc.returncode, 0, out)
+        self.assertIn("isolated job-scoped MCP", out)
+
 
 class OpenCodeOmpPiWorkerArgv(unittest.TestCase):
     def setUp(self):
         self.td = tempfile.TemporaryDirectory()
-        self.repo = Path(self.td.name)
+        self.root = Path(self.td.name)
+        self.repo = self.root / "repo"
+        self.home = self.root / "home"
+        self.repo.mkdir()
+        self.home.mkdir()
         (self.repo / ".git").mkdir()
         (self.repo / ".rig").mkdir()
         (self.repo / ".rig" / "harness.toml").write_text(
@@ -207,11 +239,17 @@ class OpenCodeOmpPiWorkerArgv(unittest.TestCase):
         jobs.mkdir(parents=True)
         self.brief = jobs / "brief.md"
         self.brief.write_text("You are a worker, not the orchestrator.\nFix the helper.\n")
-        self.bins = self.repo / "bins"
+        self.bins = self.root / "bins"
         self.bins.mkdir()
+        mcp_test_support.seed_installed_mcp(self.home)
         for name in ("opencode", "omp", "pi", "agy"):
             path = self.bins / name
-            path.write_text("#!/bin/sh\nexit 0\n")
+            path.write_text(
+                f"#!{sys.executable}\n"
+                + mcp_test_support.inbox_handshake_prelude(ROOT)
+                + "print('ok')\n"
+                + "raise SystemExit(0)\n"
+            )
             path.chmod(0o755)
 
     def tearDown(self):
@@ -219,7 +257,8 @@ class OpenCodeOmpPiWorkerArgv(unittest.TestCase):
 
     def _env(self, extra: dict | None = None) -> dict:
         env = {
-            "PATH": f"{self.bins}:/usr/bin:/bin",
+            "PATH": mcp_test_support.stub_path(self.bins),
+            "HOME": str(self.home),
             "RIG_PARENT": "grok",
             "RIG_ROLE": "implement",
             "RIG_MODEL": "",
@@ -323,11 +362,13 @@ class OpenCodeOmpPiWorkerArgv(unittest.TestCase):
         settings.write_text('{"keep": true, "permissions": {"allow": ["read(*)"]}}\n')
         agent = self.bins / "agy"
         agent.write_text(
-            "#!/bin/sh\n"
-            'echo \'{"status":"SUCCESS","response":"blocked","denied_actions":'
-            '[{"action":"command","display_name":"RunCommand"}]}\'\n'
-            "exit 0\n"
+            f"#!{sys.executable}\n"
+            + mcp_test_support.inbox_handshake_prelude(ROOT)
+            + "print('{\"status\":\"SUCCESS\",\"response\":\"blocked\",\"denied_actions\":"
+            "[{\"action\":\"command\",\"display_name\":\"RunCommand\"}]}')\n"
+            "raise SystemExit(0)\n"
         )
+        agent.chmod(0o755)
         env = self._env(
             {
                 "RIG_LIVE": "1",
@@ -355,10 +396,12 @@ class OpenCodeOmpPiWorkerArgv(unittest.TestCase):
         settings.write_text("{}\n")
         agent = self.bins / "agy"
         agent.write_text(
-            "#!/bin/sh\n"
-            'echo \'{"status":"SUCCESS","response":"fixed the helper","denied_actions":[]}\'\n'
-            "exit 0\n"
+            f"#!{sys.executable}\n"
+            + mcp_test_support.inbox_handshake_prelude(ROOT)
+            + "print('{\"status\":\"SUCCESS\",\"response\":\"fixed the helper\",\"denied_actions\":[]}')\n"
+            "raise SystemExit(0)\n"
         )
+        agent.chmod(0o755)
         env = self._env({"RIG_LIVE": "1", "AGY_SETTINGS": str(settings)})
         proc = run_worker(self.repo, "agy", "print-stream", str(self.brief), env=env)
         out = proc.stdout + proc.stderr
@@ -377,9 +420,13 @@ class WrapperChangeEvidence(unittest.TestCase):
         self.addCleanup(self.td.cleanup)
         self.root = Path(self.td.name)
         self.repo = self.root / "repo"
+        self.home = self.root / "home"
         self.repo.mkdir()
+        self.home.mkdir()
         self.bins = self.root / "bins"
         self.bins.mkdir()
+        mcp_test_support.seed_installed_mcp(self.home)
+        mcp_test_support.fake_bin(self.bins, "claude")
         for args in (
             ["init", "-q"], ["config", "user.email", "test@example.invalid"],
             ["config", "user.name", "Rig Test"],
@@ -412,7 +459,11 @@ class WrapperChangeEvidence(unittest.TestCase):
         )
 
     def _worker(self, body):
-        script = f"#!{sys.executable}\nimport json, os, pathlib\nrepo = pathlib.Path.cwd()\n" + body
+        script = (
+            f"#!{sys.executable}\nimport json, os, pathlib\nrepo = pathlib.Path.cwd()\n"
+            + mcp_test_support.inbox_handshake_prelude(ROOT)
+            + body
+        )
         for worker in ("codex", "opencode"):
             path = self.bins / worker
             path.write_text(script)
@@ -420,7 +471,9 @@ class WrapperChangeEvidence(unittest.TestCase):
 
     def _run(self, **extra):
         env = {
-            "PATH": f"{self.bins}:{os.environ.get('PATH', '')}", "RIG_LIVE": "1",
+            "PATH": mcp_test_support.stub_path(self.bins),
+            "HOME": str(self.home),
+            "RIG_LIVE": "1",
             "RIG_PARENT": "grok", "RIG_ROLE": "implement", "RIG_MODEL": "gpt-5.6-luna",
             "RIG_EFFORT": "low", "RIG_JOB_FILES_JSON": json.dumps(self.scope),
         }
@@ -436,7 +489,10 @@ class WrapperChangeEvidence(unittest.TestCase):
         harness = self.repo / ".rig" / "harness.toml"
         harness.write_text(harness.read_text().replace("claude = false", "claude = true"))
         session = "wrapper-review-tests"
-        with patch.dict(os.environ, {"RIG_PARENT": "grok", "RIG_SKIP_MODEL_CATALOG": "1"}):
+        with patch.dict(os.environ, {
+            "RIG_PARENT": "grok", "RIG_SKIP_MODEL_CATALOG": "1",
+            "HOME": str(self.home), "PATH": mcp_test_support.stub_path(self.bins),
+        }):
             details = jobs.start_job(
                 self.repo, worker="claude", role="implement", job_id=job_id, live="grok",
                 model="claude-sonnet-5", files=files, native_agent_id=job_id + "-agent",
@@ -523,7 +579,7 @@ class WrapperChangeEvidence(unittest.TestCase):
     def test_legacy_file_scope_is_still_accepted(self):
         self._worker("(repo / 'plain.txt').write_text('legacy scope edit\\n')\n")
         env = {
-            "PATH": f"{self.bins}:{os.environ.get('PATH', '')}", "RIG_LIVE": "1",
+            "PATH": mcp_test_support.stub_path(self.bins), "HOME": str(self.home), "RIG_LIVE": "1",
             "RIG_PARENT": "grok", "RIG_ROLE": "implement", "RIG_MODEL": "gpt-5.6-luna",
             "RIG_EFFORT": "low", "RIG_JOB_FILES": "plain.txt",
         }
@@ -582,7 +638,7 @@ class WrapperChangeEvidence(unittest.TestCase):
                 original = b"You are a worker, not the orchestrator.\nReview the accepted change and explain findings.\n"
                 brief.write_bytes(original)
                 env = {
-                    "PATH": f"{self.bins}:{os.environ.get('PATH', '')}", "RIG_LIVE": "1",
+                    "PATH": mcp_test_support.stub_path(self.bins), "HOME": str(self.home), "RIG_LIVE": "1",
                     "RIG_PARENT": parent, "RIG_ROLE": "review", "RIG_MODEL": model,
                     "RIG_WRITER_JOB_ID": writer_id, "RIG_REVIEW_MODE": "independent",
                     "RIG_JOB_FILES_JSON": json.dumps(files),
@@ -664,10 +720,16 @@ class WrapperAdmission(unittest.TestCase):
         self.fail("wrapper did not reach the expected synchronization boundary")
 
     def _env(self, files, **extra):
-        return dict(os.environ, RIG_HOME=str(ROOT), RIG_PARENT="grok", RIG_LIVE="1",
-                    RIG_SKIP_MODEL_CATALOG="1", RIG_MODEL="gpt-5.6-luna", RIG_EFFORT="low",
-                    RIG_ROLE="implement", RIG_OWNER_SESSION="wrapper-admission-tests",
-                    RIG_JOB_FILES_JSON=json.dumps(files), PATH=f"{self.bins}:{os.environ.get('PATH', '')}") | extra
+        merged = {key: value for key, value in os.environ.items() if key not in _CLEAR_RIG}
+        merged.update(
+            RIG_HOME=str(ROOT), RIG_PARENT="grok", RIG_LIVE="1",
+            RIG_SKIP_MODEL_CATALOG="1", RIG_MODEL="gpt-5.6-luna", RIG_EFFORT="low",
+            RIG_ROLE="implement", RIG_OWNER_SESSION="wrapper-admission-tests",
+            RIG_JOB_FILES_JSON=json.dumps(files),
+            HOME=str(self.home), PATH=mcp_test_support.stub_path(self.bins),
+        )
+        merged.update(extra)
+        return merged
 
     def _start(self, job_id, files, *, barrier=None, **extra):
         folder = self.repo / ".rig" / "jobs" / job_id
