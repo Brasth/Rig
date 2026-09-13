@@ -1,0 +1,86 @@
+# Rig flow
+
+Rig lets you stay with one parent agent while it assigns work, checks the result, and gives feedback. Your usual Codex or Grok conversation remains the place to describe the outcome you want. The optional terminal companion lets you watch jobs and park more work while that parent is busy.
+
+## Start with your usual command
+
+After installing Rig, initialize each repository with `rig init`. To add the companion, install tmux **3.3+** and enable the bash/zsh integration once:
+
+```bash
+rig setup --shell-ui
+# Open a new shell in an initialized repository.
+codex
+# Or launch: grok
+```
+
+Plain interactive `codex` and `grok` launches then open with a Rig status row. Existing aliases/functions are preserved; setup reports conflicts. See [setup and controls](usage.md#optional-terminal-companion) for custom startup files and removal.
+
+## From request to checked result
+
+The parent reads your request and decides what work is needed. Questions and planning can stay in the conversation. For execution, it selects a worker, names the files involved, and reserves that scope before edits begin. Queued work is claimed by item ID. The child receives a focused `brief.md` containing its task and boundaries.
+
+```mermaid
+flowchart TD
+    request[You ask the parent] --> decide{Execution needed?}
+    decide -->|No| answer[Parent answers or plans]
+    decide -->|Yes| scope[Select worker and reserve file scope]
+    pending[Persisted queue item] --> free[Parent has a free orchestration turn]
+    free --> claim[Claim item by ID with worker and files]
+    scope --> brief[Write scoped brief.md]
+    claim --> brief
+    brief --> execute[Worker executes]
+    execute --> verify[Parent inspects evidence and runs checks]
+    verify -->|Needs correction| feedback[Parent gives feedback]
+    feedback --> execute
+    verify -->|Accepted| result[Parent reports verified result]
+```
+
+If selection returns `parent_writes`, the parent registers its scope and does the work itself. A successful worker exit means execution finished; **verified** means the parent accepted the current scoped result against its requirements. Further edits can invalidate acceptance.
+
+Reservations prevent conflicting work from being admitted. The default cap is three reserved/running/ASK executions. A stopped execution frees its slot, but its files remain protected through verification or explicit close. See [protected writes and acceptance](usage.md#protected-writes-and-parent-acceptance).
+
+## While the parent is busy
+
+The companion observes repository state independently of the host's model turn. Its status row shows work, queued items, attention, and freshness. **F8** opens Jobs / Queue / Notices. **F9** opens the queue editor, so you can park a new task without waiting for the parent to finish its current turn. Notices distinguish approval requests, finished execution, verification, and stop progress; history remains in the popup after a brief status message expires.
+
+```mermaid
+flowchart LR
+    launch[Plain codex or grok] --> terminal[tmux terminal with active parent]
+    terminal -->|F8| popup[Jobs / Queue / Notices popup]
+    terminal -->|F9| editor[Queue editor]
+    popup <-->|Inspect and act| service[Repository companion service]
+    editor -->|Save| service
+    service --> queue[Persisted Rig queue]
+    state[Observed jobs and queue] --> service
+    service --> row[Status row and notices]
+```
+
+The parent stays in the main terminal; there is no permanent side panel. Esc leaves the editor draft available for later, and closing the popup restores the parent view. Sessions using the same repository root share observed jobs and pending items. Another repository or worktree uses its own root and Rig state; this is not a global board across projects.
+
+| What you use | Where the work goes | What starts execution |
+| --- | --- | --- |
+| Host's native prompt queue | Managed by that CLI for its conversation | Host behavior; not a Rig claim |
+| Rig F9, popup `e`, `/queue …`, or `rig queue add` | This repository's persisted `.rig/queue/` | Parent later claims, briefs, and launches on a free turn |
+
+Typing into a host's native prompt queue is not a receipt for a Rig queue item. Host submit hooks also depend on when that host processes input. F9 talks directly to the companion service and returns a saved queue receipt independently of the parent's turn. `/queue` availability varies by host; see the [adapter table](usage.md#watch-jobs-memory).
+
+Parking, refreshing the status row, and opening a popup **never dispatch workers**. Pending items remain until the parent handles them or you cancel them. The companion does not forward your chat or act as another parent.
+
+## Closing, cancelling, and stopping
+
+| Action or state | Meaning |
+| --- | --- |
+| Close the popup | Return to the parent view. Jobs continue; accepted actions remain accepted. |
+| Cancel a pending queue item | Remove that item from pending work. This does not stop a running job. |
+| Request stop for a selected job | Record cancellation for that job; inspect the result for confirmed termination. |
+| `stop-unconfirmed` | Stop was requested, but execution is not yet confirmed stopped. Slot and files remain held. |
+| `native-cancel-required` | The owning host must interrupt its native agent and report authenticated completion. |
+| Confirmed stopped | Execution slot is free; explicitly close cancelled work to release held files. |
+
+Closing a popup does not undo a submitted action. If an action receipt becomes uncertain after an observer restart, inspect the item before retrying. After explicit cancellation, the parent must not automatically re-wait, re-pick, or drain pending work. See [recovery](usage.md#queue-ownership-and-recovery).
+
+## Companion coverage
+
+The optional shell companion currently supports **Codex and Grok**. Codex has no native Rig HUD panel; the companion supplies the status row and popups outside the host UI. Other supported parents retain their existing adapters and HUDs. Companion support for OpenCode, OMP, Pi, and agy is roadmap work, not an installed feature.
+
+Continue with [daily use](usage.md#daily-use), [queue scenarios](usage.md#scenarios), or the [README](../README.md).
