@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import curses
+import json
 import os
 import sys
 import time
@@ -49,6 +50,57 @@ def _add(stdscr, y: int, x: int, text: str, attr: int = 0, width: int | None = N
         pass
 
 
+def _viewport(selected: int, count: int, rows: int, offset: int) -> tuple[int, int]:
+    rows = max(1, rows)
+    offset = min(max(0, offset), max(0, count - rows))
+    if selected < offset:
+        offset = selected
+    elif selected >= offset + rows:
+        offset = selected - rows + 1
+    return max(0, offset), min(count, max(0, offset) + rows)
+
+
+def _visible_jobs(listing: list[dict], repo: Path, start: int, stop: int) -> list[dict]:
+    # One refresh hashes only displayed subjects, sharing repeated paths across rows.
+    cache: dict = {}
+    return [rig_jobs.project_job(job, repo=repo, refresh=True, cache=cache) for job in listing[start:stop]]
+
+
+def _detail_lines(job: dict) -> list[str]:
+    state = job.get("display_state") or rig_jobs.job_display_state(job)
+    detail = [str(job.get("job_id") or "unknown"), f"status {state}"]
+    if job.get("display_action"):
+        detail.extend(str(job["display_action"]).split(" | "))
+    if job.get("display_reason"):
+        detail.append(str(job["display_reason"]))
+    model = job.get("model") if job.get("model_source") in {"selected", "observed"} and not job.get("model_inferred") else ""
+    detail.append(f"agent  {job.get('worker') or 'unknown'}   model {model or 'unknown'}")
+    reservation = job.get("reservation") or {}
+    if reservation and reservation.get("stage") != "released":
+        scope = "exclusive repository scope" if reservation.get("scope_unknown") else json.dumps(reservation.get("files") or [], ensure_ascii=False)
+        detail.append(f"files held ({reservation.get('access') or 'unknown'}): {scope}")
+        detail.append(f"execution slot {'held' if reservation.get('slot_held') else 'free'}")
+    assessment = job.get("verification_summary") or {}
+    detail.append(f"verification {assessment.get('state') or 'unknown'} / {assessment.get('method') or 'not accepted'}")
+    independence = job.get("independence") or "unknown"
+    detail.append(f"independent review {independence}; {'completed' if job.get('review_completed') else 'not completed'}")
+    detail.extend([f"role   {job.get('role') or '-'}", f"task   {job.get('task') or '-'}"])
+    for field in ("effort", "thread", "doing", "open"):
+        if job.get(field):
+            detail.append(f"{field:<6} {job[field]}")
+    if job.get("pid"):
+        detail.append(f"pid    {job['pid']} ({'alive' if job.get('alive') else 'dead or unknown'})")
+    if assessment.get("snapshot_id"):
+        detail.append(f"snapshot {assessment['snapshot_id']}")
+    if job.get("dir"):
+        folder = Path(job["dir"])
+        for artifact in ("change-evidence.json", "verification.json", "checks"):
+            path = folder / artifact
+            if path.exists():
+                detail.append(str(path))
+    return detail
+
+
 def _paint(stdscr, repo: Path) -> None:
     curses.curs_set(0)
     curses.use_default_colors()
@@ -60,6 +112,7 @@ def _paint(stdscr, repo: Path) -> None:
     stdscr.timeout(400)
     stdscr.scrollok(False)
     selected = 0
+    row_offset = 0
     log_off = 0
     follow = True
     footer = HELP
@@ -67,49 +120,56 @@ def _paint(stdscr, repo: Path) -> None:
     listing: list[dict] = []
 
     def color_for(status: str) -> int:
-        if status == "running":
+        if status in {"working", "verified"}:
             return curses.color_pair(1) | curses.A_BOLD
-        if status == "ask":
+        if status == "needs-input":
             return curses.color_pair(3) | curses.A_BOLD
-        if status in {"fail", "stale"}:
+        if status == "failed":
             return curses.color_pair(2)
-        if status in {"timeout", "cancelled"}:
+        if status in {"reserved", "verifying", "cancelled"}:
             return curses.color_pair(3)
         return curses.A_NORMAL
 
     while True:
         now = time.time()
         if now - last > 0.8 or not listing:
+            selected_id = listing[selected].get("job_id") if listing else None
             listing = rig_jobs.list_jobs(repo)
             last = now
-            if selected >= len(listing):
-                selected = max(0, len(listing) - 1)
+            selected = next((i for i, job in enumerate(listing) if job.get("job_id") == selected_id),
+                            min(selected, max(0, len(listing) - 1)))
             if follow:
                 log_off = 0
         h, w = stdscr.getmaxyx()
         stdscr.erase()
-        running = sum(1 for j in listing if j["effective"] == "running")
-        asking = sum(1 for j in listing if j["effective"] == "ask")
+        running = sum(1 for j in listing if j.get("effective") == "running")
+        asking = sum(1 for j in listing if j.get("effective") == "ask")
+        reserved = sum(1 for j in listing if j.get("effective") == "reserved")
+        slots = sum(bool((j.get("reservation") or {}).get("slot_held")) if j.get("reservation") else
+                    j.get("effective") in {"running", "ask"} for j in listing)
         pending = len(rig_queue.list_items(repo, status="pending"))
         cap = rig_queue.max_running(repo)
         title = (
-            f" Rig  {asking} ask / {running} running / {len(listing)} jobs  "
-            f"queue {pending}  live {running + asking}/{cap}   {repo} "
+            f" Rig  {asking} ask / {running} working / {reserved} reserved / {len(listing)} jobs  "
+            f"queue {pending}  live {slots}/{cap}   {repo} "
         )
         _add(stdscr, 0, 0, title, curses.A_REVERSE, width=w)
         if h < 8 or w < 40:
             _add(stdscr, 1, 0, "terminal too small", width=w)
             stdscr.refresh()
         else:
-            left_w = min(36, max(22, w // 3))
-            job = listing[selected] if listing else None
-            for i, item in enumerate(listing[: h - 3]):
-                mark = "●" if item["effective"] == "running" else "○"
-                prefix = f"{mark} {item['worker']:<6} {item['effective']:<8} "
-                rest = left_w - len(prefix)
-                label = prefix + _elide(item["job_id"], max(rest, 4))
-                attr = color_for(item["effective"])
-                if i == selected:
+            left_w = min(44, max(22, w // 3))
+            row_offset, row_end = _viewport(selected, len(listing), h - 3, row_offset)
+            visible = _visible_jobs(listing, repo, row_offset, row_end)
+            job = visible[selected - row_offset] if visible else None
+            _add(stdscr, 1, 0, f"Jobs {row_offset + 1 if listing else 0}-{row_end}/{len(listing)}", width=left_w)
+            for i, item in enumerate(visible):
+                state = item.get("display_state") or rig_jobs.job_display_state(item)
+                mark = "●" if state == "working" else "○"
+                id_width = min(16, max(8, left_w // 3))
+                label = f"{mark} {_elide(item['job_id'], id_width):<{id_width}} {state}"
+                attr = color_for(state)
+                if i + row_offset == selected:
                     attr |= curses.A_REVERSE
                 _add(stdscr, i + 2, 0, label, attr, width=left_w)
             rx = left_w + 1
@@ -119,31 +179,14 @@ def _paint(stdscr, repo: Path) -> None:
                     if rx - 1 < w:
                         _add(stdscr, y, rx - 1, "│", curses.color_pair(4), width=1)
                 if job:
-                    detail = [
-                        job["job_id"],
-                        f"agent  {job['worker']}   role {job['role'] or '-'}",
-                        f"status {job['effective']}",
-                        f"model  {job.get('model') or '-'}",
-                        f"reasoning  {job.get('effort') or '-'}",
-                        f"task   {job['task']}",
-                    ]
-                    if job.get("thread"):
-                        detail.append(f"thread {job['thread']}")
-                    if job.get("doing"):
-                        detail.append(f"doing  {job['doing']}")
-                    if job.get("pid"):
-                        detail.append(
-                            f"pid    {job['pid']} ({'alive' if job['alive'] else 'dead'})"
-                        )
-                    if job.get("open"):
-                        detail.append(f"open   {job['open']}")
-                    detail.append("")
+                    detail = _detail_lines(job) + [""]
                     acts = job.get("activities") or []
+                    available = max(0, h - 3 - len(detail))
                     if follow:
-                        view = acts[-(h - 3 - len(detail)) :]
+                        view = acts[-available:] if available else []
                     else:
-                        start = max(0, len(acts) - (h - 3 - len(detail)) - log_off)
-                        view = acts[start : start + (h - 3 - len(detail))]
+                        start = max(0, len(acts) - available - log_off)
+                        view = acts[start : start + available]
                     detail.extend(view or ["(no log yet)"])
                     for i, line in enumerate(detail):
                         y = 2 + i

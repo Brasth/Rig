@@ -489,7 +489,7 @@ class JobBoard(unittest.TestCase):
         self.assertIn("Grok 4.6", text)
         self.assertIn("rig ·", text)
         self.assertIn("grok", text)
-        self.assertIn("running", text)
+        self.assertIn("working", text)
         self.assertIn("QUEUE", text)
 
     def test_hud_idle_and_queue(self):

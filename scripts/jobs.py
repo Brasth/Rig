@@ -539,6 +539,100 @@ def _doing_from_activities(activities: list[str]) -> str:
     return next((a for a in reversed(activities) if not a.startswith("think")), activities[-1])
 
 
+def job_display_state(job: dict, reservation: dict | None = None, verification: dict | None = None) -> str:
+    """Project factual execution and assessment state without changing machine statuses."""
+    reservation = reservation if reservation is not None else job.get("reservation") or {}
+    verification = verification if verification is not None else job.get("verification_summary") or job.get("verification") or {}
+    effective = job.get("effective") or job.get("status")
+    if effective == "ask":
+        return "needs-input"
+    if effective == "cancelled":
+        return "cancelled"
+    if effective in {"fail", "timeout", "stale"} or verification.get("state") == "failed" or verification.get("acceptance") == "rejected":
+        return "failed"
+    if reservation.get("needs_reconciliation"):
+        return "needs-input"
+    if verification.get("state") == "verifying" and verification.get("active_check"):
+        return "verifying"
+    if effective == "running":
+        return "verifying" if job.get("role") in {"review", "reviewer"} else "working"
+    if effective == "reserved":
+        return "reserved"
+    if effective == "pending":
+        return "queued"
+    if (effective == "ok" and verification.get("state") == "verified"
+            and verification.get("acceptance") == "accepted" and verification.get("freshness") == "current"):
+        return "verified"
+    return "completed-unverified"
+
+
+def project_job(job: dict, repo: Path | None = None, *, refresh: bool = False, cache: dict | None = None) -> dict:
+    """Validate only chosen subjects; callers share one hash cache per request."""
+    import verification
+
+    row = dict(job)
+    assessment = row.get("verification_summary") or row.get("verification") or {}
+    if refresh and row.get("dir"):
+        root = repo if repo is not None else Path(row["dir"]).parents[2]
+        assessment = verification.assessment(root, row, refresh=True, cache=cache)
+    row["verification_summary"] = assessment
+    row["verification"] = assessment
+    state = job_display_state(row, verification=assessment)
+    row["display_state"] = state
+    observed_model = row.get("model_source") in {"selected", "observed"} and not row.get("model_inferred")
+    row["display_model"] = (row.get("model") or "unknown") if observed_model else "unknown"
+    reservation = row.get("reservation") or {}
+    held = bool(reservation and reservation.get("stage") != "released")
+    jid = row.get("job_id") or ""
+    action = ""
+    if row.get("effective") == "ask":
+        pending = row.get("ask") or {}
+        reason = pending.get("preview") or pending.get("tool_name") or "Permission required"
+        action = f"rig job allow {jid} | rig job deny {jid}"
+    elif reservation.get("needs_reconciliation"):
+        reason = reservation.get("reconciliation_reason") or "Owner or process state needs reconciliation"
+        if row.get("effective") == "cancelled" and held and not reservation.get("stopped"):
+            reason = "stopping; files held — " + str(reason)
+        action = f"rig job reconcile {jid}"
+    elif state == "cancelled":
+        reason = "stopping; files held" if held and not reservation.get("stopped") else "cancelled; files held" if held else "User cancelled execution"
+    elif state == "failed":
+        reason = str(assessment.get("reason") or "") if assessment.get("state") == "failed" else str(row.get("effective") or "Execution failed")
+    elif state == "verifying":
+        active = assessment.get("active_check")
+        reason = (active.get("name") or active.get("check_id")) if isinstance(active, dict) else "Reviewer executing"
+    elif state == "reserved":
+        reason = "Waiting for execution; scope reserved"
+    elif state == "working":
+        reason = row.get("doing") or "Execution running"
+    elif state == "verified":
+        reason = f"Parent accepted current content ({assessment.get('method') or 'unknown method'})"
+    else:
+        reason = assessment.get("reason") or "Parent acceptance required"
+        if assessment.get("state") == "verified" and assessment.get("freshness") != "current":
+            reason = "Accepted content has not been checked in this view"
+    if held and reservation.get("stopped") and not action:
+        reason = str(reason) + "; files held"
+    row["display_reason"] = str(reason or "")
+    row["display_action"] = action
+    # Provider provenance describes independence, never whether findings passed.
+    independence = "unknown"
+    if row.get("writer_job_id"):
+        import route
+
+        actual = row.get("model_source") in {"selected", "observed"} and not row.get("model_inferred")
+        provider = route.provider_for(row.get("model") or "") if actual else ""
+        writer_provider = row.get("writer_provider") or ""
+        if provider and writer_provider:
+            independence = "confirmed" if provider != writer_provider else "unavailable"
+        elif row.get("independence") == "unavailable":
+            independence = "unavailable"
+    row["independence"] = independence
+    row["review_completed"] = bool(row.get("writer_job_id") and row.get("effective") == "ok"
+                                   and row.get("ownership_established") and row.get("execution_mode") in {"live", "native"})
+    return row
+
+
 def load_job(job_path: Path) -> dict | None:
     meta_path = job_path / "meta.json"
     if not meta_path.is_file():
@@ -616,8 +710,14 @@ def load_job(job_path: Path) -> dict | None:
     elapsed_i = computed if computed is not None else stored_i
     model = str(obj.get("model") or "").strip()
     effort = str(obj.get("effort") or "").strip()
-    inferred = False
-    if not model:
+    executor = str(obj.get("executor_kind") or "")
+    if str(obj.get("role") or "") == "parent" or obj.get("worker") == "parent":
+        executor = "parent"
+    elif not executor:
+        executor = "native_child" if kind == "native" else "wrapper"
+    model_source = str(obj.get("model_source") or "unknown")
+    inferred = bool(obj.get("model_inferred", False))
+    if not model and executor != "parent":
         try:
             import route as rig_route
 
@@ -626,7 +726,7 @@ def load_job(job_path: Path) -> dict | None:
             inferred = True
         except Exception:
             model, effort = "", ""
-    return {
+    job = {
         "job_id": job_id,
         "worker": str(obj.get("worker") or "?"),
         "role": str(obj.get("role") or ""),
@@ -640,6 +740,21 @@ def load_job(job_path: Path) -> dict | None:
         "model": model,
         "effort": effort,
         "model_inferred": inferred,
+        "model_source": model_source,
+        "executor_kind": executor,
+        "execution_mode": str(obj.get("execution_mode") or "unknown"),
+        "writer_job_id": str(obj.get("writer_job_id") or ""),
+        "writer_snapshot_id": str(obj.get("writer_snapshot_id") or ""),
+        "writer_provider": str(obj.get("writer_provider") or ""),
+        "independence": str(obj.get("independence") or "unknown"),
+        "provider": str(obj.get("provider") or ""),
+        "provider_source": str(obj.get("provider_source") or "unknown"),
+        "reservation_id": str(obj.get("reservation_id") or ""),
+        "attempt_id": str(obj.get("attempt_id") or ""),
+        "ownership_established": obj.get("ownership_established") is True,
+        "access": str(obj.get("access") or ""),
+        "queue_id": str(obj.get("queue_id") or ""),
+        "native_agent_id": str(obj.get("native_agent_id") or ""),
         "open": str(obj.get("open") or ""),
         "watch": str(obj.get("watch") or ""),
         "summary": str(obj.get("summary") or ""),
@@ -656,56 +771,146 @@ def load_job(job_path: Path) -> dict | None:
         "log_pruned": status == "ok" and not log_path.is_file(),
         "mtime": mtime,
         "files": [
-            str(x).strip()
+            x
             for x in (obj.get("files") or [])
-            if str(x).strip()
+            if isinstance(x, str) and x
         ]
         if isinstance(obj.get("files"), list)
         else [],
+    }
+    import verification
+
+    job["verification"] = verification.assessment(job_path.parents[2], job)
+    job["verification_summary"] = job["verification"]
+    return project_job(job)
+
+
+class JobsSnapshot(list):
+    """One enumeration, including directory counts for legacy status output."""
+
+    def __init__(self, rows=(), *, directory_count: int = 0, all_jobs=None, real_job_count=None, reservations=None):
+        super().__init__(rows)
+        self.directory_count = directory_count
+        self.all_jobs = self if all_jobs is None else all_jobs
+        self.real_job_count = len(self) if real_job_count is None else real_job_count
+        self.reservations = reservations
+
+
+def _reserved_job(repo: Path, reservation: dict) -> dict:
+    jid = reservation.get("job_id") or "reservation-" + reservation["reservation_id"]
+    folder = jobs_dir(repo) / jid
+    stamp = parse_job_ts(reservation.get("updated_at") or reservation.get("created_at") or "")
+    return {
+        "job_id": jid, "worker": reservation.get("worker") or "unknown", "role": reservation.get("role") or "worker",
+        "status": "reserved", "effective": "reserved", "task": "Reserved queue item " + reservation["queue_id"] if reservation.get("queue_id") else "Waiting for execution registration",
+        "doing": reservation.get("reconciliation_reason") or "", "model": reservation.get("model") or "", "effort": "",
+        "model_source": "selected" if reservation.get("model") else "unknown", "model_inferred": False,
+        "executor_kind": (reservation.get("owner") or {}).get("kind", "unknown"), "execution_mode": "unknown",
+        "dir": str(folder), "log": str(folder / "stdout.log"), "mtime": stamp.timestamp() if stamp else 0,
+        "files": reservation.get("declared_files") or [], "reservation": reservation, "reservation_only": True,
+        "reservation_id": reservation["reservation_id"], "attempt_id": reservation["attempt_id"],
+        "queue_id": reservation.get("queue_id") or "", "access": reservation.get("access") or "",
+        "thread": (reservation.get("owner") or {}).get("session_id") or "", "session_id": "", "open": "",
+        "pid": None, "alive": False, "started_at": "", "ended_at": "", "summary": "", "activities": [],
+        "verification_summary": {"state": "unknown", "reason": "execution_not_started", "freshness": "not_checked"},
     }
 
 
 def list_jobs(repo: Path, thread: str | None = None) -> list[dict]:
     root = jobs_dir(repo)
-    if not root.is_dir():
-        return []
-    jobs = []
-    for path in root.iterdir():
+    jobs = JobsSnapshot()
+    for path in root.iterdir() if root.is_dir() else []:
         if path.is_dir():
+            jobs.directory_count += 1
             job = load_job(path)
             if job:
                 jobs.append(job)
+    jobs.real_job_count = len(jobs)
+    import admission
+
+    jobs.reservations = admission.list_reservations(repo)
+    by_id = {job["job_id"]: job for job in jobs}
+    for reservation in jobs.reservations:
+        job = by_id.get(reservation.get("job_id"))
+        if job is not None:
+            if job.get("attempt_id") == reservation.get("attempt_id"):
+                job["reservation"] = reservation
+        else:
+            jobs.append(_reserved_job(repo, reservation))
+    jobs[:] = [project_job(job) for job in jobs]
     def _rank(job: dict) -> int:
         if job["effective"] == "ask":
             return 0
-        if job["effective"] == "running":
+        if job["effective"] in {"running", "reserved"} or job.get("reservation"):
             return 1
         return 2
 
     jobs.sort(key=lambda j: (_rank(j), -j["mtime"]))
     if thread:
-        jobs = [j for j in jobs if j.get("thread") == thread]
+        jobs = JobsSnapshot(
+            [j for j in jobs if j.get("thread") == thread],
+            directory_count=jobs.directory_count, all_jobs=jobs,
+            real_job_count=jobs.real_job_count, reservations=jobs.reservations,
+        )
     return jobs
 
 
+def _job_path(repo: Path, name: str) -> Path:
+    if not name or name in {".", ".."} or not JOB_ID_RE.fullmatch(name):
+        raise SystemExit(f"rig: invalid job id '{name}'")
+    root = jobs_dir(repo).resolve()
+    path = root / name
+    if path.resolve().parent != root:
+        raise SystemExit(f"rig: invalid job path '{name}'")
+    return path
+
+
+def _load_selected_job(path: Path) -> dict:
+    job = load_job(path)
+    if job is not None:
+        if job.get("reservation_id"):
+            import admission
+
+            reservation = admission.get_reservation(path.parents[2], job["reservation_id"])
+            if reservation and reservation.get("job_id") == job["job_id"] and reservation.get("attempt_id") == job.get("attempt_id"):
+                job["reservation"] = reservation
+        return project_job(job)
+    if path.is_dir() and not (path / "meta.json").is_file():
+        reason = "never started (brief.md only, no meta.json)" if (path / "brief.md").is_file() else "has a folder but no meta.json"
+        raise SystemExit(f"rig: job {path.name} {reason}. Launch with run-worker.sh, then wait.")
+    if path.is_dir():
+        raise SystemExit(f"rig: job {path.name} has invalid meta.json")
+    raise SystemExit(f"rig: no such job {path.name}")
+
+
+def resolve_job_paths(repo: Path, names: list[str]) -> list[Path]:
+    """Pin exact paths once; partial names share one directory-name snapshot."""
+    if not names:
+        return [Path(resolve_job(repo, None)["dir"])]
+    paths = []
+    candidates = None
+    for raw in names:
+        name = str(raw).strip()
+        path = _job_path(repo, name)
+        if not path.is_dir():
+            if candidates is None:
+                root = jobs_dir(repo)
+                candidates = [p for p in root.iterdir() if p.is_dir()] if root.is_dir() else []
+            matches = [p for p in candidates if name in p.name]
+            if len(matches) > 1:
+                raise SystemExit(f"rig: ambiguous job id '{name}': " + ", ".join(sorted(p.name for p in matches)))
+            if not matches:
+                raise SystemExit(f"rig: no such job {name}")
+            path = _job_path(repo, matches[0].name)
+        if path not in paths:
+            paths.append(path)
+    return paths
+
+
 def resolve_job(repo: Path, job_id: str | None) -> dict:
-    jobs = list_jobs(repo)
     if job_id:
-        for job in jobs:
-            if job["job_id"] == job_id or job_id in job["job_id"]:
-                return job
-        folder = jobs_dir(repo) / str(job_id).strip()
-        if folder.is_dir() and not (folder / "meta.json").is_file():
-            if (folder / "brief.md").is_file():
-                raise SystemExit(
-                    f"rig: job {job_id} never started (brief.md only, no meta.json). "
-                    "Launch with run-worker.sh, then wait."
-                )
-            raise SystemExit(
-                f"rig: job {job_id} has a folder but no meta.json. "
-                "Launch with run-worker.sh, then wait."
-            )
-        raise SystemExit(f"rig: no such job {job_id}")
+        return _load_selected_job(resolve_job_paths(repo, [job_id])[0])
+    jobs = list_jobs(repo)
     for job in jobs:
         if job["effective"] == "ask":
             return job
@@ -741,9 +946,16 @@ def write_cancel_flag(job_dir: Path, reason: str) -> None:
     tmp.replace(path)
 
 
-def cancel_job(repo: Path, job_id: str | None, reason: str = "parent") -> str:
+def cancel_job(repo: Path, job_id: str | None, reason: str = "parent", *, job_path: Path | None = None) -> str:
     """Abort a live job. Wrapper kill_tree + status cancelled. Does not touch the queue."""
-    job = resolve_job(repo, job_id)
+    import admission
+
+    with admission.transaction(repo):
+        return _cancel_job_locked(repo, job_id, reason, job_path=job_path)
+
+
+def _cancel_job_locked(repo: Path, job_id: str | None, reason: str, *, job_path: Path | None = None) -> str:
+    job = _load_selected_job(job_path) if job_path is not None else resolve_job(repo, job_id)
     jid = str(job["job_id"])
     eff = str(job.get("effective") or "")
     if eff == "cancelled":
@@ -752,13 +964,27 @@ def cancel_job(repo: Path, job_id: str | None, reason: str = "parent") -> str:
         return f"rig: job {jid} already {eff}"
     job_dir = Path(job["dir"])
     write_cancel_flag(job_dir, reason)
-    pid = job.get("pid")
-    if pid_alive(pid):
+    meta = _read_meta_dict(job_dir)
+    reservation = job.get("reservation") or {}
+    owner = reservation.get("owner") or {}
+    # Signal the wrapper so its trap terminates the child tree and restores
+    # launcher state. meta.pid may identify the child, never the wrapper.
+    pid = owner.get("pid")
+    matching_wrapper = (
+        owner.get("kind") == "wrapper" and isinstance(pid, int) and pid > 0
+        and reservation.get("attempt_id") == meta.get("attempt_id")
+        and owner.get("start_id")
+    )
+    if matching_wrapper:
+        import admission
+
+        current = admission.process_identity(pid)
+        matching_wrapper = current.get("start_id") == owner["start_id"]
+    if matching_wrapper and pid_alive(pid):
         try:
             os.kill(int(pid), signal.SIGTERM)
         except (OSError, ValueError, TypeError):
             pass
-    meta = _read_meta_dict(job_dir)
     worker = str(meta.get("worker") or job.get("worker") or "parent")
     role = str(meta.get("role") or job.get("role") or "worker")
     started = str(meta.get("started_at") or job.get("started_at") or iso_now())
@@ -775,14 +1001,16 @@ def cancel_job(repo: Path, job_id: str | None, reason: str = "parent") -> str:
         summary,
         kind=str(meta.get("kind") or ""),
         thread=str(meta.get("thread") or ""),
-        model=str(meta.get("model") or job.get("model") or ""),
-        effort=str(meta.get("effort") or job.get("effort") or ""),
+        model_source=str(meta.get("model_source") or "unknown"),
+        capture_evidence=False,
+        legacy_cancel_requested=not bool(meta.get("reservation_id")),
     )
     write_state(repo, jid, worker, "cancelled", summary)
     return f"cancelled {jid}"
 
 
 def format_wait(job: dict, others: list[dict] | None = None) -> str:
+    job = project_job(job)
     job_id = job["job_id"]
     eff = job.get("effective")
     if eff == "ask":
@@ -801,6 +1029,7 @@ def format_wait(job: dict, others: list[dict] | None = None) -> str:
         doing = job.get("doing") or "running"
         lines = [
             f"RUNNING {job_id}",
+            f"display {job['display_state']} — {job['display_reason']}",
             f"agent   {job.get('worker') or '?'}",
             f"doing   {doing}",
             f"next    rig job wait {job_id}",
@@ -808,6 +1037,7 @@ def format_wait(job: dict, others: list[dict] | None = None) -> str:
     elif eff == "cancelled":
         lines = [
             f"CANCELLED {job_id}",
+            f"display cancelled — {job['display_reason']}",
             f"agent   {job.get('worker') or '?'}",
             "Do not re-pick. User aborted this wait.",
         ]
@@ -826,11 +1056,14 @@ def format_wait_many(jobs: list[dict]) -> str:
     if len(jobs) == 1:
         return format_wait(jobs[0])
     rows = [f"WAIT {len(jobs)} jobs"]
+    cache = {}
     for job in jobs:
+        job = project_job(job, refresh=job.get("effective") == "ok", cache=cache)
         rows.append(
-            f"{str(job.get('effective') or '-'):<9} {job.get('job_id')}  "
+            f"{job['display_state']:<20} {job.get('job_id')}  "
             f"{job.get('worker') or '?'}"
         )
+        rows.append(f"          {job['display_reason']}")
         if job.get("doing") and job.get("effective") == "running":
             rows.append(f"          doing  {job['doing']}")
     return "\n".join(rows)
@@ -868,6 +1101,7 @@ def wait_job(
     timeout: float | None = None,
     on_tick: Callable | None = None,
     ids: str | list | tuple | set | None = None,
+    resolved_paths: list[Path] | None = None,
 ) -> tuple[int, str]:
     timeout_s: float | None
     if timeout is None:
@@ -880,12 +1114,11 @@ def wait_job(
     deadline = None if timeout_s is None else time.time() + max(0.0, timeout_s)
     last_tick: dict[str, tuple[str, str]] = {}
     names = _normalize_wait_ids(job_id, ids)
+    paths = resolve_job_paths(repo, names) if resolved_paths is None else resolved_paths
+    if not paths:
+        raise SystemExit("rig: no jobs")
     while True:
-        if names:
-            jobs = [resolve_job(repo, name) for name in names]
-        else:
-            jobs = [resolve_job(repo, None)]
-            names = [str(jobs[0]["job_id"])]
+        jobs = [_load_selected_job(path) for path in paths]
         if on_tick is not None:
             for job in jobs:
                 key = (str(job.get("effective") or ""), str(job.get("doing") or ""))
@@ -921,19 +1154,28 @@ def wait_job(
         time.sleep(0.4)
 
 
-def format_table(jobs: list[dict], repo: Path | None = None) -> str:
+def format_table(jobs: list[dict], repo: Path | None = None, *, jobs_snapshot=None) -> str:
     if not jobs:
         rows = ["no jobs  (cross-CLI children and recorded cheap workers show up here)"]
     else:
-        rows = ["STATUS    AGENT    ROLE       JOB                              TASK"]
+        rows = ["STATE                 AGENT    ROLE       JOB                              TASK"]
         for job in jobs:
+            job = project_job(job)
             rows.append(
-                f"{job['effective']:<9} {job['worker']:<8} {job['role']:<10} {job['job_id']:<32} {job['task']}"
+                f"{job['display_state']:<21} {job['worker']:<8} {job['role']:<10} {job['job_id']:<32} {job['task']}"
             )
-            extras = []
-            if job.get("model") or job.get("effort"):
+            extras = [f"          {job['display_reason']}"]
+            if job.get("display_action"):
+                extras.append(f"          action {job['display_action']}")
+            assessment = job.get("verification") or job.get("verification_summary") or {}
+            if assessment:
+                state = assessment.get("state", "unknown")
+                if state == "verified" and assessment.get("freshness") == "not_checked":
+                    state = "unverified (content not checked)"
+                extras.append(f"          verification  {state}")
+            if job.get("model") or job.get("effort") or job.get("effective") in {"running", "reserved"}:
                 extras.append(
-                    f"          model  {job.get('model') or '-'}   reasoning {job.get('effort') or '-'}"
+                    f"          model  {job['display_model']}   reasoning {job.get('effort') or '-'}"
                 )
             if job.get("elapsed_s") is not None:
                 extras.append(f"          elapsed  {format_elapsed(int(job['elapsed_s']))}")
@@ -957,21 +1199,47 @@ def format_table(jobs: list[dict], repo: Path | None = None) -> str:
     if repo is not None:
         import work_queue as rig_queue
 
-        live = sum(1 for j in jobs if j.get("effective") in {"running", "ask"})
         rows.append("")
-        rows.append(rig_queue.format_block(repo, live=live))
+        snapshot = jobs_snapshot if jobs_snapshot is not None else getattr(jobs, "all_jobs", jobs)
+        live = rig_queue.slot_count(repo, jobs_snapshot=snapshot)
+        rows.append(rig_queue.format_block(repo, live=live, jobs_snapshot=snapshot))
     return "\n".join(rows)
 
 
 def format_show(job: dict, log_lines: int = 24) -> str:
+    import change_evidence
+    import verification
+
+    job_dir = Path(job["dir"])
+    repo = job_dir.parents[2]
+    hash_cache = {}
+    job = project_job(job, repo, refresh=True, cache=hash_cache)
+    assessment = job["verification_summary"]
     lines = [
         f"job     {job['job_id']}",
         f"agent   {job['worker']}",
         f"role    {job['role'] or '-'}",
         f"status  {job['effective']}",
+        f"display {job['display_state']} — {job['display_reason']}",
     ]
-    lines.append(f"model      {job.get('model') or '-'}")
+    if job.get("display_action"):
+        lines.append(f"action  {job['display_action']}")
+    lines.append(f"independence  {job['independence']} (review {'completed' if job['review_completed'] else 'not completed'})")
+    lines.append(f"model      {job['display_model']}")
     lines.append(f"reasoning  {job.get('effort') or '-'}")
+    lines.append(f"execution  {job.get('execution_mode') or 'unknown'}")
+    lines.append(f"verification  {assessment.get('state', 'unknown')} ({assessment.get('reason') or assessment.get('acceptance', 'pending')})")
+    try:
+        snapshot = change_evidence.snapshot(repo, job.get("files") or [], cache=hash_cache)
+        lines.append(f"snapshot_id  {snapshot['snapshot_id']}")
+    except (OSError, ValueError):
+        lines.append("snapshot_id  unavailable (declare a concrete file scope)")
+    for name in ("change-evidence.json", "requirements.json", "verification.json", "checks"):
+        if (job_dir / name).exists():
+            lines.append(f"evidence  {job_dir / name}")
+    claims = verification.worker_claims(job_dir)
+    if claims.get("available"):
+        lines.append("worker claims (not parent verification)  " + json.dumps(claims.get("claims", {}), ensure_ascii=True))
     lines += [
         f"task    {job['task']}",
     ]
@@ -1054,7 +1322,8 @@ def parse_job_ts(raw: str) -> datetime | None:
     if not text:
         return None
     try:
-        return datetime.strptime(text, JOB_TS_FMT).replace(tzinfo=timezone.utc)
+        stamp = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        return stamp.replace(tzinfo=timezone.utc) if stamp.tzinfo is None else stamp.astimezone(timezone.utc)
     except ValueError:
         return None
 
@@ -1123,17 +1392,57 @@ def write_job_files(
     model: str = "",
     effort: str = "",
     files: list | None = None,
+    executor_kind: str = "",
+    model_source: str = "",
+    execution_mode: str = "",
+    writer_job_id: str = "",
+    writer_snapshot_id: str = "",
+    reservation: dict | None = None,
+    capture_evidence: bool = True,
+    legacy_cancel_requested: bool | None = None,
 ) -> None:
     job_dir.mkdir(parents=True, exist_ok=True)
-    if not model:
+    old = _read_meta_dict(job_dir)
+    executor_kind = executor_kind or str(old.get("executor_kind") or "")
+    if worker == "parent" or role == "parent":
+        executor_kind = "parent"
+    if not executor_kind:
+        executor_kind = "native_child" if kind == "native" else "wrapper"
+    if executor_kind not in {"parent", "native_child", "wrapper"}:
+        raise SystemExit("rig job: executor_kind must be parent|native_child|wrapper")
+    supplied_model = bool(model.strip())
+    inferred = bool(old.get("model_inferred", False)) and not supplied_model
+    model = model.strip() or str(old.get("model") or "")
+    effort = effort.strip() or str(old.get("effort") or "")
+    if not model and executor_kind != "parent":
         try:
             import route as rig_route
 
             route_kind = rig_route.classify(role or "implement", "")
-            model, effort = rig_route.model_for(worker or "codex", route_kind)
+            if old:
+                model, effort = rig_route.model_for(worker or "codex", route_kind)
+            else:
+                model, effort = rig_route.resolved_model_for(worker or "codex", route_kind)
+            inferred = bool(old)
         except Exception:
             model, effort = model or "", effort or ""
-    old = _read_meta_dict(job_dir)
+    if not model_source:
+        if old and not supplied_model:
+            model_source = str(old.get("model_source") or "unknown")
+        elif executor_kind == "parent":
+            model_source = "observed" if supplied_model else str(old.get("model_source") or "unknown")
+        else:
+            model_source = "selected" if model else "unknown"
+    if not model:
+        effort = ""
+    if model and executor_kind != "parent" and status == "running" and (supplied_model or not old):
+        import route as rig_route
+
+        model_error = rig_route.assert_child_model(model)
+        if model_error:
+            raise SystemExit(model_error)
+    if not execution_mode:
+        execution_mode = str(old.get("execution_mode") or "unknown") if old else ("parent" if executor_kind == "parent" else "native")
     obj = {
         "job_id": job_id,
         "worker": worker,
@@ -1148,15 +1457,60 @@ def write_job_files(
         "kind": kind or "native",
         "model": model,
         "effort": effort,
+        "executor_kind": executor_kind,
+        "model_source": model_source,
+        "model_inferred": inferred,
+        "execution_mode": execution_mode,
+        "writer_job_id": writer_job_id or str(old.get("writer_job_id") or ""),
+        "writer_snapshot_id": writer_snapshot_id or str(old.get("writer_snapshot_id") or ""),
     }
-    for key in ("thread", "session_id", "pid", "open", "watch", "kind", "model", "effort", "doing"):
+    for key in ("thread", "session_id", "pid", "open", "watch", "kind", "model", "effort", "doing", "writer_provider", "independence"):
         if not obj.get(key) and old.get(key) not in (None, ""):
             obj[key] = old[key]
     listed = files
     if listed is None:
         raw = old.get("files")
         listed = raw if isinstance(raw, list) else []
-    obj["files"] = [str(x).strip() for x in listed if str(x).strip()]
+        if not old and status == "running":
+            listed = job_files_input()
+    obj["files"] = [x for x in listed if isinstance(x, str) and x]
+    if legacy_cancel_requested is not None or old.get("legacy_cancel_requested"):
+        obj["legacy_cancel_requested"] = bool(legacy_cancel_requested if legacy_cancel_requested is not None else old["legacy_cancel_requested"])
+    for key in ("reservation_id", "attempt_id", "access", "owner", "ownership_established", "queue_id", "native_agent_id"):
+        if key in old:
+            obj[key] = old[key]
+    if reservation:
+        for key in ("reservation_id", "attempt_id", "access", "owner", "queue_id"):
+            if key in reservation:
+                obj[key] = reservation[key]
+        obj["ownership_established"] = True
+        obj["native_agent_id"] = (reservation.get("owner") or {}).get("native_agent_id", "")
+    if model and not inferred and model_source in {"selected", "observed"}:
+        import route as rig_route
+
+        obj["provider"] = rig_route.provider_for(model)
+        obj["provider_source"] = model_source if obj["provider"] else "unknown"
+    else:
+        obj["provider"] = ""
+        obj["provider_source"] = "unknown"
+    if obj.get("writer_job_id") and not obj.get("writer_provider"):
+        import route as rig_route
+
+        writer = _read_meta_dict(_job_path(job_dir.parents[2], obj["writer_job_id"]))
+        if writer.get("model_source") in {"selected", "observed"} and not writer.get("model_inferred"):
+            obj["writer_provider"] = rig_route.provider_for(writer.get("model") or "")
+        elif writer.get("provider_source") == "explicit":
+            obj["writer_provider"] = writer.get("provider") if writer.get("provider") in rig_route.PROVIDERS else ""
+    if capture_evidence and executor_kind in {"native_child", "parent"}:
+        import change_evidence
+
+        repo = job_dir.parents[2]
+        evidence_path = job_dir / "change-before.json"
+        if status == "running" and not evidence_path.exists():
+            change_evidence.begin(repo, job_dir, obj["files"])
+        elif status in {"ok", "fail", "timeout", "cancelled"} and evidence_path.exists():
+            evidence = change_evidence.finish(repo, job_dir)
+            obj["files_changed"] = evidence.get("scoped_changed_paths", [])
     if thread:
         obj["thread"] = thread
     live = (not (ended_at or "").strip()) and status in {"running", "ask"}
@@ -1181,7 +1535,7 @@ def _allocate_job_id(job_id: str) -> str:
     job_id = (job_id or "").strip()
     if not job_id:
         job_id = new_job_id()
-    if not JOB_ID_RE.match(job_id):
+    if job_id in {".", ".."} or not JOB_ID_RE.fullmatch(job_id):
         raise SystemExit(f"rig job: invalid job id '{job_id}'")
     return job_id
 
@@ -1240,6 +1594,26 @@ def _finish_text(job_id: str, worker: str, role: str, status: str, job_dir: Path
     return f"job {job_id} worker={worker} role={role} status={status}\n{job_dir / 'result.json'}"
 
 
+def job_files_input(files: list | None = None) -> list[str]:
+    if files is None:
+        raw = os.environ.get("RIG_JOB_FILES_JSON", "")
+        if raw:
+            try:
+                files = json.loads(raw)
+            except json.JSONDecodeError as exc:
+                raise SystemExit("rig job: RIG_JOB_FILES_JSON must be a JSON string array") from exc
+        else:
+            files = (os.environ.get("RIG_JOB_FILES") or "").replace(",", " ").split()
+    if not isinstance(files, list) or any(not isinstance(path, str) or not path.strip() for path in files):
+        raise SystemExit("rig job: files must be a JSON array of nonempty paths")
+    return list(dict.fromkeys(files))
+
+
+def _native_parent_only() -> None:
+    if os.environ.get("RIG_JOB_ID") or os.environ.get("RIG_JOB_DIR"):
+        raise SystemExit("rig job: native lifecycle and acceptance are parent-only")
+
+
 def start_job(
     repo: Path,
     worker: str = "",
@@ -1248,49 +1622,93 @@ def start_job(
     summary: str = "",
     live: str = "",
     preferred: str = "",
-) -> str:
+    model: str = "",
+    effort: str = "",
+    executor_kind: str = "",
+    files: list | None = None,
+    writer_job_id: str = "",
+    writer_snapshot_id: str = "",
+    access: str = "",
+    reservation_id: str = "",
+    attempt_id: str = "",
+    owner_token: str = "",
+    owner_session: str = "",
+    queue_id: str = "",
+    native_agent_id: str = "",
+    return_details: bool = False,
+) -> str | dict:
     """Write a running job. Does not launch a worker. Returns the job id."""
     _require_harness(repo)
+    _native_parent_only()
     role = (role or "worker").strip() or "worker"
     live = (live or "").strip() or rig_harness.live_parent()
     preferred = (preferred or "").strip() or rig_harness.preferred_parent(repo)
     raw_id = (job_id or "").strip()
-    meta = _read_meta_dict(jobs_dir(repo) / raw_id) if raw_id else {}
     job_id = _allocate_job_id(raw_id)
-    worker = _resolve_worker(worker, live, preferred, meta)
+    job_dir = _job_path(repo, job_id)
+    worker = _resolve_worker(worker, live, preferred, {})
     rig_harness.assert_spawn_allowed(repo, worker, live)
-    listed = [
-        p.strip()
-        for p in (os.environ.get("RIG_JOB_FILES") or "").replace(",", " ").split()
-        if p.strip()
-    ]
-    if not listed and isinstance(meta.get("files"), list):
-        listed = [str(x).strip() for x in meta.get("files") or [] if str(x).strip()]
-    import work_queue as rig_queue
-
-    try:
-        rig_queue.check_start(repo, job_id, files=listed, role=role, worker=worker)
-    except rig_queue.QueueError as exc:
-        raise SystemExit(str(exc)) from exc
+    listed = job_files_input(files)
+    kind = "parent" if worker == "parent" or role == "parent" else executor_kind or "native_child"
+    if kind not in {"parent", "native_child"}:
+        raise SystemExit("rig job: executor_kind must be parent|native_child")
+    access = access or ("read" if role in {"review", "explore", "research"} else "write")
+    import admission
+    import route
+    # Resolve models before taking the admission lock. Parent models are observed,
+    # while child selections still honor model bans and effective worker policy.
+    if not model and kind != "parent":
+        model, effort = route.resolved_model_for(worker, route.classify(role, ""))
+    if model and kind != "parent":
+        error = route.assert_child_model(model)
+        if error:
+            raise SystemExit(error)
+    owner = admission.caller_owner(kind, owner_session=owner_session, native_agent_id=native_agent_id)
+    owner["parent_cli"] = live
     now = iso_now()
-    job_dir = jobs_dir(repo) / job_id
-    write_job_files(
-        job_dir,
-        job_id,
-        worker,
-        role,
-        "running",
-        0,
-        now,
-        "",
-        summary or "",
-        "native",
-        thread=_job_thread(repo),
-        files=listed or None,
-    )
-    (job_dir / "started_at").write_text(now + "\n")
-    write_state(repo, job_id, worker, "running", summary or "")
-    return job_id
+    with admission.transaction(repo):
+        lease = admission.reserve(
+            repo, job_id=job_id, worker=worker, role=role, model=model, files=listed, access=access,
+            owner=owner, owner_session=owner_session, queue_id=queue_id,
+            reservation_id=reservation_id, attempt_id=attempt_id, owner_token=owner_token,
+            writer_job_id=writer_job_id, writer_snapshot_id=writer_snapshot_id,
+        )
+        credentials = admission.credentials(lease)
+        listed = lease.get("declared_files", listed)
+        activated = False
+        try:
+            write_job_files(job_dir, job_id, worker, role, "running", 0, now, "", summary or "", "native",
+                            thread=_job_thread(repo), files=listed, model=model, effort=effort,
+                            executor_kind=kind, execution_mode="parent" if kind == "parent" else "native",
+                            writer_job_id=writer_job_id, writer_snapshot_id=writer_snapshot_id,
+                            reservation=lease)
+            lease = admission.activate(repo, **credentials, job_id=job_id, worker=worker, files=listed,
+                                       access=access, owner=owner, owner_session=owner_session,
+                                       native_agent_id=native_agent_id)
+            activated = True
+            (job_dir / "started_at").write_text(now + "\n")
+            write_state(repo, job_id, worker, "running", summary or "")
+            artifact = admission.write_credentials(repo, {**lease, **credentials})
+        except BaseException:
+            if not activated:
+                current = admission.get_reservation(repo, credentials["reservation_id"])
+                if current and not current.get("launch_started") and not current.get("process"):
+                    # A partial running row must not reappear as an ownerless live
+                    # writer after its unlaunched reservation is compensated.
+                    partial = _read_meta_dict(job_dir)
+                    if partial.get("attempt_id") == credentials["attempt_id"]:
+                        import change_evidence
+
+                        partial.update(status="fail", exit_code=1, ended_at=iso_now(),
+                                       execution_mode="not_started", ownership_established=False,
+                                       summary="Native registration failed before execution started")
+                        for name in ("meta.json", "result.json"):
+                            change_evidence.write_json(job_dir / name, partial)
+                    admission.release(repo, **credentials, rationale="native registration failed before activation",
+                                      owner=owner, owner_session=owner_session, mode="launch_failed")
+            raise
+    details = {**lease, **credentials, "job_id": job_id, "credentials_path": str(artifact)}
+    return details if return_details else job_id
 
 
 def finish_job(
@@ -1303,44 +1721,93 @@ def finish_job(
     live: str = "",
     preferred: str = "",
     require_id: bool = True,
-) -> str:
+    model: str = "",
+    effort: str = "",
+    executor_kind: str = "",
+    reservation_id: str = "",
+    attempt_id: str = "",
+    owner_token: str = "",
+    owner_session: str = "",
+    completion: dict | None = None,
+    execution_mode: str = "",
+    return_details: bool = False,
+) -> str | dict:
     """Write result.json for a job. Does not kill a process."""
     _require_harness(repo)
+    _native_parent_only()
     raw_id = (job_id or "").strip()
     if require_id and not raw_id:
         raise SystemExit("usage: rig job finish <id> [--status ok|fail] [--summary TEXT]")
     status = _validate_status((status or "ok").strip() or "ok")
-    meta = _read_meta_dict(jobs_dir(repo) / raw_id) if raw_id else {}
-    role = (role or "").strip() or str(meta.get("role") or "").strip() or "worker"
-    worker = _resolve_worker(worker, live, preferred, meta)
     job_id = _allocate_job_id(raw_id)
-    now = iso_now()
-    job_dir = jobs_dir(repo) / job_id
-    started = _started_at(job_dir, meta, now)
-    write_job_files(
-        job_dir,
-        job_id,
-        worker,
-        role,
-        status,
-        _exit_code(status),
-        started,
-        now,
-        summary or "",
-        "native",
-        thread=_job_thread(repo),
-    )
-    write_state(repo, job_id, worker, status, summary or "")
+    job_dir = _job_path(repo, job_id)
+    import admission
+
+    transition = None
+    with admission.transaction(repo):
+        meta = _read_meta_dict(job_dir)
+        if meta.get("reservation_id") and (job_dir / "cancel.json").exists() and status != "cancelled":
+            raise ValueError("rig job: cancellation was requested; preserve the cancelled outcome")
+        role = (role or "").strip() or str(meta.get("role") or "").strip() or "worker"
+        worker = _resolve_worker(worker, live, preferred, meta)
+        credentials = dict(reservation_id=reservation_id, attempt_id=attempt_id, owner_token=owner_token)
+        if meta.get("reservation_id"):
+            if (reservation_id, attempt_id) != (meta.get("reservation_id"), meta.get("attempt_id")):
+                raise ValueError("rig job: finish requires this job's reservation and attempt credentials")
+            for key, value in (("worker", worker), ("role", role), ("model", model), ("effort", effort), ("executor_kind", executor_kind)):
+                if value and value != meta.get(key):
+                    raise ValueError(f"rig job: finish cannot change admitted {key}")
+            if status == "running":
+                raise ValueError("rig job: admitted execution must finish with a terminal status")
+            owner = admission.caller_owner(str(meta.get("executor_kind") or "native_child"), owner_session=owner_session)
+            transition = admission.finish(repo, **credentials, status=status, owner=owner,
+                                          owner_session=owner_session, completion=completion)
+        elif any(credentials.values()):
+            raise ValueError("rig job: supplied credentials do not belong to this legacy job")
+        now = iso_now()
+        started = _started_at(job_dir, meta, now)
+        write_job_files(job_dir, job_id, worker, role, status, _exit_code(status), started, now,
+                        summary or "", str(meta.get("kind") or "native"), thread=_job_thread(repo),
+                        model=model, effort=effort, executor_kind=executor_kind,
+                        execution_mode=execution_mode or str(meta.get("execution_mode") or "unknown"),
+                        capture_evidence=transition is None or transition.get("stopped") is True)
+        write_state(repo, job_id, worker, status, summary or "")
     persist_activity(job_dir)
     if status == "ok":
         _prune_stdout_log(job_dir)
-    try:
-        import work_queue as rig_queue
+    text = _finish_text(job_id, worker, role, status, job_dir)
+    if transition and transition.get("needs_reconciliation"):
+        text += "\nneeds_reconciliation: completion is unconfirmed; slot and files remain held"
+    return {"job_id": job_id, "text": text, "reservation": transition} if return_details else text
 
-        rig_queue.mark_done_for_job(repo, job_id)
-    except Exception:
-        pass
-    return _finish_text(job_id, worker, role, status, job_dir)
+
+def close_job(repo: Path, job_id: str, *, reservation_id: str = "", attempt_id: str = "",
+              owner_token: str = "", owner_session: str = "", rationale: str = "") -> dict:
+    _require_harness(repo)
+    _native_parent_only()
+    import admission
+
+    if not job_id:
+        raise ValueError("rig job: close requires a job ID")
+    credentials = dict(reservation_id=reservation_id, attempt_id=attempt_id, owner_token=owner_token)
+    with admission.transaction(repo):
+        lease = admission.assert_owned(repo, **credentials, owner_session=owner_session)
+        # A retained review handoff can fail before meta.json is created. Its
+        # authenticated reservation is enough to identify an explicit close.
+        bound_id = str(lease.get("job_id") or "")
+        requested = job_id if job_id == bound_id else resolve_job(repo, job_id)["job_id"]
+        if bound_id != requested:
+            raise ValueError("rig job: credentials belong to another job")
+        return admission.release(repo, **credentials, owner_session=owner_session,
+                                 rationale=rationale, mode="close")
+
+
+def reconcile_jobs(repo: Path, job_id: str = "", **options) -> dict:
+    _require_harness(repo)
+    _native_parent_only()
+    import admission
+
+    return admission.reconcile(repo, job_id=job_id, **options)
 
 
 def record_job(
@@ -1352,15 +1819,24 @@ def record_job(
     job_id: str = "",
     live: str = "",
     preferred: str = "",
+    model: str = "",
+    effort: str = "",
+    executor_kind: str = "",
+    files: list | None = None,
 ) -> str:
     """One-shot start+finish like `rig job record`. Files only."""
     _require_harness(repo)
+    _native_parent_only()
     live = (live or "").strip() or rig_harness.live_parent()
     preferred = (preferred or "").strip() or rig_harness.preferred_parent(repo)
     raw_id = (job_id or "").strip()
     meta = _read_meta_dict(jobs_dir(repo) / raw_id) if raw_id else {}
     worker = _resolve_worker(worker, live, preferred, meta)
     rig_harness.assert_spawn_allowed(repo, worker, live)
+    if files is not None:
+        raise SystemExit("rig job record is retrospective; start scoped writes before editing")
+    if meta or status == "running":
+        raise SystemExit("rig job record requires a fresh ID and a terminal read-only result")
     return finish_job(
         repo,
         job_id,
@@ -1371,6 +1847,10 @@ def record_job(
         live=live,
         preferred=preferred,
         require_id=False,
+        model=model,
+        effort=effort,
+        executor_kind=executor_kind,
+        execution_mode="retrospective",
     )
 
 
@@ -1400,7 +1880,29 @@ def _hud_job(job: dict) -> dict:
         "model": job.get("model") or "",
         "effort": job.get("effort") or "",
         "effective": job.get("effective"),
+        "display_state": job.get("display_state") or job_display_state(job),
+        "display_reason": job.get("display_reason") or "",
+        "display_action": job.get("display_action") or "",
+        "independence": job.get("independence") or "unknown",
     }
+
+
+def _hud_priority(job: dict) -> int:
+    reservation = job.get("reservation") or {}
+    state = job_display_state(job)
+    if job.get("effective") == "ask":
+        return 0
+    if reservation.get("needs_reconciliation") or (state == "cancelled" and reservation.get("stage") != "released" and reservation and not reservation.get("stopped")):
+        return 1
+    if state in {"working", "reserved", "verifying"}:
+        return 2
+    return 3
+
+
+def _terminal_time(job: dict) -> float:
+    accepted = (job.get("verification_summary") or {}).get("accepted_at") or ""
+    times = [parse_job_ts(value) for value in (job.get("ended_at") or "", accepted)]
+    return max((stamp.timestamp() for stamp in times if stamp is not None), default=0)
 
 
 def hud_snapshot(payload: dict | None = None, *, repo: Path | None = None) -> dict:
@@ -1429,6 +1931,7 @@ def hud_snapshot(payload: dict | None = None, *, repo: Path | None = None) -> di
         listing = []
     asking = [j for j in listing if j.get("effective") == "ask"]
     running = [j for j in listing if j.get("effective") == "running"]
+    reserved = [j for j in listing if j.get("effective") == "reserved"]
     pending: list[dict] = []
     cap = 3
     n_live = len(asking) + len(running)
@@ -1437,40 +1940,50 @@ def hud_snapshot(payload: dict | None = None, *, repo: Path | None = None) -> di
 
         pending = rig_queue.list_items(root, status="pending")
         cap = rig_queue.max_running(root)
-        n_live = rig_queue.live_count(root)
+        n_live = rig_queue.live_count(root, jobs_snapshot=listing)
     except (OSError, ImportError, ValueError):
         pass
     first_pending = str(pending[0].get("text") or "")[:80] if pending else ""
     queue_bit = f"QUEUE {len(pending)} · live {n_live}/{cap}"
-    status = "idle"
-    line2 = f"rig · idle · {queue_bit}"
-    line3 = first_pending
-    if asking:
-        job = asking[0]
-        extra = f" +{len(asking) - 1}" if len(asking) > 1 else ""
-        line2 = f"rig · {job['worker']} ASK{extra} · {job['task']}"
-        line3 = job["doing"] if job.get("doing") else f"rig job allow {job['job_id']}"
-        status = "ask"
-    elif running:
-        job = running[0]
-        extra = f" +{len(running) - 1}" if len(running) > 1 else ""
-        spec = " ".join(x for x in [job.get("model"), job.get("effort")] if x)
-        line2 = (
-            f"rig · {job['worker']} {job['role'] or 'worker'} running{extra}"
-            + (f" · {spec}" if spec else "")
-            + f" · {job['task']}"
-        )
-        line3 = job["doing"] if job.get("doing") else ""
-        status = "running"
+    active = [job for job in listing if _hud_priority(job) < 3]
+    active.sort(key=lambda job: (_hud_priority(job), -job.get("mtime", 0)))
+    recent = [job for job in listing if _hud_priority(job) == 3 and 0 <= time.time() - _terminal_time(job) < 60]
+    recent.sort(key=_terminal_time, reverse=True)
+    selected = active[0] if active else recent[0] if recent else None
+    # Selection precedes hashing. Historical accepted jobs are metadata-only.
+    if selected:
+        selected = project_job(selected, root, refresh=not bool(active), cache={})
+    status = "ask" if asking else "running" if active else "idle"
+    display = selected["display_state"] if selected else "queued" if pending else "idle"
+    remaining = max(0, len(active) - 1)
+    extra = f" +{remaining} · rig tui" if remaining else " · rig tui"
+    line2 = f"rig · {display} · {queue_bit}{extra}"
+    detail = first_pending
+    if selected:
+        jid = selected["job_id"]
+        detail = selected["display_reason"]
+        if selected.get("effective") == "ask":
+            line1 = f"rig · {selected['worker']} ASK {jid}{extra}"
+            line2 = selected["display_action"]
+        else:
+            spec = selected["display_model"] if selected["display_model"] != "unknown" else "model unknown"
+            line2 = f"rig · {display} {jid} · {selected['worker']} {spec}{extra}"
+            if selected.get("display_action"):
+                line1 = line2
+                line2 = selected["display_action"]
     lines = [line1, line2]
-    if status != "idle":
+    if selected:
         lines.append(queue_bit)
-    if line3:
-        lines.append(str(line3)[:160])
-    lines = lines[:5]
+    if detail:
+        lines.append(str(detail)[:160])
     return {
         "idle": status == "idle",
         "status": status,
+        "display_state": display,
+        "selected": _hud_job(selected) if selected else None,
+        "verification_summary": selected.get("verification_summary") if selected else None,
+        "independence": selected.get("independence", "unknown") if selected else "unknown",
+        "remaining": remaining,
         "cwd": str(cwd or root),
         "repo": str(root),
         "queue_pending": len(pending),
@@ -1478,6 +1991,7 @@ def hud_snapshot(payload: dict | None = None, *, repo: Path | None = None) -> di
         "cap": cap,
         "asking": [_hud_job(j) for j in asking],
         "running": [_hud_job(j) for j in running],
+        "reserved": [_hud_job(j) for j in reserved],
         "pending_text": first_pending,
         "lines": lines,
         "text": "\n".join(lines),
@@ -1519,6 +2033,7 @@ def main() -> int:
             "wait",
             "persist",
             "message",
+            "start", "finish", "record", "close", "reconcile",
         ],
     )
     parser.add_argument("job_id", nargs="*")
@@ -1536,10 +2051,64 @@ def main() -> int:
         help="Filter by parent thread id. Bare --thread uses the current parent thread.",
     )
     parser.add_argument("--reason", default="")
-    args = parser.parse_args()
+    parser.add_argument("--worker", default="")
+    parser.add_argument("--role", default="")
+    parser.add_argument("--status", default="ok")
+    parser.add_argument("--summary", default="")
+    parser.add_argument("--model", default="")
+    parser.add_argument("--effort", default="")
+    parser.add_argument("--executor-kind", choices=["parent", "native_child"], default="")
+    parser.add_argument("--files-json")
+    parser.add_argument("--access", choices=["read", "write"], default="")
+    parser.add_argument("--reservation-id", default=os.environ.get("RIG_RESERVATION_ID", ""))
+    parser.add_argument("--attempt-id", default=os.environ.get("RIG_ATTEMPT_ID", ""))
+    parser.add_argument("--owner-session", default=os.environ.get("RIG_OWNER_SESSION", ""))
+    parser.add_argument("--queue-id", default="")
+    parser.add_argument("--native-agent-id", default="")
+    parser.add_argument("--completion-json")
+    parser.add_argument("--writer-job-id", default="")
+    parser.add_argument("--writer-snapshot-id", default="")
+    parser.add_argument("--rationale", default="")
+    parser.add_argument("--apply", action="store_true")
+    parser.add_argument("--action", choices=["report", "adopt", "release"], default="report")
+    args = parser.parse_intermixed_args()
     repo = repo_root(args.repo)
     wait_ids = [str(x).strip() for x in (args.job_id or []) if str(x).strip()]
     job_id = wait_ids[0] if wait_ids else None
+    if args.cmd in {"start", "finish", "record", "close", "reconcile"}:
+        if len(wait_ids) > 1:
+            parser.error("this command accepts one job ID")
+        ownership = {"reservation_id": args.reservation_id, "attempt_id": args.attempt_id,
+                     "owner_token": os.environ.get("RIG_OWNER_TOKEN", ""), "owner_session": args.owner_session}
+        common = {"worker": args.worker, "role": args.role, "summary": args.summary,
+                  "model": args.model, "effort": args.effort, "executor_kind": args.executor_kind}
+        try:
+            files = json.loads(args.files_json) if args.files_json is not None else None
+            completion = json.loads(args.completion_json) if args.completion_json is not None else None
+            if args.cmd == "start":
+                result = start_job(repo, job_id=job_id or "", files=files, access=args.access,
+                                   queue_id=args.queue_id, native_agent_id=args.native_agent_id,
+                                   writer_job_id=args.writer_job_id, writer_snapshot_id=args.writer_snapshot_id,
+                                   return_details=True, **common, **ownership)
+                print(json.dumps(result) if args.json else result["job_id"])
+                print(f"job {result['job_id']} status=running\ncredentials {result['credentials_path']}", file=sys.stderr)
+            elif args.cmd == "finish":
+                result = finish_job(repo, job_id or "", status=args.status, completion=completion,
+                                    return_details=True, **common, **ownership)
+                print(json.dumps(result) if args.json else result["text"])
+            elif args.cmd == "record":
+                result = record_job(repo, job_id=job_id or "", status=args.status, files=files, **common)
+                print(result)
+            elif args.cmd == "close":
+                print(json.dumps(close_job(repo, job_id or "", rationale=args.rationale, **ownership)))
+            else:
+                print(json.dumps(reconcile_jobs(repo, job_id or "", queue_id=args.queue_id,
+                    apply=args.apply, action=args.action, **ownership,
+                    worker=args.worker, access=args.access or "write", files=files,
+                    rationale=args.rationale, completion=completion)))
+        except (ValueError, OSError) as error:
+            parser.exit(2, f"rig job: {error}\n")
+        return 0
     if args.cmd == "message":
         job = resolve_job(repo, job_id)
         text = (args.text or "").strip()

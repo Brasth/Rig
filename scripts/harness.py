@@ -198,7 +198,13 @@ def effective_workers(repo: Path, live: str | None = None) -> list[str]:
     return out
 
 
-def format_status(repo: Path, live: str | None = None) -> str:
+def format_status(
+    repo: Path,
+    live: str | None = None,
+    jobs_snapshot: list[dict] | None = None,
+    include_jobs: bool = True,
+    effective: list[str] | None = None,
+) -> str:
     import jobs as rig_jobs
     import memory as rig_memory
 
@@ -206,11 +212,11 @@ def format_status(repo: Path, live: str | None = None) -> str:
         live = live_parent()
     harness = parse_harness(harness_path(repo))
     pref = harness["parent"]
-    effs = effective_workers(repo, live)
-    jobs_root = repo / ".rig" / "jobs"
-    n_jobs = 0
-    if jobs_root.is_dir():
-        n_jobs = sum(1 for p in jobs_root.iterdir() if p.is_dir())
+    effs = effective_workers(repo, live) if effective is None else effective
+    if jobs_snapshot is None:
+        jobs_snapshot = rig_jobs.list_jobs(repo)
+    # Status historically counts every directory, including unreadable records.
+    n_jobs = getattr(jobs_snapshot, "directory_count", len(jobs_snapshot))
     lines = [
         f"parent live={live or '(none)'} preferred={pref}",
         f"effective: {' '.join(effs) if effs else 'none'}",
@@ -237,5 +243,6 @@ def format_status(repo: Path, live: str | None = None) -> str:
         if marked:
             lines.append("state:")
             lines.extend(f"  {ln}" for ln in marked)
-    lines.append(rig_jobs.format_table(rig_jobs.list_jobs(repo), repo))
+    if include_jobs:
+        lines.append(rig_jobs.format_table(jobs_snapshot, repo, jobs_snapshot=jobs_snapshot))
     return "\n".join(lines)

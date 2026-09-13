@@ -23,10 +23,37 @@ import jobs as rig_jobs  # noqa: E402
 import work_queue as rig_queue  # noqa: E402
 import memory as rig_memory  # noqa: E402
 import route as rig_route  # noqa: E402
+import verification as rig_verification  # noqa: E402
 
 PICK_ROLES = ("explore", "mini", "bulk", "implement", "hard", "review", "stay")
 JOB_WORKERS = ("grok", "codex", "claude", "cursor", "opencode", "omp", "pi", "agy", "parent")
 JOB_FINISH_STATUSES = ("ok", "fail", "timeout")
+REVIEW_PROPERTIES = {
+    "writer_job_id": {"type": "string"},
+    "writer_cli": {"type": "string"},
+    "writer_model": {"type": "string"},
+    "writer_provider": {"type": "string"},
+    "review_mode": {"type": "string", "enum": ["standalone", "independent"], "default": "standalone"},
+}
+PARENT_METADATA_PROPERTIES = {
+    "parent_model": {
+        "type": "string",
+        "description": "Actual current parent-session model, only when explicitly known.",
+    },
+    "parent_effort": {
+        "type": "string",
+        "description": "Actual current parent-session reasoning effort, only when known.",
+    },
+}
+JOB_EXECUTION_PROPERTIES = {
+    "model": {"type": "string", "description": "Executing model. For parent work, pass only the actual known model."},
+    "effort": {"type": "string", "description": "Executing model reasoning effort, when known."},
+    "executor_kind": {
+        "type": "string",
+        "enum": ["parent", "native_child"],
+        "description": "Default parent for role/worker parent; otherwise native_child.",
+    },
+}
 
 TOOLS = [
     {
@@ -215,6 +242,7 @@ TOOLS = [
             "type": "object",
             "properties": {
                 "case": {"type": "string", "description": "The task text."},
+                **PARENT_METADATA_PROPERTIES,
                 "role": {
                     "type": "string",
                     "enum": list(PICK_ROLES),
@@ -258,6 +286,7 @@ TOOLS = [
         "inputSchema": {
             "type": "object",
             "properties": {
+                **JOB_EXECUTION_PROPERTIES,
                 "worker": {
                     "type": "string",
                     "enum": list(JOB_WORKERS),
@@ -294,12 +323,13 @@ TOOLS = [
     {
         "name": "rig_job_record",
         "description": (
-            "One-shot start+finish for a cheap same-CLI worker. Files only. "
-            "Same text as rig job record."
+            "Record a retrospective terminal read-only result. Scoped writes must use rig_job_start before editing. "
+            "A retrospective result cannot be verified."
         ),
         "inputSchema": {
             "type": "object",
             "properties": {
+                **JOB_EXECUTION_PROPERTIES,
                 "worker": {
                     "type": "string",
                     "enum": list(JOB_WORKERS),
@@ -326,6 +356,19 @@ TOOLS = [
         "inputSchema": {
             "type": "object",
             "properties": {
+                **PARENT_METADATA_PROPERTIES,
+                "compact": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "Return compact schema v2 JSON, retaining every active/ASK job.",
+                },
+                "terminal_limit": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 100,
+                    "default": 10,
+                    "description": "Newest terminal rows in compact mode. Full history remains in rig_jobs.",
+                },
                 "case": {
                     "type": "string",
                     "description": "Task text for pick. Required to include pick JSON.",
@@ -517,6 +560,80 @@ TOOLS = [
     },
 ]
 
+for _tool in TOOLS:
+    if _tool["name"] in {"rig_pick", "rig_session"}:
+        _tool["inputSchema"]["properties"].update(REVIEW_PROPERTIES)
+    if _tool["name"] == "rig_job_start":
+        _tool["inputSchema"]["properties"].update({
+            "files": {"type": "array", "items": {"type": "string"}},
+            "writer_job_id": {"type": "string"},
+            "writer_snapshot_id": {"type": "string"},
+        })
+
+_JOB_REF_PROPERTIES = {"id": {"type": "string"}, "repo": {"type": "string"}}
+_OWNERSHIP_PROPERTIES = {key: {"type": "string"} for key in
+                         ("reservation_id", "attempt_id", "owner_token", "owner_session")}
+TOOLS.extend([
+    {
+        "name": "rig_job_requirements",
+        "description": "Parent declares the complete acceptance manifest before checks. Existing requirements are immutable once checks start.",
+        "inputSchema": {"type": "object", "properties": {
+            **_JOB_REF_PROPERTIES,
+            "requirements": {"type": "array", "items": {"type": "object", "properties": {
+                "id": {"type": "string"}, "argv": {"type": "array", "items": {"type": "string"}}, "cwd": {"type": "string"},
+            }, "required": ["id", "argv"]}},
+            "manual_criteria": {"type": "array", "items": {"type": "string"}},
+        }, "required": ["id"]},
+    },
+    {
+        "name": "rig_job_check",
+        "description": "Run the exact parent-authorized argv for a declared required check, recording actual output and before/after content snapshots. Does not accept the work.",
+        "inputSchema": {"type": "object", "properties": {
+            **_JOB_REF_PROPERTIES, "name": {"type": "string"},
+            "argv": {"type": "array", "items": {"type": "string"}, "minItems": 1}, "cwd": {"type": "string"},
+        }, "required": ["id", "name", "argv"]},
+    },
+    {
+        "name": "rig_job_accept",
+        "description": "Parent accepts or rejects current scoped content against EVERY manifest requirement. Check IDs cannot omit failed or missing requirements. next=review retains files for independent review.",
+        "inputSchema": {"type": "object", "properties": {
+            **_JOB_REF_PROPERTIES, "decision": {"type": "string", "enum": ["accept", "reject"]},
+            "snapshot_id": {"type": "string"}, "check_ids": {"type": "array", "items": {"type": "string"}},
+            "rationale": {"type": "string"}, "next": {"type": "string", "enum": ["complete", "review"], "default": "complete"},
+        }, "required": ["id", "decision", "snapshot_id", "rationale"]},
+    },
+])
+
+TOOLS.extend([
+    {"name": "rig_job_close", "description": "Parent deliberately releases a confirmed-stopped attempt without accepting or retrying it. Requires exact ownership credentials and rationale.",
+     "inputSchema": {"type": "object", "properties": {
+         **_JOB_REF_PROPERTIES, **_OWNERSHIP_PROPERTIES, "rationale": {"type": "string"},
+     }, "required": ["id", "reservation_id", "attempt_id", "owner_token", "rationale"]}},
+    {"name": "rig_job_reconcile", "description": "Report held ownership by default. Apply only provably dead unlaunched recovery; explicit adopt/release reconciles legacy queue claims with parent attestation. Never expires live or unknown execution.",
+     "inputSchema": {"type": "object", "properties": {
+         **_JOB_REF_PROPERTIES, "queue_id": {"type": "string"}, "apply": {"type": "boolean", "default": False},
+         "action": {"type": "string", "enum": ["report", "adopt", "release"], "default": "report"},
+         "owner_session": {"type": "string"}, "worker": {"type": "string"},
+         "access": {"type": "string", "enum": ["read", "write"]},
+         "files": {"type": "array", "items": {"type": "string"}},
+         "rationale": {"type": "string"}, "completion": {"type": "object"},
+     }}},
+])
+for _tool in TOOLS:
+    _properties = _tool["inputSchema"]["properties"]
+    if _tool["name"] in {"rig_job_start", "rig_job_finish", "rig_job_requirements", "rig_job_check", "rig_job_accept", "rig_job_reconcile", "rig_queue_unclaim", "rig_queue_spawned"}:
+        _properties.update(_OWNERSHIP_PROPERTIES)
+    if _tool["name"] == "rig_job_start":
+        _properties.update({"access": {"type": "string", "enum": ["read", "write"]},
+                            "queue_id": {"type": "string"}, "native_agent_id": {"type": "string"}})
+    if _tool["name"] == "rig_job_finish":
+        _properties["completion"] = {"type": "object", "description": "Owning parent task-completion or the specific native agent's observed terminal outcome."}
+    if _tool["name"] in {"rig_queue_claim", "rig_queue_spawned"}:
+        _properties.update({"worker": {"type": "string"}, "access": {"type": "string", "enum": ["read", "write"]},
+                            "owner_session": {"type": "string"}})
+    if _tool["name"] == "rig_queue_claim":
+        _properties["job_id"] = {"type": "string"}
+
 TOOL_ORDER = (
     "rig_session",
     "rig_job_wait",
@@ -531,6 +648,11 @@ TOOL_ORDER = (
     "rig_job_log",
     "rig_job_finish",
     "rig_job_record",
+    "rig_job_requirements",
+    "rig_job_check",
+    "rig_job_close",
+    "rig_job_reconcile",
+    "rig_job_accept",
     "rig_memory",
     "rig_memory_add",
     "rig_job_message",
@@ -597,6 +719,58 @@ def _repo(args: dict) -> Path:
     return rig_jobs.repo_root(args.get("repo") if isinstance(args, dict) else None)
 
 
+def _optional_string(args: dict, name: str) -> str:
+    value = args.get(name, "")
+    if not isinstance(value, str):
+        raise ValueError(f"{name} must be a string")
+    return value
+
+
+def _ownership_args(args: dict) -> dict:
+    return {key: _optional_string(args, key) for key in _OWNERSHIP_PROPERTIES}
+
+
+def _execution_args(args: dict) -> dict:
+    values = {name: _optional_string(args, name) for name in JOB_EXECUTION_PROPERTIES}
+    if values["executor_kind"] not in {"", "parent", "native_child"}:
+        raise ValueError("executor_kind must be parent|native_child")
+    return values
+
+
+def _review_args(args: dict) -> dict:
+    values = {name: _optional_string(args, name) for name in REVIEW_PROPERTIES if name != "review_mode"}
+    values["review_mode"] = args.get("review_mode", "standalone")
+    if values["review_mode"] not in {"standalone", "independent"}:
+        raise ValueError("review_mode must be standalone|independent")
+    return values
+
+
+def _compact_rows(listing: list[dict], terminal_limit: int, *, repo: Path, cache=None) -> list[dict]:
+    active_states = {"running", "ask", "reserved"}
+    def is_active(job):
+        return job.get("effective") in active_states or bool(job.get("reservation") and job["reservation"].get("stage") != "released")
+    active = [job for job in listing if is_active(job)]
+    terminal = [job for job in listing if not is_active(job)]
+    terminal.sort(key=lambda job: job.get("mtime", 0), reverse=True)
+    keys = (
+        "job_id", "worker", "role", "task", "status", "effective", "doing",
+        "model", "effort", "model_source", "model_inferred", "executor_kind",
+        "files", "reservation_id", "attempt_id", "execution_mode",
+        "writer_job_id", "writer_provider", "ownership_established",
+    )
+    rows = []
+    for job in active + terminal[:terminal_limit]:
+        row = {key: job.get(key, False if key == "model_inferred" else "") for key in keys}
+        projection = rig_jobs.project_job(job, repo, refresh=True, cache=cache)
+        for key in ("verification_summary", "display_state", "display_reason", "display_action", "display_model", "independence", "review_completed"):
+            row[key] = projection[key]
+        if job.get("reservation"):
+            row["reservation"] = {key: job["reservation"].get(key) for key in
+                                  ("stage", "slot_held", "access", "stopped", "needs_reconciliation", "reconciliation_reason")}
+        rows.append(row)
+    return rows
+
+
 def format_session(
     repo: Path,
     case: str,
@@ -604,35 +778,78 @@ def format_session(
     exclude: str = "",
     *,
     as_json: bool = False,
+    compact: bool = False,
+    terminal_limit: int = 10,
+    parent_model: str = "",
+    parent_effort: str = "",
+    writer_job_id: str = "",
+    writer_cli: str = "",
+    writer_model: str = "",
+    writer_provider: str = "",
+    review_mode: str = "standalone",
 ) -> str:
+    if type(compact) is not bool:
+        raise ValueError("rig_session: compact must be a boolean")
+    if type(terminal_limit) is not int or not 0 <= terminal_limit <= 100:
+        raise ValueError("rig_session: terminal_limit must be an integer from 0 to 100")
     live = rig_harness.live_parent()
     effective = rig_harness.effective_workers(repo, live)
     mem = rig_memory.show_memory(repo)
     listing = rig_jobs.list_jobs(repo)
-    status = rig_harness.format_status(repo, live=live)
+    hash_cache = {}
+    status = "" if compact and as_json else rig_harness.format_status(
+        repo, live=live, jobs_snapshot=listing, include_jobs=not compact, effective=effective,
+    )
     role_n = (role or "").strip()
     pick_err = ""
     choice: dict = {}
     if role_n and role_n not in PICK_ROLES:
         pick_err = "rig_pick: role must be explore|mini|bulk|implement|hard|review|stay"
     else:
-        choice = rig_route.pick(live, effective, role_n, case or "", exclude=exclude)
+        choice = rig_route.pick(
+            live, effective, role_n, case or "", exclude=exclude,
+            parent_model=parent_model, parent_effort=parent_effort,
+            writer_job_id=writer_job_id, writer_cli=writer_cli, writer_model=writer_model,
+            writer_provider=writer_provider, review_mode=review_mode, repo=repo, jobs_snapshot=listing,
+            hash_cache=hash_cache,
+        )
+    shown = _compact_rows(listing, terminal_limit, repo=repo, cache=hash_cache) if compact else listing
+    history = {
+        "total": len(listing),
+        "shown": len(shown),
+        "omitted": len(listing) - len(shown),
+        "invalid_directories": getattr(listing, "directory_count", len(listing)) - getattr(listing, "real_job_count", len(listing)),
+    }
     if as_json:
-        return json.dumps(
-            {
-                "memory": mem,
-                "jobs": listing,
-                "status": status,
-                "pick": choice if not pick_err else {"error": pick_err},
-            },
-            indent=2,
-            default=str,
+        payload = {
+            "memory": mem,
+            "jobs": shown,
+            "status": status,
+            "pick": choice if not pick_err else {"error": pick_err},
+        }
+        if compact:
+            payload.update(schema_version=2, mode="compact", history=history)
+            payload["status"] = {
+                "live": live or "",
+                "preferred": rig_harness.preferred_parent(repo),
+                "effective": effective,
+                "jobs": getattr(listing, "directory_count", len(listing)),
+                "thread": rig_jobs.current_thread(repo),
+                "memory_facts": len(rig_memory.parse_bullets(mem)),
+                "reserved": sum(1 for reservation in getattr(listing, "reservations", None) or [] if reservation.get("stage") == "reserved"),
+            }
+        return json.dumps(payload, indent=2, default=str)
+    jobs_text = rig_jobs.format_table(shown, repo, jobs_snapshot=listing)
+    if compact:
+        jobs_text += (
+            f"\nhistory: {history['shown']} shown / {history['total']} valid jobs; "
+            f"{history['omitted']} omitted; {history['invalid_directories']} invalid directories"
         )
     parts = [
         "# memory",
         mem.strip() or "(empty)",
         "# jobs",
-        rig_jobs.format_table(listing, repo),
+        jobs_text,
         "# status",
         status.strip() or "(empty)",
         "# pick",
@@ -692,7 +909,7 @@ def _child_ask(job_dir: Path, args: dict, *, permission: bool) -> dict:
     return _ok(json.dumps(decision))
 
 
-def call_tool(name: str, args: dict, on_tick=None) -> dict:
+def call_tool(name: str, args: dict, on_tick=None, *, wait_paths: list[Path] | None = None) -> dict:
     args = args or {}
     try:
         child = is_child()
@@ -762,18 +979,20 @@ def call_tool(name: str, args: dict, on_tick=None) -> dict:
                     repo,
                     files=files,
                     item_id=str(args.get("id") or "").strip(),
+                    worker=_optional_string(args, "worker"), access=args.get("access", "write"),
+                    owner_session=_optional_string(args, "owner_session"), job_id=_optional_string(args, "job_id"),
                 )
             except rig_queue.QueueError as exc:
                 return _err(str(exc))
             except FileNotFoundError as exc:
                 return _err(f"queue item not found: {exc}")
-            return _ok(f"claimed {obj['id']}\n{obj.get('text') or ''}\n{rig_queue.format_block(repo)}")
+            return {**_ok(f"claimed {obj['id']}\n{obj.get('text') or ''}\n{rig_queue.format_block(repo)}"), "structuredContent": obj}
         if name == "rig_queue_unclaim":
             qid = str(args.get("id") or "").strip()
             if not qid:
                 return _err("rig_queue_unclaim needs id")
             try:
-                obj = rig_queue.unclaim(repo, qid)
+                obj = rig_queue.unclaim(repo, qid, **_ownership_args(args))
             except FileNotFoundError:
                 return _err(f"queue item not found: {qid}")
             except rig_queue.QueueError as exc:
@@ -784,13 +1003,14 @@ def call_tool(name: str, args: dict, on_tick=None) -> dict:
             jid = str(args.get("job_id") or "").strip()
             try:
                 obj = rig_queue.mark_spawned(
-                    repo, qid, jid, files=args.get("files")
+                    repo, qid, jid, files=args.get("files"), worker=_optional_string(args, "worker"),
+                    access=_optional_string(args, "access"), **_ownership_args(args),
                 )
             except FileNotFoundError:
                 return _err(f"queue item not found: {qid}")
             except rig_queue.QueueError as exc:
                 return _err(str(exc))
-            return _ok(f"spawned {obj['id']} job {obj.get('job_id')}\n{rig_queue.format_block(repo)}")
+            return _ok(f"{obj.get('status') or 'spawned'} {obj['id']} job {obj.get('job_id')}\n{rig_queue.format_block(repo)}")
         if name == "rig_jobs":
             want_thread = str(args.get("thread") or "").strip() or None
             listing = rig_jobs.list_jobs(repo, thread=want_thread)
@@ -823,6 +1043,7 @@ def call_tool(name: str, args: dict, on_tick=None) -> dict:
                 args.get("id"),
                 timeout_s,
                 on_tick=on_tick,
+                resolved_paths=wait_paths,
                 ids=args.get("ids"),
             )
             if code == 1:
@@ -870,7 +1091,12 @@ def call_tool(name: str, args: dict, on_tick=None) -> dict:
             live = rig_harness.live_parent()
             effective = rig_harness.effective_workers(repo, live)
             exclude = str(args.get("exclude") or "")
-            choice = rig_route.pick(live, effective, role, case, exclude=exclude)
+            choice = rig_route.pick(
+                live, effective, role, case, exclude=exclude,
+                parent_model=_optional_string(args, "parent_model"),
+                parent_effort=_optional_string(args, "parent_effort"),
+                repo=repo, **_review_args(args),
+            )
             return _ok(json.dumps(choice, indent=2))
         if name == "rig_session":
             role = str(args.get("role") or "").strip()
@@ -887,10 +1113,55 @@ def call_tool(name: str, args: dict, on_tick=None) -> dict:
                     case,
                     role,
                     str(args.get("exclude") or ""),
+                    as_json=args.get("compact", False) is True,
+                    compact=args.get("compact", False),
+                    terminal_limit=args.get("terminal_limit", 10),
+                    parent_model=_optional_string(args, "parent_model"),
+                    parent_effort=_optional_string(args, "parent_effort"),
+                    **_review_args(args),
                 )
             )
         if name == "rig_status":
             return _ok(rig_harness.format_status(repo, live=rig_harness.live_parent()))
+        if name == "rig_job_close":
+            result = rig_jobs.close_job(repo, _optional_string(args, "id"),
+                                        rationale=_optional_string(args, "rationale"), **_ownership_args(args))
+            return _ok(json.dumps(result, indent=2))
+        if name == "rig_job_reconcile":
+            if not isinstance(args.get("apply", False), bool):
+                raise ValueError("apply must be a boolean")
+            result = rig_jobs.reconcile_jobs(
+                repo, _optional_string(args, "id"), queue_id=_optional_string(args, "queue_id"),
+                apply=args.get("apply", False), action=args.get("action", "report"),
+                worker=_optional_string(args, "worker"), **_ownership_args(args),
+                access=args.get("access", "write"), files=args.get("files"),
+                rationale=_optional_string(args, "rationale"), completion=args.get("completion"),
+            )
+            return _ok(json.dumps(result, indent=2))
+        if name in {"rig_job_requirements", "rig_job_check", "rig_job_accept"}:
+            job_id = _optional_string(args, "id").strip()
+            if not job_id:
+                return _err(f"{name} needs id")
+            job_dir = Path(rig_jobs.resolve_job(repo, job_id)["dir"])
+            if name == "rig_job_requirements":
+                result = rig_verification.record_requirements(
+                    repo, job_dir, args.get("requirements", []), args.get("manual_criteria", []),
+                    **_ownership_args(args),
+                )
+            elif name == "rig_job_check":
+                result = rig_verification.run_check(
+                    repo, job_dir, _optional_string(args, "name"), args.get("argv"),
+                    cwd=args.get("cwd"), on_tick=on_tick,
+                    **_ownership_args(args),
+                )
+            else:
+                result = rig_verification.accept(
+                    repo, job_dir, _optional_string(args, "decision"),
+                    _optional_string(args, "snapshot_id"), check_ids=args.get("check_ids", []),
+                    rationale=_optional_string(args, "rationale"), next=args.get("next", "complete"),
+                    **_ownership_args(args),
+                )
+            return _ok(json.dumps(result, indent=2))
         if name in {"rig_job_start", "rig_job_finish", "rig_job_record"}:
             live = rig_harness.live_parent()
             preferred = rig_harness.preferred_parent(repo)
@@ -899,8 +1170,7 @@ def call_tool(name: str, args: dict, on_tick=None) -> dict:
             summary = str(args.get("summary") or "")
             job_id = str(args.get("id") or "")
             if name == "rig_job_start":
-                return _ok(
-                    rig_jobs.start_job(
+                result = rig_jobs.start_job(
                         repo,
                         worker=worker,
                         role=role or "worker",
@@ -908,12 +1178,18 @@ def call_tool(name: str, args: dict, on_tick=None) -> dict:
                         summary=summary,
                         live=live,
                         preferred=preferred,
-                    )
+                        **_execution_args(args),
+                        files=args.get("files"),
+                        writer_job_id=_optional_string(args, "writer_job_id"),
+                        writer_snapshot_id=_optional_string(args, "writer_snapshot_id"),
+                        access=_optional_string(args, "access"), queue_id=_optional_string(args, "queue_id"),
+                        native_agent_id=_optional_string(args, "native_agent_id"), return_details=True,
+                        **_ownership_args(args),
                 )
+                return {**_ok(result["job_id"]), "structuredContent": result}
             status = str(args.get("status") or "ok")
             if name == "rig_job_finish":
-                return _ok(
-                    rig_jobs.finish_job(
+                result = rig_jobs.finish_job(
                         repo,
                         job_id,
                         status=status,
@@ -922,8 +1198,9 @@ def call_tool(name: str, args: dict, on_tick=None) -> dict:
                         role=role,
                         live=live,
                         preferred=preferred,
-                    )
+                        completion=args.get("completion"), return_details=True, **_ownership_args(args),
                 )
+                return {**_ok(result["text"]), "structuredContent": result}
             return _ok(
                 rig_jobs.record_job(
                     repo,
@@ -934,6 +1211,7 @@ def call_tool(name: str, args: dict, on_tick=None) -> dict:
                     job_id=job_id,
                     live=live,
                     preferred=preferred,
+                    **_execution_args(args),
                 )
             )
         return _err(f"unknown tool {name}")
@@ -957,12 +1235,9 @@ def _abort_wait(rid) -> None:
     if not item:
         return
     repo = item.get("repo")
-    names = list(item.get("ids") or [])
-    if not names:
-        names = [None]
-    for jid in names:
+    for path in item.get("paths") or []:
         try:
-            rig_jobs.cancel_job(repo, jid, "wait-cancelled")
+            rig_jobs.cancel_job(repo, path.name, "wait-cancelled", job_path=path)
         except SystemExit:
             continue
 
@@ -1035,23 +1310,25 @@ def handle(msg: dict) -> dict | None:
         if not isinstance(args, dict):
             args = {}
         on_tick = None
-        if name == "rig_job_wait":
+        if name == "rig_job_wait" and not is_child():
             token = _progress_token(params)
             if token is not None:
                 on_tick = _progress_on_tick(token)
             repo = _repo(args)
-            names = rig_jobs._normalize_wait_ids(args.get("id"), args.get("ids"))
-            if not names:
-                try:
-                    names = [str(rig_jobs.resolve_job(repo, None)["job_id"])]
-                except SystemExit:
-                    names = []
+            try:
+                names = rig_jobs._normalize_wait_ids(args.get("id"), args.get("ids"))
+                paths = rig_jobs.resolve_job_paths(repo, names)
+            except (SystemExit, Exception) as exc:  # Lookup failures must not stop the MCP server.
+                return {"jsonrpc": "2.0", "id": mid, "result": _err(str(exc) or "rig error")}
+            # Keep directory identities for both refresh and cancellation. A vanished
+            # target must never be replaced by a newly matching partial job id.
+            args = {**args, "id": "", "ids": [path.name for path in paths]}
             with _wait_lock:
-                _inflight_waits[str(mid)] = {"repo": repo, "ids": names}
+                _inflight_waits[str(mid)] = {"repo": repo, "paths": paths}
 
             def _run_wait() -> None:
                 try:
-                    result = call_tool(name, args, on_tick=on_tick)
+                    result = call_tool(name, args, on_tick=on_tick, wait_paths=paths)
                     write_message({"jsonrpc": "2.0", "id": mid, "result": result})
                 except Exception as exc:  # noqa: BLE001
                     write_message(
@@ -1066,6 +1343,24 @@ def handle(msg: dict) -> dict | None:
                         _inflight_waits.pop(str(mid), None)
 
             t = threading.Thread(target=_run_wait, daemon=True)
+            with _wait_lock:
+                _wait_threads.append(t)
+            t.start()
+            return None
+        if name == "rig_job_check" and not is_child():
+            token = _progress_token(params)
+            if token is not None:
+                on_tick = _progress_on_tick(token)
+            # Checks may run for minutes. Keep the reader available for ASK,
+            # cancellation, and other requests while preserving request progress.
+            def _run_check() -> None:
+                try:
+                    result = call_tool(name, args, on_tick=on_tick)
+                except (SystemExit, Exception) as exc:
+                    result = _err(str(exc) or "rig error")
+                write_message({"jsonrpc": "2.0", "id": mid, "result": result})
+
+            t = threading.Thread(target=_run_check, daemon=True)
             with _wait_lock:
                 _wait_threads.append(t)
             t.start()
@@ -1091,9 +1386,18 @@ def run_session_cli(argv: list[str]) -> int:
     parser.add_argument("--case", default="")
     parser.add_argument("--role", default="")
     parser.add_argument("--exclude", default="")
+    parser.add_argument("--parent-model", default="")
+    parser.add_argument("--parent-effort", default="")
+    parser.add_argument("--compact", action="store_true")
+    parser.add_argument("--terminal-limit", type=int, default=10)
     parser.add_argument("--repo", default="")
     parser.add_argument("--json", action="store_true")
+    for name in ("writer-job-id", "writer-cli", "writer-model", "writer-provider"):
+        parser.add_argument("--" + name, default="")
+    parser.add_argument("--review-mode", choices=["standalone", "independent"], default="standalone")
     args = parser.parse_args(argv)
+    if not 0 <= args.terminal_limit <= 100:
+        parser.error("--terminal-limit must be an integer from 0 to 100")
     repo = rig_jobs.repo_root(args.repo or None)
     print(
         format_session(
@@ -1102,6 +1406,13 @@ def run_session_cli(argv: list[str]) -> int:
             args.role,
             args.exclude,
             as_json=args.json,
+            compact=args.compact,
+            terminal_limit=args.terminal_limit,
+            parent_model=args.parent_model,
+            parent_effort=args.parent_effort,
+            writer_job_id=args.writer_job_id, writer_cli=args.writer_cli,
+            writer_model=args.writer_model, writer_provider=args.writer_provider,
+            review_mode=args.review_mode,
         )
     )
     return 0

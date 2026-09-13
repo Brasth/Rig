@@ -34,6 +34,7 @@ usage: rig <command> [args]
   job start [--worker NAME] [--role ROLE] [id]
   job finish <id> [--status ok|fail] [--summary TEXT]
   job record [--worker NAME] [--role ROLE] [--status ok|fail] [--summary TEXT] [id]
+    start/record metadata: [--model MODEL] [--effort EFFORT] [--executor-kind parent|native_child]
   job show [id]
   job log [id] [-f] [-n N]
   job allow [id]
@@ -48,7 +49,8 @@ usage: rig <command> [args]
   queue unclaim <id>
   queue spawned <id> --job <job-id> [--files a,b]
   pick [explore|mini|bulk|implement|hard|review|stay] [--case TEXT] [--exclude NAME] [--json]
-  session [--role KIND] [--case TEXT] [--exclude NAME] [--json]
+  session [--role KIND] [--case TEXT] [--exclude NAME] [--compact] [--terminal-limit 0..100] [--json]
+    pick/session metadata: [--parent-model MODEL] [--parent-effort EFFORT] (actual session only)
 
 Stay in Codex, Grok, OpenCode, OMP, Pi, or agy. They can invoke Claude, Cursor, OpenCode, OMP, Pi, agy, or each other.
 EOF
@@ -518,18 +520,18 @@ If the implement brief already lists files, do not also spawn explore.
 Brief lists files, the change, and absolute skill file paths the child must follow. Child does not hunt extra updates.
 Do not tell the child to use computer-use, chrome-profile, or Figma MCP. Put artifacts in the brief.
 Spawn for: write of the listed files when pick is run-worker, review, SSH/debug. Not "find the bug" on an implement spawn.
-Parent chooses kind from this user request and this user skills. Then MCP `rig_pick` with `role` stay|explore|mini|implement|hard|review. `--case` is the task text, not a slash-command catalog.
+Parent chooses kind from this user request and this user skills. Then MCP `rig_pick` with `role` stay|explore|mini|bulk|implement|hard|review. `--case` is the task text, not a slash-command catalog.
 Do not encode local slash command names in pick.
 Model/effort still come from pick JSON. Parent does not shop models.
 
-1. MCP `rig_session` first (memory + jobs + status + pick). Else MCP `rig_memory` then `rig_jobs` then `rig_status` then `rig_pick`. Bash fallback if MCP missing: `rig session --role KIND --case "<task>" --json` or `rig memory` then `rig jobs` then `rig status` then `rig pick implement --case "<task>" --json`.
+1. Parent chooses the semantic role explicitly, including non-English requests. MCP `rig_session(role=KIND, compact=true, terminal_limit=10, case="task")` first (memory + jobs + status + pick). Full mode stays the API/CLI default; compact keeps every active/ASK/reserved job and ten recent terminal rows. Omitted role uses bounded English inference. Else MCP `rig_memory` then `rig_jobs` then `rig_status` then `rig_pick`. Bash fallback if MCP missing: `rig session --role KIND --case "<task>" --compact --terminal-limit 10 --json` or `rig memory` then `rig jobs` then `rig status` then `rig pick implement --case "<task>" --json`.
 2. Follow pick JSON — do not ask the user which model
 Follow pick JSON; never spawn a worker whose harness flag is false; never spawn grok when workers.grok is false unless live parent is grok (native parent_writes). Timeout/fail does not unlock a disabled worker.
 3. stay → you do it (ask / plan / advise / vision / computer-use / chrome-profile / Figma). Do not spawn a clicker for Figma or computer-use.
-4. native explore/mini/bulk → cheap same-CLI agent, then MCP `rig_job_start` / `rig_job_finish` / `rig_job_record`
-   native implement/hard (parent_writes true) → this parent writes the listed files, then MCP `rig_job_record`. Do not spawn a second same-CLI session. Bash fallback if MCP missing: `rig job start` / `rig job finish` / `rig job record`.
+4. Start every native/parent write with MCP `rig_job_start` BEFORE editing: actual worker/model/effort, concrete files, access=write, executor_kind=parent or native_child. parent_writes means this parent writes; do not spawn a second same-CLI session. Native mini/bulk needs an edit-capable worker; Codex mini uses gpt-5.6-luna low, while gpt-5.3-codex-mini explorer stays read-only. Read-only history may use rig_job_record; retrospective writes never gain protected provenance.
+   Preserve returned reservation_id, attempt_id, owner_token, owner/session and credentials_path. Native finish requires the same credentials and explicit completion: parent_task/completed=true, or the observed native_child agent_id/terminal=true/outcome matching status. Parent/MCP PID is never child completion. Unknown completion keeps files/slot held. Bash fallback: rig job start --json, then authenticated rig job finish.
 5. run-worker → write `.rig/jobs/<id>/brief.md` then start the wrapper in the background (do not block this turn on it):
-   `RIG_LIVE=1 RIG_ROLE=<kind> RIG_MODEL=<model> RIG_EFFORT=<effort> "$HOME/.rig/scripts/run-worker.sh" <worker> <id> .rig/jobs/<id>/brief.md`
+   `RIG_LIVE=1 RIG_ROLE=<kind> RIG_MODEL=<model> RIG_EFFORT=<effort> RIG_JOB_FILES_JSON=<JSON-array> RIG_ACCESS=<read-or-write> "$HOME/.rig/scripts/run-worker.sh" <worker> <id> .rig/jobs/<id>/brief.md`
    Orchestrate with MCP: `rig_session` / `rig_jobs` / `rig_job_show` / `rig_job_log` / `rig_job_wait` / `rig_job_allow` / `rig_job_deny` / `rig_job_message` / `rig_memory` / `rig_pick` / `rig_status` / `rig_job_start` / `rig_job_finish` / `rig_job_record`. Wait = one blocking `rig_job_wait` with no timeout. After implement+verify ok, wait review+seed together: MCP `ids`. Bash fallback if MCP missing: one `rig job wait <id>` with no `--timeout` (`rig job wait id1 id2`).
    Do not spawn via MCP. Launching a child is still bash `run-worker.sh`.
    If MCP wait errors or the host drops the tool, bash `rig job wait <id>` once (no `--timeout`). Do not poll 30s.
@@ -538,8 +540,15 @@ Follow pick JSON; never spawn a worker whose harness flag is false; never spawn 
    Then wait once more (no timeout). Same ids if you waited a panel. exit 0 ok, exit 1 fail.
    Never kill, close, or finish an asking or running job because the child asked. Never spawn another worker because the child asked. The child is waiting on you.
    User Esc / MCP notifications/cancelled on `rig_job_wait`: abort those waited ids (`rig_job_cancel` / `rig job cancel`). Status cancelled. Do not re-pick. A new thread does not abort other jobs. Host-dropped wait still bash-waits once (that is not cancel).
-   After implement+verify ok, parent MAY start at most one read-only review (different vendor) and one seed/bulk with listed files disjoint from the review set, in parallel. Until that write is ok: one child on those files. Other queued items may run at the same time, up to max_running (default 3 live running+ask), if listed files are disjoint. Parent selects a disjoint subset by id (skip overlap; try next). Claim needs id when more than one pending. List shows occupied files. Never spawn a second writer on the same files. Never spawn explore/fix/QA as extra teammates. parent_writes occupies this turn; do not drain more writers then. Claim then brief then spawn; unclaim if the brief fails. Wait all live ids. ASK: allow/deny that id; wait the same ids again; do not claim during ASK.
+   After implement+verify ok (stopped execution plus current parent acceptance), parent MAY start at most one read-only review (different actual model provider) and one seed/bulk with listed files disjoint from the review set, in parallel. Until that write is ok: one child on those files. Other queued items may run at the same time, up to max_running (default 3 reserved/running/ASK executions), if listed files are disjoint. Parent selects a disjoint subset by id (skip overlap; try next). Claim needs id when more than one pending. List shows occupied files. Never spawn a second writer on the same files. Never spawn explore/fix/QA as extra teammates. parent_writes occupies this turn; do not drain more writers then. Claim selected worker/access/files with initiating owner_session, preserve exact reservation/attempt/token, then brief and consume that claim on launch. Unclaim requires matching unconsumed credentials if the brief fails. rig_queue_spawned is an authenticated acknowledgement of the same queue/job/attempt; it cannot regress done/cancelled state. Wait all live ids. ASK: allow/deny that id; wait the same ids again; do not claim during ASK.
    Spawn never started (binary missing, refuse, native tool error, empty argv): one re-pick with `--exclude <dead worker>`. Same brief, new job id. Last-resort: opencode, omp, pi, agy, codex. Do not auto-spawn Cursor. Child ran and failed the patch: escalate. Do not vendor-shop. One fallback per task.
+
+6. Child exit zero is completed-unverified. Inspect rig_job_show scoped evidence and current snapshot_id. Declare the complete rig_job_requirements manifest (requirements id/argv/cwd plus manual_criteria), deliberately run exact rig_job_check commands, then rig_job_accept with decision, current snapshot_id, rationale and ownership credentials. Check IDs cannot omit failed/missing requirements. Child claims are not authoritative checks. Changed content invalidates acceptance; active checks emit only their own request progress.
+7. Accepted next=review retains file protection. Pick role=review with review_mode=independent and writer_job_id; require current accepted writer snapshot and different known actual model provider, not just a different CLI. Native reviewer start passes writer_job_id/writer_snapshot_id and current holder credentials; wrapper uses RIG_REVIEW_MODE=independent and RIG_WRITER_JOB_ID. Keep the fresh reviewer attempt/token. Failed reviewer launch retains scope without a slot until fresh retry or explicit close. Unknown/unavailable independence stays explicit.
+8. Accepted next=complete releases files. Failed/cancelled/rejected work remains unverified; rig_job_close with exact credentials and rationale releases only confirmed-stopped work without acceptance or retry. rig_job_reconcile reports by default; apply only supported explicit recovery. Never age-expire live/ASK/unknown ownership. Interrupted checks need matching owner credentials, rationale and completion checks_stopped=true; observed live processes refuse.
+Credentials: MCP structuredContent or CLI --json returns the explicit launch response. Direct wrapper reports only the private .rig/jobs/<id>/owner-credentials.json path (mode 0600). Retain that returned path; never guess authorization from job ID or .rig/thread, and never print tokens. Shell transport is RIG_OWNER_TOKEN; CLI identifiers use --reservation-id/--attempt-id/--owner-session. Queued wrapper adds RIG_QUEUE_ID/RIG_RESERVATION_ID/RIG_ATTEMPT_ID/RIG_OWNER_SESSION plus RIG_ACCESS and RIG_JOB_FILES_JSON. JSON preserves spaces, Unicode and literal bracket names. Stopped execution frees its slot while files remain held; read/read overlap is allowed, unknown writes are exclusive.
+Parent models: pass parent_model/parent_effort only when actually observed. Unknown remains unknown; a cheaper suggestion does not switch the live model. Model/effort for children still come from pick JSON.
+Rollout: quiesce and drain/reconcile old work, confirm stopped tasks, update every launcher, refresh managed source skills/protocol, and fully restart all parent/MCP sessions. Mixed-version admission is unsupported. Preserve worker/cap values, memory, custom agent overrides and unrelated AGENTS content. Never clear blocked ownership by deleting reservation files.
 
 Live parent is this CLI, not the `parent` key (`rig use grok|codex|opencode|omp|pi|agy` is only the preferred default).
 Claude Code and Cursor CLI are never the parent. OpenCode, OMP, Pi, and agy can be the parent when you open that CLI. Worker on only if flag + binary + not live parent. Cursor binary is `cursor-agent`. Missing binary: that worker is off. Cheap same-CLI is success.
@@ -918,10 +927,16 @@ effective_csv() {
 }
 
 cmd_pick() {
-  local role="" case_text="" exclude="" json=0
+  local role="" case_text="" exclude="" json=0 parent_model="" parent_effort=""
+  local review_args=()
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --json) json=1; shift ;;
+      --writer-job-id|--writer-cli|--writer-model|--writer-provider|--review-mode)
+        [[ $# -ge 2 ]] || { echo "rig pick: $1 needs a value" >&2; exit 2; }
+        review_args+=("$1" "$2")
+        shift 2
+        ;;
       --case)
         case_text="${2:-}"
         shift 2
@@ -930,8 +945,13 @@ cmd_pick() {
         exclude="${2:-}"
         shift 2
         ;;
+      --parent-model|--parent-effort)
+        [[ $# -ge 2 ]] || { echo "rig pick: $1 needs a value" >&2; exit 2; }
+        if [[ "$1" == "--parent-model" ]]; then parent_model="$2"; else parent_effort="$2"; fi
+        shift 2
+        ;;
       --help|-h)
-        echo "usage: rig pick [explore|mini|bulk|implement|hard|review|stay] [--case TEXT] [--exclude NAME] [--json]" >&2
+        echo "usage: rig pick [explore|mini|bulk|implement|hard|review|stay] [--case TEXT] [--exclude NAME] [--parent-model MODEL] [--parent-effort EFFORT] [--json]" >&2
         exit 2
         ;;
       --*)
@@ -946,15 +966,34 @@ cmd_pick() {
   done
   local args=(pick --live "$(live_parent)" --effective "$(effective_csv)" --role "$role" --case "$case_text")
   [[ -n "$exclude" ]] && args+=(--exclude "$exclude")
+  [[ -n "$parent_model" ]] && args+=(--parent-model "$parent_model")
+  [[ -n "$parent_effort" ]] && args+=(--parent-effort "$parent_effort")
   [[ "$json" -eq 1 ]] && args+=(--json)
-  python3 "$(py_script route.py)" "${args[@]}"
+  if [[ ${#review_args[@]} -gt 0 ]]; then args+=("${review_args[@]}"); fi
+  python3 "$(py_script route.py)" "${args[@]}" --repo "$(repo_root)"
 }
 
 cmd_session() {
-  local role="" case_text="" exclude="" json=0
+  local role="" case_text="" exclude="" json=0 compact=0 terminal_limit=10 parent_model="" parent_effort=""
+  local review_args=()
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --json) json=1; shift ;;
+      --compact) compact=1; shift ;;
+      --writer-job-id|--writer-cli|--writer-model|--writer-provider|--review-mode)
+        [[ $# -ge 2 ]] || { echo "rig session: $1 needs a value" >&2; exit 2; }
+        review_args+=("$1" "$2")
+        shift 2
+        ;;
+      --terminal-limit|--parent-model|--parent-effort)
+        [[ $# -ge 2 ]] || { echo "rig session: $1 needs a value" >&2; exit 2; }
+        case "$1" in
+          --terminal-limit) terminal_limit="$2" ;;
+          --parent-model) parent_model="$2" ;;
+          --parent-effort) parent_effort="$2" ;;
+        esac
+        shift 2
+        ;;
       --case)
         case_text="${2:-}"
         shift 2
@@ -968,7 +1007,7 @@ cmd_session() {
         shift 2
         ;;
       --help|-h)
-        echo "usage: rig session [--role KIND] [--case TEXT] [--exclude NAME] [--json]" >&2
+        echo "usage: rig session [--role KIND] [--case TEXT] [--exclude NAME] [--compact] [--terminal-limit 0..100] [--parent-model MODEL] [--parent-effort EFFORT] [--json]" >&2
         exit 2
         ;;
       --*)
@@ -982,7 +1021,12 @@ cmd_session() {
     esac
   done
   local args=(--session --repo "$(repo_root)" --role "$role" --case "$case_text" --exclude "$exclude")
+  args+=(--terminal-limit "$terminal_limit")
+  [[ "$compact" -eq 1 ]] && args+=(--compact)
+  [[ -n "$parent_model" ]] && args+=(--parent-model "$parent_model")
+  [[ -n "$parent_effort" ]] && args+=(--parent-effort "$parent_effort")
   [[ "$json" -eq 1 ]] && args+=(--json)
+  if [[ ${#review_args[@]} -gt 0 ]]; then args+=("${review_args[@]}"); fi
   python3 "$(py_script rig_mcp.py)" "${args[@]}"
 }
 
@@ -1154,310 +1198,22 @@ Overwritten each run.
 EOF
 }
 
-write_job_files() {
-  local job_dir="$1"
-  mkdir -p "$job_dir"
-  local model="${RESULT_MODEL:-}" effort="${RESULT_EFFORT:-}" envout
-  if [[ -z "$model" ]]; then
-    envout="$(python3 "$(py_script route.py)" env --worker "$3" --role "$4" 2>/dev/null || true)"
-    model="$(printf '%s\n' "$envout" | sed -n 's/^RIG_MODEL=//p')"
-    effort="$(printf '%s\n' "$envout" | sed -n 's/^RIG_EFFORT=//p')"
-  fi
-  RESULT_JOB_ID="${2}" \
-  RESULT_WORKER="${3}" \
-  RESULT_ROLE="${4}" \
-  RESULT_STATUS="${5}" \
-  RESULT_EXIT="${6}" \
-  RESULT_STARTED="${7}" \
-  RESULT_ENDED="${8}" \
-  RESULT_SUMMARY="${9}" \
-  RESULT_KIND="${10:-native}" \
-  RESULT_MODEL="$model" \
-  RESULT_EFFORT="$effort" \
-  RESULT_THREAD="${RESULT_THREAD:-}" \
-  python3 - "$job_dir" <<'PY'
-import json, os, pathlib, sys
-job_dir = pathlib.Path(sys.argv[1])
-keep = ("thread", "session_id", "pid", "open", "watch", "kind", "model", "effort")
-old = {}
-meta_path = job_dir / "meta.json"
-if meta_path.is_file():
-    try:
-        loaded = json.loads(meta_path.read_text())
-        if isinstance(loaded, dict):
-            old = loaded
-    except Exception:
-        old = {}
-obj = {
-    "job_id": os.environ["RESULT_JOB_ID"],
-    "worker": os.environ["RESULT_WORKER"],
-    "role": os.environ["RESULT_ROLE"],
-    "status": os.environ["RESULT_STATUS"],
-    "exit_code": int(os.environ["RESULT_EXIT"]),
-    "started_at": os.environ["RESULT_STARTED"],
-    "ended_at": os.environ["RESULT_ENDED"],
-    "summary": os.environ["RESULT_SUMMARY"],
-    "files_changed": [],
-    "next": "",
-    "kind": os.environ.get("RESULT_KIND", "native"),
-    "model": os.environ.get("RESULT_MODEL", ""),
-    "effort": os.environ.get("RESULT_EFFORT", ""),
-}
-for key in keep:
-    if not obj.get(key) and old.get(key) not in (None, ""):
-        obj[key] = old[key]
-thread = os.environ.get("RESULT_THREAD", "")
-if thread:
-    obj["thread"] = thread
-for name in ("meta.json", "result.json"):
-    path = job_dir / name
-    tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(json.dumps(obj, indent=2) + "\n")
-    tmp.replace(path)
-PY
-}
-
-new_job_id() {
-  printf '%s-%s\n' "$(date -u +%Y%m%dT%H%M%SZ)" "$$"
-}
-
-parse_job_flags() {
-  JOB_WORKER=""
-  JOB_ROLE="worker"
-  JOB_ROLE_SET=0
-  JOB_STATUS="ok"
-  JOB_SUMMARY=""
-  JOB_ID=""
-  JOB_IDS=()
-  JOB_FOLLOW=0
-  JOB_LINES=""
-  JOB_REASON=""
-  JOB_TEXT=""
-  JOB_TIMEOUT=""
-  while [[ $# -gt 0 ]]; do
-    case "$1" in
-      --worker)
-        JOB_WORKER="${2:-}"
-        shift 2
-        ;;
-      --role)
-        JOB_ROLE="${2:-}"
-        JOB_ROLE_SET=1
-        shift 2
-        ;;
-      --status)
-        JOB_STATUS="${2:-}"
-        shift 2
-        ;;
-      --summary)
-        JOB_SUMMARY="${2:-}"
-        shift 2
-        ;;
-      -f|--follow)
-        JOB_FOLLOW=1
-        shift
-        ;;
-      -n|--lines)
-        JOB_LINES="${2:-}"
-        shift 2
-        ;;
-      --reason)
-        JOB_REASON="${2:-}"
-        shift 2
-        ;;
-      --timeout)
-        JOB_TIMEOUT="${2:-}"
-        shift 2
-        ;;
-      --help|-h)
-        echo "usage: rig job start|finish|record|show|log|allow|deny|wait|message [--worker NAME] [--role ROLE] [--status ok|fail] [--summary TEXT] [--reason TEXT] [--text TEXT] [--timeout SECS] [id ...] [-f] [-n N]" >&2
-        exit 2
-        ;;
-      --text)
-        JOB_TEXT="${2:-}"
-        shift 2
-        ;;
-      --*)
-        echo "rig job: unknown flag $1" >&2
-        exit 2
-        ;;
-      *)
-        JOB_IDS+=("$1")
-        if [[ -z "$JOB_ID" ]]; then
-          JOB_ID="$1"
-        fi
-        shift
-        ;;
-    esac
-  done
-}
 
 cmd_job() {
   local sub="${1:-}"
   shift || true
   case "$sub" in
-    start|finish|record|show|log|allow|deny|cancel|wait|message) ;;
+    requirements|check|accept)
+      python3 "$(py_script verification.py)" --repo "$(repo_root)" "$sub" "$@"
+      ;;
+    start|finish|record|close|reconcile|show|log|allow|deny|cancel|wait|message)
+      python3 "$(py_script jobs.py)" "$sub" "$@" --repo "$(repo_root)"
+      ;;
     *)
-      echo "usage: rig job start|finish|record|show|log|allow|deny|cancel|wait|message [--worker NAME] [--role ROLE] [--status ok|fail] [--summary TEXT] [--reason TEXT] [--text TEXT] [--timeout SECS] [id ...] [-f] [-n N]" >&2
-      exit 2
+      echo "usage: rig job start|finish|record|close|reconcile|requirements|check|accept|show|log|allow|deny|cancel|wait|message [arguments]" >&2
+      return 2
       ;;
   esac
-  parse_job_flags "$@"
-  if [[ "$sub" != "wait" && ${#JOB_IDS[@]} -gt 1 ]]; then
-    echo "rig job: extra arg ${JOB_IDS[1]}" >&2
-    exit 2
-  fi
-  local root harness
-  root="$(repo_root)"
-  harness="$(harness_path)"
-  if [[ ! -f "$harness" ]]; then
-    echo "rig job: missing $harness — run: rig init" >&2
-    exit 1
-  fi
-  local job_dir_early=""
-  if [[ -n "$JOB_ID" ]]; then
-    job_dir_early="$(repo_root)/.rig/jobs/$JOB_ID"
-  fi
-  if [[ -z "$JOB_WORKER" && -f "${job_dir_early}/meta.json" ]]; then
-    JOB_WORKER="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("worker",""))' "$job_dir_early/meta.json" 2>/dev/null || true)"
-  fi
-  if [[ "$JOB_ROLE_SET" -eq 0 && -f "${job_dir_early}/meta.json" && "$sub" == "finish" ]]; then
-    local existing_role
-    existing_role="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("role",""))' "$job_dir_early/meta.json" 2>/dev/null || true)"
-    [[ -n "$existing_role" ]] && JOB_ROLE="$existing_role"
-  fi
-  if [[ -z "$JOB_WORKER" ]]; then
-    JOB_WORKER="$(live_parent)"
-    if [[ -z "$JOB_WORKER" ]]; then
-      JOB_WORKER="$(preferred_parent)"
-    fi
-  fi
-  case "$JOB_WORKER" in
-    grok|codex|claude|cursor|opencode|omp|pi|agy|parent) ;;
-    *)
-      echo "rig job: worker must be grok|codex|claude|cursor|opencode|omp|pi|agy|parent" >&2
-      exit 2
-      ;;
-  esac
-  case "$JOB_STATUS" in
-    ok|fail|timeout|running) ;;
-    *)
-      echo "rig job: status must be ok|fail|timeout|running" >&2
-      exit 2
-      ;;
-  esac
-
-  if [[ "$sub" == "show" ]]; then
-    if [[ -n "$JOB_ID" ]]; then
-      python3 "$(py_script jobs.py)" show "$JOB_ID"
-    else
-      python3 "$(py_script jobs.py)" show
-    fi
-    return 0
-  fi
-  if [[ "$sub" == "log" ]]; then
-    local log_args=()
-    [[ "$JOB_FOLLOW" -eq 1 ]] && log_args+=(-f)
-    [[ -n "$JOB_LINES" ]] && log_args+=(-n "$JOB_LINES")
-    [[ -n "$JOB_ID" ]] && log_args+=("$JOB_ID")
-    python3 "$(py_script jobs.py)" log "${log_args[@]}"
-    return 0
-  fi
-  if [[ "$sub" == "allow" || "$sub" == "deny" ]]; then
-    local ask_args=("$sub")
-    [[ -n "$JOB_ID" ]] && ask_args+=("$JOB_ID")
-    [[ -n "$JOB_REASON" ]] && ask_args+=(--reason "$JOB_REASON")
-    python3 "$(py_script jobs.py)" "${ask_args[@]}"
-    return $?
-  fi
-  if [[ "$sub" == "cancel" ]]; then
-    local cancel_args=(cancel)
-    [[ -n "$JOB_ID" ]] && cancel_args+=("$JOB_ID")
-    [[ -n "$JOB_REASON" ]] && cancel_args+=(--reason "$JOB_REASON")
-    python3 "$(py_script jobs.py)" "${cancel_args[@]}"
-    return $?
-  fi
-  if [[ "$sub" == "wait" ]]; then
-    local wait_args=(wait)
-    if [[ ${#JOB_IDS[@]} -gt 0 ]]; then
-      wait_args+=("${JOB_IDS[@]}")
-    elif [[ -n "$JOB_ID" ]]; then
-      wait_args+=("$JOB_ID")
-    fi
-    [[ -n "$JOB_TIMEOUT" ]] && wait_args+=(--timeout "$JOB_TIMEOUT")
-    python3 "$(py_script jobs.py)" "${wait_args[@]}"
-    return $?
-  fi
-  if [[ "$sub" == "message" ]]; then
-    if [[ -z "$JOB_ID" || -z "$JOB_TEXT" ]]; then
-      echo "usage: rig job message <id> --text TEXT" >&2
-      exit 2
-    fi
-    python3 "$(py_script jobs.py)" message "$JOB_ID" --text "$JOB_TEXT"
-    return $?
-  fi
-
-  if [[ "$sub" == "start" || "$sub" == "record" ]]; then
-    if [[ "$JOB_WORKER" != "parent" ]]; then
-      local live flag
-      live="$(live_parent)"
-      flag="$(worker_flag "$JOB_WORKER")"
-      if [[ "$JOB_WORKER" != "$live" && "$flag" != "true" ]]; then
-        echo "rig job: worker $JOB_WORKER is off in harness" >&2
-        exit 1
-      fi
-    fi
-  fi
-
-  if [[ "$sub" == "finish" && -z "$JOB_ID" ]]; then
-    echo "usage: rig job finish <id> [--status ok|fail] [--summary TEXT]" >&2
-    exit 2
-  fi
-  if [[ -z "$JOB_ID" ]]; then
-    JOB_ID="$(new_job_id)"
-  fi
-  if [[ ! "$JOB_ID" =~ ^[A-Za-z0-9._-]+$ ]]; then
-    echo "rig job: invalid job id '$JOB_ID'" >&2
-    exit 2
-  fi
-
-  local job_dir now
-  job_dir="$root/.rig/jobs/$JOB_ID"
-  now="$(iso_now)"
-  mkdir -p "$job_dir"
-  RESULT_THREAD="${RIG_THREAD:-}"
-  if [[ -z "$RESULT_THREAD" ]]; then
-    RESULT_THREAD="$(python3 "$(py_script jobs.py)" thread --repo "$root" 2>/dev/null || true)"
-  fi
-  export RESULT_THREAD
-
-  if [[ "$sub" == "start" ]]; then
-    write_job_files "$job_dir" "$JOB_ID" "$JOB_WORKER" "$JOB_ROLE" "running" "0" "$now" "" "$JOB_SUMMARY" "native"
-    printf '%s\n' "$now" > "$job_dir/started_at"
-    write_state "$JOB_ID" "$JOB_WORKER" "running" "$JOB_SUMMARY"
-    echo "job $JOB_ID worker=$JOB_WORKER role=$JOB_ROLE status=running" >&2
-    printf '%s\n' "$JOB_ID"
-    return 0
-  fi
-
-  local started="$now"
-  if [[ -f "$job_dir/started_at" ]]; then
-    started="$(cat "$job_dir/started_at")"
-  elif [[ -f "$job_dir/meta.json" ]]; then
-    started="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("started_at",""))' "$job_dir/meta.json" 2>/dev/null || true)"
-    [[ -n "$started" ]] || started="$now"
-  fi
-  local exit_code=0
-  [[ "$JOB_STATUS" == "ok" ]] || exit_code=1
-  [[ "$JOB_STATUS" == "timeout" ]] && exit_code=124
-  write_job_files "$job_dir" "$JOB_ID" "$JOB_WORKER" "$JOB_ROLE" "$JOB_STATUS" "$exit_code" "$started" "$now" "$JOB_SUMMARY" "native"
-  write_state "$JOB_ID" "$JOB_WORKER" "$JOB_STATUS" "$JOB_SUMMARY"
-  python3 "$(py_script jobs.py)" persist --dir "$job_dir" || true
-  if [[ "$JOB_STATUS" == "ok" && -f "$job_dir/activity.json" ]]; then
-    rm -f "$job_dir/stdout.log"
-  fi
-  echo "job $JOB_ID worker=$JOB_WORKER role=$JOB_ROLE status=$JOB_STATUS"
-  echo "$job_dir/result.json"
 }
 
 cmd_run() {
@@ -1500,7 +1256,7 @@ cmd_run() {
     exit 0
   fi
   if [[ "$spawn" == "native" && "$parent_writes" == "true" ]]; then
-    echo "parent_writes: this parent writes the listed files, then rig job record. Do not spawn a second same-CLI session."
+    echo "parent_writes: register listed files with rig job start --json before editing, then authenticated finish/check/accept. Do not spawn a second same-CLI session."
     echo "$choice"
     write_state "$job" "${worker:-parent}" "ok" "parent_writes native implement/hard"
     exit 0

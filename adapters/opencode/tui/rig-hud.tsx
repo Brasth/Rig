@@ -38,13 +38,20 @@ function hudLines(cwd: string): string[] {
   return ["rig · idle · QUEUE 0"]
 }
 
+function compactLines(lines: string[], max: number): string[] {
+  const shown = lines.slice(0, max)
+  const action = lines.find((line) => /\brig job (?:allow|deny|reconcile)\b/.test(line))
+  if (action && max > 0 && !shown.includes(action)) shown[Math.min(1, max - 1)] = action
+  return shown
+}
+
 function HudLines(props: { cwd: string; max?: number }) {
   const [lines, setLines] = createSignal(hudLines(props.cwd))
   const tick = () => setLines(hudLines(props.cwd))
   tick()
   const id = setInterval(tick, 5000)
   onCleanup(() => clearInterval(id))
-  const shown = () => lines().slice(0, props.max ?? 5)
+  const shown = () => compactLines(lines(), props.max ?? 5)
   return (
     <box flexDirection="column">
       <For each={shown()}>{(line) => <text>{line}</text>}</For>

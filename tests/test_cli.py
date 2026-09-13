@@ -72,6 +72,106 @@ class CliMemoryAndThread(unittest.TestCase):
         shown = run_rig(self.repo, "job", "show", job_id)
         self.assertIn("use listed files", shown.stdout)
 
+    def test_native_job_metadata_is_explicit_and_survives_finish(self):
+        for command in ("start", "record"):
+            for explicit in (False, True):
+                with self.subTest(command=command, explicit=explicit):
+                    job_id = f"parent-{command}-{explicit}"
+                    args = ["job", command, job_id, "--worker", "grok", "--role", "parent"]
+                    if command == "start":
+                        args.extend(["--json", "--owner-session", "cli-metadata-test"])
+                    if explicit:
+                        args.extend(["--model", "actual-parent-model", "--effort", "high", "--executor-kind", "parent"])
+                    proc = run_rig(self.repo, *args, env={"RIG_PARENT": "grok"})
+                    self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+                    meta_path = self.repo / ".rig" / "jobs" / job_id / "meta.json"
+                    meta = json.loads(meta_path.read_text())
+                    self.assertEqual(meta["executor_kind"], "parent")
+                    self.assertEqual(meta["model"], "actual-parent-model" if explicit else "")
+                    self.assertEqual(meta["effort"], "high" if explicit else "")
+                    self.assertEqual(meta["model_source"], "observed" if explicit else "unknown")
+                    if command == "start":
+                        lease = json.loads(proc.stdout)
+                        credentials = ["--reservation-id", lease["reservation_id"], "--attempt-id", lease["attempt_id"],
+                                       "--owner-session", "cli-metadata-test"]
+                        owner_env = {"RIG_PARENT": "grok", "RIG_OWNER_TOKEN": lease["owner_token"]}
+                        finished = run_rig(self.repo, "job", "finish", job_id, *credentials,
+                                           "--completion-json", '{"kind":"parent_task","completed":true}', env=owner_env)
+                        self.assertEqual(finished.returncode, 0, finished.stderr)
+                        after = json.loads(meta_path.read_text())
+                        for key in ("model", "effort", "executor_kind", "model_source"):
+                            self.assertEqual(after[key], meta[key])
+                        closed = run_rig(self.repo, "job", "close", job_id, *credentials,
+                                         "--rationale", "Metadata fixture complete", env=owner_env)
+                        self.assertEqual(closed.returncode, 0, closed.stderr)
+
+    def test_job_start_forwards_native_child_selection(self):
+        proc = run_rig(
+            self.repo, "job", "start", "selected-child", "--worker", "codex", "--role", "mini",
+            "--model", "gpt-5.6-luna", "--effort", "low", "--executor-kind", "native_child",
+            env={"RIG_PARENT": "codex"},
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        meta = json.loads((self.repo / ".rig" / "jobs" / "selected-child" / "meta.json").read_text())
+        self.assertEqual(meta["model"], "gpt-5.6-luna")
+        self.assertEqual(meta["effort"], "low")
+        self.assertEqual(meta["executor_kind"], "native_child")
+        self.assertEqual(meta["model_source"], "selected")
+
+    def test_job_metadata_flags_validate_before_writing(self):
+        for args in (
+            ["--executor-kind", "wrapper"], ["--executor-kind", "invalid"],
+            ["--executor-kind"], ["--model"], ["--effort"],
+        ):
+            with self.subTest(args=args):
+                proc = run_rig(self.repo, "job", "start", "invalid-job", *args)
+                self.assertEqual(proc.returncode, 2, proc.stdout + proc.stderr)
+                self.assertFalse((self.repo / ".rig" / "jobs" / "invalid-job").exists())
+
+    def test_session_compact_cli_is_opt_in_and_validates_limit(self):
+        common = ["session", "--role", "stay", "--case", "advise"]
+        env = {"PATH": _stub_path(), "RIG_PARENT": "grok"}
+        default = run_rig(self.repo, *common, "--json", env=env)
+        self.assertEqual(default.returncode, 0, default.stderr)
+        full = json.loads(default.stdout)
+        self.assertEqual(set(full), {"memory", "jobs", "status", "pick"})
+        self.assertIsInstance(full["status"], str)
+        for limit in (0, 10, 100):
+            compact = run_rig(self.repo, *common, "--compact", "--terminal-limit", str(limit), "--json", env=env)
+            self.assertEqual(compact.returncode, 0, compact.stderr)
+            payload = json.loads(compact.stdout)
+            self.assertEqual(payload["schema_version"], 2)
+            self.assertEqual(payload["mode"], "compact")
+            self.assertIsInstance(payload["status"], dict)
+            self.assertEqual(payload["history"]["total"], 0)
+        text = run_rig(self.repo, *common, "--compact", env=env)
+        self.assertEqual(text.returncode, 0, text.stderr)
+        self.assertEqual(text.stdout.count("# jobs"), 1)
+        self.assertEqual(text.stdout.count("no jobs"), 1)
+        self.assertEqual(text.stdout.count("# status"), 1)
+        for value in ("-1", "101", "1.5", "true"):
+            invalid = run_rig(self.repo, *common, "--compact", "--terminal-limit", value, env=env)
+            self.assertEqual(invalid.returncode, 2, invalid.stdout + invalid.stderr)
+            self.assertIn("terminal-limit", invalid.stderr)
+        missing = run_rig(self.repo, *common, "--terminal-limit", env=env)
+        self.assertEqual(missing.returncode, 2)
+
+    def test_pick_and_session_forward_observed_parent_metadata(self):
+        env = {"PATH": _stub_path(), "RIG_PARENT": "grok"}
+        for command in ("pick", "session"):
+            with self.subTest(command=command):
+                args = [command, "implement", "--case", "fix header", "--json"]
+                proc = run_rig(
+                    self.repo, *args, "--parent-model", "actual-parent-model", "--parent-effort", "high", env=env,
+                )
+                self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+                choice = json.loads(proc.stdout)
+                if command == "session":
+                    choice = choice["pick"]
+                self.assertEqual(choice["model"], "actual-parent-model")
+                self.assertEqual(choice["effort"], "high")
+                self.assertEqual(choice["model_source"], "observed")
+
     def test_queue_add_list_cancel_and_jobs_footer(self):
         added = run_rig(self.repo, "queue", "add", "fix pagination")
         self.assertEqual(added.returncode, 0, added.stderr + added.stdout)
@@ -351,9 +451,21 @@ class InitPresence(unittest.TestCase):
                 name,
                 "--role",
                 "implement",
+                "--json", "--owner-session", "worker-availability-test",
                 env={"PATH": _stub_path()},
             )
             self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+            lease = json.loads(proc.stdout)
+            credentials = ["--reservation-id", lease["reservation_id"], "--attempt-id", lease["attempt_id"],
+                           "--owner-session", "worker-availability-test"]
+            owner_env = {"PATH": _stub_path(), "RIG_OWNER_TOKEN": lease["owner_token"]}
+            completion = json.dumps({"kind": "native_child", "agent_id": name + "-fixture", "terminal": True, "outcome": "ok"})
+            finished = run_rig(self.repo, "job", "finish", lease["job_id"], *credentials,
+                               "--completion-json", completion, env=owner_env)
+            self.assertEqual(finished.returncode, 0, finished.stderr)
+            closed = run_rig(self.repo, "job", "close", lease["job_id"], *credentials,
+                             "--rationale", "Availability fixture complete", env=owner_env)
+            self.assertEqual(closed.returncode, 0, closed.stderr)
 
     def test_job_start_refuses_disabled_grok_unless_live_parent(self):
         run_rig(self.repo, "init", env={"PATH": _stub_path()})

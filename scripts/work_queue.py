@@ -16,6 +16,7 @@ HERE = Path(__file__).resolve().parent
 if str(HERE) not in sys.path:
     sys.path.insert(0, str(HERE))
 
+import admission  # noqa: E402
 import harness as rig_harness  # noqa: E402
 import jobs as rig_jobs  # noqa: E402
 
@@ -23,7 +24,7 @@ TEXT_CAP = 2000
 OCCUPIED_SHOW = 8
 STATUSES = frozenset({"pending", "cancelled", "claimed", "spawned", "done"})
 WRITER_ROLES = frozenset({"implement", "hard", "worker", "bulk"})
-NON_WRITER_ROLES = frozenset({"explorer", "reviewer", "review", "parent"})
+NON_WRITER_ROLES = frozenset({"explore", "explorer", "reviewer", "review"})
 THREAD_ENV = (
     "RIG_THREAD",
     "GROK_SESSION_ID",
@@ -32,8 +33,7 @@ THREAD_ENV = (
 )
 
 
-class QueueError(Exception):
-    """Cap, overlap, or claim race. Message is safe to print."""
+QueueError = admission.AdmissionError
 
 
 def iso_now() -> str:
@@ -45,7 +45,7 @@ def queue_dir(repo: Path) -> Path:
 
 
 def item_path(repo: Path, item_id: str) -> Path:
-    return queue_dir(repo) / f"{item_id}.json"
+    return queue_dir(repo) / f"{admission._id(item_id, 'queue id')}.json"
 
 
 def current_thread() -> str:
@@ -111,11 +111,11 @@ def max_per_worker(repo: Path, worker: str = "") -> int:
     return max(0, n)
 
 
-def worker_live_count(repo: Path, worker: str) -> int:
+def worker_live_count(repo: Path, worker: str, jobs_snapshot=None) -> int:
     name = str(worker or "").strip()
     if not name:
         return 0
-    return sum(1 for job in live_jobs(repo) if str(job.get("worker") or "") == name)
+    return sum(1 for row in _held_rows(repo, jobs_snapshot) if row.get("slot_held") and row.get("worker") in {"", name})
 
 
 def clip_priority(raw) -> int:
@@ -239,16 +239,17 @@ def apply_slash(repo: Path, text: str) -> dict | None:
     return {"action": "add", "item": obj}
 
 
-def live_jobs(repo: Path) -> list[dict]:
+def live_jobs(repo: Path, jobs_snapshot=None) -> list[dict]:
+    snapshot = rig_jobs.list_jobs(Path(repo)) if jobs_snapshot is None else jobs_snapshot
     return [
         job
-        for job in rig_jobs.list_jobs(Path(repo))
+        for job in snapshot
         if job.get("effective") in {"running", "ask"}
     ]
 
 
-def live_count(repo: Path) -> int:
-    return len(live_jobs(repo))
+def live_count(repo: Path, jobs_snapshot=None) -> int:
+    return slot_count(repo, jobs_snapshot)
 
 
 def is_writer(role: str) -> bool:
@@ -271,10 +272,9 @@ def normalize_files(raw) -> list[str]:
     else:
         items = [raw]
     for item in items:
-        text = str(item or "").strip().replace("\\", "/")
+        text = str(item or "") if not isinstance(raw, str) else str(item or "").strip()
         while text.startswith("./"):
             text = text[2:]
-        text = text.lstrip("/")
         if text and text not in parts:
             parts.append(text)
     return parts
@@ -290,28 +290,50 @@ def job_files(job: dict) -> list[str]:
     return normalize_files((job or {}).get("files"))
 
 
+def _held_rows(repo, jobs_snapshot=None, include_claimed=True):
+    if jobs_snapshot is None:
+        jobs_snapshot = rig_jobs.list_jobs(Path(repo))
+    reservations = getattr(jobs_snapshot, "reservations", None)
+    if reservations is None:
+        reservations = admission.list_reservations(repo)
+    reservations = [row for row in reservations if row.get("stage") != "released"]
+    jobs_bound = {row.get("job_id") for row in reservations if row.get("job_id")}
+    queues_bound = {row.get("queue_id") for row in reservations if row.get("queue_id")}
+    rows = list(reservations)
+    for job in live_jobs(repo, jobs_snapshot):
+        if job.get("job_id") not in jobs_bound:
+            rows.append({**job, "slot_held": True, "access": job.get("access") or ("write" if is_writer(job.get("role")) else "read")})
+    if include_claimed:
+        for item in list_items(repo, status=None):
+            if item.get("status") in {"claimed", "spawned"} and item.get("id") not in queues_bound and item.get("job_id") not in jobs_bound:
+                rows.append({**item, "slot_held": True, "queue_id": item.get("id"), "access": item.get("access") or "write"})
+    seen, unique = set(), []
+    for row in rows:
+        key = row.get("job_id") or row.get("queue_id") or row.get("reservation_id")
+        if key not in seen:
+            seen.add(key)
+            unique.append(row)
+    return unique
+
+
 def unlabeled_writers(
     repo: Path,
     *,
     ignore_job_id: str = "",
     include_claimed: bool = True,
+    jobs_snapshot=None,
 ) -> list[str]:
     """Live/claimed writers with no listed files (cannot prove disjoint)."""
     names: list[str] = []
     skip = str(ignore_job_id or "").strip()
-    for job in live_jobs(repo):
-        jid = str(job.get("job_id") or "")
+    for job in _held_rows(repo, jobs_snapshot, include_claimed):
+        jid = str(job.get("job_id") or job.get("queue_id") or job.get("reservation_id") or "")
         if skip and jid == skip:
             continue
-        if not is_writer(str(job.get("role") or "")):
+        if job.get("access") != "write":
             continue
         if not job_files(job) and jid and jid not in names:
             names.append(jid)
-    if include_claimed:
-        for item in list_items(repo, status="claimed"):
-            qid = str(item.get("id") or "")
-            if not normalize_files(item.get("files")) and qid and qid not in names:
-                names.append(qid)
     return names
 
 
@@ -320,30 +342,23 @@ def occupied_files(
     *,
     ignore_job_id: str = "",
     include_claimed: bool = True,
+    jobs_snapshot=None,
 ) -> tuple[set[str], bool]:
     files: set[str] = set()
     unknown = False
     skip = str(ignore_job_id or "").strip()
-    for job in live_jobs(repo):
+    for job in _held_rows(repo, jobs_snapshot, include_claimed):
         if skip and str(job.get("job_id") or "") == skip:
-            continue
-        if not is_writer(str(job.get("role") or "")):
             continue
         listed = job_files(job)
         if not listed:
             unknown = True
         files |= set(listed)
-    if include_claimed:
-        for item in list_items(repo, status="claimed"):
-            listed = normalize_files(item.get("files"))
-            if not listed:
-                unknown = True
-            files |= set(listed)
     return files, unknown
 
 
-def slot_count(repo: Path) -> int:
-    return live_count(repo) + len(list_items(repo, status="claimed"))
+def slot_count(repo: Path, jobs_snapshot=None) -> int:
+    return sum(bool(row.get("slot_held")) for row in _held_rows(repo, jobs_snapshot))
 
 
 def overlap_reason(
@@ -381,14 +396,7 @@ def _lock_path(repo: Path) -> Path:
 
 
 def _with_lock(repo: Path, fn):
-    path = _lock_path(repo)
-    with path.open("a+") as fh:
-        try:
-            import fcntl
-
-            fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
-        except Exception:
-            pass
+    with admission.transaction(repo):
         return fn()
 
 
@@ -399,158 +407,79 @@ def live_ids_line(repo: Path) -> str:
     return "live: " + ", ".join(str(j.get("job_id") or "") for j in jobs)
 
 
-def check_start(
-    repo: Path,
-    job_id: str = "",
-    files=None,
-    role: str = "worker",
-    worker: str = "",
-) -> None:
-    """Refuse a new running job at cap or on file overlap. Existing live id is ok."""
-    repo = Path(repo)
-    jid = str(job_id or "").strip()
-    if jid:
-        existing = rig_jobs.load_job(rig_jobs.jobs_dir(repo) / jid)
-        if existing and existing.get("effective") in {"running", "ask"}:
-            return
-    cap = max_running(repo)
-    n = live_count(repo)
-    if n >= cap:
-        extra = live_ids_line(repo)
-        raise QueueError(
-            f"live jobs {n}/{cap} (running+ask). wait or rig queue list"
-            + (f". {extra}" if extra else "")
-        )
-    who = str(worker or "").strip()
-    cap_w = max_per_worker(repo, who)
-    if who and cap_w:
-        nw = worker_live_count(repo, who)
-        if nw >= cap_w:
-            raise QueueError(
-                f"{who} live {nw}/{cap_w} (max_per_worker). wait or use another worker"
-            )
-    if not is_writer(role):
-        return
-    why = overlap_reason(
-        repo, files, ignore_job_id=jid, include_claimed=False
-    )
-    if why:
-        raise QueueError(why)
+def check_start(repo: Path, job_id: str = "", files=None, role: str = "worker", worker: str = "") -> None:
+    """Compatibility preview only. A successful preview never authorizes launch."""
+    owner = admission.caller_owner("parent")
+    access = "write" if is_writer(role) else "read"
+    _, canonical = admission.canonical_files(repo, normalize_files(files))
+    with admission.transaction(repo) as root:
+        admission._validate(root, worker, role, "", access, owner, allow_unknown_worker=True)
+        if job_id and (root / ".rig" / "jobs" / admission._id(job_id) / "meta.json").exists():
+            raise QueueError("existing job id is not launch authorization")
+        admission._capacity(root, admission._accounting(root), worker, access, canonical)
 
 
-def claim_next(repo: Path, files=None, item_id: str = "") -> dict:
-    listed = normalize_files(files)
-    want = str(item_id or "").strip()
-
-    def _claim() -> dict:
-        cap = max_running(repo)
-        n = slot_count(repo)
-        if n >= cap:
-            extra = live_ids_line(repo)
-            raise QueueError(
-                f"live+claimed {n}/{cap}. wait or rig queue list"
-                + (f". {extra}" if extra else "")
-            )
+def claim_next(repo: Path, files=None, item_id: str = "", *, worker="", access="write",
+               owner=None, owner_session="", job_id="") -> dict:
+    with admission.transaction(repo):
         pending = list_items(repo, status="pending")
-        if want:
-            pending = [item for item in pending if str(item.get("id") or "") == want]
+        if item_id:
+            pending = [item for item in pending if item["id"] == item_id]
         elif len(pending) > 1:
-            raise QueueError(
-                "claim needs id when more than one pending item. "
-                "rig queue list then claim --files a,b <id>"
-            )
+            raise QueueError("claim needs id when more than one pending item; list then claim by id")
         if not pending:
-            raise QueueError("no pending queue item" + (f" {want}" if want else ""))
-        why = overlap_reason(repo, listed, include_claimed=True)
-        if why:
-            raise QueueError(why)
-        obj = dict(pending[0])
-        name = str(obj.get("id") or "")
-        fresh = load_item(repo, name)
-        if not fresh or str(fresh.get("status") or "") != "pending":
-            raise QueueError(f"lost claim race on {name}")
-        obj = dict(fresh)
-        obj["status"] = "claimed"
-        obj["claimed_at"] = iso_now()
-        if listed:
-            obj["files"] = listed
-        _write_json(item_path(repo, name), obj)
-        return obj
-
-    return _with_lock(repo, _claim)
+            raise QueueError("no pending queue item" + (f" {item_id}" if item_id else ""))
+        item = pending[0]
+        record = admission.reserve(repo, queue_id=item["id"], job_id=job_id,
+                                   worker=worker, access=access, files=normalize_files(files),
+                                   owner=owner, owner_session=owner_session)
+        return {**load_item(repo, item["id"]), **admission.credentials(record), "owner": record["owner"]}
 
 
-def unclaim(repo: Path, item_id: str) -> dict:
-    name = str(item_id or "").strip()
-    if not name:
-        raise QueueError("queue id required")
-
-    def _unclaim() -> dict:
-        obj = load_item(repo, name)
-        if not obj:
-            raise FileNotFoundError(name)
-        if str(obj.get("status") or "") != "claimed":
-            raise QueueError(
-                f"cannot unclaim {name} status={obj.get('status') or '-'}"
-            )
-        obj["status"] = "pending"
-        obj["claimed_at"] = ""
-        _write_json(item_path(repo, name), obj)
-        return obj
-
-    return _with_lock(repo, _unclaim)
+def unclaim(repo: Path, item_id: str, *, reservation_id="", attempt_id="", owner_token="",
+            owner=None, owner_session="") -> dict:
+    with admission.transaction(repo):
+        item = load_item(repo, item_id)
+        if not item:
+            raise FileNotFoundError(item_id)
+        record = admission.assert_owned(repo, reservation_id=reservation_id, attempt_id=attempt_id,
+                                        owner_token=owner_token, owner=owner, owner_session=owner_session)
+        if record.get("queue_id") != item_id or record.get("claim_consumed"):
+            raise QueueError("unclaim needs the matching unconsumed attempt")
+        admission.release(repo, reservation_id=reservation_id, attempt_id=attempt_id, owner_token=owner_token,
+                          owner=owner, owner_session=owner_session, mode="launch_failed", rationale="parent returned unlaunched claim")
+        return load_item(repo, item_id)
 
 
-def mark_spawned(repo: Path, item_id: str, job_id: str, files=None) -> dict:
-    name = str(item_id or "").strip()
-    jid = str(job_id or "").strip()
-    if not name or not jid:
-        raise QueueError("queue spawned needs id and job id")
-    listed = normalize_files(files)
-
-    def _spawn() -> dict:
-        obj = load_item(repo, name)
-        if not obj:
-            raise FileNotFoundError(name)
-        if str(obj.get("status") or "") not in {"claimed", "spawned"}:
-            raise QueueError(
-                f"cannot mark spawned {name} status={obj.get('status') or '-'}"
-            )
-        obj["status"] = "spawned"
-        obj["job_id"] = jid
-        if listed:
-            obj["files"] = listed
-        _write_json(item_path(repo, name), obj)
-        return obj
-
-    return _with_lock(repo, _spawn)
+def mark_spawned(repo: Path, item_id: str, job_id: str, files=None, *, worker="", access="",
+                 reservation_id="", attempt_id="", owner_token="", owner=None, owner_session="") -> dict:
+    with admission.transaction(repo):
+        record = admission.assert_owned(repo, reservation_id=reservation_id, attempt_id=attempt_id,
+                                        owner_token=owner_token, owner=owner, owner_session=owner_session)
+        if record.get("queue_id") != item_id or record.get("job_id") != job_id or not record.get("launch_started"):
+            raise QueueError("spawned acknowledgement needs the matching activated attempt")
+        if worker and worker != record["worker"] or access and access != record["access"]:
+            raise QueueError("spawned worker or access mismatch")
+        if files is not None and admission.canonical_files(repo, normalize_files(files))[1] != record["files"]:
+            raise QueueError("spawned files mismatch")
+        if record.get("stopped") or record.get("stage") == "released":
+            return load_item(repo, item_id)
+        admission._queue_update(Path(repo).resolve(), record, "spawned")
+        return load_item(repo, item_id)
 
 
-def mark_done_for_job(repo: Path, job_id: str) -> dict | None:
-    jid = str(job_id or "").strip()
-    if not jid:
-        return None
-
-    def _done() -> dict | None:
-        folder = queue_dir(repo)
-        if not folder.is_dir():
-            return None
-        found = None
-        for path in folder.glob("*.json"):
-            obj = _read_json(path)
-            if not obj or str(obj.get("job_id") or "") != jid:
-                continue
-            if str(obj.get("status") or "") not in {"claimed", "spawned"}:
-                continue
-            obj["status"] = "done"
-            _write_json(path, obj)
-            found = obj
-        return found
-
-    return _with_lock(repo, _done)
+def mark_done_for_job(repo: Path, job_id: str, *, reservation_id="", attempt_id="", owner_token="",
+                      owner=None, owner_session="") -> dict | None:
+    with admission.transaction(repo):
+        record = admission.assert_owned(repo, reservation_id=reservation_id, attempt_id=attempt_id,
+                                        owner_token=owner_token, owner=owner, owner_session=owner_session)
+        if record.get("job_id") != job_id or not record.get("stopped"):
+            raise QueueError("queue completion requires its confirmed-stopped attempt")
+        admission._queue_update(Path(repo).resolve(), record, "done")
+        return load_item(repo, record["queue_id"]) if record.get("queue_id") else None
 
 
-def add_item(
+def _add_item_unlocked(
     repo: Path,
     text: str,
     *,
@@ -578,6 +507,11 @@ def add_item(
     }
     _write_json(item_path(repo, item_id), obj)
     return obj
+
+
+def add_item(repo: Path, text: str, *, thread="", priority=0, worker="") -> dict:
+    with admission.transaction(repo):
+        return _add_item_unlocked(repo, text, thread=thread, priority=priority, worker=worker)
 
 
 def load_item(repo: Path, item_id: str) -> dict | None:
@@ -611,7 +545,7 @@ def list_items(repo: Path, *, status: str | None = "pending") -> list[dict]:
     return out
 
 
-def cancel_item(repo: Path, item_id: str) -> dict:
+def _cancel_item_unlocked(repo: Path, item_id: str) -> dict:
     name = str(item_id or "").strip()
     if not name:
         raise ValueError("queue id required")
@@ -626,10 +560,15 @@ def cancel_item(repo: Path, item_id: str) -> dict:
     return obj
 
 
-def format_occupied_line(repo: Path) -> str:
-    occ, unknown = occupied_files(repo, include_claimed=True)
+def cancel_item(repo: Path, item_id: str) -> dict:
+    with admission.transaction(repo):
+        return _cancel_item_unlocked(repo, item_id)
+
+
+def format_occupied_line(repo: Path, jobs_snapshot=None) -> str:
+    occ, unknown = occupied_files(repo, include_claimed=True, jobs_snapshot=jobs_snapshot)
     if unknown:
-        names = unlabeled_writers(repo, include_claimed=True)
+        names = unlabeled_writers(repo, include_claimed=True, jobs_snapshot=jobs_snapshot)
         who = ", ".join(names) if names else "unknown id"
         return f"occupied  unknown (a live writer has no listed files: {who})"
     if not occ:
@@ -643,15 +582,17 @@ def format_occupied_line(repo: Path) -> str:
     return line
 
 
-def format_block(repo: Path, *, live: int | None = None) -> str:
+def format_block(repo: Path, *, live: int | None = None, jobs_snapshot=None) -> str:
+    if jobs_snapshot is None:
+        jobs_snapshot = rig_jobs.list_jobs(Path(repo))
     pending = list_items(repo, status="pending")
     cap = max_running(repo)
-    n_live = live_count(repo) if live is None else int(live)
+    n_live = slot_count(repo, jobs_snapshot) if live is None else int(live)
     rows = [
         f"QUEUE    {len(pending)} pending / live {n_live}/{cap}    "
         "rig queue add|list|cancel|claim"
     ]
-    occ_line = format_occupied_line(repo)
+    occ_line = format_occupied_line(repo, jobs_snapshot=jobs_snapshot)
     if occ_line:
         rows.append(occ_line)
     shown = 0
@@ -710,6 +651,11 @@ def main() -> int:
     parser.add_argument("--json", action="store_true")
     parser.add_argument("--text", default="")
     parser.add_argument("--files", default="")
+    parser.add_argument("--files-json")
+    parser.add_argument("--access", choices=["read", "write"], default="write")
+    parser.add_argument("--reservation-id", default="")
+    parser.add_argument("--attempt-id", default="")
+    parser.add_argument("--owner-session", default="")
     parser.add_argument("--job", default="")
     parser.add_argument("--job-id", default="")
     parser.add_argument("--role", default="worker")
@@ -718,6 +664,10 @@ def main() -> int:
     args = parser.parse_args()
     repo = rig_jobs.repo_root(args.repo)
     try:
+        files = json.loads(args.files_json) if args.files_json is not None else args.files
+        auth = {"reservation_id": args.reservation_id or os.environ.get("RIG_RESERVATION_ID", ""),
+                "attempt_id": args.attempt_id or os.environ.get("RIG_ATTEMPT_ID", ""),
+                "owner_token": os.environ.get("RIG_OWNER_TOKEN", ""), "owner_session": args.owner_session}
         if args.cmd == "add":
             text = (args.text or " ".join(args.rest)).strip()
             if not text:
@@ -742,25 +692,26 @@ def main() -> int:
             return 0
         if args.cmd == "claim":
             name = (args.rest[0] if args.rest else "").strip()
-            obj = claim_next(repo, files=args.files, item_id=name)
+            obj = claim_next(repo, files=files, item_id=name, worker=args.worker, access=args.access,
+                             owner_session=args.owner_session)
             _print_obj(obj, "claimed", repo, args.json)
             return 0
         if args.cmd == "unclaim":
             name = (args.rest[0] if args.rest else "").strip()
             if not name:
                 raise SystemExit("usage: rig queue unclaim <id>")
-            _print_obj(unclaim(repo, name), "unclaimed", repo, args.json)
+            _print_obj(unclaim(repo, name, **auth), "unclaimed", repo, args.json)
             return 0
         if args.cmd == "spawned":
             name = (args.rest[0] if args.rest else "").strip()
             jid = (args.job or args.job_id or (args.rest[1] if len(args.rest) > 1 else "")).strip()
-            obj = mark_spawned(repo, name, jid, files=args.files)
+            obj = mark_spawned(repo, name, jid, files=files or None, worker=args.worker, access=args.access, **auth)
             _print_obj(obj, "spawned", repo, args.json)
             return 0
         if args.cmd == "gate":
             jid = (args.job_id or args.job or (args.rest[0] if args.rest else "")).strip()
             check_start(
-                repo, jid, files=args.files, role=args.role, worker=args.worker
+                repo, jid, files=files, role=args.role, worker=args.worker
             )
             return 0
         items = list_items(repo, status="pending")
@@ -774,6 +725,9 @@ def main() -> int:
         return 1
     except FileNotFoundError as exc:
         print(f"queue item not found: {exc}", file=sys.stderr)
+        return 1
+    except (OSError, ValueError) as exc:
+        print(str(exc), file=sys.stderr)
         return 1
 
 

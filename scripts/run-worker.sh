@@ -20,6 +20,16 @@ BRIEF_IN="$3"
 ROLE="${RIG_ROLE:-worker}"
 TIMEOUT_SECS="${RIG_TIMEOUT:-1200}"
 ROUTE_PY="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/route.py"
+EVIDENCE_PY="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/change_evidence.py"
+ADMISSION_PY="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/admission.py"
+EXECUTION_MODE="dry_run"
+[[ "${RIG_LIVE:-0}" == "1" ]] && EXECUTION_MODE="live"
+OWNER_CREDENTIALS=""
+ADMISSION_META_JSON="{}"
+ADMISSION_ACTIVATED=0
+ADMISSION_FINISHED=0
+LAUNCH_COMMITTED=0
+AGY_PERMS_MERGED=0
 
 case "$WORKER" in
   grok|codex|claude|cursor|opencode|omp|pi|agy) ;;
@@ -47,34 +57,207 @@ if [[ ! -f "$HARNESS" ]]; then
 fi
 parse_harness "$HARNESS"
 
-QUEUE_PY="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/work_queue.py"
-if [[ -f "$QUEUE_PY" ]]; then
-  if ! python3 "$QUEUE_PY" gate --repo "$REPO" --job-id "$JOB_ID" --role "$ROLE" --worker "$WORKER" --files "${RIG_JOB_FILES:-}"; then
-    echo "run-worker: live cap or file overlap — rig queue list" >&2
-    exit 1
-  fi
-fi
-
 JOB_DIR="$REPO/.rig/jobs/$JOB_ID"
-mkdir -p "$JOB_DIR"
+JOB_FILES_JSON="$(python3 - "$JOB_DIR/meta.json" <<'PY'
+import json, os, pathlib, sys
+if "RIG_JOB_FILES_JSON" in os.environ:
+    try:
+        files = json.loads(os.environ["RIG_JOB_FILES_JSON"])
+    except json.JSONDecodeError as exc:
+        raise SystemExit(f"run-worker: invalid RIG_JOB_FILES_JSON: {exc}")
+elif os.environ.get("RIG_JOB_FILES"):
+    files = os.environ["RIG_JOB_FILES"].replace(",", " ").split()
+else:
+    try:
+        files = json.loads(pathlib.Path(sys.argv[1]).read_text()).get("files", [])
+    except (OSError, ValueError, AttributeError):
+        files = []
+if not isinstance(files, list) or any(not isinstance(f, str) or not f or "\0" in f for f in files):
+    raise SystemExit("run-worker: file scope must be a JSON array of nonempty paths")
+print(json.dumps(files))
+PY
+)"
+export RIG_JOB_FILES_JSON="$JOB_FILES_JSON"
 BRIEF="$JOB_DIR/brief.md"
 
-# Copy via a temp file. Never `{ cat f; } > f` — that truncates then
-# concatenates forever (rig run writes this same path).
-_BRIEF_SRC="$(mktemp "$JOB_DIR/brief.src.XXXXXX")"
-cp "$BRIEF_IN" "$_BRIEF_SRC"
-{
-  if ! command grep -q "You are a worker, not the orchestrator" "$_BRIEF_SRC" 2>/dev/null; then
-    printf '%s\n\n' "$WORKER_PREAMBLE"
-  fi
-  cat "$_BRIEF_SRC"
-} > "$BRIEF"
-rm -f "$_BRIEF_SRC"
+prepare_brief() {
+  mkdir -p "$JOB_DIR"
+  # Never overwrite a live brief before admission authorizes this attempt.
+  local source
+  source="$(mktemp "$JOB_DIR/brief.src.XXXXXX")"
+  cp "$BRIEF_IN" "$source"
+  {
+    if ! command grep -q "You are a worker, not the orchestrator" "$source" 2>/dev/null; then
+      printf '%s\n\n' "$WORKER_PREAMBLE"
+    fi
+    cat "$source"
+  } > "$BRIEF"
+  rm -f "$source"
+}
 
 LIVE="$(live_parent)"
 FLAG="$(worker_flag "$WORKER")"
 BIN="$(find_worker_bin "$WORKER")"
 STARTED="$(iso_now)"
+
+admission_call() {
+  python3 - "$ADMISSION_PY" "$1" "$REPO" "$JOB_ID" "$WORKER" "$ROLE" "${MODEL:-}" \
+    "$JOB_FILES_JSON" "$$" "$OWNER_CREDENTIALS" "$EXECUTION_MODE" "${PROVENANCE_JSON:-\{\}}" "${2:-}" <<'PY'
+import json, os, pathlib, sys, uuid
+sys.path.insert(0, str(pathlib.Path(sys.argv[1]).parent))
+import admission
+operation, repo, job_id, worker, role, model = sys.argv[2:8]
+files, wrapper_pid, credential_path, execution_mode, provenance, value = (
+    json.loads(sys.argv[8]), int(sys.argv[9]), sys.argv[10], sys.argv[11], json.loads(sys.argv[12]), sys.argv[13]
+)
+owner = admission.caller_owner("wrapper", owner_pid=wrapper_pid, owner_session=os.environ.get("RIG_OWNER_SESSION", ""))
+access = os.environ.get("RIG_ACCESS") or ("read" if role.lower() in {"review", "reviewer", "explore", "explorer"} else "write")
+try:
+    if operation == "reserve":
+        supplied = {key: os.environ.get("RIG_" + key.upper(), "") for key in ("reservation_id", "attempt_id", "owner_token")}
+        with admission.transaction(repo):
+            record = admission.reserve(
+                repo, job_id=job_id, worker=worker, role=role, model=model, files=files, access=access, owner=owner,
+                queue_id=os.environ.get("RIG_QUEUE_ID", ""), writer_job_id=provenance.get("writer_job_id", ""),
+                writer_snapshot_id=provenance.get("writer_snapshot_id", ""), dry_run=execution_mode == "dry_run", **supplied,
+            )
+            if execution_mode == "dry_run":
+                # Register the fresh ID while preview and registration share the lock.
+                record["preview_id"] = uuid.uuid4().hex
+                path = pathlib.Path(repo) / ".rig" / "jobs" / job_id / "meta.json"
+                path.parent.mkdir(parents=True, exist_ok=True)
+                preview = {"job_id": job_id, "preview_id": record["preview_id"], "execution_mode": "dry_run",
+                           "executor_kind": "wrapper", "status": "reserved", "ownership_established": False}
+                temporary = path.with_name("meta.json.tmp")
+                with temporary.open("w") as stream:
+                    json.dump(preview, stream)
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                temporary.replace(path)
+        keys = ("reservation_id", "attempt_id", "job_id", "queue_id", "access", "owner", "scope_unknown", "preview_id")
+        result = {key: record[key] for key in keys if key in record}
+        result["protected_files"] = record.get("files", [])
+        result["ownership_established"] = execution_mode == "live"
+        if execution_mode == "live":
+            result["credentials_path"] = str(admission.write_credentials(repo, record))
+    else:
+        if not credential_path:
+            raise admission.AdmissionError("explicit wrapper credentials are required")
+        saved = json.loads(pathlib.Path(credential_path).read_text())
+        credentials = admission.credentials(saved)
+        if operation == "activate":
+            process = json.loads(pathlib.Path(value).read_text())
+            result = admission.activate(repo, **credentials, job_id=job_id, worker=worker, files=files,
+                                        access=access, owner=owner, process=process)
+        elif operation == "commit":
+            result = admission.commit_launch(repo, **credentials, owner=owner)
+        elif operation == "observe":
+            result = admission.observe_process(repo, **credentials, owner=owner)
+        elif operation == "stopped":
+            record = admission.assert_owned(repo, **credentials, owner=owner)
+            stopped, reason = admission._external_stopped(record)
+            result = {"stopped": stopped}
+            if not stopped:
+                print("run-worker: execution liveness needs reconciliation: " + reason, file=sys.stderr)
+        elif operation == "finish":
+            result = admission.finish(repo, **credentials, status=value, owner=owner, completion={"kind": "wrapper"})
+            if result.get("needs_reconciliation"):
+                print("run-worker: execution liveness needs reconciliation; file protection remains held", file=sys.stderr)
+        elif operation == "release":
+            result = admission.release(repo, **credentials, owner=owner, mode="launch_failed", rationale=value)
+        elif operation == "close":
+            result = admission.release(repo, **credentials, owner=owner, mode="close", rationale=value)
+        else:
+            raise admission.AdmissionError("unknown wrapper admission operation")
+        result = {key: result[key] for key in ("reservation_id", "attempt_id", "stage", "slot_held", "stopped") if key in result}
+    print(json.dumps(result))
+except (OSError, ValueError, admission.AdmissionError) as error:
+    raise SystemExit(f"run-worker: admission refused: {error}")
+PY
+}
+
+kill_tree() {
+  local p="$1" kids k
+  kids="$(pgrep -P "$p" 2>/dev/null || true)"
+  for k in $kids; do
+    kill_tree "$k"
+  done
+  kill -TERM "$p" 2>/dev/null || true
+}
+
+agy_restore_settings() {
+  if [[ "${AGY_PERMS_MERGED:-0}" != "1" ]]; then
+    return 0
+  fi
+  AGY_PERMS_MERGED=0
+  local args=(restore --job-dir "$JOB_DIR")
+  [[ -n "${AGY_SETTINGS:-}" ]] && args+=(--settings "$AGY_SETTINGS")
+  python3 "$AGY_PERMS_PY" "${args[@]}" || true
+}
+
+wrapper_cleanup() {
+  local rc=$?
+  trap - EXIT
+  trap '' INT TERM
+  set +e
+  # The durable gate also covers interruption before the shell records commit success.
+  [[ -f "${LAUNCH_GATE:-}" ]] && LAUNCH_COMMITTED=1
+  if [[ -n "$OWNER_CREDENTIALS" && ( "$ADMISSION_FINISHED" != "1" || "$LAUNCH_COMMITTED" != "1" ) ]]; then
+    if [[ -n "${CHILD:-}" ]]; then
+      kill_tree "$CHILD"
+      sleep 1
+      kill -KILL "$CHILD" 2>/dev/null || true
+      wait "$CHILD" 2>/dev/null || true
+    fi
+    if [[ "$LAUNCH_COMMITTED" == "1" ]]; then
+      local outcome="fail" summary="wrapper interrupted before recording completion"
+      if [[ -f "$JOB_DIR/cancel.json" || "$rc" == "130" || "$rc" == "143" ]]; then
+        outcome="cancelled"
+        summary="cancelled by parent"
+        rc=130
+      fi
+      complete_execution
+      write_json "$outcome" "$rc" "$summary" "$(iso_now)"
+    elif ! admission_call release "wrapper stopped before the launch barrier committed" >/dev/null; then
+      local outcome="fail"
+      [[ -f "$JOB_DIR/cancel.json" ]] && outcome="cancelled"
+      admission_call finish "$outcome" >/dev/null || true
+    fi
+  fi
+  [[ -f "$JOB_DIR/cancel.json" ]] && rc=130
+  agy_restore_settings
+  exit "$rc"
+}
+
+complete_execution() {
+  local completion
+  RESULT_FILES_JSON="[]"
+  # Capture final content only after the recorded process tree is confirmed stopped.
+  admission_call observe >/dev/null || true
+  if ! completion="$(admission_call stopped)"; then
+    EVIDENCE_ERROR="could not confirm stopped execution; final evidence deferred"
+    return 0
+  fi
+  if ! python3 - "$completion" <<'PY'
+import json, sys
+raise SystemExit(0 if json.loads(sys.argv[1]).get("stopped") is True else 1)
+PY
+  then
+    EVIDENCE_ERROR="execution liveness needs reconciliation; final evidence deferred"
+    return 0
+  fi
+  if python3 "$EVIDENCE_PY" finish --repo "$REPO" --job-dir "$JOB_DIR" >/dev/null; then
+    RESULT_FILES_JSON="$(python3 - "$JOB_DIR/change-evidence.json" <<'PY'
+import json, pathlib, sys
+evidence = json.loads(pathlib.Path(sys.argv[1]).read_text())
+# Concurrent observations remain in the sidecar without attribution to the job.
+print(json.dumps(evidence.get("scoped_changed_paths", [])))
+PY
+)"
+  else
+    EVIDENCE_ERROR="could not capture complete after-change evidence"
+  fi
+}
 
 write_json() {
   local status="$1" exit_code="$2" summary="$3" ended="$4"
@@ -89,7 +272,15 @@ write_json() {
   RESULT_STARTED="$STARTED" \
   RESULT_ENDED="$ended" \
   RESULT_SUMMARY="$summary" \
-  RESULT_FILES="${RESULT_FILES:-}" \
+  RESULT_FILES_JSON="${RESULT_FILES_JSON:-[]}" \
+  RESULT_EVIDENCE_ERROR="${EVIDENCE_ERROR:-}" \
+  RESULT_EXECUTION_MODE="$EXECUTION_MODE" \
+  RESULT_PROVENANCE="${PROVENANCE_JSON:-\{\}}" \
+  RESULT_ADMISSION="$ADMISSION_META_JSON" \
+  RESULT_ADMISSION_SCRIPT="$ADMISSION_PY" \
+  RESULT_CREDENTIALS="$OWNER_CREDENTIALS" \
+  RESULT_ACTIVATED="$ADMISSION_ACTIVATED" \
+  RESULT_WRAPPER_PID="$$" \
   RESULT_NEXT="${RESULT_NEXT:-}" \
   RESULT_MODEL="${MODEL:-}" \
   RESULT_EFFORT="${EFFORT:-}" \
@@ -100,9 +291,9 @@ write_json() {
   RESULT_BIN="$BIN" \
   RESULT_STATE="$RESULT_STATE" \
   python3 - <<'PY'
-import json, os, pathlib
+import contextlib, json, os, pathlib, sys
 from datetime import datetime
-files = [f for f in os.environ.get("RESULT_FILES", "").split("\n") if f]
+files = json.loads(os.environ.get("RESULT_FILES_JSON", "[]"))
 keep = ("thread", "session_id", "pid", "open", "watch", "kind", "doing", "files")
 old = {}
 mpath = pathlib.Path(os.environ["RESULT_META"])
@@ -126,7 +317,16 @@ obj = {
     "next": os.environ.get("RESULT_NEXT", ""),
     "model": os.environ.get("RESULT_MODEL", ""),
     "effort": os.environ.get("RESULT_EFFORT", ""),
+    "execution_mode": os.environ["RESULT_EXECUTION_MODE"],
+    "executor_kind": "wrapper",
+    "model_source": "selected",
+    "model_inferred": False,
+    "parent_writes": False,
 }
+obj.update(json.loads(os.environ.get("RESULT_PROVENANCE", "{}")))
+obj.update({key: value for key, value in json.loads(os.environ["RESULT_ADMISSION"]).items() if key != "credentials_path"})
+if os.environ.get("RESULT_EVIDENCE_ERROR"):
+    obj["evidence_error"] = os.environ["RESULT_EVIDENCE_ERROR"]
 for key in keep:
     if not obj.get(key) and old.get(key) not in (None, ""):
         obj[key] = old[key]
@@ -142,33 +342,58 @@ if started and ended:
         obj["elapsed_s"] = max(0, int((end_dt - start_dt).total_seconds()))
     except ValueError:
         pass
-path = pathlib.Path(os.environ["RESULT_OUT"])
-tmp = path.with_name(path.name + ".tmp")
-tmp.write_text(json.dumps(obj, indent=2) + "\n")
-tmp.replace(path)
-meta = dict(obj)
-meta["repo"] = os.environ.get("RESULT_REPO", "")
-meta["bin"] = os.environ.get("RESULT_BIN", "")
-mtmp = mpath.with_name(mpath.name + ".tmp")
-mtmp.write_text(json.dumps(meta, indent=2) + "\n")
-mtmp.replace(mpath)
-state = pathlib.Path(os.environ["RESULT_STATE"])
-state.parent.mkdir(parents=True, exist_ok=True)
-state.write_text(
-    "# STATE\n\nOverwritten each run.\n\n"
-    f"- last_job: {obj['job_id']}\n"
-    f"- worker: {obj['worker']}\n"
-    f"- status: {obj['status']}\n"
-    f"- summary: {obj['summary']}\n"
-)
+sys.path.insert(0, str(pathlib.Path(os.environ["RESULT_ADMISSION_SCRIPT"]).parent))
+import admission
+credential_path = os.environ["RESULT_CREDENTIALS"]
+repo = pathlib.Path(os.environ["RESULT_REPO"])
+with admission.transaction(repo):
+    if credential_path:
+        credentials = admission.credentials(json.loads(pathlib.Path(credential_path).read_text()))
+        owner = admission.caller_owner("wrapper", owner_pid=int(os.environ["RESULT_WRAPPER_PID"]),
+                                       owner_session=os.environ.get("RIG_OWNER_SESSION", ""))
+        admission.assert_owned(repo, **credentials, owner=owner)
+    elif json.loads(mpath.read_text()).get("preview_id") != obj.get("preview_id") or not obj.get("preview_id"):
+        raise SystemExit("run-worker: dry-run execution ID changed before result registration")
+    if (mpath.parent / "cancel.json").exists():
+        obj.update(status="cancelled", exit_code=130)
+    if credential_path and os.environ["RESULT_ACTIVATED"] == "1":
+        completion = admission.finish(repo, **credentials, status=obj["status"], owner=owner, completion={"kind": "wrapper"})
+        if completion.get("needs_reconciliation"):
+            print("run-worker: child liveness needs reconciliation; ownership remains held", file=sys.stderr)
+    path = pathlib.Path(os.environ["RESULT_OUT"])
+    tmp = path.with_name(path.name + ".tmp")
+    with tmp.open("w") as stream:
+        stream.write(json.dumps(obj, indent=2) + "\n")
+        stream.flush()
+        os.fsync(stream.fileno())
+    tmp.replace(path)
+    meta = dict(obj)
+    meta["repo"] = os.environ.get("RESULT_REPO", "")
+    meta["bin"] = os.environ.get("RESULT_BIN", "")
+    mtmp = mpath.with_name(mpath.name + ".tmp")
+    mtmp.write_text(json.dumps(meta, indent=2) + "\n")
+    mtmp.replace(mpath)
+    state = pathlib.Path(os.environ["RESULT_STATE"])
+    state.parent.mkdir(parents=True, exist_ok=True)
+    state.write_text(
+        "# STATE\n\nOverwritten each run.\n\n"
+        f"- last_job: {obj['job_id']}\n"
+        f"- worker: {obj['worker']}\n"
+        f"- status: {obj['status']}\n"
+        f"- summary: {obj['summary']}\n"
+    )
 PY
+  ADMISSION_FINISHED="$ADMISSION_ACTIVATED"
+  if [[ -f "$JOB_DIR/cancel.json" && "$status" != "cancelled" ]]; then
+    return 130
+  fi
 }
 
 write_meta() {
   local status="$1"
   META_OUT="$JOB_DIR/meta.json"
-  python3 - "$META_OUT" "$JOB_ID" "$WORKER" "$ROLE" "$status" "$STARTED" "$REPO" "$BIN" "${CHILD:-}" "${SESSION_ID:-}" "$JOB_DIR" "${MODEL:-}" "${EFFORT:-}" "${PARENT_THREAD:-}" <<'PY'
-import json, os, pathlib, sys
+  python3 - "$META_OUT" "$JOB_ID" "$WORKER" "$ROLE" "$status" "$STARTED" "$REPO" "$BIN" "${CHILD:-}" "${SESSION_ID:-}" "$JOB_DIR" "${MODEL:-}" "${EFFORT:-}" "${PARENT_THREAD:-}" "$EXECUTION_MODE" "${PROVENANCE_JSON:-\{\}}" "$JOB_FILES_JSON" "$ADMISSION_META_JSON" "$OWNER_CREDENTIALS" "$ADMISSION_PY" "$$" <<'PY'
+import contextlib, json, os, pathlib, sys
 path = pathlib.Path(sys.argv[1])
 old = {}
 if path.is_file():
@@ -186,7 +411,14 @@ obj = {
     "started_at": sys.argv[6],
     "repo": sys.argv[7],
     "bin": sys.argv[8],
+    "execution_mode": sys.argv[15],
+    "executor_kind": "wrapper",
+    "model_source": "selected",
+    "model_inferred": False,
+    "parent_writes": False,
 }
+obj.update(json.loads(sys.argv[16]))
+obj.update({key: value for key, value in json.loads(sys.argv[18]).items() if key != "credentials_path"})
 pid, session_id, job_dir = sys.argv[9], sys.argv[10], sys.argv[11]
 model, effort, thread = sys.argv[12], sys.argv[13], sys.argv[14]
 if pid:
@@ -200,18 +432,28 @@ if effort:
     obj["effort"] = effort
 if thread:
     obj["thread"] = thread
-listed = [p for p in os.environ.get("RIG_JOB_FILES", "").replace(",", " ").split() if p]
-if listed:
-    obj["files"] = listed
-elif old.get("files"):
-    obj["files"] = old["files"]
+obj["files"] = json.loads(sys.argv[17])
 obj["watch"] = f"tail -f {job_dir}/stdout.log"
 for key, val in old.items():
     if key not in obj and val not in (None, ""):
         obj[key] = val
-tmp = path.with_name(path.name + ".tmp")
-tmp.write_text(json.dumps(obj, indent=2) + "\n")
-tmp.replace(path)
+sys.path.insert(0, str(pathlib.Path(sys.argv[20]).parent))
+import admission
+with admission.transaction(sys.argv[7]):
+    if sys.argv[19]:
+        credentials = admission.credentials(json.loads(pathlib.Path(sys.argv[19]).read_text()))
+        owner = admission.caller_owner("wrapper", owner_pid=int(sys.argv[21]), owner_session=os.environ.get("RIG_OWNER_SESSION", ""))
+        admission.assert_owned(sys.argv[7], **credentials, owner=owner)
+        if (path.parent / "cancel.json").exists():
+            raise SystemExit("run-worker: cancelled before launch registration")
+    elif json.loads(path.read_text()).get("preview_id") != obj.get("preview_id") or not obj.get("preview_id"):
+        raise SystemExit("run-worker: dry-run execution ID changed before metadata registration")
+    tmp = path.with_name(path.name + ".tmp")
+    with tmp.open("w") as stream:
+        stream.write(json.dumps(obj, indent=2) + "\n")
+        stream.flush()
+        os.fsync(stream.fileno())
+    tmp.replace(path)
 PY
 }
 
@@ -247,16 +489,67 @@ shell_join() {
   printf '%s\n' "${out% }"
 }
 
-BRIEF_TEXT="$(cat "$BRIEF")"
 if [[ -z "${RIG_MODEL:-}" && -f "$ROUTE_PY" ]]; then
   eval "$(python3 "$ROUTE_PY" env --worker "$WORKER" --role "$ROLE")"
   ROLE="${RIG_ROLE:-$ROLE}"
 fi
 MODEL="${RIG_MODEL:-}"
 EFFORT="${RIG_EFFORT:-}"
-if [[ -f "$ROUTE_PY" ]]; then
-  python3 "$ROUTE_PY" allow --model "$MODEL" || exit 1
+launch_provenance() {
+  python3 "$ROUTE_PY" allow --json --model "$MODEL" --role "$ROLE" --repo "$REPO" \
+    --writer-job-id "${RIG_WRITER_JOB_ID:-}" --writer-cli "${RIG_WRITER_CLI:-}" \
+    --writer-model "${RIG_WRITER_MODEL:-}" --writer-provider "${RIG_WRITER_PROVIDER:-}" \
+    --review-mode "${RIG_REVIEW_MODE:-standalone}"
+}
+PROVENANCE_JSON="$(launch_provenance)" || exit 1
+ADMISSION_META_JSON="$(admission_call reserve)" || exit 1
+OWNER_CREDENTIALS="$(python3 - "$ADMISSION_META_JSON" <<'PY'
+import json, sys
+print(json.loads(sys.argv[1]).get("credentials_path", ""))
+PY
+)"
+trap wrapper_cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+if [[ -n "$OWNER_CREDENTIALS" ]]; then
+  echo "run-worker: owner credentials: $OWNER_CREDENTIALS" >&2
 fi
+prepare_brief
+if [[ "$ROLE" == "review" || "$ROLE" == "reviewer" ]]; then
+  PROVENANCE_JSON="$(python3 - "$ROUTE_PY" "$REPO" "$JOB_DIR" "$BRIEF" "$PROVENANCE_JSON" <<'PY'
+import json, pathlib, sys
+sys.path.insert(0, str(pathlib.Path(sys.argv[1]).parent))
+import change_evidence
+root, job_dir, brief = map(pathlib.Path, sys.argv[2:5])
+provenance = json.loads(sys.argv[5])
+writer_id = provenance.get("writer_job_id")
+accepted_snapshot = provenance.get("writer_snapshot_id")
+if writer_id and accepted_snapshot:
+    writer_dir = change_evidence.job_directory(root, root / ".rig" / "jobs" / writer_id)
+    writer = change_evidence.read_json(writer_dir / "meta.json") or {}
+    files = change_evidence.normalize_files(root, writer.get("files", []))
+    if change_evidence.snapshot(root, files)["snapshot_id"] != accepted_snapshot:
+        raise SystemExit("content_changed: writer scope no longer matches the accepted reviewer snapshot")
+    context = {"writer_job_id": writer_id, "writer_snapshot_id": accepted_snapshot, "writer_files": files}
+    section = (
+        "\n\n## Accepted writer context\n\n"
+        "The parent accepted this scoped content for review. Paths below are literal repository paths. "
+        "Inspect this snapshot and report findings to the parent; review exit zero does not accept the implementation.\n\n"
+        "```json\n" + json.dumps(context, indent=2) + "\n```\n"
+    )
+    review_brief = job_dir / "review-brief.md"
+    review_brief.write_bytes(brief.read_bytes() + section.encode("utf-8"))
+    provenance.update(writer_files=files, review_brief=str(review_brief))
+print(json.dumps(provenance))
+PY
+)" || exit 1
+  BRIEF="$(python3 - "$PROVENANCE_JSON" "$BRIEF" <<'PY'
+import json, sys
+print(json.loads(sys.argv[1]).get("review_brief") or sys.argv[2])
+PY
+)"
+fi
+BRIEF_TEXT="$(cat "$BRIEF")"
 PARENT_THREAD="${RIG_THREAD:-}"
 if [[ -z "$PARENT_THREAD" ]]; then
   JOBS_PY="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/jobs.py"
@@ -428,7 +721,7 @@ PY
 esac
 CMD_STR="$(shell_join "${CMD[@]}")"
 
-write_meta "running"
+write_meta "reserved"
 
 refuse() {
   local reason="$1"
@@ -459,61 +752,102 @@ if [[ "${RIG_LIVE:-0}" != "1" ]]; then
   exit 0
 fi
 
-AGY_PERMS_MERGED=0
-agy_restore_settings() {
-  if [[ "${AGY_PERMS_MERGED:-0}" != "1" ]]; then
-    return 0
-  fi
-  AGY_PERMS_MERGED=0
-  local args=(restore --job-dir "$JOB_DIR")
-  [[ -n "${AGY_SETTINGS:-}" ]] && args+=(--settings "$AGY_SETTINGS")
-  python3 "$AGY_PERMS_PY" "${args[@]}" || true
-}
 if [[ "$WORKER" == "agy" ]]; then
   AGY_PERMS_PY="${AGY_PERMS_PY:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/agy_job_permissions.py}"
   agy_merge_args=(merge --job-dir "$JOB_DIR")
   [[ -n "${AGY_SETTINGS:-}" ]] && agy_merge_args+=(--settings "$AGY_SETTINGS")
   AGY_PERMS_MERGED=1
-  trap agy_restore_settings EXIT
   python3 "$AGY_PERMS_PY" "${agy_merge_args[@]}"
 fi
 
-snapshot_files() {
-  git -C "$REPO" status --porcelain 2>/dev/null | awk '{print $NF}' | sort -u || true
-}
-
-BEFORE="$(snapshot_files)"
+if ! python3 "$EVIDENCE_PY" begin --repo "$REPO" --job-dir "$JOB_DIR" --files-json "$JOB_FILES_JSON" >/dev/null; then
+  refuse "could not capture before-change evidence"
+fi
+# Refresh acceptance immediately before an independent reviewer starts.
+if [[ "${RIG_REVIEW_MODE:-standalone}" == "independent" ]]; then
+  CURRENT_PROVENANCE="$(launch_provenance)" || refuse "writer provenance changed before review start"
+  PROVENANCE_JSON="$(python3 - "$PROVENANCE_JSON" "$CURRENT_PROVENANCE" <<'PY'
+import json, sys
+prepared, current = map(json.loads, sys.argv[1:3])
+for key in ("writer_job_id", "writer_snapshot_id", "writer_cli", "writer_model", "writer_provider"):
+    if prepared.get(key) != current.get(key):
+        raise SystemExit("writer context changed since the reviewer brief was prepared")
+for key in ("writer_files", "review_brief"):
+    if key in prepared:
+        current[key] = prepared[key]
+print(json.dumps(current))
+PY
+)" || refuse "writer provenance changed before review start"
+fi
 LOG="$JOB_DIR/stdout.log"
 : > "$LOG"
 
-kill_tree() {
-  local p="$1" kids
-  kids="$(pgrep -P "$p" 2>/dev/null || true)"
-  local k
-  for k in $kids; do
-    kill_tree "$k"
-  done
-  kill -TERM "$p" 2>/dev/null || true
-}
-
-set +e
-(
-  cd "$REPO" || exit 1
-  export RIG_JOB_ID="$JOB_ID"
-  export RIG_JOB_DIR="$JOB_DIR"
-  export RIG_REPO="$REPO"
-  export RIG_ROLE="$ROLE"
-  "${CMD[@]}"
-) >"$LOG" 2>&1 &
+ATTEMPT_ID="$(python3 - "$ADMISSION_META_JSON" <<'PY'
+import json, sys
+print(json.loads(sys.argv[1])["attempt_id"])
+PY
+)"
+LAUNCH_GATE="$JOB_DIR/launch-$ATTEMPT_ID.json"
+LAUNCH_READY="$JOB_DIR/launch-ready-$ATTEMPT_ID.json"
+RIG_JOB_ID="$JOB_ID" RIG_JOB_DIR="$JOB_DIR" RIG_REPO="$REPO" RIG_ROLE="$ROLE" \
+python3 - "$ADMISSION_PY" "$REPO" "$$" "$LAUNCH_GATE" "$LAUNCH_READY" "${CMD[@]}" >"$LOG" 2>&1 <<'PY' &
+import json, os, pathlib, sys, time
+sys.path.insert(0, str(pathlib.Path(sys.argv[1]).parent))
+import admission
+repo, wrapper_pid, gate, ready = pathlib.Path(sys.argv[2]), int(sys.argv[3]), pathlib.Path(sys.argv[4]), pathlib.Path(sys.argv[5])
+os.setsid()
+wrapper = admission.process_identity(wrapper_pid)
+process = admission.process_identity(os.getpid())
+process.update(gated=True, gate_path=str(gate))
+temporary = ready.with_suffix(".tmp")
+with temporary.open("w") as stream:
+    json.dump(process, stream)
+    stream.flush()
+    os.fsync(stream.fileno())
+temporary.replace(ready)
+while not gate.is_file():
+    try:
+        os.kill(wrapper_pid, 0)
+    except ProcessLookupError:
+        raise SystemExit("wrapper stopped before the launch barrier committed")
+    current = admission.process_identity(wrapper_pid)
+    if wrapper.get("start_id") and current.get("start_id") != wrapper["start_id"]:
+        raise SystemExit("wrapper stopped before the launch barrier committed")
+    time.sleep(0.02)
+os.chdir(repo)
+# Child notifications do not need parent admission credentials.
+os.environ.pop("RIG_OWNER_TOKEN", None)
+os.execvp(sys.argv[6], sys.argv[6:])
+PY
 CHILD=$!
+for _READY_POLL in {1..250}; do
+  [[ -f "$LAUNCH_READY" ]] && break
+  kill -0 "$CHILD" 2>/dev/null || break
+  sleep 0.02
+done
+if [[ ! -f "$LAUNCH_READY" ]]; then
+  refuse "child did not reach the launch barrier"
+fi
+admission_call activate "$LAUNCH_READY" >/dev/null || refuse "could not activate the reserved child"
+ADMISSION_ACTIVATED=1
 write_meta "running"
 write_watch
+admission_call commit >/dev/null || refuse "could not commit the launch barrier"
+LAUNCH_COMMITTED=1
+set +e
 ELAPSED=0
 TIMED_OUT=0
 CANCELLED=0
 ASK_NOTIFIED=0
 IN_ASK=0
 while kill -0 "$CHILD" 2>/dev/null; do
+  if ! admission_call observe >/dev/null; then
+    echo "run-worker: could not observe child ownership; stopping execution" >&2
+    kill_tree "$CHILD"
+    sleep 1
+    kill -KILL "$CHILD" 2>/dev/null || true
+    break
+  fi
   if [[ -f "$JOB_DIR/cancel.json" ]]; then
     CANCELLED=1
     kill_tree "$CHILD"
@@ -552,8 +886,7 @@ CHILD_RC=$?
 set -e
 
 ENDED="$(iso_now)"
-AFTER="$(snapshot_files)"
-RESULT_FILES="$(comm -13 <(printf '%s\n' "$BEFORE") <(printf '%s\n' "$AFTER") | sed '/^$/d' || true)"
+complete_execution
 
 summary_from_log() {
   if command -v python3 >/dev/null 2>&1; then
@@ -585,7 +918,6 @@ PY
 }
 
 agy_restore_settings
-trap - EXIT
 
 SUMMARY="$(summary_from_log)"
 JOBS_PY="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/jobs.py"
