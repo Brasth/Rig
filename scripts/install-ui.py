@@ -811,4 +811,8 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+    if os.environ.get("RIG_INSTALL_TRANSACTION") != "1":
+        from ui_install import transaction
+        root = Path(sys.argv[1] if len(sys.argv) > 1 else os.environ.get("RIG_HOME", Path.home() / ".rig"))
+        raise SystemExit(transaction([sys.executable, *sys.argv], root, root))
     raise SystemExit(main())

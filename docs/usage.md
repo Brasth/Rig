@@ -1,8 +1,8 @@
 # Rig usage
 
-Landing page: [README](../README.md) (prompt diagram, queue diagram, what setup installs).
+Start here: [Rig flow](rig-flow.md) (parent, workers, queue, and terminal companion). Landing page: [README](../README.md).
 
-In this file: [protected writes and acceptance](#protected-writes-and-parent-acceptance) · [recovery](#queue-ownership-and-recovery) · [safe rollout](#safe-upgrade-and-rollback) · [how your prompt is handled](#how-your-prompt-is-handled) · [why the queue](#why-the-queue-exists) · [queue](#how-the-queue-works) · [scenarios](#scenarios) · [install](#install) · [daily use](#daily-use) · [watch](#watch-jobs-memory) · [troubleshooting](#troubleshooting).
+In this file: [terminal companion](#optional-terminal-companion) · [protected writes and acceptance](#protected-writes-and-parent-acceptance) · [recovery](#queue-ownership-and-recovery) · [safe rollout](#safe-upgrade-and-rollback) · [how your prompt is handled](#how-your-prompt-is-handled) · [why the queue](#why-the-queue-exists) · [queue](#how-the-queue-works) · [scenarios](#scenarios) · [install](#install) · [daily use](#daily-use) · [watch](#watch-jobs-memory) · [troubleshooting](#troubleshooting).
 
 ## What Rig is
 
@@ -94,13 +94,64 @@ which rig
 
 That must print `$HOME/.local/bin/rig` (for example `/Users/you/.local/bin/rig`). If it is empty, PATH is still wrong.
 
+## Optional terminal companion
+
+Install tmux **3.3 or newer**, then run `rig setup --shell-ui`. The version check must pass before shell startup files or the enable marker change. Open a new shell, run `rig init` in the project if needed, and launch plain `codex` or `grok`.
+
+The parent occupies the main terminal. A tmux status row shows observed activity, queue count, attention, and snapshot freshness. The observer runs independently of the parent's turn; it neither forwards prompts nor starts workers. Milestones distinguish finished execution from verified results, and stop requests from confirmed termination. Notices remain available in the popup after their brief status-row display expires.
+
+| Control | Action |
+| --- | --- |
+| F8 | Open Jobs / Queue / Notices popup |
+| F9 | Open queue editor immediately |
+| Tab | Switch popup tabs |
+| Arrows or j/k | Select a row |
+| Enter on job | Inspect activity and current approval details |
+| e | Add queue text; Enter saves, Esc keeps the draft for later |
+| x | Cancel a pending queue item, or request stop for the selected job after confirmation |
+| y / n in details | Allow / deny the inspected approval request |
+| a | Acknowledge notices for this terminal session |
+| Esc | Close the current popup view and return to the parent |
+
+Queue submission uses a durable receipt and a stable submission ID. Closing a popup does not cancel an accepted action. If the observer restarts during an action, an uncertain receipt stays explicit; inspect the item before retrying. Pending queue cancellation checks that the item is still pending. Native work that Rig cannot interrupt remains `native-cancel-required`; use its owning host to stop it.
+
+If your terminal intercepts F8/F9, set `RIG_UI_MANAGER_KEY` and `RIG_UI_ADD_KEY` before launching a new companion, for example `RIG_UI_MANAGER_KEY=F6 RIG_UI_ADD_KEY=F7 codex`. Bindings accept F1–F12 or a letter/digit, optionally prefixed by C-, M-, or S-. Invalid or identical bindings fall back to F8/F9; the status row shows the selected bindings.
+
+The integration installs nonexported shell functions, with no replacement `codex` or `grok` executable on PATH. Existing aliases/functions are preserved with a warning. Only interactive TTY launches in initialized repositories are eligible; headless subcommands, worker invocations, and unknown argument forms run normally. Missing tmux at launch falls back to the parent. A running companion suppresses the duplicate Grok native Rig status line for that launch only.
+
+For zsh, the default startup file is `$ZDOTDIR/.zshrc` when `ZDOTDIR` is set, otherwise `~/.zshrc`. Bash setup covers `~/.bashrc` and the first existing login file among `.bash_profile`, `.bash_login`, and `.profile` (creating `.bash_profile` if none exists). Symlinks remain symlinks; their target content is journaled. Choose an explicit file when your shell has a custom startup arrangement:
+
+```bash
+rig setup --shell-ui --shell zsh --rc-file /path/to/custom-rc
+rig ui disable             # loaded functions also bypass Rig on their next call
+rig ui enable              # checks tmux again; open a new shell if needed
+rig ui sessions
+rig ui attach SESSION_ID
+```
+
+Disabling affects future launches. Existing parent sessions continue. Detaching a tmux session keeps the parent alive for later attach; closing a popup does not detach or stop it. Session settings and shortcuts belong to the companion session, without changes to global tmux configuration. The private Rig server uses a 25 ms Escape delay; an existing user tmux server retains its own delay, so Esc can respond later there.
+
+### Remove installed integrations
+
+```bash
+rig uninstall --dry-run
+rig uninstall
+rig uninstall --repo /path/to/older-project
+```
+
+Setup records original file content and symlink targets before its first write, retaining those originals across updates. Uninstall restores integrations that still match the installed version, including registered project instructions and skills. `--repo` additionally visits a legacy project's marked Rig instructions. Exact managed blocks can be removed while retaining other edits; modified host configuration files are preserved as a whole and reported for manual cleanup.
+
+Runtime files are removed only when ownership is established and no active lease, process reference, active or unreconciled registered reservation, or remaining configuration reference requires them. Older installs without ownership records, unavailable process inspection, and uncertain references produce partial cleanup with an explanation. Finish or reconcile work and close parent/MCP sessions before retrying removal. Installation, enabling, disabling, and uninstall share a lock with a bounded wait.
+
+Project `.rig` jobs, queue, memory, reservations, and history remain. Host binaries, tmux, private uninstall metadata, and empty runtime directories remain. Keep modified settings under your control; uninstall does not delete an entire home or project directory.
+
 ## First-time machine
 
 Install already ran `rig setup`. Re-run `rig setup` after you update Rig (`rig update` or the curl install does this for you).
 
 1. Fully quit Grok, Codex, OpenCode, OMP, Pi, and/or agy **once** so MCP tools, `/queue` adapters, and HUDs load (quit the apps, then reopen).
 2. Run `rig doctor`. MCP lines should show `[mcp_servers.rig]` for grok and/or codex, plus OpenCode/OMP/Pi/agy JSON MCP when those files exist.
-3. After setup, Grok gets a **bottom status line** with QUEUE. Restart Grok once if you do not see it. agy: `/statusline` if the row is hidden. OMP/Pi: widget under the editor. OpenCode: sidebar/footer from `tui.json` (file-path plugin). Codex: no panel — `/plugins` install **Rig Queue**, then `/hooks` trust.
+3. After setup, Grok gets a **bottom status line** with QUEUE. Restart Grok once if you do not see it. agy: `/statusline` if the row is hidden. OMP/Pi: widget under the editor. OpenCode: sidebar/footer from `tui.json` (file-path plugin). Codex: no native Rig HUD panel; `/plugins` install **Rig Queue**, then `/hooks` trust for parking. The optional [terminal companion](#optional-terminal-companion) adds the status row and F8/F9 controls.
 4. Pi `/rig` also needs `pi install npm:pi-mcp-adapter` (setup writes `mcp.json` but does not install the package).
 
 ### What `rig doctor` should look like
@@ -343,16 +394,16 @@ The parent does **not** ask you which model. `rig pick` maps kind → worker, mo
 
 ## Why the queue exists
 
-Every parent CLI is one user message → one turn. While a child runs (often several minutes) and `rig_job_wait` blocks, that session does not run another command. You still think of more work. Sending it as a normal prompt would interrupt wait/ASK (illegal) or get lost until the child finishes. The queue lets you **park** those extras now; on a free turn the parent checks the lot, writes briefs, and spawns — so independent work finishes instead of sitting idle behind one job.
+The parent orchestrates work on its own turns. While a child runs (often several minutes) and `rig_job_wait` blocks, the optional terminal companion remains available: F9 saves extra work directly to Rig’s persisted queue, independently of the host turn. A host’s native prompt queue is separate and does not itself create a Rig queue item. The parent can later claim queued work, write briefs, and launch on a free orchestration turn; the companion never dispatches. Explicit Esc/Stop instead requests cancellation of the jobs attached to that wait.
 
 Two locks force that design:
 
-1. **Parent chat turn.** One prompt at a time. Interrupting wait/ASK is illegal. Mid-wait you still park only: `/queue`, TUI `e`, or `rig queue add` in another pane — never a spawn from the hook/HUD/`e`.
+1. **Parent chat turn.** One prompt at a time. Mid-wait, use companion F9, TUI `e`, or `rig queue add` in another pane. `/queue` availability depends on when the host processes its submit hook. The hook/HUD/`e` never spawns. Explicit cancellation ends the attached wait; it does not trigger queue drain.
 2. **One-child policy.** Until implement is ok, one writer on those files. Without a queue drain, that also serialized *independent* work. Drain allows up to **3** live children when listed files are **disjoint**. Same-file items stay serialized.
 
 | | Without queue | With queue |
 | --- | --- | --- |
-| Extra ideas while a child runs | Wait until the child is done, or interrupt wait/ASK | Park now (`/queue` / TUI `e` / `rig queue add`) |
+| Extra ideas while a child runs | Wait until the child is done, or interrupt wait/ASK | Park now (companion F9 / TUI `e` / `rig queue add`; `/queue` where supported) |
 | Independent follow-ups | One live writer until that job ends | Free-turn drain: up to 3 live jobs if files do not overlap |
 | Who starts the child | — | Parent still names files and writes `brief.md` |
 
@@ -447,13 +498,15 @@ Do **not** kill that job because it asked. Do **not** spawn Grok “instead”. 
 
 ### 6. You press Esc / Stop while a child is running
 
-The parent turn dies. Rig aborts **the job ids that wait was blocking on** (`cancel.json` → wrapper `kill_tree` → status `cancelled`). Parked `/queue` items stay. Jobs in another thread stay. Do not re-pick a cancelled job.
+Rig records durable cancellation intent for **the exact job attempts attached to that wait**, then ends the observer promptly. A cancellation receipt is not proof that execution has stopped. Parked `/queue` items and unattached jobs stay. After explicit cancellation, do not re-wait, re-pick, or drain queued work automatically.
 
 Human: `rig tui` `x`, or `rig job cancel <id>`. MCP: `rig_job_cancel`, or the host `notifications/cancelled` on `rig_job_wait`.
 
-A **new parent thread** still sees repo jobs; those keep going unless you cancel them. Host-dropped wait still bash-waits once — that is not Esc.
+A **new parent thread** still sees repo jobs; those keep going unless you cancel them. A transport failure or MCP EOF alone detaches observers and preserves workers. After a dropped or failed wait, take **one bounded status snapshot**: `rig job wait ID --timeout 0` (or all attached IDs in one command). Inspect that result and reconcile unknown ownership; do not blindly start another indefinite wait. Explicit cancellation never takes this fallback.
 
-Cancel can leave a half-written tree. Inspect `git status` afterwards. A TERM request or cancelled metadata does not release files: wait for confirmed process/group/descendant termination, then explicitly close or assess the held work.
+Cancellation progresses separately from execution status: `stop-requested` records intent; `stop-unconfirmed` means termination is not yet proved; `native-cancel-required` requires the owning host to interrupt its specific native agent. Rig MCP cannot call the host's interruption tools or signal the parent as a substitute. Use host-native wait/interrupt, observe that agent's terminal result, then submit authenticated completion with the matching outcome.
+
+Wrapper termination uses a bounded TERM/KILL attempt with process identity checks. Unknown liveness returns `NEEDS_RECONCILIATION` instead of waiting forever. A request, timeout, or terminal-looking metadata never frees an unconfirmed execution slot or file scope. Only `stopped` confirms termination; the execution slot can then become free while cancelled work keeps its files until explicit `rig job close`. Inspect `git status` and the scoped evidence before closing or assessing partial work.
 
 ### 7. You are in Grok as parent
 
@@ -461,7 +514,7 @@ Grok child is `effective=off (is live parent)`. `Fix the tests` still runs: Clau
 
 ### 8. Codex parent, you type `/queue` while Astra is streaming
 
-After `rig setup`, `/plugins` **Rig Queue**, `/hooks` trust, fully quit once: `/queue fix sidebar` parks and **does not** start an Astra implement turn. 0.154 has no `/prompts:queue` autocomplete. Companion `rig tui` if you want a board. Codex has no in-TUI HUD panel.
+After `rig setup`, `/plugins` **Rig Queue**, `/hooks` trust, fully quit once: `/queue fix sidebar` parks and **does not** start an Astra implement turn. 0.154 has no `/prompts:queue` autocomplete. Use `rig tui` for a standalone board, or enable the [terminal companion](#optional-terminal-companion) for a status row and F8/F9 controls. Codex has no native Rig HUD panel.
 
 ### 9. Docs-only
 
@@ -471,7 +524,7 @@ Mini uses an edit-capable worker and starts a write reservation before editing `
 
 ### 10. Review after a successful implement
 
-After confirmed execution and parent acceptance with `next=review`, the parent may transfer the held scope to one independent read-only reviewer and run one seed/bulk whose files are disjoint. Review needs the original writer ID, current accepted snapshot, and a different actual model provider. A different CLI alone is insufficient. Wait once on both IDs. If seed changes the reviewed scope, run seed before the accepted snapshot.
+After confirmed execution and parent acceptance with `next=review`, the parent may transfer the held scope to one independent read-only reviewer and run one seed/bulk whose files are disjoint. Review needs the original writer ID, current accepted snapshot, and a different actual model provider. A different CLI alone is insufficient. Wait wrapper IDs together through MCP and native agents through the owning host. If seed changes the reviewed scope, run seed before the accepted snapshot.
 
 ### 11. Park on agy
 
@@ -483,7 +536,7 @@ agy 1.2.0 has no `UserPromptSubmit`. `/queue` on a free turn can still park via 
 2. Parent chooses semantic `role` and calls `rig_session(role=..., compact=true, terminal_limit=10, case=...)`. Questions/plans stay local, including non-English requests with an explicit role. The omitted-role fallback is bounded English inference. Compact keeps all active/ASK/reserved jobs and ten recent terminal rows; full mode remains the public default.
 3. Parent checks the relevant files, names scope and acceptance, and follows the returned worker/model/effort. Gather only if the parent cannot name files after a short check. Vision, Figma, computer-use, and chrome-profile stay with the parent; put their artifacts and required skill file paths in the brief.
 4. Register every native/parent write before edits. Wrapper dispatch reserves before execution; queued launches consume their exact claim credentials. A job ID does not authorize reuse. Read-only retrospective history may use `rig_job_record`; writes cannot gain protection afterwards.
-5. Wait once on all live IDs, without timeout. ASK: allow/deny that job, then wait the same IDs again. Host-dropped wait falls back to one `rig job wait`; user cancellation cancels only waited IDs and never retries them. Never replace a worker because it asks permission.
+5. Wait once on observable wrapper IDs, without timeout. ASK: allow/deny that job, then wait the same IDs again. Native agents use the owning host's wait/interrupt and authenticated completion. A dropped wait permits one `rig job wait ID --timeout 0` snapshot, followed by inspection/reconciliation. Explicit cancellation records intent for attached attempts; never re-wait, re-pick, or drain automatically. Never replace a worker because it asks permission.
 6. After confirmed task termination, inspect scoped evidence, declare requirements, run deliberate checks/manual review, and accept or reject the current content. Report actual changed behavior, validation, and limitations. Execution `ok` alone is completed-unverified.
 
 Bash fallback when MCP is unavailable: `rig session --role implement --case "fix the tests" --compact --terminal-limit 10 --json`. Parent models are observed, not changed by pick: pass `parent_model`/`parent_effort` only when known (CLI `--parent-model`, `--parent-effort`). Unknown remains unknown; suggested cheaper models are separate from actual model identity.
@@ -517,7 +570,7 @@ Never Fable / Sol / Astra as a child. Opus is allowed.
 
 MCP `rig_job_start` and CLI `rig job start --json` return `reservation_id`, `attempt_id`, `owner_token`, owner, and `credentials_path`. Preserve that exact response privately. The explicit artifact is `.rig/jobs/<id>/owner-credentials.json`, mode 0600; direct wrappers report only its path to stderr. Never display tokens, infer them from a job ID, or use `.rig/thread` as owner authentication. Subsequent mutations require the same initiating session and exact credentials; shell token transport is `RIG_OWNER_TOKEN`, not a token command-line flag.
 
-Native finish needs `completion={"kind":"parent_task","completed":true}` for this parent's completed task, or `{"kind":"native_child","agent_id":"actual-agent-id","terminal":true,"outcome":"ok"}` after the parent observed that specific agent finish. Outcome must match status. Parent/server PID is not child proof. Missing completion keeps slot/files held. Actual parent model may be unknown; do not label a preferred model as observed.
+Native finish needs `completion={"kind":"parent_task","completed":true}` for this parent's completed task, or `{"kind":"native_child","agent_id":"actual-agent-id","terminal":true,"outcome":"ok"}` after the parent observed that specific agent finish. Outcome must match status. Use the host's native wait or interrupt capability to obtain that result; Rig MCP cannot call those host tools. Parent/server PID is not child proof. `native-cancel-required` is not a terminal result, and missing completion keeps slot/files held. Actual parent model may be unknown; do not label a preferred model as observed.
 
 The following Bash fallback demonstrates a parent write in an initialized repo. Use the actual parent CLI for `--worker`, and set `RIG_OWNER_SESSION` to that parent's stable session ID. It captures a fresh start response explicitly; all later commands use that same response. `rig_job_show` / `rig job show` provides the current `snapshot_id` for manual or checked acceptance.
 
@@ -553,10 +606,15 @@ For independent review, accept the stopped writer with `next=review`; this retai
 Claim by ID with selected worker, access, files, and initiating session. JSON preserves names such as `app/[id]/page.tsx`, spaces, and Unicode; absolute/dot/symlink aliases collide, escapes/directories/unresolved globs refuse. Legacy comma/whitespace input is only a compatibility format.
 
 ```bash
-rig queue claim QUEUE_ID --worker grok --access write --files-json '["src/a.py"]' --owner-session "$RIG_OWNER_SESSION" --json
+umask 077
+rig queue claim QUEUE_ID --worker grok --access write --files-json '["src/a.py"]' --owner-session "$RIG_OWNER_SESSION" --json > .rig/claim-response.json
 ```
 
-Save that JSON privately. Pass the returned `RIG_RESERVATION_ID`, `RIG_ATTEMPT_ID`, `RIG_OWNER_TOKEN`, and `RIG_OWNER_SESSION`, plus `RIG_QUEUE_ID`, `RIG_ACCESS`, and `RIG_JOB_FILES_JSON`, to the wrapper. Native start receives equivalent fields. `rig_queue_spawned` / `rig queue spawned QUEUE_ID --job-id JOB_ID` is an authenticated acknowledgement, using the matching IDs/session and token environment; it cannot reassign another attempt or regress done/cancelled work. Unclaim requires the exact unconsumed claim credentials. A missing binary before launch may compensate only that claim; cancellation never queues a retry.
+CLI claims bind to a verified durable parent process, not the short-lived `rig queue claim` command. If automatic detection cannot identify it, supply `--owner-pid "$PARENT_PID" --owner-session "$RIG_OWNER_SESSION"` for a known live ancestor that will survive the command. Rig checks ancestry and process start identity; an arbitrary live PID is not accepted.
+
+Save the claim response privately. CLI claims also return `credentials_path` for `.rig/queue/credentials/<queue-id>.json` (mode 0600); plain output shows that path, while `--json` includes the exact credentials. MCP claims return credentials in `structuredContent`. Pass the returned `reservation_id`, `attempt_id`, `owner_token`, and owner session through `RIG_RESERVATION_ID`, `RIG_ATTEMPT_ID`, `RIG_OWNER_TOKEN`, and `RIG_OWNER_SESSION`, plus `RIG_QUEUE_ID`, `RIG_ACCESS`, and `RIG_JOB_FILES_JSON`, to the wrapper. Native start receives equivalent fields. Never print tokens or recover them from guessed IDs. `rig_queue_spawned` / `rig queue spawned QUEUE_ID --job-id JOB_ID` acknowledges the matching queue/job/attempt; it cannot reassign another attempt or regress done/cancelled work. Unclaim requires the exact unconsumed claim credentials. A missing binary before launch may compensate only that claim; cancellation never queues a retry.
+
+Successful CLI/MCP add and Grok/Codex submit hooks return the committed item ID and text without collecting the full QUEUE/HUD block. A later HUD failure does not undo that receipt. Request `rig queue list` separately when you want the full queue. Optional `rig queue add "text" --idempotency-key KEY` or MCP `rig_queue_add(text=..., idempotency_key=...)` returns the existing item when that same key is retried. Use one stable key per logical submission; without a key, repeated text remains distinct work.
 
 `rig_job_close` / `rig job close ID --reservation-id RID --attempt-id AID --owner-session SESSION --rationale TEXT` releases a confirmed-stopped attempt without accepting it. Failed, cancelled, rejected, and unverified results remain intact. Token comes from `RIG_OWNER_TOKEN`. Stop signals alone cannot release an overlapping writer.
 
@@ -564,9 +622,9 @@ Save that JSON privately. Pass the returned `RIG_RESERVATION_ID`, `RIG_ATTEMPT_I
 
 ## Safe upgrade and rollback
 
-Rollout order is additive readers, routing/performance, verification, atomic admission, then the updated protocol/UI. Quiesce the repository before enabling these admission writers: stop dispatching, drain or cancel existing work, confirm process/native-task completion, assess or explicitly close held scopes, and reconcile legacy claims. Update **every** launcher, refresh managed skills/protocol via init/setup, and fully restart all parent/MCP sessions. Concurrent mixed-version admission is unsupported. Existing worker/cap values, memory, unrelated AGENTS content, and custom agent overrides must remain intact; inspect a custom native agent's write capability before using it for mini work.
+Stop new admissions before upgrading. Finish or explicitly cancel existing work, confirm process/native-task completion, assess or close held scopes, and reconcile legacy claims. Keep pending queue text intact. Update **every** launcher, refresh managed skills/protocol via init/setup, then fully restart all parent/MCP sessions before admitting new work. Concurrent mixed-version admission writers are unsupported. Existing worker/cap values, memory, unrelated AGENTS content, and custom agent overrides must remain intact; inspect a custom native agent's write capability before using it for mini work.
 
-Test rollout in temporary homes/repos, not by installing into the active machine. Rollback likewise drains confirmed-stopped work first; preserve reservations, snapshots, checks, queue text, and overrides. Roll back protocol before restoring old writers. Terminal HUD expiry is presentation only and never releases ownership.
+Test rollout in temporary homes/repos. Rollback uses the same stopped-admission, confirmed-completion, and reconciliation sequence; preserve reservations, snapshots, checks, queue text, and overrides. Restore one compatible set of launchers and protocol, then restart all sessions before resuming. Terminal HUD expiry is presentation only and never releases ownership.
 
 ## Watch, jobs, memory
 
@@ -580,28 +638,41 @@ The display label is derived from separate execution, ownership, verification, a
 | completed-unverified | Execution succeeded without current parent acceptance, including old records and dry-runs |
 | verified | Parent accepted this current content against checks/manual criteria; independence is separate |
 | failed / cancelled | Preserve execution/check/rejection cause; cancelled-but-live adds stopping and files held |
+| stop-requested / stop-unconfirmed | Cancellation intent recorded / execution termination still unconfirmed; keep protection |
+| native-cancel-required / stopped | Owning host must interrupt the native agent / termination confirmed; file release remains a separate decision |
 
 Pre-job “checking” is parent commentary, not a fabricated job or percent complete. HUD selects ASK → stopping/reconciliation → active work/checks → newest terminal result for 60 seconds → idle. Expiry never releases ownership. The board/compact session keeps all active IDs. Each check owns its progress token; completed wait tokens are not reused.
 
 A Grok child is **headless**. Codex will not show its TUI. While it runs, both you and the parent can see **which agent, which task, status, and the log**.
 
-Parent agent: MCP. First call: `rig_session` with explicit semantic role, `compact=true`, and `terminal_limit=10`. Instant: `rig_jobs`, `rig_job_show`, `rig_job_log`, `rig_job_allow`, `rig_job_deny`, `rig_job_cancel`, `rig_job_message`, `rig_memory`, `rig_memory_add`, `rig_pick`, `rig_status`, `rig_job_start`, `rig_job_finish`, `rig_job_record`, `rig_queue_add`, `rig_queue_list`, `rig_queue_cancel`, `rig_queue_claim`. Launching a child is still bash `run-worker.sh`; there is no spawn-from-MCP tool. Wait is one blocking `rig_job_wait` with **no timeout**. After implement+verify ok, pass `ids` to wait review+seed together. If the parent host supports MCP progress, `rig_job_wait` may stream the child `doing` line. If a parent host **kills** the MCP tool, fall back to **one** bash `rig job wait <id>` with **no** `--timeout`. Do not poll 30s.
+Parent agent: MCP. First call: `rig_session` with explicit semantic role, `compact=true`, and `terminal_limit=10`. Instant: `rig_jobs`, `rig_job_show`, `rig_job_log`, `rig_job_allow`, `rig_job_deny`, `rig_job_cancel`, `rig_job_message`, `rig_memory`, `rig_memory_add`, `rig_pick`, `rig_status`, `rig_job_start`, `rig_job_finish`, `rig_job_record`, `rig_queue_add`, `rig_queue_list`, `rig_queue_cancel`, `rig_queue_claim`. Launching a child is still bash `run-worker.sh`; there is no spawn-from-MCP tool. Normal observable wrapper work uses one blocking `rig_job_wait` with **no timeout**; after implement+verify ok, pass `ids` to wait wrapper review+seed together. Native agents use host-native wait/interrupt and authenticated completion. If supported, MCP progress shows the child `doing` line. A dropped or failed wait permits **one** bounded `rig job wait ID --timeout 0` snapshot; inspect/reconcile its result instead of blindly re-waiting. Explicit cancellation never starts a fallback wait, re-pick, or automatic queue drain.
 
 Human terminal (not the parent agent):
 
 ```bash
-rig tui                 # jobs board (agent / task / status / live log)
+rig tui                 # Jobs/Queue tabs, status, activity, snapshot age/errors
 rig jobs                # same data as a table
 rig jobs --json
 rig jobs --thread
-rig tui                 # e = enqueue one line
+rig tui                 # e = nonblocking Unicode queue editor, cap 2000 characters
 ```
 
-Bash fallback if MCP is missing:
+Normal CLI wait when MCP is unavailable before waiting:
 
 ```bash
 rig job wait <id>
 rig job wait <id1> <id2>
+```
+
+Transport recovery after a dropped or failed wait:
+
+```bash
+rig job wait ID --timeout 0       # one status snapshot, then inspect/reconcile
+```
+
+Human actions or fallback commands when MCP is unavailable:
+
+```bash
 rig job cancel <id>
 rig job show
 rig job log <id> -f
@@ -612,25 +683,27 @@ rig queue cancel <id>
 
 `--timeout SECS` is an optional cap, not the default. Omit timeout to block. `0` snapshots once. Exit 124 only if still running when a cap hits.
 
+TUI controls: Tab switches Jobs/Queue; `j`/`k` or arrows select. The Queue tab shows pending text and known capacity/ownership blockers; it does not infer file scope from task text. `e` opens the Unicode editor, Enter commits, Esc cancels the draft, and arrows/Home/End/Delete edit. Bracketed paste treats embedded newlines as spaces and is capped at 2,000 characters. A failed save retains the draft for retry. `x` requests cancellation for the selected job or queue item; repeated requests for the same target are suppressed while pending. `y`/`n` answer the selected job's ASK, `l` toggles its in-board activity log, and PgUp/PgDn scroll activity. `r` refreshes; `q` closes the board without stopping work. Snapshot collection and actions run in the background; a slow or failed refresh leaves the last snapshot visible with its age/error.
+
 In Grok, Codex, OpenCode, OMP, Pi, or agy type `/rig` or `/queue`. `/queue` parks a line in `.rig/queue/` and does **not** spawn.
 
 | Parent | In-composer park | HUD | Mid-wait |
 | --- | --- | --- | --- |
 | Grok | `/queue fix pagination` (submit hook blocks the model) | bottom status line includes QUEUE + live/ASK (restart Grok once) | same hook |
-| Codex | `/queue …` or `$queue park …` after `rig setup` + **`/hooks` trust** + fully quit once. Prefer `/plugins` **Rig Queue** (same hook). No `/prompts:queue` slash in 0.154. No custom TUI panel. | hook `systemMessage` on park; companion `rig tui` | same hook, or `!rig queue add "…"` |
+| Codex | `/queue …` or `$queue park …` after `rig setup` + **`/hooks` trust** + fully quit once. Prefer `/plugins` **Rig Queue** (same hook). No `/prompts:queue` slash in 0.154. No native Rig HUD panel. | hook `systemMessage` on park; optional [terminal companion](#optional-terminal-companion) or standalone `rig tui` | same hook, or `!rig queue add "…"` |
 | OpenCode | `/queue …` via plugin. On 1.17 the plugin **throws** after park so `prompt()` does not run (the only skip). 1.17.5+ may flash a TUI error `__RIG_QUEUE_HANDLED__`; that is the skip, not a failed park. `$queue park …` rewrites the user text (model may still answer). Fully quit once after setup. | `tui.json` file-path plugin `rig-hud.tsx` (sidebar/footer). If the slot does not paint, use `rig tui`. | same park plugin if composer still accepts input; else `rig tui` `e` |
 | OMP / Pi | `/queue …` extension command (`~/.omp/agent/extensions/rig-queue.js`, `~/.pi/agent/extensions/rig-queue.js`). Runs even while streaming. Fully quit once. | widget under the editor + footer status | same `/queue` |
 | agy | skill / `/queue` on a free turn (no UserPromptSubmit) | `statusLine.command` → same `jobs.py hud` (`/statusline` if hidden) | `rig tui` `e` or `rig queue add` |
 
 Grok hook: `~/.grok/hooks/rig-queue-submit.json`. Codex: `/plugins` Rig Queue **or** `~/.codex/hooks.json` (not both) + `[features] hooks = true`. Bare `/queue` (list) is not blocked. `rig tui` key `e` always parks. HUD refresh is read-only and never spawns. `rig setup` probes the `agy` binary for `UserPromptSubmit` and only then writes `~/.gemini/config/hooks.json`. agy 1.2.0 has PreInvocation, not UserPromptSubmit — skip (use `rig tui` `e`).
 
-MCP tools load after `rig setup` + fully quit the parent CLI once. Parent agents use MCP. Launch is still bash `run-worker.sh`. Wait is MCP `rig_job_wait` with no timeout (`ids` for a review+seed panel); one bash `rig job wait` only if the host drops the tool.
+MCP tools load after `rig setup` + fully quit the parent CLI once. Parent agents use MCP. Launch is still bash `run-worker.sh`. Normal wrapper wait is MCP `rig_job_wait` with no timeout (`ids` for a review+seed panel). If the transport drops an active wait, use one `rig job wait ID --timeout 0` snapshot and inspect/reconcile; do not blindly resume an indefinite wait.
 
 Open the Grok child TUI yourself: `grok -r <session-id>` or `grok dashboard`. The job folder has `WATCH.md`.
 
 Claude has no TTY as a child. When it needs permission, the job status becomes `ask` and MCP `rig_job_wait` returns ASK. The **parent agent** answers MCP `rig_job_allow` / `rig_job_deny`. Do not ignore it, kill the job, or spawn another worker. Human TUI: `y` / `n`. The child work timeout pauses while status is `ask` and restarts after allow.
 
-Jobs are this repo, not this chat. A new parent thread still sees `.rig/jobs`. Running children keep going across threads. Esc on this wait cancels those ids. First call in a new thread: compact MCP `rig_session` with explicit semantic role. Else MCP `rig_memory` then `rig_jobs` then `rig_status` then `rig_pick`. Bash fallback if MCP is missing: `rig session --role stay --case "show status" --compact --terminal-limit 10 --json`.
+Jobs are this repo, not this chat. A new parent thread still sees `.rig/jobs`. Running children keep going across threads. Esc on this wait records cancellation for its attached attempts; pending queue items stay. Do not re-wait, re-pick, or drain automatically after explicit cancellation. First call in a new thread: compact MCP `rig_session` with explicit semantic role. Else MCP `rig_memory` then `rig_jobs` then `rig_status` then `rig_pick`. Bash fallback if MCP is missing: `rig session --role stay --case "show status" --compact --terminal-limit 10 --json`.
 
 Memory is local only. Parent: MCP `rig_memory_add`. Do not edit the file. Human / fallback: `rig memory add "Codex sandbox must write ~/.grok"`.
 
@@ -638,7 +711,7 @@ Memory is local only. Parent: MCP `rig_memory_add`. Do not edit the file. Human 
 - `.rig/STATE.md` — overwritten each run (last job / worker / status / summary).
 - `.rig/jobs/` — gitignored. Each job records the parent `thread` when known. `rig prune` drops jobs older than 7 days and keeps the last 20. Successful jobs delete `stdout.log` after decoded activity is saved in `activity.json` (`rig job log` still works). If the log cannot be decoded, the raw log is kept. Fail/timeout logs stay for debug. Never read Cursor `state.vscdb` or other vendor sqlite to learn a Rig job — use `rig job log` / MCP.
 - Child MCP: when `RIG_JOB_ID` is set, Rig MCP is job-scoped (`rig_job_doing`, `rig_job_note`, `rig_job_ask`, `rig_job_inbox`). It cannot pick, wait, spawn, queue, or allow. Do not run the `rig` CLI as a child. Parent MCP stays the orchestrator. MCP `rig_job_message` leaves one inbox note; the child pulls `rig_job_inbox` **once per turn** (empty is fine). Inbox is not ASK and does not wake wait. Cursor print-mode has no isolated `--mcp-config`; do not install Rig into `~/.cursor/mcp.json`.
-- `.rig/queue/` — gitignored user work queue. MCP `rig_queue_add` / `/queue` parks text and does not spawn. On a free turn the parent claims a **disjoint subset by id** via `rig_queue_claim` (list shows occupied files; skip overlap and try the next id; omit id only if one pending), briefs, spawns, then MCP `rig_job_wait` on all live ids. Cap `[queue].max_running` (default 3 reserved/running/ASK). Claims and spawned acknowledgements require the matching attempt credentials. Mid-wait enqueue: MCP `rig_queue_add`.
+- `.rig/queue/` — gitignored user work queue. MCP `rig_queue_add` / `/queue` parks text and does not spawn. On a free turn the parent claims a **disjoint subset by id** via `rig_queue_claim` (list shows occupied files; skip overlap and try the next id; omit id only if one pending), briefs, spawns, then MCP `rig_job_wait` on observable wrapper IDs or host-native wait with authenticated completion. Cap `[queue].max_running` (default 3 reserved/running/ASK). Claims and spawned acknowledgements require the matching attempt credentials. Mid-wait enqueue: MCP `rig_queue_add`.
 - `.rig/reservations/` — retained ownership records; never delete them to clear a blocked job.
 - `.rig/thread` — gitignored HUD thread cache, never initiating-owner authentication.
 
@@ -713,7 +786,7 @@ That is the 1.17 skip of `prompt()` after a successful park. Check `rig queue li
 
 **HUD missing after setup**
 
-Fully quit the parent app once. Grok: statusline command in `~/.grok/config.toml`. agy: `/statusline`. OpenCode: `tui.json` must list the **file path** to `rig-hud.tsx` (not an npm spec). Codex has no HUD panel — use `rig tui`.
+Fully quit the parent app once. Grok: statusline command in `~/.grok/config.toml`. agy: `/statusline`. OpenCode: `tui.json` must list the **file path** to `rig-hud.tsx` (not an npm spec). Codex has no native Rig HUD panel; use the optional [terminal companion](#optional-terminal-companion) or standalone `rig tui`.
 
 **OpenCode / OMP / Pi / agy not spawning**
 
@@ -721,7 +794,7 @@ Need the binary **and** `rig workers opencode=on` (or `omp=on` / `pi=on` / `agy=
 
 ## Parent agents
 
-Parent agents: load `.agents/skills/delegate-harness/SKILL.md`. Live wrapper is `RIG_LIVE=1` + `run-worker.sh` in the background, then one blocking `rig job wait` (MCP `rig_job_wait` if present; no `--timeout`; `ids` for review+seed after current parent acceptance). Default wrapper is dry-run. Claude `ask` → `rig job allow` / `rig job deny`. Never kill an asking job because it asked. User Esc → `rig job cancel` / MCP `rig_job_cancel` those wait ids.
+Parent agents: load `.agents/skills/delegate-harness/SKILL.md`. Live wrapper is `RIG_LIVE=1` + `run-worker.sh` in the background, then one normal blocking wait (MCP `rig_job_wait` if present; no timeout; `ids` for wrapper review+seed after current parent acceptance). A transport failure instead permits one `rig job wait ID --timeout 0` snapshot followed by inspection/reconciliation. Default wrapper is dry-run. Claude `ask` → `rig job allow` / `rig job deny`; never kill or replace a worker because it asked. User Esc records cancellation intent for attached attempts and returns promptly; never re-wait, re-pick, or drain automatically. Native agents use the host's wait/interrupt tools and authenticated completion; Rig cannot interrupt them itself.
 
 Read-only retrospective exploration may use `rig_job_record` so it appears in `.rig/jobs/`. Native writers instead start before edits and use authenticated completion/acceptance:
 
@@ -742,6 +815,8 @@ The parent picks **kind**. Pick maps kind to worker, model, and effort. Do not a
 Routing/session: `rig session --role KIND --case TEXT --compact --terminal-limit 10 --json`, `rig pick KIND --case TEXT --json`. Review adds `--review-mode independent --writer-job-id ID`; explicit actual parent metadata uses `--parent-model` / `--parent-effort`.
 
 Lifecycle: `rig job start|finish|record|close|reconcile`; verification: `rig job requirements|check|accept`. The examples above show ownership arguments. Read-only watch remains `rig jobs [--json] [--thread [ID]]`, `rig job show|log ID`, `rig tui`. Wait/ASK: `rig job wait ID...`, `rig job allow ID`, `rig job deny ID --reason TEXT`, `rig job cancel ID`. Steering: `rig job message ID --text TEXT`.
+
+Terminal companion: `rig setup --shell-ui`, `rig ui enable|disable|sessions`, `rig ui attach ID`, and `rig uninstall [--dry-run] [--repo PATH]`.
 
 Setup/configuration remains `rig setup`, `rig update`, `rig init`, `rig doctor`, `rig status`, `rig use`, `rig workers`, `rig prune`. Memory: `rig memory` / `rig memory add "standing fact"`. Queue: `rig queue add|list|cancel|claim|unclaim|spawned`.
 

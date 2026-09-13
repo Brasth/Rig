@@ -11,6 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 import rig_tui  # noqa: E402
+from tui_runtime import Snapshot  # noqa: E402
 
 
 class FakeScr:
@@ -73,15 +74,51 @@ class BoardScr(FakeScr):
     def refresh(self):
         pass
 
-    def getch(self):
+    def get_wch(self):
         self.frames.append(list(self.calls))
-        return next(self.keys, ord("q"))
+        key = next(self.keys, "q")
+        return chr(key) if isinstance(key, int) and 0 <= key < 128 else key
 
     def nodelay(self, _value):
         pass
 
     timeout = nodelay
     scrollok = nodelay
+    keypad = nodelay
+
+    def move(self, *_args):
+        pass
+
+
+class ScriptedRuntime:
+    """Inject complete worker results at frame boundaries, without scheduler races."""
+
+    def __init__(self, snapshots):
+        self.snapshot = snapshots[0]
+        self.remaining = iter(snapshots[1:])
+        self.revision = 0
+        self.scanning = False
+        self.snapshot_error = ""
+        self.first = True
+
+    def poll(self):
+        if self.first:
+            self.first = False
+        else:
+            newer = next(self.remaining, None)
+            if newer is not None:
+                self.snapshot = newer
+                self.revision += 1
+        return []
+
+    def request_snapshot(self, **_kwargs):
+        pass
+
+    def refresh(self):
+        pass
+
+    def close(self):
+        pass
 
 
 class BoardProjection(unittest.TestCase):
@@ -96,21 +133,21 @@ class BoardProjection(unittest.TestCase):
                 "verification_summary": {"state": "pending"}, "independence": "unknown"}
 
     def paint(self, screen, snapshots, times=None):
+        runtime = ScriptedRuntime([Snapshot(jobs=[self.project(row) for row in rows], captured_at=1)
+                                   for rows in snapshots])
         with ExitStack() as stack:
-            for name in ("curs_set", "use_default_colors", "init_pair"):
+            for name in ("curs_set", "use_default_colors", "init_pair", "noecho", "set_escdelay"):
                 stack.enter_context(mock.patch.object(rig_tui.curses, name))
             stack.enter_context(mock.patch.object(rig_tui.curses, "color_pair", return_value=0))
             stack.enter_context(mock.patch.object(rig_tui.rig_jobs, "list_jobs", side_effect=snapshots))
             projected = stack.enter_context(mock.patch.object(rig_tui.rig_jobs, "project_job", side_effect=self.project, create=True))
             stack.enter_context(mock.patch.object(rig_tui.rig_queue, "list_items", return_value=[]))
             stack.enter_context(mock.patch.object(rig_tui.rig_queue, "max_running", return_value=3))
-            stack.enter_context(mock.patch.object(rig_tui.time, "time", side_effect=times) if times else
-                                mock.patch.object(rig_tui.time, "time", return_value=10))
             mutations = [stack.enter_context(mock.patch.object(module, name)) for module, name in (
                 (rig_tui.rig_jobs, "cancel_job"), (rig_tui.rig_jobs, "answer_pending"),
                 (rig_tui.rig_queue, "add_item"),
             )]
-            rig_tui._paint(screen, Path("/fixture"))
+            rig_tui._paint(screen, Path("/fixture"), runtime=runtime)
             for mutation in mutations:
                 mutation.assert_not_called()
             return projected.call_args_list

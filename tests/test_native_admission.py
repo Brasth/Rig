@@ -27,7 +27,7 @@ class NativeAdmission(unittest.TestCase):
         subprocess.run(["git", "init", "-q", str(self.repo)], check=True, capture_output=True)
         (self.repo / "subject.txt").write_text("before\n")
         self.enterContext(patch.dict(os.environ, {
-            "RIG_PARENT": "codex", "RIG_THREAD": "native-test-parent", "RIG_HOME": str(ROOT),
+            "RIG_PARENT": "codex", "RIG_THREAD": "native-test-parent", "RIG_HOME": str(ROOT), "RIG_INSTALL_TRANSACTION": "1",
             "RIG_JOB_ID": "", "RIG_JOB_DIR": "", "RIG_SKIP_MODEL_CATALOG": "1",
             "RIG_SKIP_UPDATE_CHECK": "1", "RIG_OWNER_SESSION": "", "RIG_OWNER_TOKEN": "",
             "RIG_RESERVATION_ID": "", "RIG_ATTEMPT_ID": "", "RIG_JOB_FILES_JSON": "", "RIG_JOB_FILES": "",
@@ -97,6 +97,7 @@ class NativeAdmission(unittest.TestCase):
         held = admission.list_reservations(self.repo)[0]
         self.assertTrue(held["slot_held"])
         self.assertTrue(held["needs_reconciliation"])
+        self.assertEqual(jobs.load_job(self.repo / ".rig/jobs/writer")["status"], "running")
         self.assertFalse(self.finish(lease).get("isError"))
         held = admission.list_reservations(self.repo)[0]
         self.assertFalse(held["slot_held"])
@@ -226,7 +227,7 @@ class NativeAdmission(unittest.TestCase):
         meta = json.loads(path.read_text())
         meta["pid"] = os.getpid()
         path.write_text(json.dumps(meta))
-        with patch.object(jobs.os, "kill") as signal:
+        with patch.object(jobs.cancellation, "dispatch", side_effect=jobs.cancellation.signal_wrapper), patch.object(jobs.os, "kill") as signal:
             self.assertFalse(self.call("rig_job_cancel", id="writer").get("isError"))
         self.assertFalse(any(call.args[1] != 0 for call in signal.call_args_list))
 
@@ -242,7 +243,7 @@ class NativeAdmission(unittest.TestCase):
         meta["pid"] = os.getpid()
         (folder / "meta.json").write_text(json.dumps(meta))
         with patch.object(admission, "process_identity", return_value={"pid": os.getpid(), "start_id": "new-incarnation"}), \
-                patch.object(jobs.os, "kill") as signal:
+                patch.object(jobs.cancellation, "dispatch", side_effect=jobs.cancellation.signal_wrapper), patch.object(jobs.os, "kill") as signal:
             self.assertFalse(self.call("rig_job_cancel", id="wrapper").get("isError"))
         self.assertFalse(any(call.args[1] != 0 for call in signal.call_args_list))
 
@@ -258,7 +259,7 @@ class NativeAdmission(unittest.TestCase):
         meta["pid"] = owner["pid"] + 100000
         (folder / "meta.json").write_text(json.dumps(meta))
         with patch.object(admission, "process_identity", return_value={"pid": owner["pid"], "start_id": "matching-wrapper"}), \
-                patch.object(jobs.os, "kill") as signal:
+                patch.object(jobs.cancellation, "dispatch", side_effect=jobs.cancellation.signal_wrapper), patch.object(jobs.os, "kill") as signal:
             self.assertFalse(self.call("rig_job_cancel", id="wrapper").get("isError"))
         sent = [call.args for call in signal.call_args_list if call.args[1] != 0]
         self.assertEqual(sent, [(owner["pid"], jobs.signal.SIGTERM)])

@@ -10,6 +10,8 @@ import json
 import os
 import sys
 import threading
+import cancellation
+from mcp_runtime import Runtime
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -112,8 +114,8 @@ TOOLS = [
             "If the text starts with ASK, call rig_job_allow or rig_job_deny next "
             "so that child can continue; then wait the same ids again. "
             "Do not kill an ask or running job because the child asked. Never spawn a replacement. "
-            "If this wait is cancelled (user Esc / notifications/cancelled), those ids abort; "
-            "do not re-pick. After implement+verify ok, pass ids for read-only review "
+            "If this wait is cancelled (user Esc / notifications/cancelled), stop is requested for those exact attempts; "
+            "do not re-pick or re-wait. Unknown/native liveness returns reconciliation guidance. After implement+verify ok, pass ids for read-only review "
             "and disjoint seed together (barrier; wakes on first ASK). "
             "Spawn-infra fail may re-pick with exclude once."
         ),
@@ -179,7 +181,7 @@ TOOLS = [
         "description": (
             "Abort a live job (running or ask) and its worker process. "
             "Use when the user cancelled the parent turn/wait (Esc/Stop). "
-            "Writes cancel.json, SIGTERM, status cancelled. Do not re-pick. "
+            "Persists stop intent promptly. Completion requires confirmed termination. Do not re-pick or re-wait. "
             "Does not cancel parked queue items. Does not abort jobs in other threads."
         ),
         "inputSchema": {
@@ -478,6 +480,7 @@ TOOLS = [
             "type": "object",
             "properties": {
                 "text": {"type": "string", "description": "Work to park."},
+                "idempotency_key": {"type": "string", "description": "Optional stable submission identity for retries."},
                 "repo": {"type": "string"},
             },
             "required": ["text"],
@@ -496,12 +499,15 @@ TOOLS = [
     },
     {
         "name": "rig_queue_cancel",
-        "description": "Parent only. Cancel a pending queue item. Does not spawn.",
+        "description": "Parent only. Cancel a queue item. Held execution reservations require confirmed shutdown; an owned, unlaunched claim can be released. Does not spawn.",
         "inputSchema": {
             "type": "object",
             "properties": {
                 "id": {"type": "string", "description": "Queue item id."},
                 "repo": {"type": "string"},
+                "reservation_id": {"type": "string"},
+                "attempt_id": {"type": "string"},
+                "owner_token": {"type": "string"},
             },
             "required": ["id"],
         },
@@ -909,7 +915,7 @@ def _child_ask(job_dir: Path, args: dict, *, permission: bool) -> dict:
     return _ok(json.dumps(decision))
 
 
-def call_tool(name: str, args: dict, on_tick=None, *, wait_paths: list[Path] | None = None) -> dict:
+def call_tool(name: str, args: dict, on_tick=None, *, wait_paths: list[Path] | None = None, cancel_event=None, wait_targets=None) -> dict:
     args = args or {}
     try:
         child = is_child()
@@ -957,8 +963,8 @@ def call_tool(name: str, args: dict, on_tick=None, *, wait_paths: list[Path] | N
             text = str(args.get("text") or "").strip()
             if not text:
                 return _err("rig_queue_add needs text")
-            obj = rig_queue.add_item(repo, text)
-            return _ok(f"queued {obj['id']}\n{obj['text']}\n{rig_queue.format_block(repo)}")
+            obj = rig_queue.add_item(repo, text, idempotency_key=args.get("idempotency_key", ""))
+            return {**_ok(f"queued {obj['id']}\n{obj['text']}"), "structuredContent": obj}
         if name == "rig_queue_list":
             return _ok(rig_queue.format_list(repo))
         if name == "rig_queue_cancel":
@@ -966,12 +972,12 @@ def call_tool(name: str, args: dict, on_tick=None, *, wait_paths: list[Path] | N
             if not qid:
                 return _err("rig_queue_cancel needs id")
             try:
-                obj = rig_queue.cancel_item(repo, qid)
+                obj = rig_queue.cancel_item(repo, qid, **_ownership_args(args))
             except FileNotFoundError:
                 return _err(f"queue item not found: {qid}")
             except ValueError as exc:
                 return _err(str(exc))
-            return _ok(f"cancelled {obj['id']}\n{rig_queue.format_block(repo)}")
+            return {**_ok(f"cancelled {obj['id']}\n{obj.get('held_reason') or ''}"), "structuredContent": obj}
         if name == "rig_queue_claim":
             files = args.get("files")
             try:
@@ -1044,7 +1050,7 @@ def call_tool(name: str, args: dict, on_tick=None, *, wait_paths: list[Path] | N
                 timeout_s,
                 on_tick=on_tick,
                 resolved_paths=wait_paths,
-                ids=args.get("ids"),
+                ids=args.get("ids"), cancel_event=cancel_event, targets=wait_targets,
             )
             if code == 1:
                 return _err(text)
@@ -1059,21 +1065,20 @@ def call_tool(name: str, args: dict, on_tick=None, *, wait_paths: list[Path] | N
             return _ok(text) if text.startswith("deny") else _err(text)
         if name == "rig_job_cancel":
             reason = str(args.get("reason") or "parent").strip() or "parent"
-            names = rig_jobs._normalize_wait_ids(args.get("id"), args.get("ids"))
-            if not names:
-                names = [None]
-            lines = []
-            ok = True
+            names = rig_jobs._normalize_wait_ids(args.get("id"), args.get("ids")) or [None]
+            results = []
+            failed = False
             for jid in names:
                 try:
-                    text = rig_jobs.cancel_job(repo, jid, reason)
-                except SystemExit as exc:
-                    return _err(str(exc) or "rig error")
-                lines.append(text)
-                if not str(text).startswith("cancelled"):
-                    ok = False
-            body = "\n".join(lines)
-            return _ok(body) if ok else _err(body)
+                    results.append(rig_jobs.cancel_job(repo, jid, reason, return_details=True))
+                except (SystemExit, Exception) as exc:
+                    failed = True
+                    results.append({"job_id": jid, "state": "error", "text": str(exc) or "rig error"})
+            result = _ok("\n".join(item["text"] for item in results))
+            if failed:
+                result["isError"] = True
+            result["structuredContent"] = {"jobs": results}
+            return result
         if name == "rig_memory":
             return _ok(rig_memory.show_memory(repo))
         if name == "rig_memory_add":
@@ -1223,23 +1228,42 @@ def call_tool(name: str, args: dict, on_tick=None, *, wait_paths: list[Path] | N
 
 _FRAMING = "lsp"
 _out_lock = threading.Lock()
-_wait_lock = threading.Lock()
-_inflight_waits: dict[str, dict] = {}
-_wait_threads: list[threading.Thread] = []
-
-
-def _abort_wait(rid) -> None:
-    key = str(rid)
-    with _wait_lock:
-        item = _inflight_waits.get(key)
-    if not item:
-        return
-    repo = item.get("repo")
-    for path in item.get("paths") or []:
+def _abort_request(request):
+    for target in request.targets:
         try:
-            rig_jobs.cancel_job(repo, path.name, "wait-cancelled", job_path=path)
-        except SystemExit:
-            continue
+            rig_jobs.cancel_target(target, "wait-cancelled")
+        except (SystemExit, Exception) as error:
+            print(f"rig cancellation {target.get('job_id')}: {error}", file=sys.stderr)
+
+
+def _execute_request(request):
+    on_tick = None
+    token = _progress_token(request.params)
+    if token is not None:
+        progress = _progress_on_tick(token)
+        def on_tick(job):
+            if _runtime.progress_allowed(request):
+                progress(job)
+    paths = None
+    if request.name == "rig_job_wait" and not is_child():
+        repo = _repo(request.args)
+        names = rig_jobs._normalize_wait_ids(request.args.get("id"), request.args.get("ids"))
+        paths = rig_jobs.resolve_job_paths(repo, names)
+        request.targets = [cancellation.capture(path) for path in paths]
+        request.bound.set()
+        if request.cancelled:
+            _abort_request(request)
+    else:
+        request.bound.set()
+    try:
+        return call_tool(request.name, request.args, on_tick=on_tick, wait_paths=paths,
+                         cancel_event=request.stop, wait_targets=request.targets or None)
+    finally:
+        if request.cancelled and request.name == "rig_job_wait":
+            _abort_request(request)
+
+
+_runtime = Runtime(_execute_request, lambda message: write_message(message), _abort_request)
 
 
 def read_message() -> dict | None:
@@ -1297,7 +1321,7 @@ def handle(msg: dict) -> dict | None:
         return None
     if method == "notifications/cancelled" or method == "cancelled":
         params = msg.get("params") if isinstance(msg.get("params"), dict) else {}
-        _abort_wait(params.get("requestId"))
+        _runtime.cancel(params.get("requestId"))
         return None
     if method == "tools/list":
         return {"jsonrpc": "2.0", "id": mid, "result": {"tools": listed_tools()}}
@@ -1309,64 +1333,11 @@ def handle(msg: dict) -> dict | None:
         args = params.get("arguments") or {}
         if not isinstance(args, dict):
             args = {}
-        on_tick = None
-        if name == "rig_job_wait" and not is_child():
-            token = _progress_token(params)
-            if token is not None:
-                on_tick = _progress_on_tick(token)
-            repo = _repo(args)
-            try:
-                names = rig_jobs._normalize_wait_ids(args.get("id"), args.get("ids"))
-                paths = rig_jobs.resolve_job_paths(repo, names)
-            except (SystemExit, Exception) as exc:  # Lookup failures must not stop the MCP server.
-                return {"jsonrpc": "2.0", "id": mid, "result": _err(str(exc) or "rig error")}
-            # Keep directory identities for both refresh and cancellation. A vanished
-            # target must never be replaced by a newly matching partial job id.
-            args = {**args, "id": "", "ids": [path.name for path in paths]}
-            with _wait_lock:
-                _inflight_waits[str(mid)] = {"repo": repo, "paths": paths}
-
-            def _run_wait() -> None:
-                try:
-                    result = call_tool(name, args, on_tick=on_tick, wait_paths=paths)
-                    write_message({"jsonrpc": "2.0", "id": mid, "result": result})
-                except Exception as exc:  # noqa: BLE001
-                    write_message(
-                        {
-                            "jsonrpc": "2.0",
-                            "id": mid,
-                            "result": _err(str(exc)),
-                        }
-                    )
-                finally:
-                    with _wait_lock:
-                        _inflight_waits.pop(str(mid), None)
-
-            t = threading.Thread(target=_run_wait, daemon=True)
-            with _wait_lock:
-                _wait_threads.append(t)
-            t.start()
-            return None
-        if name == "rig_job_check" and not is_child():
-            token = _progress_token(params)
-            if token is not None:
-                on_tick = _progress_on_tick(token)
-            # Checks may run for minutes. Keep the reader available for ASK,
-            # cancellation, and other requests while preserving request progress.
-            def _run_check() -> None:
-                try:
-                    result = call_tool(name, args, on_tick=on_tick)
-                except (SystemExit, Exception) as exc:
-                    result = _err(str(exc) or "rig error")
-                write_message({"jsonrpc": "2.0", "id": mid, "result": result})
-
-            t = threading.Thread(target=_run_check, daemon=True)
-            with _wait_lock:
-                _wait_threads.append(t)
-            t.start()
-            return None
-        result = call_tool(name, args, on_tick=on_tick)
-        return {"jsonrpc": "2.0", "id": mid, "result": result}
+        allowed = CHILD_TOOL_NAMES if is_child() else PARENT_TOOL_NAMES
+        if name not in allowed:
+            who = "child" if is_child() else "parent"
+            return {"jsonrpc": "2.0", "id": mid, "result": _err(f"{name} is not a {who} tool")}
+        return _runtime.start(mid, name, args, params)
     if method == "ping":
         return {"jsonrpc": "2.0", "id": mid, "result": {}}
     if mid is not None:
@@ -1421,16 +1392,22 @@ def run_session_cli(argv: list[str]) -> int:
 def main() -> int:
     if "--session" in sys.argv:
         return run_session_cli(sys.argv[1:])
+    from ui_runtime_lease import lease
+    with lease("mcp"):
+        try:
+            return _serve_messages()
+        finally:
+            _runtime.shutdown()
+
+
+def _serve_messages() -> int:
     while True:
         try:
             msg = read_message()
         except (OSError, json.JSONDecodeError, ValueError):
             return 1
         if msg is None:
-            with _wait_lock:
-                threads = list(_wait_threads)
-            for t in threads:
-                t.join()
+            _runtime.shutdown()
             return 0
         reply = handle(msg)
         if reply is not None:

@@ -30,16 +30,15 @@ def handle(payload: dict) -> dict | None:
         or os.getcwd()
     )
     repo = rig_jobs.repo_root(str(cwd))
-    result = rig_queue.apply_slash(repo, prompt)
+    result = rig_queue.apply_slash(repo, prompt, idempotency_key=payload.get("idempotency_key") or "")
     if not result or result.get("action") == "list":
         return None
     item = result.get("item") or {}
     action = result.get("action")
     label = "queued" if action == "add" else "cancelled"
-    reason = (
-        f"rig {label} {item.get('id') or ''} — {item.get('text') or ''}\n"
-        f"{rig_queue.format_block(repo)}"
-    )
+    reason = f"rig {label} {item.get('id') or ''} — {item.get('text') or ''}"
+    if item.get("held_reason"):
+        reason += "\n" + item["held_reason"]
     shown = reason[:2000]
     return {
         "decision": "block",

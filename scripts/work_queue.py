@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -57,10 +58,7 @@ def current_thread() -> str:
 
 
 def _write_json(path: Path, obj: dict) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(json.dumps(obj, indent=2) + "\n")
-    tmp.replace(path)
+    admission._write(path, obj)
 
 
 def _read_json(path: Path) -> dict | None:
@@ -74,7 +72,7 @@ def _read_json(path: Path) -> dict | None:
 
 
 def _clip_text(text: str) -> str:
-    line = " ".join(str(text).split())
+    line = str(text).strip()
     if not line:
         raise ValueError("queue text required")
     if len(line) > TEXT_CAP:
@@ -127,72 +125,43 @@ def clip_priority(raw) -> int:
 
 
 def parse_slash(text: str) -> dict | None:
-    """Parse /queue, /prompts:queue, $queue, $rig-queue. None if a normal prompt."""
-    raw = str(text or "").strip()
-    if not raw:
+    """Recognize exact commands and consume options only before the task body."""
+    match = re.match(r"^([/$])(?:rig-queue|prompts:queue|queue)(?=\s|$)(.*)$",
+                     str(text or "").strip(), re.IGNORECASE | re.DOTALL)
+    if not match:
         return None
-    sigil = raw[0]
-    if sigil not in {"/", "$"}:
-        return None
-    line = raw[1:]
-    low = line.lower()
-    rest = ""
-    dollar = sigil == "$"
-    if low.startswith("rig-queue"):
-        rest = line[len("rig-queue") :].strip()
-    elif low.startswith("prompts:queue"):
-        rest = line[len("prompts:queue") :].strip()
-    elif low.startswith("queue"):
-        rest = line[len("queue") :].strip()
-    else:
-        return None
-    if dollar:
-        low_rest = rest.lower()
-        if low_rest == "park":
-            rest = ""
-        elif low_rest.startswith("park ") or low_rest.startswith("park\t"):
-            rest = rest[4:].strip()
+    rest = match.group(2).strip()
+    if match.group(1) == "$" and re.match(r"^park(?:\s|$)", rest, re.IGNORECASE):
+        rest = rest[4:].lstrip()
+    priority, worker = 0, ""
+    literal = False
+    while rest:
+        token = re.match(r"\S+", rest).group()
+        if token == "--":
+            rest = rest[len(token):].lstrip()
+            literal = True
+            break
+        key, separator, value = token.partition("=")
+        if key not in {"--priority", "-p", "--worker", "-w"}:
+            break
+        tail = rest[len(token):].lstrip()
+        if not separator:
+            option_value = re.match(r"\S+", tail)
+            if not option_value:
+                break
+            value = option_value.group()
+            tail = tail[len(value):].lstrip()
+        if key in {"--priority", "-p"}:
+            priority = clip_priority(value)
+        else:
+            worker = value
+        rest = tail
     if not rest:
         return {"action": "list"}
-    priority = 0
-    worker = ""
-    parts = rest.split()
-    out: list[str] = []
-    i = 0
-    while i < len(parts):
-        tok = parts[i]
-        if tok in {"--priority", "-p"} and i + 1 < len(parts):
-            priority = clip_priority(parts[i + 1])
-            i += 2
-            continue
-        if tok.startswith("--priority="):
-            priority = clip_priority(tok.split("=", 1)[1])
-            i += 1
-            continue
-        if tok in {"--worker", "-w"} and i + 1 < len(parts):
-            worker = parts[i + 1].strip()
-            i += 2
-            continue
-        if tok.startswith("--worker="):
-            worker = tok.split("=", 1)[1].strip()
-            i += 1
-            continue
-        out.append(tok)
-        i += 1
-    body = " ".join(out).strip()
-    if not body:
-        return {"action": "list"}
-    if body.lower().startswith("cancel"):
-        bits = body.split(None, 1)
-        if len(bits) < 2:
-            return {"action": "list"}
-        return {"action": "cancel", "id": bits[1].strip()}
-    return {
-        "action": "add",
-        "text": body,
-        "priority": priority,
-        "worker": worker,
-    }
+    if not literal and re.match(r"^cancel(?:\s|$)", rest, re.IGNORECASE):
+        parts = rest.split(None, 1)
+        return {"action": "cancel", "id": parts[1].strip()} if len(parts) == 2 else {"action": "list"}
+    return {"action": "add", "text": rest, "priority": priority, "worker": worker}
 
 
 def prompt_from_hook_payload(data: dict) -> str:
@@ -219,7 +188,7 @@ def prompt_from_hook_payload(data: dict) -> str:
     return ""
 
 
-def apply_slash(repo: Path, text: str) -> dict | None:
+def apply_slash(repo: Path, text: str, *, idempotency_key="") -> dict | None:
     """Run a /queue slash. None if not a queue command. list is a no-op dict."""
     parsed = parse_slash(text)
     if not parsed:
@@ -235,6 +204,7 @@ def apply_slash(repo: Path, text: str) -> dict | None:
         str(parsed.get("text") or ""),
         priority=parsed.get("priority") or 0,
         worker=str(parsed.get("worker") or ""),
+        idempotency_key=idempotency_key,
     )
     return {"action": "add", "item": obj}
 
@@ -396,7 +366,7 @@ def _lock_path(repo: Path) -> Path:
 
 
 def _with_lock(repo: Path, fn):
-    with admission.transaction(repo):
+    with admission.transaction(repo, timeout=1.0):
         return fn()
 
 
@@ -412,7 +382,7 @@ def check_start(repo: Path, job_id: str = "", files=None, role: str = "worker", 
     owner = admission.caller_owner("parent")
     access = "write" if is_writer(role) else "read"
     _, canonical = admission.canonical_files(repo, normalize_files(files))
-    with admission.transaction(repo) as root:
+    with admission.transaction(repo, timeout=1.0) as root:
         admission._validate(root, worker, role, "", access, owner, allow_unknown_worker=True)
         if job_id and (root / ".rig" / "jobs" / admission._id(job_id) / "meta.json").exists():
             raise QueueError("existing job id is not launch authorization")
@@ -421,7 +391,7 @@ def check_start(repo: Path, job_id: str = "", files=None, role: str = "worker", 
 
 def claim_next(repo: Path, files=None, item_id: str = "", *, worker="", access="write",
                owner=None, owner_session="", job_id="") -> dict:
-    with admission.transaction(repo):
+    with admission.transaction(repo, timeout=1.0):
         pending = list_items(repo, status="pending")
         if item_id:
             pending = [item for item in pending if item["id"] == item_id]
@@ -438,7 +408,7 @@ def claim_next(repo: Path, files=None, item_id: str = "", *, worker="", access="
 
 def unclaim(repo: Path, item_id: str, *, reservation_id="", attempt_id="", owner_token="",
             owner=None, owner_session="") -> dict:
-    with admission.transaction(repo):
+    with admission.transaction(repo, timeout=1.0):
         item = load_item(repo, item_id)
         if not item:
             raise FileNotFoundError(item_id)
@@ -453,7 +423,7 @@ def unclaim(repo: Path, item_id: str, *, reservation_id="", attempt_id="", owner
 
 def mark_spawned(repo: Path, item_id: str, job_id: str, files=None, *, worker="", access="",
                  reservation_id="", attempt_id="", owner_token="", owner=None, owner_session="") -> dict:
-    with admission.transaction(repo):
+    with admission.transaction(repo, timeout=1.0):
         record = admission.assert_owned(repo, reservation_id=reservation_id, attempt_id=attempt_id,
                                         owner_token=owner_token, owner=owner, owner_session=owner_session)
         if record.get("queue_id") != item_id or record.get("job_id") != job_id or not record.get("launch_started"):
@@ -470,7 +440,7 @@ def mark_spawned(repo: Path, item_id: str, job_id: str, files=None, *, worker=""
 
 def mark_done_for_job(repo: Path, job_id: str, *, reservation_id="", attempt_id="", owner_token="",
                       owner=None, owner_session="") -> dict | None:
-    with admission.transaction(repo):
+    with admission.transaction(repo, timeout=1.0):
         record = admission.assert_owned(repo, reservation_id=reservation_id, attempt_id=attempt_id,
                                         owner_token=owner_token, owner=owner, owner_session=owner_session)
         if record.get("job_id") != job_id or not record.get("stopped"):
@@ -486,7 +456,15 @@ def _add_item_unlocked(
     thread: str = "",
     priority: int = 0,
     worker: str = "",
+    idempotency_key: str = "",
 ) -> dict:
+    if not isinstance(idempotency_key, str):
+        raise ValueError("idempotency key must be a string")
+    if idempotency_key:
+        for path in queue_dir(repo).glob("*.json"):
+            previous = admission._read(path, required=True)
+            if previous.get("idempotency_key") == idempotency_key:
+                return previous
     line = _clip_text(text)
     item_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ") + f"-{os.getpid()}"
     n = 0
@@ -505,13 +483,16 @@ def _add_item_unlocked(
         "worker": str(worker or "").strip(),
         "thread": (thread or current_thread()).strip(),
     }
+    if idempotency_key:
+        obj["idempotency_key"] = idempotency_key
     _write_json(item_path(repo, item_id), obj)
     return obj
 
 
-def add_item(repo: Path, text: str, *, thread="", priority=0, worker="") -> dict:
-    with admission.transaction(repo):
-        return _add_item_unlocked(repo, text, thread=thread, priority=priority, worker=worker)
+def add_item(repo: Path, text: str, *, thread="", priority=0, worker="", idempotency_key="") -> dict:
+    with admission.transaction(repo, timeout=1.0):
+        return _add_item_unlocked(repo, text, thread=thread, priority=priority, worker=worker,
+                                  idempotency_key=idempotency_key)
 
 
 def load_item(repo: Path, item_id: str) -> dict | None:
@@ -560,9 +541,82 @@ def _cancel_item_unlocked(repo: Path, item_id: str) -> dict:
     return obj
 
 
-def cancel_item(repo: Path, item_id: str) -> dict:
-    with admission.transaction(repo):
-        return _cancel_item_unlocked(repo, item_id)
+def cancel_item(repo: Path, item_id: str, *, reservation_id="", attempt_id="", owner_token="",
+                owner=None, owner_session="", expected_status: str | None = None) -> dict:
+    with admission.transaction(repo, timeout=1.0):
+        current = load_item(repo, item_id)
+        if expected_status is not None and (not current or current.get("status") != expected_status):
+            raise QueueError("queue item changed; refresh before cancelling")
+        if current and current.get("status") == "cancelled":
+            item = current
+        else:
+            item = _cancel_item_unlocked(repo, item_id)
+        rid = item.get("reservation_id")
+        if not rid:
+            return item
+        record = admission._read(admission._reservation_path(Path(repo).resolve(), rid), required=True)
+        if record.get("stage") == "released":
+            return item
+        actor = admission._owner(owner, owner_session)
+        can_release = (not record.get("claim_consumed") and not record.get("launch_started")
+                       and not record.get("process") and record.get("stage") == "reserved")
+        try:
+            supplied = any((reservation_id, attempt_id, owner_token))
+            if supplied:
+                if reservation_id != rid or attempt_id != item.get("attempt_id"):
+                    raise QueueError("cancellation credentials do not match the held queue attempt")
+                record = admission.assert_owned(repo, reservation_id=reservation_id, attempt_id=attempt_id,
+                                                 owner_token=owner_token, owner=actor)
+                if record.get("queue_id") != item_id:
+                    raise QueueError("cancellation credentials belong to another queue item")
+            elif not admission._same_actor(record["owner"], actor):
+                raise QueueError("claim belongs to another initiating owner")
+            if can_release:
+                # Only the same owner may return an unconsumed, unlaunched claim.
+                auth = {"reservation_id": reservation_id, "attempt_id": attempt_id,
+                        "owner_token": owner_token} if supplied else admission.credentials(record)
+                admission.release(repo, **auth, owner=actor, mode="launch_failed",
+                                  rationale="parent cancelled unlaunched queue claim")
+                return load_item(repo, item_id)
+            reason = "execution may have started; confirm it stopped and close its reservation"
+        except QueueError as error:
+            reason = str(error)
+        return {**item, "held_reason": "Cancellation recorded; reservation remains held: " + reason}
+
+
+def _cli_claim_owner(owner_session="", owner_pid=None):
+    """Bind the claim to an observable ancestor that survives this CLI command."""
+    actor = admission.caller_owner("parent", owner_session=owner_session)
+    pid = owner_pid if owner_pid is not None else actor.get("parent_pid")
+    ancestors = set()
+    probe = os.getppid()
+    for _ in range(64):
+        if probe <= 1 or probe in ancestors:
+            break
+        ancestors.add(probe)
+        try:
+            probe = int(rig_harness._ps_ppid(probe))
+        except (ValueError, OSError):
+            break
+    recognized = pid and rig_harness._comm_parent(rig_harness._ps_comm(pid), pid)
+    if pid not in ancestors or (owner_pid is None and not recognized):
+        raise QueueError("durable claim owner unavailable; pass --owner-pid for the live parent and --owner-session")
+    if owner_pid is not None and not actor.get("session_id"):
+        raise QueueError("explicit --owner-pid requires --owner-session or a current session environment")
+    identity = admission.process_identity(pid)
+    if not identity.get("start_id") or admission._process_state(identity) != "alive":
+        raise QueueError("durable claim owner process identity could not be verified")
+    actor.update(identity)
+    actor.update(parent_pid=pid, parent_start_id=identity["start_id"])
+    if recognized:
+        actor["parent_cli"] = recognized
+    return actor
+
+
+def _write_claim_credentials(repo, claim):
+    path = queue_dir(repo) / "credentials" / (admission._id(claim["id"]) + ".json")
+    admission._write(path, {**admission.credentials(claim), "owner": claim["owner"], "queue_id": claim["id"]})
+    return path
 
 
 def format_occupied_line(repo: Path, jobs_snapshot=None) -> str:
@@ -635,7 +689,11 @@ def _print_obj(obj: dict, label: str, repo: Path, as_json: bool) -> None:
     print(f"{label} {obj.get('id')}")
     if obj.get("text"):
         print(obj["text"])
-    print(format_block(repo))
+    if obj.get("credentials_path"):
+        print("credentials: " + obj["credentials_path"])
+        print("Use this private file for launch/unclaim; pass its owner session and RIG_OWNER_TOKEN.")
+    if obj.get("held_reason"):
+        print(obj["held_reason"])
 
 
 def main() -> int:
@@ -656,6 +714,8 @@ def main() -> int:
     parser.add_argument("--reservation-id", default="")
     parser.add_argument("--attempt-id", default="")
     parser.add_argument("--owner-session", default="")
+    parser.add_argument("--owner-pid", type=int)
+    parser.add_argument("--idempotency-key", default="")
     parser.add_argument("--job", default="")
     parser.add_argument("--job-id", default="")
     parser.add_argument("--role", default="worker")
@@ -678,6 +738,7 @@ def main() -> int:
                     text,
                     priority=args.priority,
                     worker=args.worker,
+                    idempotency_key=args.idempotency_key,
                 ),
                 "queued",
                 repo,
@@ -688,12 +749,18 @@ def main() -> int:
             name = (args.rest[0] if args.rest else "").strip()
             if not name:
                 raise SystemExit("usage: rig queue cancel <id>")
-            _print_obj(cancel_item(repo, name), "cancelled", repo, args.json)
+            _print_obj(cancel_item(repo, name, **auth), "cancelled", repo, args.json)
             return 0
         if args.cmd == "claim":
             name = (args.rest[0] if args.rest else "").strip()
+            owner = _cli_claim_owner(args.owner_session, args.owner_pid)
             obj = claim_next(repo, files=files, item_id=name, worker=args.worker, access=args.access,
-                             owner_session=args.owner_session)
+                             owner=owner, owner_session=args.owner_session)
+            try:
+                obj["credentials_path"] = str(_write_claim_credentials(repo, obj))
+            except OSError:
+                unclaim(repo, name or obj["id"], **admission.credentials(obj), owner=owner)
+                raise
             _print_obj(obj, "claimed", repo, args.json)
             return 0
         if args.cmd == "unclaim":

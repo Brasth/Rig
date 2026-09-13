@@ -6,7 +6,7 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import jobs
@@ -63,8 +63,10 @@ class JobLookup(unittest.TestCase):
             paths = jobs.resolve_job_paths(self.repo, ["alpha", "beta"])
             self.assertEqual(scans, [self.root])
             self.assertEqual(paths[0], first.resolve())
-            with patch.object(jobs.time, "sleep", finish):
-                code, _ = jobs.wait_job(self.repo, None, ids=[p.name for p in paths])
+            stop = Mock()
+            stop.is_set.return_value = False
+            stop.wait.side_effect = finish
+            code, _ = jobs.wait_job(self.repo, None, ids=[p.name for p in paths], cancel_event=stop)
             self.assertEqual(code, 0)
             self.assertEqual(scans, [])
 
@@ -98,8 +100,14 @@ class JobLookup(unittest.TestCase):
             (folder / "meta.json").unlink()
             self.seed("target-new")
 
-        with patch.object(jobs.time, "sleep", remove), self.assertRaisesRegex(SystemExit, "no meta.json"):
-            jobs.wait_job(self.repo, "target")
+        stop = Mock()
+        stop.is_set.return_value = False
+        stop.wait.side_effect = remove
+        code, text = jobs.wait_job(self.repo, "target", cancel_event=stop)
+        self.assertEqual(code, 1)
+        self.assertIn("NEEDS_RECONCILIATION", text)
+        self.assertIn("identity changed", text)
+        self.assertNotIn("target-new", text)
 
     def test_parent_models_are_observed_or_unknown(self):
         folder = self.root / "parent-job"

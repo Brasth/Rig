@@ -20,7 +20,7 @@ class NormalPromptFlow(unittest.TestCase):
         self.repo.mkdir()
         self.home = self.base / "home"
         self.home.mkdir()
-        self.env = {**os.environ, "HOME": str(self.home), "RIG_HOME": str(ROOT),
+        self.env = {**os.environ, "HOME": str(self.home), "RIG_HOME": str(ROOT), "RIG_INSTALL_TRANSACTION": "1",
                     "RIG_PARENT": "codex", "RIG_THREAD": "normal-prompt-parent",
                     "RIG_SKIP_UPDATE_CHECK": "1", "RIG_SKIP_MODEL_CATALOG": "1",
                     "RIG_JOB_ID": "", "RIG_JOB_DIR": "", "RIG_JOB_FILES": "",
@@ -99,6 +99,7 @@ class NormalPromptFlow(unittest.TestCase):
     def test_local_install_setup_and_init_preserve_user_configuration(self):
         kit = self.base / "installed-kit"
         self.env.update(RIG_HOME=str(kit), RIG_SRC=str(ROOT))
+        self.env.pop("RIG_INSTALL_TRANSACTION", None)  # Exercise real ownership in the temporary install.
         custom = self.home / ".codex" / "agents" / "worker.toml"
         custom.parent.mkdir(parents=True)
         custom_text = 'name = "custom-worker"\nmodel = "custom-model"\nsandbox_mode = "read-only"\n'
@@ -122,6 +123,11 @@ class NormalPromptFlow(unittest.TestCase):
         self.assertIn("Preserve my project fact.", memory.read_text())
         self.assertIn("Preserve my project instructions.", agents.read_text())
         self.assertEqual(agents.read_text().count("<!-- rig:start -->"), 1)
+        self.assertIn("rig job wait ID --timeout 0", agents.read_text())
+        self.assertIn("Do not re-wait, re-pick, or drain queued work after explicit cancellation", agents.read_text())
+        self.assertIn("native-cancel-required", agents.read_text())
+        self.assertIn(".rig/queue/credentials/<queue-id>.json", agents.read_text())
+        self.assertNotIn("Host-dropped wait still bash-waits once", agents.read_text())
         for name in ("admission.py", "change_evidence.py", "verification.py", "jobs.py", "rig_mcp.py"):
             self.assertEqual((kit / "scripts" / name).read_bytes(), (ROOT / "scripts" / name).read_bytes())
         for skill in ("delegate-harness", "rig-jobs", "rig-queue"):

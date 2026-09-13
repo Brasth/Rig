@@ -17,6 +17,7 @@ import secrets
 import subprocess
 import sys
 import threading
+import time
 import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -28,6 +29,12 @@ import harness
 
 class AdmissionError(ValueError):
     pass
+
+
+class AdmissionBusy(AdmissionError):
+    """Retryable contention; no admission state was changed."""
+
+    retryable = True
 
 
 _process = os.getpid()
@@ -55,9 +62,10 @@ def _now():
 
 
 @contextmanager
-def transaction(repo):
+def transaction(repo, timeout=5.0):
     """Reentrant per thread, serialized locally and across processes; fail closed."""
     global _process, _locks, _lock_map_guard, _held
+    deadline = time.monotonic() + max(0.0, timeout)
     pid = os.getpid()
     if pid != _process:
         # Never LOCK_UN an inherited descriptor: that unlocks the parent's flock.
@@ -68,7 +76,9 @@ def transaction(repo):
     key = str(root)
     with _lock_map_guard:
         local = _locks.setdefault(key, threading.RLock())
-    with local:
+    if not local.acquire(timeout=max(0.0, deadline - time.monotonic())):
+        raise AdmissionBusy("admission busy; retry shortly")
+    try:
         entries = getattr(_held, "entries", None)
         if entries is None:
             entries = _held.entries = {}
@@ -80,7 +90,16 @@ def transaction(repo):
             folder = root / ".rig" / "queue"
             folder.mkdir(parents=True, exist_ok=True)
             stream = (folder / ".lock").open("a+")
-            fcntl.flock(stream.fileno(), fcntl.LOCK_EX)
+            while True:
+                try:
+                    fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        stream.close()
+                        raise AdmissionBusy("admission busy; retry shortly")
+                    time.sleep(min(0.02, remaining))
         except (OSError, RuntimeError) as error:
             if stream is not None:
                 stream.close()
@@ -95,6 +114,9 @@ def transaction(repo):
                     fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
                 finally:
                     stream.close()
+
+    finally:
+        local.release()
 
 
 def _write(path, value):
@@ -171,7 +193,7 @@ def write_credentials(repo, record):
     return path
 
 
-def process_identity(pid):
+def process_identity(pid, timeout=1.0):
     """Capture a PID incarnation. Missing observability remains unknown."""
     try:
         pid = int(pid)
@@ -179,25 +201,31 @@ def process_identity(pid):
             return {}
     except (TypeError, ValueError):
         return {}
-    result = {"pid": pid, "start_id": "", "pgid": None}
+    result = {"pid": pid, "start_id": "", "pgid": None, "state": ""}
     try:
         result["pgid"] = os.getpgid(pid)
+    except OSError:
+        pass
+    try:
         stat = Path(f"/proc/{pid}/stat")
         if stat.is_file():
             fields = stat.read_text().rsplit(")", 1)[1].split()
+            result["state"] = fields[0]
             boot = Path("/proc/sys/kernel/random/boot_id").read_text().strip()
             result["start_id"] = boot + ":" + fields[19]
         else:
-            proc = subprocess.run(["ps", "-o", "lstart=", "-p", str(pid)], capture_output=True,
-                                  text=True, check=False, env={**os.environ, "LC_ALL": "C"})
+            proc = subprocess.run(["ps", "-o", "stat=,lstart=", "-p", str(pid)], capture_output=True,
+                                  text=True, check=False, timeout=max(0.001, timeout), env={**os.environ, "LC_ALL": "C"})
             if proc.returncode == 0:
-                result["start_id"] = proc.stdout.strip()
-    except (OSError, ValueError, IndexError):
+                parts = proc.stdout.strip().split(None, 1)
+                if len(parts) == 2:
+                    result["state"], result["start_id"] = parts
+    except (OSError, ValueError, IndexError, subprocess.TimeoutExpired):
         pass
     return result
 
 
-def _process_state(identity):
+def _process_state(identity, timeout=1.0):
     pid = (identity or {}).get("pid")
     if not isinstance(pid, int) or pid <= 0:
         return "unknown"
@@ -207,7 +235,9 @@ def _process_state(identity):
         return "dead"
     except (PermissionError, OSError):
         return "unknown"
-    current = process_identity(pid)
+    current = process_identity(pid) if timeout == 1.0 else process_identity(pid, timeout=timeout)
+    if current.get("state", "").startswith("Z"):
+        return "dead"
     before, after = identity.get("start_id"), current.get("start_id")
     if before and after and before != after:
         return "dead"
@@ -315,6 +345,13 @@ def _queue_path(root, queue_id):
     return root / ".rig" / "queue" / (_id(queue_id, "queue id") + ".json")
 
 
+def _cancel_requested(root, record):
+    import cancellation
+    return cancellation.requested(root / ".rig" / "jobs" / record["job_id"],
+                                  attempt_id=record.get("attempt_id", ""),
+                                  reservation_id=record.get("reservation_id", ""))
+
+
 def _queue_update(root, record, status):
     if not record.get("queue_id"):
         return
@@ -326,7 +363,8 @@ def _queue_update(root, record, status):
         raise AdmissionError("queue belongs to another attempt")
     # A cancelled job must never turn into an implicit queue retry, including
     # cancellation before its launch barrier was opened.
-    if record.get("job_id") and (root / ".rig" / "jobs" / record["job_id"] / "cancel.json").exists():
+    completed = record.get("stopped") and record.get("execution_status") in {"ok", "fail", "timeout"}
+    if not completed and record.get("job_id") and _cancel_requested(root, record):
         item["status"] = "cancelled"
     # Cancellation preserves intent even when a late executor completes.
     if item.get("status") != "cancelled" and not (item.get("status") == "done" and status in {"claimed", "spawned"}):
@@ -649,7 +687,7 @@ def commit_launch(repo, *, reservation_id, attempt_id, owner_token, owner=None, 
 
 
 def _refuse_cancelled(root, record):
-    if record.get("job_id") and (root / ".rig" / "jobs" / record["job_id"] / "cancel.json").exists():
+    if record.get("job_id") and _cancel_requested(root, record):
         raise AdmissionError("job cancellation was requested; launch refused")
     if record.get("queue_id"):
         item = _read(_queue_path(root, record["queue_id"]), required=True)
@@ -664,19 +702,28 @@ def observe_process(repo, *, reservation_id, attempt_id, owner_token, owner=None
     process = record.get("process") or {}
     descendants, complete = [], False
     try:
-        table = subprocess.run(["ps", "-axo", "pid=,ppid=,pgid="], capture_output=True, text=True, check=False)
+        table = subprocess.run(["ps", "-axo", "pid=,ppid=,pgid="], capture_output=True, text=True, check=False, timeout=1.0)
         if table.returncode == 0:
             rows = [tuple(map(int, row.split())) for row in table.stdout.splitlines() if row.strip()]
-            selected = {process.get("pid")}
-            selected.update(item.get("pid") for item in process.get("descendants", []))
+            selected = set()
+            group_owned = False
+            for item in [process, *process.get("descendants", [])]:
+                if _process_state(item) != "alive":
+                    continue
+                current_identity = process_identity(item["pid"])
+                if not item.get("start_id") or current_identity.get("start_id") != item["start_id"]:
+                    continue
+                selected.add(item["pid"])
+                group_owned |= (process.get("pgid") == process.get("pid")
+                                and current_identity.get("pgid") == process.get("pgid"))
             changed = True
             while changed:
                 before = len(selected)
-                selected.update(pid for pid, ppid, pgid in rows if ppid in selected or pgid == process.get("pgid"))
+                selected.update(pid for pid, ppid, pgid in rows if ppid in selected or (group_owned and pgid == process.get("pgid")))
                 changed = before != len(selected)
             descendants = [process_identity(pid) for pid in selected if pid and pid != process.get("pid")]
             complete = True
-    except (OSError, ValueError):
+    except (OSError, ValueError, subprocess.TimeoutExpired):
         pass
     with transaction(root):
         current, _ = _auth(root, reservation_id, attempt_id, owner_token, owner, owner_session)
@@ -704,14 +751,14 @@ def _external_stopped(record):
     if pgid != process.get("pid"):
         return False, "child process group is not isolated"
     try:
-        rows = subprocess.run(["ps", "-axo", "pid=,pgid=,stat="], capture_output=True, text=True, check=False)
+        rows = subprocess.run(["ps", "-axo", "pid=,pgid=,stat="], capture_output=True, text=True, check=False, timeout=1.0)
         if rows.returncode:
             return False, "process group liveness unavailable"
         for row in rows.stdout.splitlines():
             fields = row.split()
             if len(fields) >= 3 and int(fields[1]) == pgid and not fields[2].startswith("Z"):
                 return False, "child process group remains alive"
-    except (OSError, ValueError):
+    except (OSError, ValueError, subprocess.TimeoutExpired):
         return False, "process group liveness unavailable"
     return True, ""
 
@@ -742,6 +789,12 @@ def finish(repo, *, reservation_id, attempt_id, owner_token, status, owner=None,
             raise AdmissionError("confirmed execution status is immutable")
         if record.get("stage") == "released":
             return _public(record)
+        if record.get("stopped") and record.get("execution_status") == status:
+            if record.get("pending_operation") == "queue_done":
+                _queue_update(root, record, "done")
+                record.pop("pending_operation", None)
+                _save(root, record)
+            return _public(record)
         _ensure_idle(record)
         stopped, reason = _stopped(record, completion)
         if completion and completion.get("kind") == "native_child" and stopped:
@@ -752,9 +805,13 @@ def finish(repo, *, reservation_id, attempt_id, owner_token, status, owner=None,
                       execution_status=status, completion=completion or record.get("completion", {}))
         if stopped:
             record.update(stage="verifying", slot_held=False)
+        if stopped:
+            record["pending_operation"] = "queue_done"
         _save(root, record)
         if stopped:
             _queue_update(root, record, "done")
+            record.pop("pending_operation", None)
+            _save(root, record)
         return _public(record)
 
 

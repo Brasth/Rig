@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
+import contextlib
+import io
 import json
 import os
+import queue
 import subprocess
 import sys
 import tempfile
@@ -11,6 +14,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
+
+import cancellation
+from mcp_runtime import Request
 
 import jobs  # noqa: E402
 import rig_mcp  # noqa: E402
@@ -29,18 +35,6 @@ def _run_rig(repo: Path, *args: str) -> subprocess.CompletedProcess:
         env=merged,
         text=True,
         capture_output=True,
-        check=False,
-    )
-
-
-def _mcp_ndjson(messages: list, timeout: float = 5) -> subprocess.CompletedProcess:
-    payload = "".join(json.dumps(m, ensure_ascii=False) + "\n" for m in messages)
-    return subprocess.run(
-        [sys.executable, "-u", str(ROOT / "scripts" / "rig_mcp.py")],
-        input=payload,
-        text=True,
-        capture_output=True,
-        timeout=timeout,
         check=False,
     )
 
@@ -75,16 +69,17 @@ class CancelJob(unittest.TestCase):
     def tearDown(self):
         self.td.cleanup()
 
-    def test_cancel_stamps_cancelled_and_wait_is_130(self):
+    def test_cancel_records_intent_without_claiming_termination_and_wait_is_130(self):
         text = jobs.cancel_job(self.repo, "live-job")
-        self.assertTrue(text.startswith("cancelled"), text)
+        self.assertTrue(text.startswith("cancellation requested"), text)
         self.assertTrue((self.d / "cancel.json").is_file())
         job = jobs.load_job(self.d)
-        self.assertEqual(job["effective"], "cancelled")
-        self.assertEqual(job["status"], "cancelled")
+        self.assertEqual(job["effective"], "cancel_requested")
+        self.assertEqual(job["status"], "running")
+        self.assertEqual(job["cancellation_state"], "stop-unconfirmed")
         code, wait_text = jobs.wait_job(self.repo, "live-job")
         self.assertEqual(code, 130)
-        self.assertIn("CANCELLED live-job", wait_text)
+        self.assertIn("CANCELLATION REQUESTED live-job", wait_text)
         self.assertIn("Do not re-pick", wait_text)
 
     def test_cancel_ok_refuses(self):
@@ -103,11 +98,13 @@ class CancelJob(unittest.TestCase):
         self.assertIn("already ok", text)
         self.assertEqual(jobs.load_job(self.d)["effective"], "ok")
 
-    def test_cancel_already_is_ok(self):
+    def test_repeated_cancel_preserves_first_intent_without_claiming_stop(self):
         jobs.cancel_job(self.repo, "live-job")
+        first_marker = (self.d / "cancel.json").read_bytes()
         text = jobs.cancel_job(self.repo, "live-job")
-        self.assertIn("already", text)
-        self.assertTrue(text.startswith("cancelled"))
+        self.assertTrue(text.startswith("cancellation requested"), text)
+        self.assertEqual(jobs.load_job(self.d)["status"], "running")
+        self.assertEqual((self.d / "cancel.json").read_bytes(), first_marker)
 
     def test_cancel_does_not_touch_queue(self):
         obj = work_queue.add_item(self.repo, "later fix sidebar")
@@ -119,16 +116,16 @@ class CancelJob(unittest.TestCase):
     def test_bin_job_cancel(self):
         proc = _run_rig(self.repo, "job", "cancel", "live-job")
         self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
-        self.assertIn("cancelled live-job", proc.stdout)
-        self.assertEqual(jobs.load_job(self.d)["effective"], "cancelled")
+        self.assertIn("cancellation requested live-job", proc.stdout)
+        self.assertEqual(jobs.load_job(self.d)["effective"], "cancel_requested")
 
     def test_mcp_cancel_tool(self):
         out = rig_mcp.call_tool(
             "rig_job_cancel", {"repo": str(self.repo), "id": "live-job"}
         )
         self.assertNotIn("isError", out)
-        self.assertIn("cancelled live-job", out["content"][0]["text"])
-        self.assertEqual(jobs.load_job(self.d)["effective"], "cancelled")
+        self.assertIn("cancellation requested live-job", out["content"][0]["text"])
+        self.assertEqual(jobs.load_job(self.d)["effective"], "cancel_requested")
 
     def test_mcp_wait_cancelled_notification_aborts(self):
         sleeper = subprocess.Popen(["sleep", "30"])
@@ -140,42 +137,63 @@ class CancelJob(unittest.TestCase):
         meta = json.loads((self.d / "meta.json").read_text())
         meta["pid"] = sleeper.pid
         (self.d / "meta.json").write_text(json.dumps(meta) + "\n")
-        proc = _mcp_ndjson(
-            [
-                {
-                    "jsonrpc": "2.0",
-                    "id": 1,
-                    "method": "initialize",
-                    "params": {
-                        "protocolVersion": "2025-03-26",
-                        "capabilities": {},
-                        "clientInfo": {"name": "t", "version": "1"},
-                    },
-                },
-                {
-                    "jsonrpc": "2.0",
-                    "id": 10,
-                    "method": "tools/call",
-                    "params": {
-                        "name": "rig_job_wait",
-                        "arguments": {"repo": str(self.repo), "id": "live-job"},
-                    },
-                },
-                {
-                    "jsonrpc": "2.0",
-                    "method": "notifications/cancelled",
-                    "params": {"requestId": 10},
-                },
-            ],
-            timeout=6,
-        )
-        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
-        lines = [json.loads(line) for line in proc.stdout.splitlines() if line.strip()]
-        wait = next(m for m in lines if m.get("id") == 10)
-        text = wait["result"]["content"][0]["text"]
-        self.assertNotIn("isError", wait["result"])
-        self.assertIn("CANCELLED", text)
-        self.assertEqual(jobs.load_job(self.d)["effective"], "cancelled")
+        proc = subprocess.Popen([sys.executable, "-u", str(ROOT / "scripts/rig_mcp.py")],
+                                stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE, text=True)
+        def close_transport():
+            if proc.poll() is None:
+                proc.kill()
+            proc.wait(timeout=3)
+            for stream in (proc.stdin, proc.stdout, proc.stderr):
+                stream.close()
+        self.addCleanup(close_transport)
+        received = queue.Queue()
+        def read():
+            for line in proc.stdout:
+                received.put(json.loads(line))
+        threading.Thread(target=read, daemon=True).start()
+        def send(message):
+            proc.stdin.write(json.dumps({"jsonrpc": "2.0", **message}) + "\n")
+            proc.stdin.flush()
+        send({"id": 10, "method": "tools/call", "params": {"name": "rig_job_wait",
+              "arguments": {"repo": str(self.repo), "id": "live-job"}}})
+        send({"id": 2, "method": "ping"})
+        self.assertEqual(received.get(timeout=3)["id"], 2)
+        send({"method": "notifications/cancelled", "params": {"requestId": 10}})
+        send({"id": 3, "method": "ping"})
+        self.assertEqual(received.get(timeout=3)["id"], 3)
+        deadline = time.monotonic() + 3
+        while not (self.d / "cancel.json").exists() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        self.assertTrue((self.d / "cancel.json").exists())
+        # Cancellation suppresses the original JSON-RPC response, while the
+        # independent executor still needs authenticated stop confirmation.
+        with self.assertRaises(queue.Empty):
+            received.get(timeout=0.5)
+        self.assertEqual(jobs.load_job(self.d)["effective"], "cancel_requested")
+        self.assertEqual(jobs.load_job(self.d)["status"], "running")
+        self.assertIsNone(sleeper.poll(), "legacy cancellation must not kill an unproven PID")
+
+    def test_one_missing_target_does_not_skip_remaining_attached_workers(self):
+        missing = cancellation.capture(self.d)
+        remaining = self.d.parent / "remaining"
+        remaining.mkdir()
+        (remaining / "meta.json").write_text(json.dumps({
+            "job_id": "remaining", "status": "running", "worker": "grok"}))
+        attached = cancellation.capture(remaining)
+        untouched = self.d.parent / "unattached"
+        untouched.mkdir()
+        (untouched / "meta.json").write_text(json.dumps({
+            "job_id": "unattached", "status": "running", "worker": "grok"}))
+        (self.d / "meta.json").unlink()
+        request = Request(30, "rig_job_wait", {}, {}, targets=[missing, attached])
+        errors = io.StringIO()
+        with contextlib.redirect_stderr(errors):
+            rig_mcp._abort_request(request)
+        self.assertIn("live-job", errors.getvalue())
+        self.assertTrue(cancellation.requested(remaining))
+        self.assertFalse(cancellation.requested(untouched))
+        self.assertEqual(json.loads((remaining / "meta.json").read_text())["status"], "running")
 
     def test_wrapper_honors_cancel_json(self):
         # This test launches a fresh attempt; pre-existing live metadata is no
@@ -228,13 +246,16 @@ class CancelJob(unittest.TestCase):
             time.sleep(0.05)
         self.assertTrue(pid and jobs.pid_alive(pid), "wrapper never stamped a live pid")
         text = jobs.cancel_job(self.repo, "live-job")
-        self.assertTrue(text.startswith("cancelled"), text)
+        self.assertTrue(text.startswith("cancellation requested"), text)
         t.join(timeout=8)
         self.assertFalse(t.is_alive(), "wrapper did not exit after cancel")
         wrapped = proc_holder["p"]
         self.assertEqual(wrapped.returncode, 130, wrapped.stdout + wrapped.stderr)
+        self.assertTrue((self.d / "result.json").is_file(),
+                        "wrapper exited without confirmed result: " + wrapped.stdout + wrapped.stderr)
         result = json.loads((self.d / "result.json").read_text())
         self.assertEqual(result["status"], "cancelled")
+        self.assertEqual(jobs.load_job(self.d)["status"], "cancelled")
 
 
 if __name__ == "__main__":

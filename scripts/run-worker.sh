@@ -153,6 +153,18 @@ try:
             result = admission.commit_launch(repo, **credentials, owner=owner)
         elif operation == "observe":
             result = admission.observe_process(repo, **credentials, owner=owner)
+        elif operation == "terminate":
+            import process_control
+            record = admission.assert_owned(repo, **credentials, owner=owner)
+            process = record.get("process") or {}
+            if not process and value:
+                process = json.loads(pathlib.Path(value).read_text())
+            result = process_control.terminate(process)
+            with admission.transaction(repo):
+                record, _ = admission._auth(admission._root(repo), **credentials, owner=owner)
+                if record.get("process"):
+                    record["process"]["descendants"] = result["descendants"]
+                    admission._save(admission._root(repo), record)
         elif operation == "stopped":
             record = admission.assert_owned(repo, **credentials, owner=owner)
             stopped, reason = admission._external_stopped(record)
@@ -176,13 +188,21 @@ except (OSError, ValueError, admission.AdmissionError) as error:
 PY
 }
 
-kill_tree() {
-  local p="$1" kids k
-  kids="$(pgrep -P "$p" 2>/dev/null || true)"
-  for k in $kids; do
-    kill_tree "$k"
-  done
-  kill -TERM "$p" 2>/dev/null || true
+stop_child() {
+  [[ "${SHUTDOWN_ATTEMPTED:-0}" == "1" ]] && return 0
+  SHUTDOWN_ATTEMPTED=1
+  admission_call terminate "${LAUNCH_READY:-}" >/dev/null || true
+}
+
+cancel_requested() {
+  python3 - "$ADMISSION_PY" "$JOB_DIR" "$OWNER_CREDENTIALS" <<'PY_CANCEL'
+import json, pathlib, sys
+sys.path.insert(0, str(pathlib.Path(sys.argv[1]).parent))
+import cancellation
+saved = json.loads(pathlib.Path(sys.argv[3]).read_text()) if sys.argv[3] else {}
+raise SystemExit(0 if cancellation.requested(pathlib.Path(sys.argv[2]),
+    attempt_id=saved.get("attempt_id", ""), reservation_id=saved.get("reservation_id", "")) else 1)
+PY_CANCEL
 }
 
 agy_restore_settings() {
@@ -204,27 +224,33 @@ wrapper_cleanup() {
   [[ -f "${LAUNCH_GATE:-}" ]] && LAUNCH_COMMITTED=1
   if [[ -n "$OWNER_CREDENTIALS" && ( "$ADMISSION_FINISHED" != "1" || "$LAUNCH_COMMITTED" != "1" ) ]]; then
     if [[ -n "${CHILD:-}" ]]; then
-      kill_tree "$CHILD"
-      sleep 1
-      kill -KILL "$CHILD" 2>/dev/null || true
-      wait "$CHILD" 2>/dev/null || true
+      stop_child
     fi
     if [[ "$LAUNCH_COMMITTED" == "1" ]]; then
       local outcome="fail" summary="wrapper interrupted before recording completion"
-      if [[ -f "$JOB_DIR/cancel.json" || "$rc" == "130" || "$rc" == "143" ]]; then
+      if [[ "$rc" == "130" || "$rc" == "143" ]] || cancel_requested; then
         outcome="cancelled"
         summary="cancelled by parent"
         rc=130
       fi
       complete_execution
       write_json "$outcome" "$rc" "$summary" "$(iso_now)"
-    elif ! admission_call release "wrapper stopped before the launch barrier committed" >/dev/null; then
+    else
       local outcome="fail"
-      [[ -f "$JOB_DIR/cancel.json" ]] && outcome="cancelled"
-      admission_call finish "$outcome" >/dev/null || true
+      cancel_requested && outcome="cancelled"
+      if [[ "$outcome" == "cancelled" ]]; then
+        admission_call finish "$outcome" >/dev/null || true
+      fi
+      if ! admission_call release "wrapper stopped before the launch barrier committed" >/dev/null; then
+        admission_call finish "$outcome" >/dev/null || true
+      fi
+      if [[ "$outcome" == "cancelled" ]]; then
+        rc=130
+        write_json cancelled 130 "cancelled before launch" "$(iso_now)"
+      fi
     fi
   fi
-  [[ -f "$JOB_DIR/cancel.json" ]] && rc=130
+  cancel_requested && rc=130
   agy_restore_settings
   exit "$rc"
 }
@@ -351,15 +377,26 @@ with admission.transaction(repo):
         credentials = admission.credentials(json.loads(pathlib.Path(credential_path).read_text()))
         owner = admission.caller_owner("wrapper", owner_pid=int(os.environ["RESULT_WRAPPER_PID"]),
                                        owner_session=os.environ.get("RIG_OWNER_SESSION", ""))
-        admission.assert_owned(repo, **credentials, owner=owner)
+        authoritative = admission.assert_owned(repo, **credentials, owner=owner)
     elif json.loads(mpath.read_text()).get("preview_id") != obj.get("preview_id") or not obj.get("preview_id"):
         raise SystemExit("run-worker: dry-run execution ID changed before result registration")
-    if (mpath.parent / "cancel.json").exists():
+    import cancellation
+    confirmed = authoritative.get("execution_status") if credential_path and authoritative.get("stopped") else ""
+    if confirmed in {"ok", "fail", "timeout", "cancelled"}:
+        # The reservation is authoritative even if a late Stop marker arrived.
+        if old.get("status") == confirmed and pathlib.Path(os.environ["RESULT_OUT"]).is_file():
+            raise SystemExit(0)
+        obj.update(status=confirmed, exit_code={"ok": 0, "fail": 1, "timeout": 124, "cancelled": 130}[confirmed])
+    elif cancellation.requested(mpath.parent, attempt_id=obj.get("attempt_id", ""), reservation_id=obj.get("reservation_id", "")):
         obj.update(status="cancelled", exit_code=130)
+    completion = authoritative if credential_path else None
     if credential_path and os.environ["RESULT_ACTIVATED"] == "1":
         completion = admission.finish(repo, **credentials, status=obj["status"], owner=owner, completion={"kind": "wrapper"})
-        if completion.get("needs_reconciliation"):
-            print("run-worker: child liveness needs reconciliation; ownership remains held", file=sys.stderr)
+    if completion is not None and not completion.get("stopped"):
+        obj.update(status="running", exit_code=0, ended_at="",
+                   summary="execution stop unconfirmed; ownership remains held")
+        obj.pop("elapsed_s", None)
+        print("run-worker: child liveness needs reconciliation; ownership remains held", file=sys.stderr)
     path = pathlib.Path(os.environ["RESULT_OUT"])
     tmp = path.with_name(path.name + ".tmp")
     with tmp.open("w") as stream:
@@ -384,7 +421,7 @@ with admission.transaction(repo):
     )
 PY
   ADMISSION_FINISHED="$ADMISSION_ACTIVATED"
-  if [[ -f "$JOB_DIR/cancel.json" && "$status" != "cancelled" ]]; then
+  if [[ "$status" != "cancelled" ]] && cancel_requested; then
     return 130
   fi
 }
@@ -444,7 +481,8 @@ with admission.transaction(sys.argv[7]):
         credentials = admission.credentials(json.loads(pathlib.Path(sys.argv[19]).read_text()))
         owner = admission.caller_owner("wrapper", owner_pid=int(sys.argv[21]), owner_session=os.environ.get("RIG_OWNER_SESSION", ""))
         admission.assert_owned(sys.argv[7], **credentials, owner=owner)
-        if (path.parent / "cancel.json").exists():
+        import cancellation
+        if cancellation.requested(path.parent, attempt_id=credentials["attempt_id"], reservation_id=credentials["reservation_id"]):
             raise SystemExit("run-worker: cancelled before launch registration")
     elif json.loads(path.read_text()).get("preview_id") != obj.get("preview_id") or not obj.get("preview_id"):
         raise SystemExit("run-worker: dry-run execution ID changed before metadata registration")
@@ -805,7 +843,10 @@ with temporary.open("w") as stream:
     stream.flush()
     os.fsync(stream.fileno())
 temporary.replace(ready)
+gate_deadline = time.monotonic() + 15.0
 while not gate.is_file():
+    if time.monotonic() >= gate_deadline or not gate.parent.is_dir():
+        raise SystemExit("launch barrier expired or job directory disappeared")
     try:
         os.kill(wrapper_pid, 0)
     except ProcessLookupError:
@@ -841,18 +882,14 @@ CANCELLED=0
 ASK_NOTIFIED=0
 IN_ASK=0
 while kill -0 "$CHILD" 2>/dev/null; do
-  if ! admission_call observe >/dev/null; then
-    echo "run-worker: could not observe child ownership; stopping execution" >&2
-    kill_tree "$CHILD"
-    sleep 1
-    kill -KILL "$CHILD" 2>/dev/null || true
+  if cancel_requested; then
+    CANCELLED=1
+    stop_child
     break
   fi
-  if [[ -f "$JOB_DIR/cancel.json" ]]; then
-    CANCELLED=1
-    kill_tree "$CHILD"
-    sleep 1
-    kill -KILL "$CHILD" 2>/dev/null || true
+  if ! admission_call observe >/dev/null; then
+    echo "run-worker: could not observe child ownership; stopping execution" >&2
+    stop_child
     break
   fi
   if [[ -f "$JOB_DIR/ask.json" && ! -f "$JOB_DIR/ask-reply.json" ]]; then
@@ -872,17 +909,18 @@ while kill -0 "$CHILD" 2>/dev/null; do
     ASK_NOTIFIED=0
     if [[ "$ELAPSED" -ge "$TIMEOUT_SECS" ]]; then
       TIMED_OUT=1
-      kill_tree "$CHILD"
-      sleep 1
-      kill -KILL "$CHILD" 2>/dev/null || true
+      stop_child
       break
     fi
     ELAPSED=$((ELAPSED + 1))
   fi
   sleep 1
 done
-wait "$CHILD" 2>/dev/null
-CHILD_RC=$?
+CHILD_RC=130
+if ! kill -0 "$CHILD" 2>/dev/null; then
+  wait "$CHILD" 2>/dev/null
+  CHILD_RC=$?
+fi
 set -e
 
 ENDED="$(iso_now)"
@@ -924,7 +962,7 @@ JOBS_PY="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/jobs.py"
 if [[ -f "$JOBS_PY" ]]; then
   python3 "$JOBS_PY" persist --dir "$JOB_DIR" || true
 fi
-if [[ "$CANCELLED" == "1" || -f "$JOB_DIR/cancel.json" ]]; then
+if [[ "$CANCELLED" == "1" ]] || cancel_requested; then
   write_json "cancelled" 130 "${SUMMARY:-cancelled by parent}" "$ENDED"
   exit 130
 fi

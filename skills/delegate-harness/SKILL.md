@@ -26,14 +26,14 @@ Parent orchestration is MCP. Do not shell `rig` for session, pick, wait, allow, 
 
 - Parent verification/recovery: `rig_job_requirements` / `rig_job_check` / `rig_job_accept` / `rig_job_close` / `rig_job_reconcile`.
 - Instant: `rig_session` / `rig_pick` / `rig_status` / `rig_jobs` / `rig_job_show` / `rig_job_log` / `rig_job_allow` / `rig_job_deny` / `rig_job_cancel` / `rig_job_message` / `rig_job_start` / `rig_job_finish` / `rig_job_record` / `rig_queue_add` / `rig_queue_list` / `rig_queue_claim` / `rig_queue_unclaim` / `rig_queue_spawned` / `rig_memory` / `rig_memory_add`
-- Wait: one blocking `rig_job_wait` with no timeout (`ids` for every live job)
+- Wait: one blocking `rig_job_wait` with no timeout for observable wrappers (`ids` for every live wrapper); native agents use host-native wait/interrupt and authenticated completion
 - Child (`RIG_JOB_ID` set): `rig_job_doing` / `rig_job_note` / `rig_job_ask` / `rig_job_inbox` only. Each turn, pull inbox once (empty is fine). Inbox is not ASK and does not wake wait. Do not run the `rig` CLI. Do not pick, wait, spawn, queue, or allow.
 
 Still bash (not communication):
 
 - Launch the child: `run-worker.sh` in the background. There is no spawn-from-MCP tool.
 - Human watch: `rig tui` / `/rig`
-- Fallback only if MCP is **missing**, or the host **kills** wait: one `rig job wait <id>` with no `--timeout`. Then back to MCP. Do not poll.
+- If MCP is **missing before waiting**, use one normal CLI `rig job wait <id>` for observable wrapper work. If an active wait fails or the transport drops it, take one bounded `rig job wait ID --timeout 0` snapshot, inspect/reconcile, and return to MCP when available. Do not blindly re-wait. Explicit cancellation never enters this fallback.
 
 Parent chooses kind from **this** user's semantic request and **this** user's skills, including non-English requests. Explicit role is authoritative; omitted role uses bounded English inference. Then MCP `rig_pick` with `role` stay|explore|mini|bulk|implement|hard|review. `--case` is the task text, not a slash-command catalog. Do not encode local slash command names in pick. Model/effort still come from pick JSON. Parent does not shop models.
 
@@ -41,11 +41,11 @@ Parent chooses kind from **this** user's semantic request and **this** user's sk
 2. Follow pick JSON. Do not ask the user which model. Never spawn a worker whose harness flag is false. Never spawn grok when `[workers].grok` is false unless the live parent is grok (native `parent_writes`). Timeout or fail does not unlock a disabled worker.
 3. `stay` — you do ask / plan / advise / vision / computer-use / chrome-profile / Figma. Do not spawn a clicker.
 4. `native` + `parent_writes` — call `rig_job_start` with `executor_kind=parent`, `access=write`, concrete `files`, and the actual CLI before editing. Keep returned ownership credentials; finish with authenticated parent-task completion. Do not spawn a second same-CLI session. Native mini/bulk writers also start before editing; native children finish only after that specific agent returns a terminal result. `rig_job_record` is retrospective read-only history, never protected write registration.
-5. `run-worker` — brief + start `RIG_LIVE=1 run-worker.sh` in the background + **one blocking** MCP `rig_job_wait` (no timeout). After implement+verify ok, you MAY start a read-only review and a disjoint seed/bulk in parallel, then wait both ids together (`rig_job_wait` `ids`). If status is `ask` or `running`, MCP `rig_job_allow` / `rig_job_deny`, then wait once more (same ids). Never kill or replace that job because the child asked. Never spawn another worker because the child asked. User Esc / MCP `notifications/cancelled` on that wait: MCP `rig_job_cancel` the waited ids (status `cancelled`; do not re-pick). Host-dropped wait still bash-waits once — that is not cancel. Spawn never started: one re-pick with `--exclude <dead>`. Launching a child is still bash `run-worker.sh`. There is no spawn-from-MCP tool.
+5. `run-worker` — brief + start `RIG_LIVE=1 run-worker.sh` in the background + **one blocking** MCP `rig_job_wait` (no timeout). After implement+verify ok, you MAY start a read-only review and a disjoint seed/bulk in parallel, then wait observable wrapper IDs together. If status is `ask`, MCP `rig_job_allow` / `rig_job_deny`, then wait once more (same ids). Never kill or replace that job because the child asked. User Esc / MCP `notifications/cancelled` records durable cancellation intent for attached attempts and ends the observer promptly; `rig_job_cancel` provides the explicit equivalent. Do not re-wait, re-pick, or drain queued work after explicit cancellation. A dropped transport permits one `rig job wait ID --timeout 0` snapshot, then inspection/reconciliation. Spawn never started: one re-pick with `--exclude <dead>`. Launching a child is still bash `run-worker.sh`. There is no spawn-from-MCP tool.
 
 Doing the worker's job yourself is a failure unless pick `parent_writes` is true. Later AGENTS.md may say "edit locally" or "SSH to the VM". That is for the worker.
 
-Jobs and MEMORY are this repo, not this chat. A new parent thread still sees `.rig/jobs` and `.rig/MEMORY.md`. Running children keep going across threads. Esc / MCP cancelled on this wait aborts those ids.
+Jobs and MEMORY are this repo, not this chat. A new parent thread still sees `.rig/jobs` and `.rig/MEMORY.md`. Running children keep going across threads. Esc / MCP cancelled on this wait records intent for its exact attached attempts. Pending queue items and unattached jobs stay. Transport EOF alone detaches observers and preserves workers.
 
 Live parent is this CLI, not the `parent` key in toml. That key is only the preferred default (`rig use grok|codex|opencode|omp|pi|agy`). Switching preferred parent does not move the session — open that CLI. Parent model is this CLI’s observed model. Supply `parent_model`/`parent_effort` only when actually known; unknown stays unknown. A cheaper suggestion is not a model switch. Worker models come from `rig_pick` / `rig pick`; preserve returned model and effort.
 Claude Code (`claude`) and Cursor CLI (`cursor-agent`) are never the parent. OpenCode (`opencode`), OMP (`omp`), Pi (`pi`), and Antigravity (`agy`) can be the parent when you open that CLI. When live parent is agy, do not use nested agy `/agent` dispatch for coding; use MCP `rig_pick`. Claude is a worker when `[workers].claude = true` and `claude` is on PATH. Cursor is a worker when `[workers].cursor = true` and `cursor-agent` is on PATH (`rig workers cursor=on`). OpenCode / OMP / Pi / agy are workers when their flags are true and the binary is on PATH (`rig workers opencode=on` / `omp=on` / `pi=on` / `agy=on`) and they are not the live parent. Pin full model IDs. Never spawn Fable, Sol, or Astra as a child. Opus is allowed. Grok Bot.app is not a parent or worker. The Antigravity IDE/GUI is not a parent or worker.
@@ -104,7 +104,7 @@ Writer does not review its own diff.
 
 One writer owns a scope through execution and parent assessment. Default `[queue].max_running` is 3 reserved/running/ASK executions; configured global/per-worker caps remain authoritative. Stopped execution frees its slot, not its files. Writes conflict with held write/read scopes in both directions; read/read overlap is allowed. Unknown write scope is exclusive. `parent_writes` occupies this parent turn; do not drain more writers then.
 
-After implement+verify ok means: confirmed stopped execution, all declared requirements addressed, and parent acceptance of the current snapshot. Optional review requires `next=review`; transfer the writer reservation to a fresh read-only reviewer attempt without releasing its files. Keep the returned new attempt/token. One disjoint seed/bulk may run alongside review; wait both IDs once. If seed changes reviewed scope, run it before the reviewed snapshot instead. Do not add explore/fix/QA teammates on the same write.
+After implement+verify ok means: confirmed stopped execution, all declared requirements addressed, and parent acceptance of the current snapshot. Optional review requires `next=review`; transfer the writer reservation to a fresh read-only reviewer attempt without releasing its files. Keep the returned new attempt/token. One disjoint seed/bulk may run alongside review; wait wrapper IDs through MCP and native agents through their owning host. If seed changes reviewed scope, run it before the reviewed snapshot instead. Do not add explore/fix/QA teammates on the same write.
 
 A failed reviewer launch still retains the original scope under the failed reviewer credentials with no execution slot. Retry uses a fresh reviewer ID, original writer/snapshot, and current holder credentials. Explicit close may conclude it; failure alone never releases the reviewed files.
 
@@ -117,14 +117,18 @@ On a free parent turn after compact `rig_session`:
 3. Save the claim response `reservation_id`, `attempt_id`, `owner_token`, and owner. Same-ID reuse is never launch permission. No-worker compatibility claims reserve a slot conservatively.
 4. Write the brief. If it fails, `rig_queue_unclaim` requires that unconsumed claim's exact credentials and initiating session.
 5. Wrapper consumes the claim via `RIG_QUEUE_ID`, `RIG_RESERVATION_ID`, `RIG_ATTEMPT_ID`, `RIG_OWNER_TOKEN`, `RIG_OWNER_SESSION`, `RIG_ACCESS`, and `RIG_JOB_FILES_JSON`. Native start passes the equivalent MCP fields. Worker/files/access must match.
-6. `rig_queue_spawned` is an authenticated acknowledgement with the same queue/job/attempt credentials, not another claim. Wait once on all live IDs. ASK: allow/deny that ID; wait the same IDs again. Do not claim during ASK.
+6. `rig_queue_spawned` is an authenticated acknowledgement with the same queue/job/attempt credentials, not another claim. Wait once on live wrapper IDs through MCP; use host-native wait and authenticated completion for native agents. ASK: allow/deny that ID; wait the same wrapper IDs again. Do not claim during ASK.
 
 `/queue`, hooks, and HUD refresh only park/read. Cancellation never silently returns work to pending. Legacy claims without credentials block conservatively; reconcile explicitly rather than guessing a token.
+
+Successful queue add returns the committed item ID/text receipt; the Grok/Codex submit hook does not collect a full QUEUE/HUD block before acknowledging it. List separately when requested. Optional MCP `idempotency_key` / CLI `--idempotency-key` makes retries of one logical submission return its existing item; repeated text without a key stays distinct.
+
+CLI queue claims use a verified durable parent owner. If automatic detection is unavailable, pass `--owner-pid` for a known live ancestor plus `--owner-session`; arbitrary live PIDs are refused. Plain claim output gives the private `.rig/queue/credentials/<queue-id>.json` artifact path (mode 0600); `--json` also returns exact credentials. Save the returned response/path privately and preserve it for launch/unclaim. Never infer ownership from the transient claim-command PID.
 
 ## Fail classes
 
 - `ask` / `running` — allow/deny or wait. Never kill because the child asked. Never replace.
-- User Esc / MCP wait cancelled / `rig job cancel` — abort **those waited ids**. Status `cancelled`. Do not re-pick. Do not cancel parked queue items or jobs this wait was not blocking on.
+- User Esc / MCP wait cancelled / `rig job cancel` — record durable cancellation for **those attached attempts**, then return promptly. `stop-requested`, `stop-unconfirmed`, and `native-cancel-required` do not prove termination. Never re-wait, re-pick, or drain automatically after explicit cancellation. Preserve parked queue items and unattached jobs.
 - spawn never started (binary 127, refuse, native tool error, empty argv, auth/FS before first token) — one re-pick `--exclude <dead worker>`. Same brief, new job id. Last-resort: opencode, omp, pi, agy, codex. Do not auto-spawn Cursor. One fallback per user task.
 - child ran and the patch failed / timeout / stale — escalate. Do not vendor-shop. Timeout does not unlock grok.
 - native implement/hard (`parent_writes`) — parent writes; not a spawn fail.
@@ -139,6 +143,8 @@ Native `rig_job_finish` requires the credentials and one explicit completion pay
 
 - Owning parent completed this task: `{"kind":"parent_task","completed":true}`. Parent CLI may remain alive.
 - Parent observed a specific native child finish: `{"kind":"native_child","agent_id":"actual-agent-id","terminal":true,"outcome":"ok"}`. Outcome must match status (`ok|fail|timeout|cancelled`). Parent/MCP PID is not child evidence.
+
+Use the owning host's native wait/interrupt tools to observe or stop that specific agent, then submit the matching authenticated completion. Rig MCP cannot call host interruption tools or signal the parent as a substitute. `native-cancel-required` remains unconfirmed; never manufacture a terminal result. Missing or unknown observation returns `NEEDS_RECONCILIATION` rather than an indefinite Rig wait. Wrapper stop attempts are bounded and identity-checked; `stopped` alone confirms termination. Keep the slot and files when stop is unconfirmed; confirmed cancelled execution frees its slot while files stay held until explicit close.
 
 Missing completion retains slot/files with `needs_reconciliation`. Wrapper completion requires its actual process/group/observable descendants to stop. TERM, timeout, or terminal metadata alone is not proof. Confirmed execution result is immutable. `rig_job_record` may describe retrospective read-only work; it cannot manufacture protection, verification, or independent-review eligibility for earlier edits.
 
@@ -155,13 +161,13 @@ Failed/cancelled/rejected work stays unverified. After confirmed task terminatio
 1. Write `.rig/jobs/<id>/brief.md`. Start with: you are a worker, not the orchestrator; do not spawn codex, grok, claude, cursor, opencode, omp, pi, or agy; do only the files and changes in the brief; do not hunt extra updates; print a short summary; stop. Implement briefs MUST list files to modify, what to change, what not to change, and acceptance. If the parent used a skill the writer must follow, put the absolute `SKILL.md` path in the brief (not a slash command name). Parent already did Figma / computer-use / chrome: put artifacts; tell the child not to use those tools. Do not spawn "go find and fix". Explore/gather briefs may say what to find; they do not need a file-edit list.
 2. MCP `rig_pick` with `role` (bash fallback: `pick=$(rig pick implement --case "<task>" --json)`) then start the wrapper **in the background**. Do not block this turn on `run-worker.sh` (that deadlocks when Claude asks for permission). Do not spawn via MCP:
    `RIG_LIVE=1 RIG_ROLE=<kind> RIG_MODEL=<model> RIG_EFFORT=<effort> RIG_JOB_FILES_JSON=<JSON-array> RIG_ACCESS=<read-or-write> "${RIG_HOME:-$HOME/.rig}/scripts/run-worker.sh" <worker> <id> .rig/jobs/<id>/brief.md`
-3. One blocking MCP `rig_job_wait` until ASK or `result.json` (no timeout). After implement+verify ok, one wait on the review+seed ids together (`ids`). Do not parse a TUI. If MCP wait errors or the host drops the tool, bash `rig job wait` once (no `--timeout`). Do not poll. Do not go back to a 30s poll loop.
+3. One normal blocking MCP `rig_job_wait` for observable wrapper work (no timeout), until ASK, result, cancellation, or an explicit reconciliation outcome. After implement+verify ok, one wait on wrapper review+seed IDs together (`ids`). Native agents use their host's wait/interrupt and authenticated completion. Do not parse a TUI. If MCP wait errors or the transport drops the tool, take one bounded `rig job wait ID --timeout 0` snapshot and inspect/reconcile. Never blindly re-wait, and never use this fallback after explicit cancellation.
    - ASK / status `ask`: **you** answer MCP `rig_job_allow` or `rig_job_deny`. Safe worker work (read/edit/test/ssh gather/git) → allow. Destructive/prod/secrets → deny or ask the user. Then wait **once** more (no timeout; same ids).
    - exit 0: child finished ok
    - spawn never started: **one** re-pick with `--exclude <dead worker>` (MCP `rig_pick` `exclude`, bash `rig pick --exclude`). Same brief, new job id. Last-resort: opencode, omp, pi, agy, codex. Do not auto-spawn Cursor (`spawn=none` → tell the user). One fallback per task. Do not retry as Sol, Astra, or Fable. Do not spawn a worker whose harness flag is false. Timeout does not unlock grok.
    - child ran and the patch failed / timeout / stale: escalate. Do not vendor-shop.
    - exit 124: only if you passed `--timeout` and the job was still running when the cap hit. Do not pass a timeout in the normal path.
-4. NEVER kill, close, finish, or replace a job that is `ask` or `running`. The child is waiting on you. Spawning another worker because Claude asked is a failure. The same Claude job continues after you allow.
+4. Never kill, close, finish, or replace a job because it is asking for permission. The same Claude job continues after you allow. Explicit user cancellation follows the cancellation protocol above; only confirmed termination permits close.
 
 Live child: `RIG_LIVE=1`. Default wrapper is dry-run.
 
@@ -173,6 +179,8 @@ Overwrite `.rig/STATE.md` with job id, worker, status, summary.
 If there is one standing fact, MCP `rig_memory_add`. Do not edit MEMORY.md by hand. Bash fallback if MCP is missing: `rig memory add "one standing fact"`.
 
 Skip if there is no fact. The command drops duplicates and caps the file at about 120 lines. No transcripts.
+
+Upgrade/rollback: stop new admissions, finish or explicitly cancel existing work, confirm termination, and close/reconcile held scopes. Preserve pending queue text and credentials. Update every launcher and managed source skill/protocol, then fully restart all parent/MCP sessions before admitting work. Never run mixed-version admission writers.
 
 ## Child commands
 
@@ -188,12 +196,17 @@ A Claude child with no TTY cannot click Allow. When it needs permission, the job
 
 Safe → allow: read, edit, test, ssh/gather, git status/diff/add/commit. Ask the user only for force-push, prod deploy, rm -rf outside the repo, or secrets. Human TUI: `y` / `n`.
 
-Fallback if MCP is missing or the host drops wait:
+Normal CLI wait when MCP is missing before waiting:
 
 ```bash
-rig job wait <id>                  # one blocking wait; no --timeout; exit 2 = ASK
+rig job wait <id>                  # one normal wrapper wait; exit 2 = ASK
 rig job wait <id1> <id2>           # wait-all after parent acceptance (review + seed)
+```
+
+Transport recovery after a dropped/failed wait: `rig job wait ID --timeout 0` once, then inspect/reconcile. Explicit cancellation never re-waits, re-picks, or drains queued work.
+
+```bash
 rig job allow <id>                 # safe worker work — child continues
 rig job deny <id> --reason "..."   # destructive / prod / secrets
-rig job cancel <id>                # user aborted this wait; status cancelled; do not re-pick
+rig job cancel <id>                # durable intent; stop confirmation remains separate
 ```
