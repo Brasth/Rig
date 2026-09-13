@@ -2,7 +2,7 @@
 
 Start here: [Rig flow](rig-flow.md) (parent, workers, queue, and terminal companion). Landing page: [README](../README.md).
 
-In this file: [terminal companion](#optional-terminal-companion) · [protected writes and acceptance](#protected-writes-and-parent-acceptance) · [recovery](#queue-ownership-and-recovery) · [safe rollout](#safe-upgrade-and-rollback) · [how your prompt is handled](#how-your-prompt-is-handled) · [why the queue](#why-the-queue-exists) · [queue](#how-the-queue-works) · [scenarios](#scenarios) · [install](#install) · [daily use](#daily-use) · [watch](#watch-jobs-memory) · [troubleshooting](#troubleshooting).
+In this file: [terminal companion](#optional-terminal-companion) · [diagram preview](#diagram-preview) · [protected writes and acceptance](#protected-writes-and-parent-acceptance) · [recovery](#queue-ownership-and-recovery) · [safe rollout](#safe-upgrade-and-rollback) · [how your prompt is handled](#how-your-prompt-is-handled) · [why the queue](#why-the-queue-exists) · [queue](#how-the-queue-works) · [scenarios](#scenarios) · [install](#install) · [daily use](#daily-use) · [watch](#watch-jobs-memory) · [troubleshooting](#troubleshooting).
 
 ## What Rig is
 
@@ -132,7 +132,11 @@ rig ui sessions
 rig ui attach SESSION_ID
 ```
 
-Disabling affects future launches. Existing parent sessions continue. Detaching a tmux session keeps the parent alive for later attach; closing a popup does not detach or stop it. Session settings and shortcuts belong to the companion session, without changes to global tmux configuration. Session-local mouse: wheel in the main parent pane controls history — WheelUp enters `copy-mode -e` and scrolls five lines immediately; WheelDown is consumed outside copy-mode; returning to the live bottom exits copy-mode. Keyboard Up/Down history remains; F8/F9/popups unchanged. No global/root changes. Requires updated runtime and companion restart. Manual mouse/trackpad Codex+Grok private/nested tmux/alternate-screen/detach acceptance is NOT RUN in the automated suite. The private Rig server uses a 25 ms Escape delay; an existing user tmux server retains its own delay, so Esc can respond later there.
+Disabling affects future launches. Existing parent sessions continue. Detaching a tmux session keeps the parent alive for later attach; closing a popup does not detach or stop it. Session settings and shortcuts belong to the companion session, without changes to global tmux configuration. Session-local mouse: wheel in the main parent pane controls history — WheelUp enters `copy-mode -e` and scrolls five lines immediately; WheelDown is consumed outside copy-mode; returning to the live bottom exits copy-mode. `MouseDrag1Pane` selection on the Rig session custom key table preserves wheel/F8/F9. Private Rig server sets a local clipboard helper and `copy-command` only. On existing-server fallback after select/leave copy mode, F10 copies the latest tmux buffer using `-S` from the launch `TMUX` socket (private server still uses `-L rig-ui`); F10 is omitted when assigned to manager/add. No global/root/copy-mode table edits. Keyboard Up/Down history remains; F8/F9/popups unchanged. No global/root changes. Requires updated runtime and companion restart for session bindings — do not treat this as installed, global, or live-terminal accepted yet. Real Ghostty drag was not tested here (CUA app access disallowed). Manual mouse/trackpad Codex+Grok private/nested tmux/alternate-screen/detach acceptance is NOT RUN in the automated suite. The private Rig server uses a 25 ms Escape delay; an existing user tmux server retains its own delay, so Esc can respond later there.
+
+## Diagram preview
+
+Command: `rig diagram PATH [--ascii] [--popup] [--output PATH]`. Renders local Mermaid from `.mmd` / `.mermaid` files or markdown fenced blocks as terminal text (Unicode by default). `--ascii` is plain ASCII; `--popup` is a scrollable tmux `display-popup` with `less -S`; `--output PATH` saves text only and will not overwrite. Requires Node.js on PATH. Supported subset: flowchart, state, sequence, class, ER, XYChart — not every Mermaid type. No browser, CDN, or runtime network. This does not claim an inline Codex Mermaid renderer. Full notes: [diagram-preview.md](diagram-preview.md). Not claimed as installed or live-accepted yet.
 
 ### Remove installed integrations
 
@@ -822,6 +826,6 @@ Lifecycle: `rig job start|finish|record|close|reconcile`; verification: `rig job
 
 Terminal companion: `rig setup --shell-ui`, `rig ui enable|disable|sessions`, `rig ui attach ID`, and `rig uninstall [--dry-run] [--repo PATH]`.
 
-Setup/configuration remains `rig setup`, `rig update`, `rig init`, `rig doctor`, `rig status`, `rig use`, `rig workers`, `rig prune`. Memory: `rig memory` / `rig memory add "standing fact"`. Queue: `rig queue add|list|cancel|claim|unclaim|spawned`.
+Setup/configuration remains `rig setup`, `rig update`, `rig init`, `rig doctor`, `rig status`, `rig use`, `rig workers`, `rig prune`. Memory: `rig memory` / `rig memory add "standing fact"`. Queue: `rig queue add|list|cancel|claim|unclaim|spawned`. Diagram: `rig diagram PATH [--ascii] [--popup] [--output PATH]` (terminal Mermaid text; see [diagram preview](#diagram-preview) and [diagram-preview.md](diagram-preview.md)).
 
 `rig run "prompt"` exists for diagnostics; normal work starts with a prompt in the parent CLI. Never spawn Sol, Astra, or Fable as a child. Opus is allowed.

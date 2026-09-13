@@ -73,6 +73,29 @@ def server_args(env=None):
     return [] if env.get('TMUX') else ['-L', 'rig-ui', '-f', '/dev/null']
 
 
+def private_server_commands():
+    from ui_clipboard import copy_command
+    return [
+        ['set-option', '-s', 'escape-time', '25'],
+        ['set-option', '-s', 'copy-command', copy_command()],
+    ]
+
+
+def clipboard_hotkey(manager, add):
+    if 'F10' not in {manager, add}:
+        return 'F10'
+    return None
+
+
+def clipboard_tmux_target(env=None):
+    env = os.environ if env is None else env
+    value = env.get('TMUX')
+    if not value:
+        return ['-L', 'rig-ui']
+    socket = value.split(',', 1)[0]
+    return ['-S', socket] if socket else []
+
+
 def session_commands(session, repo, host, executable, args, launch_file=None):
     cli = shlex.join([sys.executable, str(HERE / 'rig_ui.py')])
     context = shlex.join(['--repo', str(repo), '--session', session])
@@ -85,7 +108,9 @@ def session_commands(session, repo, host, executable, args, launch_file=None):
     if not re.fullmatch(r'(?:[CMS]-)*(?:F(?:[1-9]|1[0-2])|[a-zA-Z0-9])', manager): manager = 'F8'
     if not re.fullmatch(r'(?:[CMS]-)*(?:F(?:[1-9]|1[0-2])|[a-zA-Z0-9])', add): add = 'F9'
     if manager == add: manager, add = 'F8', 'F9'
-    return [
+    copy_key = clipboard_hotkey(manager, add)
+    buffer_copy = shlex.join([sys.executable, str(HERE / 'ui_clipboard.py'), '--buffer', '--', shutil.which('tmux') or 'tmux', *clipboard_tmux_target()])
+    commands = [
         ['new-session', '-d', '-s', session, '-c', os.getcwd(), command],
         ['set-option', '-t', session, 'status', 'on'],
         ['set-option', '-t', session, 'status-interval', '1'],
@@ -96,9 +121,15 @@ def session_commands(session, repo, host, executable, args, launch_file=None):
         ['set-option', '-t', session, 'mouse', 'on'],
         ['bind-key', '-T', table, 'WheelUpPane', 'select-pane -t = ; copy-mode -e ; send-keys -X -N 5 scroll-up'],
         ['bind-key', '-T', table, 'WheelDownPane', 'select-pane -t ='],
+        ['bind-key', '-T', table, 'MouseDrag1Pane', 'select-pane -t = ; copy-mode -M'],
+    ]
+    if copy_key:
+        commands.append(['bind-key', '-T', table, copy_key, 'run-shell', '-b', buffer_copy])
+    commands.extend([
         ['bind-key', '-T', table, manager, 'display-popup', '-E', '-w', '85%', '-h', '80%', cli + ' popup ' + context],
         ['bind-key', '-T', table, add, 'display-popup', '-E', '-w', '85%', '-h', '80%', cli + ' popup ' + context + ' --add'],
-    ]
+    ])
+    return commands
 
 
 def main(argv):
@@ -137,7 +168,8 @@ def main(argv):
             result = subprocess.run(base + commands[0], check=True)
             started = True
             if not os.environ.get('TMUX'):
-                subprocess.run(base + ['set-option', '-s', 'escape-time', '25'], check=True)
+                for command in private_server_commands():
+                    subprocess.run(base + command, check=True)
             pane = subprocess.run(base + ['display-message', '-p', '-t', session, '#{pane_pid}'], capture_output=True, text=True, check=True)
             pid = int(pane.stdout.strip())
             from admission import process_identity
