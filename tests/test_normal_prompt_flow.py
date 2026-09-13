@@ -98,7 +98,7 @@ class NormalPromptFlow(unittest.TestCase):
 
     def test_local_install_setup_and_init_preserve_user_configuration(self):
         kit = self.base / "installed-kit"
-        self.env.update(RIG_HOME=str(kit), RIG_SRC=str(ROOT))
+        self.env.update(RIG_HOME=str(kit), RIG_SRC=str(ROOT), RIG_SKIP_TMUX_INSTALL="1")
         self.env.pop("RIG_INSTALL_TRANSACTION", None)  # Exercise real ownership in the temporary install.
         custom = self.home / ".codex" / "agents" / "worker.toml"
         custom.parent.mkdir(parents=True)

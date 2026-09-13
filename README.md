@@ -127,6 +127,8 @@ curl -fsSL https://raw.githubusercontent.com/Brasth/Rig/main/install.sh | bash
 
 No GitHub login. It clones over HTTPS, copies into `~/.rig`, puts `rig` on `~/.local/bin`, runs `rig setup`, and deletes the temp clone. Same curl later is idempotent. It does **not** overwrite a project’s `.rig/harness.toml` or `.rig/MEMORY.md`.
 
+First install and `rig update` also try to install or upgrade tmux to **3.3+**, using an existing Homebrew on macOS or apt-get/dnf on Linux. Compatible tmux is left alone. Package operations are noninteractive; if unavailable or unsuccessful, Rig installation continues with manual instructions. Set `RIG_SKIP_TMUX_INSTALL=1` on the installer or `rig update` to opt out. The terminal companion still requires explicit opt-in below.
+
 Already have `rig` on PATH: `rig update` (GitHub `main`, same installer). Older `rig` without that command still needs the curl once.
 
 From a checkout you already have: `./install.sh` (copies the local tree + `rig setup`, no clone).

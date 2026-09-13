@@ -37,6 +37,11 @@ fi
 
 export RIG_HOME
 export RIG_SRC="$SRC"
+if command -v python3 >/dev/null 2>&1; then
+  python3 "$SRC/scripts/install-tmux.py"
+else
+  echo "tmux setup: Python 3 unavailable; install tmux 3.3+ manually to use the terminal companion."
+fi
 bash "$SRC/bin/rig" setup "$@"
 
 if [[ -n "$CLEANUP" ]]; then
