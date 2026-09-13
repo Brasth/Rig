@@ -78,11 +78,49 @@ class LaunchTests(unittest.TestCase):
             with patch('ui_launch.signal.signal'), patch('ui_launch.subprocess.call', return_value=7) as call, patch('ui_launch.subprocess.run') as run, patch('ui_service.request'), patch('ui_install.lifecycle_lock', return_value=contextlib.nullcontext()), patch('ui_install.remove_lease') as remove:
                 self.assertEqual(ui_launch.run_child(path), 7)
                 self.assertEqual(call.call_args.kwargs['env']['FRESH'], 'current')
+                self.assertEqual(call.call_args.kwargs['cwd'], '/repo')
                 self.assertEqual(call.call_args.args[0], ['/bin/host', 'a b'])
                 remove.assert_called_once_with('rig-123456abcdef', directory)
                 self.assertEqual(run.call_args.args[0][-4:], ['unbind-key', '-a', '-T', 'rig-rig-123456abcdef'])
             self.assertEqual(path.with_suffix('.exit').read_text(), '7')
             self.assertFalse(path.exists())
+
+    def test_supervisor_recovers_deleted_cwd_and_preserves_relative_arguments(self):
+        import subprocess
+        import tempfile
+        import textwrap
+        with tempfile.TemporaryDirectory() as directory:
+            script = textwrap.dedent('''
+                import contextlib, json, os, sys
+                from pathlib import Path
+                from unittest.mock import patch
+                import ui_launch
+                root = Path(sys.argv[1])
+                invocation = root / 'invocation'
+                invocation.mkdir()
+                (invocation / 'subdir').mkdir()
+                deleted = root / 'deleted'
+                deleted.mkdir()
+                os.chdir(deleted)
+                deleted.rmdir()
+                path = root / 'launch.json'
+                host = "import os,sys; os.chdir(sys.argv[1]); print(os.getcwd())"
+                path.write_text(json.dumps({'env': dict(os.environ), 'session': 'test',
+                    'repo': str(root), 'cwd': str(invocation), 'home': str(root),
+                    'endpoint': 'unused', 'tmux': ['tmux'], 'executable': sys.executable,
+                    'args': ['-c', host, 'subdir']}))
+                path.with_suffix('.ready').touch()
+                with patch('ui_launch.subprocess.run'), patch('ui_service.request'), \
+                     patch('ui_install.lifecycle_lock', return_value=contextlib.nullcontext()), \
+                     patch('ui_install.remove_lease'):
+                    assert ui_launch.run_child(path) == 0
+                assert path.with_suffix('.exit').read_text() == '0'
+            ''')
+            env = dict(os.environ, PYTHONPATH=str(Path(ui_launch.__file__).parent))
+            result = subprocess.run([sys.executable, '-c', script, directory], env=env,
+                                    capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(Path(result.stdout.strip()), Path(directory).resolve() / 'invocation/subdir')
 
     def test_admin_commands_and_distinct_hotkeys(self):
         for host, commands in [('codex', ['queue', 'plugin', 'doctor', 'agents']), ('grok', ['agent', 'export', 'trace', 'inspect', 'leader', 'dashboard'])]:

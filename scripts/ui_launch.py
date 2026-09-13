@@ -104,9 +104,10 @@ def session_commands(session, repo, host, executable, args, launch_file=None):
 def main(argv):
     if len(argv) < 2: return 2
     original_env = os.environ.copy()
+    launch_cwd = os.getcwd()
     host, executable, *args = argv
     if args[:1] == ['--']: args = args[1:]
-    repo = classify(host, args)
+    repo = classify(host, args, cwd=launch_cwd)
     binary = shutil.which('tmux')
     if repo is None or not binary or not tmux_available(binary):
         if repo is None and sys.stdout.isatty() and any('worktree' in arg or 'remote' in arg for arg in args):
@@ -128,7 +129,7 @@ def main(argv):
             directory = runtime_home() / 'ui/launch'
             directory.mkdir(parents=True, exist_ok=True, mode=0o700)
             launch_file = directory / (session + '.json')
-            payload = {'env': original_env, 'executable': executable, 'args': args, 'repo': str(repo), 'session': session, 'endpoint': socket, 'tmux': base, 'home': str(runtime_home())}
+            payload = {'env': original_env, 'executable': executable, 'args': args, 'repo': str(repo), 'cwd': launch_cwd, 'session': session, 'endpoint': socket, 'tmux': base, 'home': str(runtime_home())}
             with os.fdopen(os.open(launch_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), 'w') as stream:
                 json.dump(payload, stream)
             commands = session_commands(session, repo, host, executable, args, launch_file)
@@ -206,10 +207,16 @@ def run_child(path):
         signal.signal(signal.SIGQUIT, signal.SIG_DFL)
     signal.signal(signal.SIGINT, signal.SIG_IGN)
     signal.signal(signal.SIGQUIT, signal.SIG_IGN)
+    launch_cwd = payload.get('cwd') or payload['repo']
     try:
-        code = subprocess.call([payload['executable'], *payload['args']], env=env, preexec_fn=host_signals)
-        path.with_suffix('.exit').write_text(str(code if code >= 0 else 128 - code))
-        return code
+        try:
+            code = subprocess.call([payload['executable'], *payload['args']], env=env, cwd=launch_cwd, preexec_fn=host_signals)
+            path.with_suffix('.exit').write_text(str(code if code >= 0 else 128 - code))
+            return code
+        except OSError as exc:
+            print(f'Rig UI: failed to start {payload["executable"]} in {launch_cwd}: {exc}', file=sys.stderr)
+            path.with_suffix('.exit').write_text('1')
+            return 1
     finally:
         try: request(payload['endpoint'], {'op': 'unregister', 'session': payload['session']})
         except Exception: pass
