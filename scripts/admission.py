@@ -161,12 +161,23 @@ def credentials(record):
     return {key: record.get(key, "") for key in ("reservation_id", "attempt_id", "owner_token")}
 
 
+def _public_owner(owner):
+    result = copy.deepcopy(owner) if isinstance(owner, dict) else {}
+    result.pop("owner_token", None)
+    return result
+
+
 def _public(record):
     result = copy.deepcopy(record)
     result.pop("owner_token", None)
     for item in result.get("history", []):
         if isinstance(item, dict):
             item.pop("owner_token", None)
+    recovery = result.get("parent_write_recovery")
+    if isinstance(recovery, dict):
+        recovery.pop("owner_token", None)
+        if isinstance(recovery.get("owner"), dict):
+            recovery["owner"].pop("owner_token", None)
     return result
 
 
@@ -327,6 +338,14 @@ def _same_actor(left, right):
     return bool(left.get("parent_pid") and left.get("parent_start_id")) and (
         left.get("parent_pid"), left.get("parent_start_id")
     ) == (right.get("parent_pid"), right.get("parent_start_id"))
+
+
+def _same_initiating_owner(left, right):
+    left_ident = str((left or {}).get("initiating_identity") or initiating_identity(left) or "").strip()
+    right_ident = str((right or {}).get("initiating_identity") or initiating_identity(right) or "").strip()
+    if left_ident and right_ident:
+        return left_ident == right_ident
+    return _same_actor(left or {}, right or {})
 
 
 def match_credentials(root, reservation_id, attempt_id, owner_token, job_id=""):
@@ -531,8 +550,13 @@ def _review_gate(root, record, model, snapshot_id):
 def _reconcile_dead(root):
     for record in _records(root):
         pending = record.get("pending_operation")
-        if (record.get("stage") == "released" and pending == "return_pending") or (record.get("stopped") and pending == "queue_done"):
-            _queue_update(root, record, "pending" if pending == "return_pending" else "done")
+        if record.get("stage") == "released" and pending == "return_pending":
+            _queue_update(root, record, "pending")
+            record.pop("pending_operation", None)
+            _save(root, record)
+            continue
+        if record.get("stopped") and pending == "queue_done":
+            _queue_update(root, record, "cancelled" if record.get("execution_status") == "cancelled" else "done")
             record.pop("pending_operation", None)
             _save(root, record)
             continue
@@ -1122,9 +1146,120 @@ def _reconcile_legacy_job(root, job_id, action, actor, worker, access, files, ra
     return {"items": [_public(record)], "applied": 1, **credentials(record)}
 
 
+PARENT_WRITE_RECOVERY = "recover_parent_write"
+
+
+def _parent_only():
+    if os.environ.get("RIG_JOB_ID") or os.environ.get("RIG_JOB_DIR"):
+        raise AdmissionError("parent write recovery is parent-only")
+
+
+def _active_verification(root, record):
+    if record.get("operation"):
+        return True
+    job_id = record.get("job_id") or ""
+    if not job_id:
+        return False
+    return (root / ".rig" / "jobs" / job_id / "check-running.json").is_file()
+
+
+def _job_artifacts_missing(root, job_id):
+    return not (root / ".rig" / "jobs" / job_id / "meta.json").is_file()
+
+
+def _parent_write_recovery_result(record, applied):
+    recovery = copy.deepcopy(record.get("parent_write_recovery") or {})
+    recovery.pop("owner_token", None)
+    if isinstance(recovery.get("owner"), dict):
+        recovery["owner"].pop("owner_token", None)
+    return {
+        "applied": applied,
+        "items": [_public(record)],
+        "recovery": recovery,
+        "artifacts_missing": recovery.get("artifacts_missing") is True,
+    }
+
+
+def recover_parent_write(repo, *, job_id, rationale, confirmed_stopped=False, owner=None,
+                         owner_session=""):
+    """Same-owner abandonment recovery for a native parent write without owner_token.
+
+    Marks that exact parent attempt cancelled/unverified, frees its slot, and
+    releases file scope. Never accepts or verifies work.
+    """
+    _parent_only()
+    if confirmed_stopped is not True:
+        raise AdmissionError("parent write recovery requires confirmed_stopped=true")
+    if not isinstance(rationale, str) or not rationale.strip():
+        raise AdmissionError("recovery rationale required")
+    job_id = _id(job_id, "job id")
+    # Recovery deliberately has no owner-token argument, so its actor identity
+    # must come from the current host process/session, never from caller-supplied
+    # session text. An optional session is only a consistency check.
+    actor = caller_owner("parent")
+    if owner_session and owner_session != str(actor.get("session_id") or ""):
+        raise AdmissionError("owner_session does not match the current parent session")
+    if actor.get("kind") != "parent":
+        raise AdmissionError("parent write recovery is limited to parent executor reservations")
+    with transaction(repo) as root:
+        matches = [row for row in _records(root) if row.get("job_id") == job_id]
+        if not matches:
+            raise AdmissionError("no reservation bound to this job")
+        held = [row for row in matches if row.get("stage") != "released"]
+        recovered = [row for row in matches
+                     if (row.get("parent_write_recovery") or {}).get("outcome") == "cancelled"
+                     and _same_initiating_owner(row.get("owner") or {}, actor)]
+        if not held:
+            if recovered:
+                return _parent_write_recovery_result(recovered[0], 0)
+            raise AdmissionError("released scope cannot use parent write recovery")
+        if len(held) != 1:
+            raise AdmissionError("job is not bound to exactly one current reservation")
+        record = held[0]
+        if record.get("job_id") != job_id:
+            raise AdmissionError("reservation is not bound to this job")
+        kind = (record.get("owner") or {}).get("kind")
+        if kind in {"wrapper", "native_child"} or kind != "parent":
+            raise AdmissionError("parent write recovery rejects wrapper and native_child attempts")
+        if not _same_initiating_owner(record.get("owner") or {}, actor):
+            raise AdmissionError("initiating owner session mismatch")
+        if _active_verification(root, record):
+            raise AdmissionError("an active or interrupted verification operation still holds this reservation")
+        status = record.get("execution_status")
+        if record.get("stopped") and status in {"ok", "fail", "timeout"}:
+            raise AdmissionError("finished execution cannot use parent write abandonment recovery")
+        artifacts_missing = _job_artifacts_missing(root, job_id)
+        audit = {
+            "action": PARENT_WRITE_RECOVERY,
+            "owner": _public_owner(actor),
+            "rationale": rationale.strip(),
+            "at": _now(),
+            "confirmed_stopped": True,
+            "artifacts_missing": artifacts_missing,
+            "outcome": "cancelled",
+            "attempt_id": record.get("attempt_id"),
+            "reservation_id": record.get("reservation_id"),
+            "job_id": job_id,
+        }
+        record.update(
+            stopped=True, slot_held=False, stage="released", execution_status="cancelled",
+            needs_reconciliation=False, reconciliation_reason="",
+            release_reason=rationale.strip(),
+            completion={"kind": "parent_write_abandonment", "confirmed_stopped": True, "outcome": "cancelled"},
+            parent_write_recovery=audit, pending_operation="queue_done",
+        )
+        _save(root, record)
+        if not artifacts_missing:
+            _write(root / ".rig" / "jobs" / job_id / "parent-write-recovery.json", audit)
+        _queue_update(root, record, "cancelled")
+        record.pop("pending_operation", None)
+        _save(root, record)
+        return _parent_write_recovery_result(record, 1)
+
+
 def main():
     parser = argparse.ArgumentParser(prog="admission.py")
-    parser.add_argument("command", choices=["reserve", "activate", "finish", "release", "reconcile", "list"])
+    parser.add_argument("command", choices=["reserve", "activate", "finish", "release", "reconcile", "recover_parent_write", "list"])
     parser.add_argument("--repo", default=".")
     parser.add_argument("--input-json", default="{}", help="Explicit operation arguments; tokens may instead use RIG_OWNER_TOKEN.")
     args = parser.parse_args()

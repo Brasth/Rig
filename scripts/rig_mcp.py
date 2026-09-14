@@ -716,6 +716,28 @@ TOOLS.extend([
          **_JOB_REF_PROPERTIES, **_OWNERSHIP_PROPERTIES, "rationale": {"type": "string"},
          "apply": {"type": "boolean", "default": False},
      }, "required": ["id", "reservation_id", "attempt_id", "owner_token", "rationale"]}},
+    {"name": "rig_job_recover_parent_write",
+     "description": (
+         "Parent-only Codex/Pi self-service recovery for a native parent write whose owning turn was "
+         "explicitly cancelled/stopped and whose owner_token or job artifacts are unavailable. "
+         "Binds to the exact current owner session/initiating identity on the reservation; does not "
+         "require, reveal, or reconstruct owner_token. Repeated allow/approve is not completion. "
+         "Stop/cancel the task first, then call with confirmed_stopped=true and a non-empty rationale. "
+         "Marks that parent attempt cancelled/unverified, frees its slot, and releases files. "
+         "Never accepts or verifies work. finish/close remain the authenticated completion path."
+     ),
+     "inputSchema": {"type": "object", "properties": {
+         **_JOB_REF_PROPERTIES,
+         "owner_session": {
+             "type": "string",
+             "description": "Optional consistency check against this current parent's session; cannot override caller identity.",
+         },
+         "confirmed_stopped": {
+             "type": "boolean",
+             "description": "Required true attestation that this parent task was already stopped/cancelled. Allow/approve is not completion.",
+         },
+         "rationale": {"type": "string"},
+     }, "required": ["id", "confirmed_stopped", "rationale"]}},
 ])
 for _tool in TOOLS:
     _properties = _tool["inputSchema"]["properties"]
@@ -753,6 +775,7 @@ TOOL_ORDER = (
     "rig_job_close",
     "rig_job_reconcile",
     "rig_job_recover_cancelled",
+    "rig_job_recover_parent_write",
     "rig_job_accept",
     "rig_memory",
     "rig_memory_add",
@@ -1344,6 +1367,20 @@ def call_tool(name: str, args: dict, on_tick=None, *, wait_paths: list[Path] | N
             result = rig_jobs.recover_cancelled_job(
                 repo, job_id, rationale=_optional_string(args, "rationale"),
                 apply=args.get("apply", False), **_ownership_args(args),
+            )
+            return {**_ok(json.dumps(result, indent=2)), "structuredContent": result}
+        if name == "rig_job_recover_parent_write":
+            job_id = _optional_string(args, "id").strip()
+            if not job_id:
+                return _err("rig_job_recover_parent_write needs id")
+            if args.get("confirmed_stopped") is not True:
+                return _err(
+                    "parent write recovery requires confirmed_stopped=true; stop/cancel first. "
+                    "Allow/approve is not completion"
+                )
+            result = rig_jobs.recover_parent_write_job(
+                repo, job_id, rationale=_optional_string(args, "rationale"),
+                confirmed_stopped=True, owner_session=_optional_string(args, "owner_session"),
             )
             return {**_ok(json.dumps(result, indent=2)), "structuredContent": result}
         if name in {"rig_job_requirements", "rig_job_check", "rig_job_accept"}:

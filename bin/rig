@@ -44,6 +44,7 @@ usage: rig <command> [args]
   job cancel [id]
   job wait [id ...] [--timeout SECS]
   job message <id> --text TEXT
+  job recover-parent-write <id> --confirmed-stopped --rationale TEXT
   queue add [--priority N] [--worker NAME] "text"
   queue list
   queue cancel <id>
@@ -555,7 +556,7 @@ Follow pick JSON; never spawn a worker whose harness flag is false; never spawn 
 3. stay → you do it (ask / plan / advise / vision / computer-use / chrome-profile / Figma). Do not spawn a clicker for Figma or computer-use.
 4. Start every native/parent write with MCP `rig_job_start` BEFORE editing: actual worker/model/effort, concrete files, access=write, executor_kind=parent or native_child. parent_writes means this parent writes; do not spawn a second same-CLI session. Native mini/bulk needs an edit-capable worker; Codex mini uses gpt-5.6-luna low, while gpt-5.3-codex-mini explorer stays read-only. Read-only history may use rig_job_record; retrospective writes never gain protected provenance.
    Preserve returned reservation_id, attempt_id, owner_token, owner/session and credentials_path. Native finish requires the same credentials and explicit completion: parent_task/completed=true, or the observed native_child agent_id/terminal=true/outcome matching status. Parent/MCP PID is never child completion. Unknown completion keeps files/slot held. Bash fallback: rig job start --json, then authenticated rig job finish.
-   Native agents use the owning host wait/interrupt capability and authenticated terminal completion. Rig MCP cannot call host interruption tools or signal the parent as a substitute. native-cancel-required is not stopped; preserve protection until that specific agent outcome is confirmed. No separate native subagents without scoped MCP.
+   Native agents use the owning host wait/interrupt capability and authenticated terminal completion. Rig MCP cannot call host interruption tools or signal the parent as a substitute. native-cancel-required is not stopped; preserve protection until that specific agent outcome is confirmed. No separate native subagents without scoped MCP. Repeated allow/approve is not completion. If a Codex/Pi parent write turn was cancelled/stopped and owner_token or job artifacts are unavailable, do not reconstruct the token: after stop/cancel, MCP `rig_job_recover_parent_write` with confirmed_stopped=true, rationale, and the same owner session. That marks only that parent attempt cancelled/unverified and releases its slot/files. finish/close remain the authenticated path.
 5. run-worker → prepare brief TEXT (do not mkdir or write `.rig/jobs/<id>/brief.md` yourself) then MCP `rig_job_launch` with brief/files/access/worker/model/effort and owner credentials (do not block this turn on the wrapper; launch returns in the background). The launch tool creates the job dir and brief.md. Detached wrapper survives parent/MCP shutdown. Durable job files: launcher.log (prechild), stdout.log, activity.json, meta.json, result.json, inbox.json, ask/reply, evidence.
    Orchestrate with MCP: `rig_session` / `rig_jobs` / `rig_job_show` / `rig_job_log` / `rig_job_launch` / `rig_job_wait` / `rig_job_allow` / `rig_job_deny` / `rig_job_message` / `rig_memory` / `rig_pick` / `rig_status` / `rig_job_start` / `rig_job_finish` / `rig_job_record` / `rig_queue_claim` / `rig_queue_spawned` / `rig_job_requirements` / `rig_job_check` / `rig_job_accept`. Normal observable wrapper wait = one blocking `rig_job_wait` with no timeout. After implement+verify ok, wait wrapper review+seed together: MCP `ids`. If MCP is unavailable before waiting, one normal CLI `rig job wait <id>` is allowed (`rig job wait id1 id2`).
    Shell `run-worker.sh` is internal/human fallback only, not the agent default.
@@ -1247,11 +1248,11 @@ cmd_job() {
     requirements|check|accept)
       python3 "$(py_script verification.py)" --repo "$(repo_root)" "$sub" "$@"
       ;;
-    start|finish|record|close|reconcile|show|log|allow|deny|cancel|wait|message)
+    start|finish|record|close|reconcile|recover-parent-write|show|log|allow|deny|cancel|wait|message)
       python3 "$(py_script jobs.py)" "$sub" "$@" --repo "$(repo_root)"
       ;;
     *)
-      echo "usage: rig job start|finish|record|close|reconcile|requirements|check|accept|show|log|allow|deny|cancel|wait|message [arguments]" >&2
+      echo "usage: rig job start|finish|record|close|reconcile|recover-parent-write|requirements|check|accept|show|log|allow|deny|cancel|wait|message [arguments]" >&2
       return 2
       ;;
   esac
