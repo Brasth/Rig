@@ -44,14 +44,13 @@ First install and `rig update` also try to install or upgrade tmux to **3.3+** (
 
 Already have `rig` on PATH: `rig update` (same `main` installer). Older `rig` without `update` still needs the curl once.
 
-**Smart routing on `feat/smart-model-routing`:** that branch is **not** on remote `main` yet. The curl installer and `rig update` install **`main`**, so they do **not** deliver this feature. To try the unmerged work from a checkout:
+Smart routing is included in `main`. New installations use it by default; existing installations can update with `rig update`, then fully restart parent/MCP sessions after safely finishing active work. An explicit `[routing] mode = "legacy"` setting remains in effect.
 
 ```bash
-git checkout feat/smart-model-routing
 ./install.sh
 ```
 
-`./install.sh` copies the **local** tree + `rig setup` (no clone). That path is for trying this branch; it is not a claim that smart routing is globally installed from `main`.
+`./install.sh` copies the **local** tree + `rig setup` (no clone).
 
 **PATH (only if `rig` is not found):**
 
@@ -234,7 +233,7 @@ Esc / Stop on **this wait** records durable cancellation for attached attempts a
 | `rig` not found | PATH → `$HOME/.local/bin` |
 | MCP / status missing | Fully quit parent once; `rig doctor` |
 | Worker `effective=off` | flag, binary, live parent, MCP; Cursor always excluded |
-| Expected smart routing after `rig update` | `main` install may not include `feat/smart-model-routing`; use checkout + `./install.sh` |
+| Still seeing old routing after update | Confirm the updated executable with `which rig`, restart parent/MCP sessions, and check `.rig/harness.toml` for an explicit legacy setting. |
 | Queue item never runs | Park only; parent must claim on a free turn with disjoint files |
 
 More: [Usage troubleshooting](docs/usage.md#troubleshooting).
