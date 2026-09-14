@@ -1,139 +1,57 @@
 # Rig
 
-Rig coordinates local coding agents from the CLI you already use. You describe the work to a **parent** agent; it scopes tasks, delegates to **workers**, checks their results, and gives feedback. Rig keeps the queue, job progress, and file ownership in your project.
+Rig coordinates local coding agents from the CLI you already use. You describe work to a **parent**; it scopes tasks, delegates to **workers**, verifies results, and gives feedback. Queue, job progress, and file ownership stay in the project.
 
-Intended parent is **Codex running Astra** (the human-like assistant). Grok, OpenCode, OMP, Pi, and agy can also be the parent. Claude and Cursor are never the parent. Missing worker binary → cheaper same-CLI. That is success.
+**Parents:** Intended: Codex on Astra. Also supported: Grok, OpenCode, OMP, Pi, or agy (open that CLI). **Never the parent:** Claude Code and Cursor. **Effective workers:** Grok, Claude, OpenCode, OMP, Pi, agy, Codex. Cursor integration is disabled pending scoped MCP. Missing worker binary → that worker is off. If no eligible worker exists, parent fallback preserves its actual model. Never spawn Astra, Sol, or Fable as a child.
 
-## Rig at a glance
+## Navigation
+
+- [Overall flow](#overall-flow)
+- [Install](#install) · [Per project](#per-project) · [Configure](#configure)
+- [Smart routing](#smart-routing)
+- [Everyday prompts and queue](#everyday-prompts-and-queue)
+- [Optional terminal companion](#optional-terminal-companion) · [Watch](#watch)
+- [Verification and cancellation](#verification-and-cancellation)
+- [Troubleshooting](#troubleshooting) · [Docs](#docs)
+
+## Overall flow
 
 ```mermaid
 flowchart LR
-  user["You in Codex or Grok"] --> parent["Parent plans and scopes work"]
-  parent --> worker["Worker executes a brief"]
-  worker --> review["Parent checks the result"]
-  review -->|Changes needed| worker
-  review -->|Accepted| result["Verified result"]
-  user -->|F9: save work for later| queue["Rig queue"]
-  queue -->|Parent claims on a free turn| parent
-  jobs["Queue and job updates"] -.-> ui["Status row and notices"]
-  worker -.-> jobs
-  queue -.-> jobs
+  you["You in parent CLI"] --> parent["Parent scopes and picks"]
+  parent -->|stay| answer["Answers here"]
+  parent -->|run-worker| child["Worker runs brief"]
+  parent -->|parent_writes| self["This parent writes"]
+  child --> verify["Parent checks and accepts"]
+  self --> verify
+  you -->|F9 or /queue| queue["Park only — no spawn"]
+  queue -->|free turn claim| parent
 ```
 
-**With the optional terminal companion:** open plain `codex` or `grok`, see progress in a compact status row, press **F9** to queue another task, and **F8** to manage jobs. It works independently of the parent's prompt processing. The parent still decides when to claim and execute queued work.
-
-For example: while a worker fixes login, press F9 and save “Add regression tests next.” The task stays pending; you return to the parent, and it claims the task when free and its file scope is available.
-
-Start with [installation](#install), [project setup](#per-project), and [the terminal companion](#optional-terminal-companion). See the [visual flow guide](docs/rig-flow.md) for the complete journey and cancellation behavior.
-
-## Why
-
-Using AI to ship a feature often means **you** become the bottleneck. You read every diff. You write every correction. You get tired. The work stops being smooth.
-
-Sol made an agent feel like a person at the computer. Astra went further. Rig is the harness around that:
-
-1. You talk to the **parent** (Astra in Codex, or another parent CLI you opened).
-2. The parent assigns the task to a **child** (Grok, Claude, Cursor, OpenCode, OMP, Pi, agy, Codex).
-3. The parent **checks, verifies, and gives the child feedback** (`rig jobs`, allow/deny, a follow-up prompt) — the same review loop you used to run by hand.
-
-Open Codex on Astra as the parent. Pick the parent model in that CLI. Worker models come from `rig pick`. Never spawn Astra, Sol, or Fable as a child.
-
-## What you get after setup
-
-After `rig setup` + fully quit the parent once:
-
-| Surface | What it does |
-| --- | --- |
-| `/queue …` in Grok, Codex, OpenCode, OMP, Pi | Parks work in **this repo’s** `.rig/queue/`. Does **not** spawn a child. Codex: `/plugins` **Rig Queue** then `/hooks` trust (0.154 has no `/prompts:queue` slash). |
-| HUD | Grok/agy statusline, OMP/Pi widget under the editor, OpenCode sidebar/footer. Shows QUEUE + live/ASK. For Codex, use the optional terminal companion below or `rig tui`; the native hook provides a queue receipt. |
-| Optional shell UI | `rig setup --shell-ui` adds a tmux status row to interactive `codex`/`grok` launches. F8 opens Jobs/Queue/Notices; F9 adds work while the parent runs. Requires tmux 3.3+. Session-local mouse: wheel in the main parent pane scrolls history (WheelUp enters copy-mode -e and moves five lines; WheelDown consumed outside copy-mode; returning to the live bottom exits copy-mode). `MouseDrag1Pane` selection on the Rig session custom table (preserves wheel/F8/F9). Private Rig server sets a local clipboard helper + copy-command only. On existing-server fallback after select/leave copy mode, F10 copies the latest tmux buffer via `-S` socket from `TMUX` (private server still uses `-L rig-ui`); F10 is omitted when assigned to manager/add. No global/root/copy-mode table edits. Keyboard Up/Down history remains; F8/F9/popups unchanged. Needs updated runtime/restart — not claimed as installed/global/live-terminal accepted yet. |
-| Drain | On a **free** parent turn the parent claims by **id**, names files, prepares brief TEXT, then MCP `rig_job_launch` (tool creates `brief.md`). HUD refresh never spawns. |
-
-Before updating an active repository, stop new admissions, finish or cancel existing work, confirm it stopped, and close or reconcile held reservations. Then update every launcher and fully restart all parent/MCP sessions. Mixed old/new admission writers are unsupported. See [safe rollout](docs/usage.md#safe-upgrade-and-rollback).
-
-## How your prompt is handled
-
-You type in the **parent**. Rig does **not** forward that chat as the child’s prompt. The parent chooses a semantic role and requests `rig_session(role=..., compact=true, terminal_limit=10, case=...)`. Questions and plans stay local. Work assigned to a child is prepared as brief TEXT and passed to `rig_job_launch`, which creates the scoped `brief.md`; the chat itself is not forwarded. Full session output remains the API/CLI default.
-
-```mermaid
-flowchart TD
-  you[You type in the parent CLI]
-  you --> q{Starts with /queue?}
-  q -->|yes| park["Park in .rig/queue - no spawn"]
-  q -->|no| kind{What kind of request?}
-  kind -->|question plan advise| stay[Parent answers here]
-  kind -->|docs only| mini[Capable mini writer]
-  kind -->|implement fix SSH| check[Parent reads code names files prepares brief TEXT]
-  check --> pick[rig pick]
-  pick -->|run-worker| child[MCP rig_job_launch creates brief.md → child edits listed files]
-  pick -->|parent_writes| self[Register scope then this parent writes]
-  mini --> miniStart[Register scope before mini edits]
-  miniStart --> evidence
-  self --> evidence[Parent inspects scoped evidence]
-  child --> wait[Parent waits]
-  wait -->|child asks| allow[allow or deny]
-  allow --> wait
-  wait -->|execution ends| evidence
-  evidence --> checks[Declare requirements and run checks or manual review]
-  checks --> accept[Parent accepts current snapshot or records failure]
-  accept --> report[Parent reports behavior validation and limitations]
-```
-
-| You type | What happens |
-| --- | --- |
-| `How does pick choose a worker?` | Stay. Parent answers. No child. |
-| `Fix the failing tests in tests/test_cli.py` | Parent names files → brief → child (or `parent_writes`). |
-| `/queue fix the sidebar after this job` | Park only. The running child is not interrupted. |
-| `Review the diff I staged` | Standalone review; independence stays unknown unless actual writer provenance supports it. |
-
-Details and walk-throughs: [Usage](docs/usage.md#how-your-prompt-is-handled).
-
-Parent agents launch with MCP `rig_job_launch` (shell `run-worker.sh` is human/internal fallback). Children must call `rig_job_inbox` first; missing handshake fails with exact `child MCP handshake missing` while preserving evidence and ownership. Cursor remains excluded until safe scoped MCP exists.
-
-## Why the queue exists
-
-While the parent is busy, you can think of more work without wanting to interrupt its current turn. Use **F9** in the companion to save it directly to Rig; this entry does not wait for the host to process another chat prompt. On a free turn the parent claims, prepares brief TEXT, and launches via MCP — up to 3 reserved/running/ASK executions when scopes permit. File protection continues through parent verification and review. Park does **not** spawn.
-
-Longer why (two locks, without vs with): [Usage](docs/usage.md#why-the-queue-exists).
-
-## How the queue works
-
-Rig queue entries are saved tasks awaiting a parent claim. **F9**, supported `/queue` hooks, `rig tui` key `e`, and `rig queue add` all park work without launching a worker. A host’s own queued chat prompts remain separate; Rig does not change their timing.
-
-```mermaid
-flowchart TD
-  park["F9, /queue, TUI e, or rig queue add"] --> file[".rig/queue pending"]
-  file --> free{"Parent free and execution slot available?"}
-  free -->|no| stayPending[Stays pending]
-  free -->|yes| list[List pending by id]
-  list --> name[Parent names files]
-  name --> overlap{Files conflict with a held scope?}
-  overlap -->|yes| skip[Skip this id try the next]
-  overlap -->|no| claim[Claim id worker access and files]
-  claim --> brief[Prepare brief TEXT]
-  brief --> spawn[MCP rig_job_launch creates brief.md]
-  spawn --> execution["Track execution and answer approvals"]
-  execution --> verify["Parent checks requirements and evidence"]
-  verify -->|Changes needed| feedback["Parent gives scoped feedback"]
-  feedback --> execution
-  verify -->|Accepted current content| accepted["Verified result"]
-```
-
-Cap is `[queue].max_running` (default 3 reserved + running + ASK executions). A stopped job frees its execution slot while its files stay protected until accepted completion or explicit close. Read/read overlap is allowed; writers conflict with held writers and readers. Unknown write scope is exclusive. Claim **by id** when more than one item is pending. Mid-wait: companion **F9** / supported `/queue` / TUI `e` / `rig queue add` — never a second writer on the same files.
+You type in the **parent**. Rig does **not** forward that chat as the child prompt. The parent chooses a role, may assess complexity/risk/uncertainty, then `rig_session` / `rig_pick`. Stay work answers locally. Assigned work becomes brief TEXT for MCP `rig_job_launch` (creates scoped `brief.md`). Queue park never launches a worker. Details: [Usage — how your prompt is handled](docs/usage.md#how-your-prompt-is-handled).
 
 ## Install
+
+Default install and `rig update` fetch GitHub **`main`**:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Brasth/Rig/main/install.sh | bash
 ```
 
-No GitHub login. It clones over HTTPS, copies into `~/.rig`, puts `rig` on `~/.local/bin`, runs `rig setup`, and deletes the temp clone. Same curl later is idempotent. It does **not** overwrite a project’s `.rig/harness.toml` or `.rig/MEMORY.md`.
+No GitHub login. Clones over HTTPS, copies into `~/.rig`, puts `rig` on `~/.local/bin`, runs `rig setup`, deletes the temp clone. Idempotent. Does **not** overwrite a project’s `.rig/harness.toml` or `.rig/MEMORY.md`.
 
-First install and `rig update` also try to install or upgrade tmux to **3.3+**, using an existing Homebrew on macOS or apt-get/dnf on Linux. Compatible tmux is left alone. Package operations are noninteractive; if unavailable or unsuccessful, Rig installation continues with manual instructions. Set `RIG_SKIP_TMUX_INSTALL=1` on the installer or `rig update` to opt out. The terminal companion still requires explicit opt-in below.
+First install and `rig update` also try to install or upgrade tmux to **3.3+** (Homebrew on macOS; apt-get/dnf on Linux). Compatible tmux is left alone. Set `RIG_SKIP_TMUX_INSTALL=1` to opt out. The terminal companion still needs explicit opt-in below.
 
-Already have `rig` on PATH: `rig update` (GitHub `main`, same installer). Older `rig` without that command still needs the curl once.
+Already have `rig` on PATH: `rig update` (same `main` installer). Older `rig` without `update` still needs the curl once.
 
-From a checkout you already have: `./install.sh` (copies the local tree + `rig setup`, no clone).
+**Smart routing on `feat/smart-model-routing`:** that branch is **not** on remote `main` yet. The curl installer and `rig update` install **`main`**, so they do **not** deliver this feature. To try the unmerged work from a checkout:
+
+```bash
+git checkout feat/smart-model-routing
+./install.sh
+```
+
+`./install.sh` copies the **local** tree + `rig setup` (no clone). That path is for trying this branch; it is not a claim that smart routing is globally installed from `main`.
 
 **PATH (only if `rig` is not found):**
 
@@ -147,31 +65,7 @@ source ~/.zshrc
 
 You need one parent CLI: Codex, Grok, OpenCode, OMP, Pi, or agy. Optional worker binaries: `grok`, `claude`, `cursor-agent`, `codex`, `opencode`, `omp`, `pi`, `agy`.
 
-## Optional terminal companion
-
-With tmux 3.3+ installed, opt in once:
-
-```bash
-rig setup --shell-ui
-# Open a new shell, then use your usual command in an initialized repo:
-codex
-# or: grok
-```
-
-The parent keeps the terminal; one status row shows observed work, queue count, and attention even with the manager closed. Brief notices announce milestones and requests for attention.
-
-| Control | What you get |
-| --- | --- |
-| Status row | Working/reserved counts, queued items, attention, and latest reported activity |
-| F8 | Jobs / Queue / Notices, job details, approvals, and stop requests with confirmation |
-| F9 | Queue editor available while the parent runs |
-| Esc in queue editor | Close and retain the draft; the parent and accepted actions continue |
-
-The popup is temporary; there is no permanent side panel. Queue additions wait for the parent to claim them. The view covers this repository or worktree, including work from other parent sessions. These companion controls support **Codex and Grok** first; other hosts remain on the companion roadmap.
-
-Bash and zsh are supported. Setup preserves existing `codex`/`grok` aliases and functions, and reports when they prevent integration. For custom startup files: `rig setup --shell-ui --shell zsh --rc-file /path/to/rc`. Headless commands and workers retain their usual behavior.
-
-`rig ui disable` makes new launches bypass the companion, including functions already loaded in a shell. `rig ui enable` restores it. `rig ui sessions` lists companion sessions; `rig ui attach ID` reconnects. See [terminal companion and removal](docs/usage.md#optional-terminal-companion) for controls, startup files, and safe uninstall.
+Before updating an active repository: stop new admissions, finish or cancel existing work, confirm termination, close or reconcile held reservations, then update launchers and fully restart all parent/MCP sessions. Mixed old/new admission writers are unsupported. See [safe upgrade](docs/usage.md#safe-upgrade-and-rollback).
 
 ## Per project
 
@@ -181,30 +75,25 @@ rig init
 rig doctor
 ```
 
-`rig init` is per repo. Do this in every project you want Rig to manage. Existing `.rig/harness.toml` flags are never flipped.
+`rig init` is per repo. Existing `.rig/harness.toml` flags are never flipped.
 
-Fully quit the parent CLI once after first install (not just the tab — quit the apps). MCP tools and the Grok status line load on a cold start.
-
-Open a **new** thread in that repo. An already-open session will not pick up `AGENTS.md` or skills.
+Fully quit the parent CLI once after first install (quit the apps, not just a tab). MCP tools and status lines load on a cold start. Open a **new** thread in that repo so `AGENTS.md` and skills load.
 
 Type a normal prompt in that parent CLI. Example: `fix the failing tests in tests/test_cli.py`. Do **not** use `rig run` for normal work.
 
 ## Configure
 
-Smart routing assesses complexity, risk, and uncertainty, then selects the minimum sufficient model+effort profile from eligible workers. Simple implementation can use a fast profile; high-risk work requires strong capability. Use `rig pick implement --complexity low --risk low --uncertainty low --explain` to inspect a decision. `rig routing report` shows outcomes without changing future ranking. See [smart routing](docs/smart-routing.md) for profiles, assessment defaults, CLI/MCP examples, and legacy rollback.
+Choose your preferred parent, then enable only installed/configured workers:
 
 ```bash
-rig use grok|codex|opencode|omp|pi|agy
-rig workers grok=on|off claude=on|off codex=on|off cursor=on|off opencode=on|off omp=on|off pi=on|off agy=on|off
+rig use codex
+rig workers grok=on claude=on
 ```
+
+Example `.rig/harness.toml`:
 
 ```toml
 parent = "codex"
-# parent = "grok"
-# parent = "opencode"
-# parent = "omp"
-# parent = "pi"
-# parent = "agy"
 
 [workers]
 codex = false
@@ -217,32 +106,140 @@ pi = false
 agy = false
 ```
 
-- **Live parent** is whichever Codex, Grok, OpenCode, OMP, Pi, or agy you actually opened (`rig status`). The `parent =` key is only the preferred default (`rig use grok|codex|opencode|omp|pi|agy`). Opening the CLI is what makes it live.
-- Parent **model** is the CLI’s model. Worker models come from `rig pick`. Never spawn Sol, Astra, or Fable as a child.
-- A worker is **effective** only when: flag true **and** binary on PATH **and** not the live parent.
-- Routing additionally requires job-scoped MCP readiness. Cursor remains excluded. `[routing] mode = "legacy"` restores the older routing ladder; omitted mode defaults to `smart`.
-- Claude Code and Cursor are never the parent.
-- Grok Bot.app and Cursor.app are GUIs, **not** spawnable workers. The Cursor worker binary is `cursor-agent`.
+- **Live parent** is whichever Codex, Grok, OpenCode, OMP, Pi, or agy you actually opened (`rig status`). The `parent =` key is only the preferred default (`rig use …`). Opening the CLI makes it live.
+- Parent **model** is that CLI’s model. Worker models come from `rig pick`. Picking never switches the live parent model.
+- A worker is **effective** only when: flag true, binary on PATH, not the live parent, and job-scoped MCP ready. **Cursor remains excluded** until safe scoped MCP exists.
+- Claude Code and Cursor are never the parent. Grok Bot.app and Cursor.app are GUIs, not spawnable workers. Cursor worker binary is `cursor-agent`.
+- Rollback ladder: `[routing] mode = "legacy"` in harness (smart is default when mode is omitted).
+
+## Smart routing
+
+Smart routing is **deterministic policy**: role plus complexity / risk / uncertainty map to a minimum tier, then an eligible model+effort profile. It is **not** an LLM classifier and **not** a learning/ranking system. `rig routing report` is read-only and does not change future picks.
+
+| Role | Default complexity / risk / uncertainty | Minimum tier |
+| --- | --- | --- |
+| explore, mini, bulk | low / low / low | fast |
+| implement | medium / medium / medium | standard |
+| hard | high / medium / high | strong |
+| review | high / medium / medium | strong |
+| stay | not assessed | live parent; no catalog discovery |
+
+**Tier rule:** any **high** → **strong**; else any **medium** → **standard**; else **fast**. Hard and review cannot go below **strong**. Explicit role wins over task-text inference. High risk may recommend independent review later; that is not automatic and is not claimed here.
+
+```mermaid
+flowchart TD
+  role[Role + assessment] --> stay{stay?}
+  stay -->|yes| parentAns[Live parent — no catalog]
+  stay -->|no| hr{hard or review?}
+  hr -->|yes| strong[strong floor]
+  hr -->|no| high{Any high?}
+  high -->|yes| strong
+  high -->|no| med{Any medium?}
+  med -->|yes| standard[standard]
+  med -->|no| fast[fast]
+  strong --> pick[Min sufficient tier then preference then stable ID]
+  standard --> pick
+  fast --> pick
+  pick --> launch[Eligible profile at that tier — or parent_writes]
+```
+
+Eligibility still requires worker flags, binary, live-parent exclusion, scoped MCP readiness, excludes, model bans, and catalog confirmation where required. A tier is a floor: not every candidate has a fast (or any) profile. Default fast/standard worker preference order: Grok, Claude, OpenCode, OMP, Pi, agy, Codex. Strong/review: Claude, Grok, OpenCode, OMP, Pi, agy, Codex. Optional `.rig/routing.json` can override preferences; config never enables workers.
+
+Inspect a decision and outcomes:
+
+```bash
+rig pick implement --case "Update a label" \
+  --complexity low --risk low --uncertainty low \
+  --assessment-reason "One isolated string" --explain
+
+rig session --role implement --case "Change admission checks" \
+  --risk high --compact --explain
+
+rig pick mini --case "Small but unfamiliar configuration change" \
+  --uncertainty high --json
+
+rig routing report --days 30 --json
+```
+
+Full profiles, catalog rules, MCP fields, and rollback: [smart routing](docs/smart-routing.md).
+
+## Everyday prompts and queue
+
+| You type | What happens |
+| --- | --- |
+| `How does pick choose a worker?` | Stay. Parent answers. No child. |
+| `Fix the failing tests in tests/test_cli.py` | Parent names files → brief → child (or `parent_writes`). |
+| `/queue fix the sidebar after this job` | Park only. Does **not** spawn or interrupt the running child. |
+| `Review the diff I staged` | Standalone review; independence stays unknown unless writer provenance supports it. |
+
+**Queue:** F9 (companion), supported `/queue` hooks, `rig tui` key `e`, and `rig queue add` all **park** work. Nothing in the queue daemon-launches workers. On a free parent turn the parent claims by **id**, names files, prepares brief TEXT, then MCP `rig_job_launch`. Cap is `[queue].max_running` (default 3 reserved/running/ASK). HUD refresh never spawns. Longer why and drain steps: [Usage — queue](docs/usage.md#how-the-queue-works).
+
+```bash
+rig queue add "Add regression tests for routing"
+rig queue list
+```
+
+Park only — these commands do not spawn a worker.
+
+Children must call `rig_job_inbox` first; missing handshake fails with exact `child MCP handshake missing` while preserving evidence and ownership.
+
+## Optional terminal companion
+
+With tmux 3.3+ installed, opt in once:
+
+```bash
+rig setup --shell-ui
+# Open a new shell, then in an initialized repo:
+codex
+# or: grok
+```
+
+| Control | What you get |
+| --- | --- |
+| Status row | Working/reserved counts, queued items, attention |
+| F8 | Jobs / Queue / Notices, details, approvals, stop with confirmation |
+| F9 | Queue editor while the parent runs (park only) |
+| Esc in queue editor | Close and retain the draft |
+
+Bash and zsh supported. `rig ui disable` / `rig ui enable`, `rig ui sessions`, `rig ui attach ID`. Companion targets **Codex and Grok** first. Details: [terminal companion](docs/usage.md#optional-terminal-companion).
 
 ## Watch
 
-- Inside Codex/Grok: optional companion status row, **F8** manager, **F9** queue editor
-- Separate board: `rig tui` / `rig jobs` / `/rig`
-- Park: `/queue …` (see table in [Usage](docs/usage.md#watch-jobs-memory)) or `rig tui` key `e`
-- HUD: Grok/agy statusline, OMP/Pi widget, OpenCode sidebar. Codex native queue hook: `/plugins` **Rig Queue** then `/hooks`; companion UI is enabled separately
+- Companion status row, **F8**, **F9** (Codex/Grok)
+- Board: `rig tui` / `rig jobs` / `/rig`
+- Park: `/queue …` or `rig tui` key `e` — see [Usage — watch](docs/usage.md#watch-jobs-memory)
+- HUD: Grok/agy statusline, OMP/Pi widget, OpenCode sidebar. Codex: `/plugins` **Rig Queue** then `/hooks`; companion UI is separate
 - Pi `/rig` also needs `pi install npm:pi-mcp-adapter`
 
-Jobs and MEMORY are this repo, not the chat. A new thread still sees `.rig/jobs`. Esc/Stop on **this wait** records durable cancellation for its attached job attempts and returns promptly. Pending queue items and unattached jobs stay. After explicit cancellation, do not re-wait, re-pick, or drain queued work automatically.
+Jobs and MEMORY are this repo, not the chat. A new thread still sees `.rig/jobs`.
 
-`stop-unconfirmed` and `native-cancel-required` mean execution is not yet confirmed stopped. Rig cannot interrupt a host-native agent itself; its owning host must interrupt that agent and report authenticated completion. Unconfirmed work keeps its slot and files. After cancelled execution is confirmed stopped, explicitly close it to release its files. A transport failure alone preserves workers: take one bounded status snapshot with `rig job wait ID --timeout 0`, then inspect or reconcile.
+In `rig tui`: Tab switches Jobs/Queue; `e` queue editor; `x` cancel selected; `l` activity; `q` exits without stopping jobs.
 
-In `rig tui`, Tab switches Jobs/Queue; `e` opens the Unicode queue editor, Enter saves, and Esc cancels the draft. Drafts survive a failed save. `x` cancels the selected job or queue item, `l` toggles the activity view, and `q` exits the board without stopping jobs. Snapshots and actions run in the background; the board shows snapshot age and refresh errors.
+Parent orchestration is MCP (`rig_session`, `rig_job_launch`, `rig_job_wait`, allow/deny, requirements/check/accept). Shell `run-worker.sh` is human/internal fallback. Claude `ask` → allow/deny; never kill that job because it asked.
 
-Parent orchestration is MCP (`rig_session`, `rig_job_launch`, `rig_job_wait`, `rig_job_allow` / `rig_job_deny`, requirement/check/accept tools). REQUIRED agent launch is MCP `rig_job_launch`; shell `run-worker.sh` is human/internal fallback. Claude `ask` → allow/deny; never kill that job.
+**Diagram preview:** `rig diagram PATH [--ascii] [--popup] [--output PATH]` — local Mermaid to terminal text. Requires Node.js. [diagram preview](docs/diagram-preview.md).
 
-Execution `ok` means the worker exited successfully. **Verified** means the parent accepted the current scoped content against its requirements; later edits invalidate that acceptance. Job details show actual model provenance, held reservations, checks, and independent-review status separately. Never infer verification from a successful exit.
+## Verification and cancellation
 
-**Diagram preview:** `rig diagram PATH [--ascii] [--popup] [--output PATH]` prints local Mermaid (`.mmd` / `.mermaid` or markdown fenced blocks) as Unicode diagrams in the terminal. `--ascii` uses plain ASCII; `--popup` opens a scrollable tmux `display-popup` with `less -S`; `--output PATH` writes text only and refuses to overwrite. Requires Node.js. Supported subset: flowchart, state, sequence, class, ER, XYChart. Not an inline Codex/Grok Mermaid renderer and not a browser/CDN preview. Details: [diagram preview](docs/diagram-preview.md).
+Execution `ok` means the worker exited successfully. **Verified** means the parent accepted the current scoped content against declared requirements; later edits invalidate that acceptance. Do not treat exit zero as acceptance.
 
-More: [Visual flow guide](docs/rig-flow.md) · [Usage](docs/usage.md) (prompt routing, queue scenarios, setup, doctor, troubleshooting).
-Parent spawn protocol: `.agents/skills/delegate-harness/SKILL.md` (also the `<!-- rig:start -->` block in `AGENTS.md`).
+Esc / Stop on **this wait** records durable cancellation for attached attempts and returns promptly. Pending queue items and unattached jobs stay. After explicit cancellation, do not re-wait, re-pick, or drain automatically.
+
+`stop-unconfirmed` and `native-cancel-required` mean execution is not confirmed stopped. Unconfirmed work keeps its slot and files. After cancelled execution is confirmed stopped, close explicitly to release files. Transport failure alone preserves workers: one bounded `rig job wait ID --timeout 0`, then inspect or reconcile.
+
+## Troubleshooting
+
+| Symptom | Check |
+| --- | --- |
+| `rig` not found | PATH → `$HOME/.local/bin` |
+| MCP / status missing | Fully quit parent once; `rig doctor` |
+| Worker `effective=off` | flag, binary, live parent, MCP; Cursor always excluded |
+| Expected smart routing after `rig update` | `main` install may not include `feat/smart-model-routing`; use checkout + `./install.sh` |
+| Queue item never runs | Park only; parent must claim on a free turn with disjoint files |
+
+More: [Usage troubleshooting](docs/usage.md#troubleshooting).
+
+## Docs
+
+- [Visual flow](docs/rig-flow.md) · [Usage](docs/usage.md) · [Smart routing](docs/smart-routing.md)
+- Parent spawn protocol: `.agents/skills/delegate-harness/SKILL.md` (also `<!-- rig:start -->` in `AGENTS.md`)
