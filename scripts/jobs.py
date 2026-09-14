@@ -1885,6 +1885,48 @@ def recover_cancelled_job(repo: Path, job_id: str, *, reservation_id: str = "", 
     )
 
 
+def _record_abandoned_parent_job(repo: Path, job_id: str, record: dict) -> None:
+    job_dir = _job_path(repo, job_id)
+    if not (job_dir / "meta.json").is_file():
+        return
+    meta = _read_meta_dict(job_dir)
+    now = iso_now()
+    started = _started_at(job_dir, meta, now)
+    recovery = record.get("parent_write_recovery") or {}
+    summary = str(recovery.get("rationale") or record.get("release_reason") or "parent write abandoned")
+    worker = str(meta.get("worker") or record.get("worker") or "")
+    write_job_files(
+        job_dir, job_id, worker, str(meta.get("role") or record.get("role") or "parent"),
+        "cancelled", _exit_code("cancelled"), started, now, summary,
+        kind=str(meta.get("kind") or "native"), thread=_job_thread(repo),
+        model=str(meta.get("model") or record.get("model") or ""),
+        effort=str(meta.get("effort") or ""), executor_kind="parent",
+        execution_mode=str(meta.get("execution_mode") or "parent"),
+        reservation=record, capture_evidence=True,
+    )
+    write_state(repo, job_id, worker, "cancelled", summary)
+    persist_activity(job_dir)
+
+
+def recover_parent_write_job(repo: Path, job_id: str, *, owner_session: str = "",
+                             rationale: str = "", confirmed_stopped: bool = False,
+                             owner=None) -> dict:
+    _require_harness(repo)
+    _native_parent_only()
+    import admission
+
+    if not job_id:
+        raise ValueError("rig job: recover-parent-write requires a job ID")
+    with admission.transaction(repo):
+        result = admission.recover_parent_write(
+            repo, job_id=job_id, rationale=rationale, confirmed_stopped=confirmed_stopped,
+            owner=owner, owner_session=owner_session,
+        )
+        if not result.get("artifacts_missing"):
+            _record_abandoned_parent_job(repo, job_id, (result.get("items") or [{}])[0])
+        return result
+
+
 def record_job(
     repo: Path,
     worker: str = "",
@@ -2112,6 +2154,7 @@ def main() -> int:
             "persist",
             "message",
             "start", "finish", "record", "close", "reconcile", "recover-cancelled",
+            "recover-parent-write",
         ],
     )
     parser.add_argument("job_id", nargs="*")
@@ -2150,12 +2193,13 @@ def main() -> int:
     parser.add_argument("--assessment-json", default="")
     parser.add_argument("--rationale", default="")
     parser.add_argument("--apply", action="store_true")
+    parser.add_argument("--confirmed-stopped", action="store_true")
     parser.add_argument("--action", choices=["report", "adopt", "release"], default="report")
     args = parser.parse_intermixed_args()
     repo = repo_root(args.repo)
     wait_ids = [str(x).strip() for x in (args.job_id or []) if str(x).strip()]
     job_id = wait_ids[0] if wait_ids else None
-    if args.cmd in {"start", "finish", "record", "close", "reconcile", "recover-cancelled"}:
+    if args.cmd in {"start", "finish", "record", "close", "reconcile", "recover-cancelled", "recover-parent-write"}:
         if len(wait_ids) > 1:
             parser.error("this command accepts one job ID")
         ownership = {"reservation_id": args.reservation_id, "attempt_id": args.attempt_id,
@@ -2187,6 +2231,11 @@ def main() -> int:
             elif args.cmd == "recover-cancelled":
                 print(json.dumps(recover_cancelled_job(repo, job_id or "", rationale=args.rationale,
                                                        apply=args.apply, **ownership)))
+            elif args.cmd == "recover-parent-write":
+                print(json.dumps(recover_parent_write_job(
+                    repo, job_id or "", rationale=args.rationale,
+                    confirmed_stopped=args.confirmed_stopped, owner_session=args.owner_session,
+                )))
             else:
                 print(json.dumps(reconcile_jobs(repo, job_id or "", queue_id=args.queue_id,
                     apply=args.apply, action=args.action, **ownership,

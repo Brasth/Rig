@@ -16,7 +16,7 @@ import jobs
 import rig_mcp
 
 
-class NativeAdmission(unittest.TestCase):
+class NativeHarness(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
@@ -48,6 +48,8 @@ class NativeAdmission(unittest.TestCase):
         return self.call("rig_job_finish", id=lease["job_id"], **self.auth(lease),
                          **{"completion": {"kind": "parent_task", "completed": True}, **args})
 
+
+class NativeAdmission(NativeHarness):
     def test_start_establishes_scope_before_edits_and_keeps_credentials_private(self):
         lease = self.start()
         folder = self.repo / ".rig" / "jobs" / "writer"
@@ -305,6 +307,177 @@ else:
                 if process.poll() is None:
                     process.kill()
                 process.communicate()
+
+
+class ParentWriteRecovery(NativeHarness):
+    def recover(self, job_id="writer", **args):
+        return self.call("rig_job_recover_parent_write", id=job_id,
+                         **{"confirmed_stopped": True, "rationale": "Owning parent turn was cancelled", **args})
+
+    def payload(self, result):
+        self.assertFalse(result.get("isError"), result)
+        text = result["content"][0]["text"]
+        return json.loads(text), json.dumps(result)
+
+    def test_schema_documents_attestation_and_omits_owner_token(self):
+        tool = next(item for item in rig_mcp.TOOLS if item["name"] == "rig_job_recover_parent_write")
+        props = tool["inputSchema"]["properties"]
+        self.assertNotIn("owner_token", props)
+        self.assertIn("confirmed_stopped", props)
+        self.assertEqual(set(tool["inputSchema"]["required"]), {"id", "confirmed_stopped", "rationale"})
+        self.assertIn("allow/approve is not completion", tool["description"].lower())
+        self.assertIn("Codex/Pi", tool["description"])
+
+    def test_same_owner_recovery_releases_only_that_parent_attempt(self):
+        (self.repo / "other.txt").write_text("other\n")
+        writer = self.start()
+        other = self.start("other", files=["other.txt"])
+        missing = self.recover(confirmed_stopped=False, rationale="still running")
+        self.assertTrue(missing.get("isError"), missing)
+        self.assertIn("confirmed_stopped=true", missing["content"][0]["text"])
+        empty = self.recover(rationale="   ")
+        self.assertTrue(empty.get("isError"), empty)
+        result = self.recover()
+        payload, dumped = self.payload(result)
+        self.assertEqual(payload["applied"], 1)
+        self.assertTrue(payload["recovery"]["confirmed_stopped"])
+        self.assertEqual(payload["items"][0]["execution_status"], "cancelled")
+        self.assertEqual(payload["items"][0]["stage"], "released")
+        self.assertFalse(payload["items"][0]["slot_held"])
+        self.assertFalse(payload["items"][0]["needs_reconciliation"])
+        self.assertEqual(payload["items"][0]["completion"]["kind"], "parent_write_abandonment")
+        self.assertNotIn(writer["owner_token"], dumped)
+        self.assertNotIn(other["owner_token"], dumped)
+        self.assertNotIn(writer["owner_token"], json.dumps(admission.list_reservations(self.repo, include_released=True)))
+        self.assertEqual({row["job_id"] for row in admission.list_reservations(self.repo)}, {"other"})
+        job = jobs.resolve_job(self.repo, "writer")
+        self.assertEqual(job["status"], "cancelled")
+        self.assertNotEqual(job["verification"]["state"], "verified")
+        self.assertNotEqual(job["verification"].get("acceptance"), "accepted")
+        self.assertTrue((self.repo / ".rig" / "jobs" / "writer" / "parent-write-recovery.json").is_file())
+        repeat = self.payload(self.recover())[0]
+        self.assertEqual(repeat["applied"], 0)
+        self.assertEqual(repeat["items"][0]["attempt_id"], writer["attempt_id"])
+        self.assertEqual(len(admission.list_reservations(self.repo)), 1)
+        self.start("replacement")
+
+    def test_missing_job_artifacts_recover_from_reservation_without_token(self):
+        import shutil
+
+        lease = self.start()
+        shutil.rmtree(self.repo / ".rig" / "jobs" / "writer")
+        result = self.recover()
+        payload, dumped = self.payload(result)
+        self.assertEqual(payload["applied"], 1)
+        self.assertTrue(payload["artifacts_missing"])
+        self.assertTrue(payload["recovery"]["artifacts_missing"])
+        self.assertNotIn(lease["owner_token"], dumped)
+        self.assertFalse((self.repo / ".rig" / "jobs" / "writer").exists())
+        rows = admission.list_reservations(self.repo, include_released=True)
+        self.assertEqual(rows[0]["execution_status"], "cancelled")
+        self.assertEqual(rows[0]["stage"], "released")
+        self.assertFalse(rows[0]["slot_held"])
+        self.assertTrue(rows[0]["parent_write_recovery"]["artifacts_missing"])
+        self.assertNotIn(lease["owner_token"], json.dumps(rows))
+        self.start("replacement")
+
+    def test_wrong_session_job_active_operation_and_child_attempts_are_rejected(self):
+        lease = self.start()
+        wrong_session = self.recover(owner_session="another-parent")
+        self.assertTrue(wrong_session.get("isError"), wrong_session)
+        current_session = os.environ.get("RIG_THREAD", "")
+        try:
+            os.environ["RIG_THREAD"] = "different-current-parent"
+            spoofed_session = self.recover(owner_session=current_session)
+            self.assertTrue(spoofed_session.get("isError"), spoofed_session)
+            self.assertIn("current parent session", spoofed_session["content"][0]["text"])
+        finally:
+            os.environ["RIG_THREAD"] = current_session
+        missing_job = self.recover("unbound-job")
+        self.assertTrue(missing_job.get("isError"), missing_job)
+        path = self.repo / ".rig" / "reservations" / (lease["reservation_id"] + ".json")
+        record = json.loads(path.read_text())
+        record["operation"] = {"id": "active", "operation": "check", "pid": os.getpid(), "start_id": "live"}
+        path.write_text(json.dumps(record))
+        active = self.recover()
+        self.assertTrue(active.get("isError"), active)
+        self.assertIn("verification", active["content"][0]["text"])
+        record.pop("operation")
+        path.write_text(json.dumps(record))
+        self.assertEqual([row["job_id"] for row in admission.list_reservations(self.repo)], ["writer"])
+        (self.repo / "child.txt").write_text("child\n")
+        self.start("child", role="mini", executor_kind="native_child", native_agent_id="agent-A",
+                   model="gpt-5.6-luna", files=["child.txt"])
+        child = self.recover("child")
+        self.assertTrue(child.get("isError"), child)
+        self.assertIn("native_child", child["content"][0]["text"])
+        (self.repo / "wrap.txt").write_text("wrap\n")
+        owner = admission.caller_owner("wrapper")
+        wrapper = admission.reserve(self.repo, job_id="wrapper", worker="codex", role="worker",
+                                    model="gpt-5.6-luna", files=["wrap.txt"], owner=owner)
+        folder = self.repo / ".rig" / "jobs" / "wrapper"
+        jobs.write_job_files(folder, "wrapper", "codex", "worker", "running", 0, jobs.iso_now(), "", "",
+                             kind="wrapper", executor_kind="wrapper", model="gpt-5.6-luna", reservation=wrapper)
+        wrapped = self.recover("wrapper")
+        self.assertTrue(wrapped.get("isError"), wrapped)
+        self.assertIn("wrapper", wrapped["content"][0]["text"])
+        self.assertTrue(any(row["job_id"] == "writer" and row["stage"] != "released"
+                            for row in admission.list_reservations(self.repo)))
+        closed = self.call("rig_job_close", id="writer", rationale="still live", **self.auth(lease))
+        self.assertTrue(closed.get("isError"), closed)
+
+    def test_released_scope_and_successful_finish_cannot_use_abandonment(self):
+        lease = self.start()
+        self.assertFalse(self.finish(lease).get("isError"))
+        refused = self.recover()
+        self.assertTrue(refused.get("isError"), refused)
+        closed = self.call("rig_job_close", id="writer", rationale="Conclude without acceptance", **self.auth(lease))
+        self.assertFalse(closed.get("isError"), closed)
+        released = self.recover()
+        self.assertTrue(released.get("isError"), released)
+        self.assertIn("released", released["content"][0]["text"])
+
+    def test_pi_parent_session_recovers_without_owner_token(self):
+        os.environ["RIG_PARENT"] = "pi"
+        os.environ["RIG_THREAD"] = "pi-parent-session"
+        lease = self.start()
+        result = self.recover(owner_session="pi-parent-session")
+        payload, dumped = self.payload(result)
+        self.assertEqual(payload["applied"], 1)
+        self.assertNotIn(lease["owner_token"], dumped)
+        self.assertEqual(payload["items"][0]["owner"]["session_id"], "pi-parent-session")
+        self.start("replacement")
+
+    def test_queued_parent_write_recovery_cancels_queue_item(self):
+        import work_queue
+
+        item = work_queue.add_item(self.repo, "Queued parent write")
+        claimed = self.call("rig_queue_claim", id=item["id"], worker="codex", files=["subject.txt"])
+        self.assertFalse(claimed.get("isError"), claimed)
+        self.start(queue_id=item["id"], **self.auth(claimed["structuredContent"]))
+        self.payload(self.recover())
+        self.assertEqual(work_queue.load_item(self.repo, item["id"])["status"], "cancelled")
+        self.assertNotEqual(work_queue.load_item(self.repo, item["id"])["status"], "pending")
+
+    def test_cli_recover_parent_write_matches_mcp(self):
+        lease = self.start()
+        cli = subprocess.run(
+            [str(ROOT / "bin" / "rig"), "job", "recover-parent-write", "writer",
+             "--confirmed-stopped", "--rationale", "Owning parent turn was cancelled"],
+            cwd=self.repo, text=True, capture_output=True,
+        )
+        self.assertEqual(cli.returncode, 0, cli.stderr)
+        payload = json.loads(cli.stdout)
+        self.assertEqual(payload["applied"], 1)
+        self.assertNotIn(lease["owner_token"], cli.stdout)
+        self.assertNotIn(lease["owner_token"], cli.stderr)
+        repeat = subprocess.run(
+            [str(ROOT / "bin" / "rig"), "job", "recover-parent-write", "writer",
+             "--confirmed-stopped", "--rationale", "already recovered"],
+            cwd=self.repo, text=True, capture_output=True,
+        )
+        self.assertEqual(repeat.returncode, 0, repeat.stderr)
+        self.assertEqual(json.loads(repeat.stdout)["applied"], 0)
 
 
 if __name__ == "__main__":

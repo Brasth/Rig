@@ -61,6 +61,7 @@ EXISTING_TOOLS = (
     "rig_queue_unclaim",
     "rig_queue_spawned",
     "rig_job_recover_cancelled",
+    "rig_job_recover_parent_write",
 )
 CHILD_TOOLS = (
     "rig_job_doing",
@@ -430,6 +431,7 @@ class McpDispatch(unittest.TestCase):
             self.assertNotIn("rig_job_wait", names)
             self.assertNotIn("rig_job_cancel", names)
             self.assertNotIn("rig_job_recover_cancelled", names)
+            self.assertNotIn("rig_job_recover_parent_write", names)
             self.assertNotIn("rig_job_message", names)
             self.assertNotIn("rig_queue_add", names)
             self.assertNotIn("rig_queue_claim", names)
@@ -442,6 +444,13 @@ class McpDispatch(unittest.TestCase):
             )
             self.assertTrue(recover.get("isError"))
             self.assertIn("not a child tool", self._text(recover))
+            parent_recover = rig_mcp.call_tool(
+                "rig_job_recover_parent_write",
+                {"id": job_id, "repo": str(self.repo), "confirmed_stopped": True,
+                 "rationale": "child must not recover parent writes"},
+            )
+            self.assertTrue(parent_recover.get("isError"))
+            self.assertIn("not a child tool", self._text(parent_recover))
             inbox0 = rig_mcp.call_tool("rig_job_inbox", {})
             self.assertNotIn("isError", inbox0)
             self.assertEqual(self._text(inbox0), "(empty)")
