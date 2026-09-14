@@ -186,7 +186,10 @@ class CompatibilityContracts(unittest.TestCase):
                                         ("stale", 0, 1), ("cold", 1, 0)):
             with self.subTest(mode=mode):
                 self.fixture.prepare_catalog(mode)
-                selected = route.pick("codex", ["opencode", "omp", "pi", "agy"], "review", "Review")
+                # Preserve the legacy selected-worker-only catalog contract;
+                # smart policy has separate lazy, ranked-candidate tests.
+                selected = route.pick("codex", ["opencode", "omp", "pi", "agy"], "review", "Review",
+                                      policy_mode="legacy")
                 self.assertEqual(selected["worker"], "opencode")
                 self.assertEqual(self.fixture.counts["catalog_probes"], probes)
                 self.assertEqual(self.fixture.counts["catalog_refresh_schedules"], refreshes)

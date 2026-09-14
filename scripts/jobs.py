@@ -744,6 +744,7 @@ def load_job(job_path: Path, *, include_activity: bool = True) -> dict | None:
         "kind": kind,
         "status": status,
         "effective": effective,
+        "exit_code": _coerce_exit_code(obj.get("exit_code")),
         "pid": pid_i,
         "alive": alive,
         "session_id": str(obj.get("session_id") or ""),
@@ -1227,12 +1228,30 @@ def format_show(job: dict, log_lines: int = 24) -> str:
         f"child_mcp  {rig_child_mcp.display_status(_read_meta_dict(job_dir), running=job.get('effective') in {'running', 'ask'})}"
     )
     lines.append(f"verification  {assessment.get('state', 'unknown')} ({assessment.get('reason') or assessment.get('acceptance', 'pending')})")
+    sidecar = None
+    try:
+        import routing_policy
+
+        sidecar = routing_policy.read_sidecar(job_dir, expected_attempt_id=str(job.get("attempt_id") or ""))
+    except Exception:
+        sidecar = None
+    if sidecar and sidecar.get("routing"):
+        routing = sidecar["routing"]
+        profile = routing.get("selected_profile") or {}
+        lines.append(
+            f"routing   {routing.get('policy_mode') or '-'} v{routing.get('policy_version') or '-'} "
+            f"tier={routing.get('required_tier') or '-'} profile={profile.get('id') or '-'}"
+        )
+        lines.append(f"routing_attempt  {sidecar['attempt_id']}")
+        rec = routing.get("review_recommendation") or "none"
+        if rec != "none":
+            lines.append(f"review_recommendation  {rec} (not a completion gate)")
     try:
         snapshot = change_evidence.snapshot(repo, job.get("files") or [], cache=hash_cache)
         lines.append(f"snapshot_id  {snapshot['snapshot_id']}")
     except (OSError, ValueError):
         lines.append("snapshot_id  unavailable (declare a concrete file scope)")
-    for name in ("change-evidence.json", "requirements.json", "verification.json", "checks"):
+    for name in ("change-evidence.json", "requirements.json", "verification.json", "checks", "routing.json"):
         if (job_dir / name).exists():
             lines.append(f"evidence  {job_dir / name}")
     claims = verification.worker_claims(job_dir)
@@ -1578,6 +1597,15 @@ def _started_at(job_dir: Path, meta: dict, now: str) -> str:
     return started or now
 
 
+def _coerce_exit_code(value):
+    if value in (None, ""):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _exit_code(status: str) -> int:
     if status == "ok":
         return 0
@@ -1634,6 +1662,8 @@ def start_job(
     queue_id: str = "",
     native_agent_id: str = "",
     return_details: bool = False,
+    routing=None,
+    assessment=None,
 ) -> str | dict:
     """Write a running job. Does not launch a worker. Returns the job id."""
     _require_harness(repo)
@@ -1650,17 +1680,44 @@ def start_job(
     kind = "parent" if worker == "parent" or role == "parent" else executor_kind or "native_child"
     if kind not in {"parent", "native_child"}:
         raise SystemExit("rig job: executor_kind must be parent|native_child")
-    access = access or ("read" if role in {"review", "explore", "research"} else "write")
     import admission
     import route
+    import routing_policy
+    # Aliases such as explorer must receive the same default access as explore.
+    access = access or ("read" if role == "research" or route.classify(role, "") in {"review", "explore"} else "write")
     # Resolve models before taking the admission lock. Parent models are observed,
     # while child selections still honor model bans and effective worker policy.
+    if routing not in (None, "") and not isinstance(routing, dict):
+        raise SystemExit("rig job: routing must be an object")
+    if assessment not in (None, "") and not isinstance(assessment, dict):
+        raise SystemExit("rig job: assessment must be an object")
+    assessment_obj = assessment if isinstance(assessment, dict) else None
+    picked_routing = routing if isinstance(routing, dict) else None
     if not model and kind != "parent":
-        model, effort = route.resolved_model_for(worker, route.classify(role, ""))
+        if routing_policy.resolve_mode(repo, None) == "smart":
+            try:
+                choice = routing_policy.resolve_explicit_worker_choice(
+                    live, worker, role, "", repo=repo, assessment=assessment_obj,
+                )
+            except (ValueError, routing_policy.ConfigError) as error:
+                raise SystemExit(f"rig job: {error}") from error
+            model, effort = choice.get("model") or "", choice.get("effort") or ""
+            if picked_routing is None and isinstance(choice.get("routing"), dict):
+                picked_routing = choice["routing"]
+        else:
+            model, effort = route.resolved_model_for(worker, route.classify(role, ""))
     if model and kind != "parent":
         error = route.assert_child_model(model)
         if error:
             raise SystemExit(error)
+    try:
+        routing_obj = routing_policy.validate_launch_tuple(
+            repo, worker=worker, model=model, effort=effort, role=role,
+            routing=picked_routing, assessment=assessment_obj,
+            executor_kind=kind, access=access,
+        )
+    except (ValueError, routing_policy.ConfigError) as error:
+        raise SystemExit(f"rig job: {error}") from error
     owner = admission.caller_owner(kind, owner_session=owner_session, native_agent_id=native_agent_id)
     owner["parent_cli"] = live
     now = iso_now()
@@ -1680,6 +1737,7 @@ def start_job(
                             executor_kind=kind, execution_mode="parent" if kind == "parent" else "native",
                             writer_job_id=writer_job_id, writer_snapshot_id=writer_snapshot_id,
                             reservation=lease)
+            routing_policy.write_sidecar(job_dir, lease["attempt_id"], routing_obj)
             lease = admission.activate(repo, **credentials, job_id=job_id, worker=worker, files=listed,
                                        access=access, owner=owner, owner_session=owner_session,
                                        native_agent_id=native_agent_id)
@@ -2088,6 +2146,8 @@ def main() -> int:
     parser.add_argument("--completion-json")
     parser.add_argument("--writer-job-id", default="")
     parser.add_argument("--writer-snapshot-id", default="")
+    parser.add_argument("--routing-json", default="")
+    parser.add_argument("--assessment-json", default="")
     parser.add_argument("--rationale", default="")
     parser.add_argument("--apply", action="store_true")
     parser.add_argument("--action", choices=["report", "adopt", "release"], default="report")
@@ -2106,9 +2166,12 @@ def main() -> int:
             files = json.loads(args.files_json) if args.files_json is not None else None
             completion = json.loads(args.completion_json) if args.completion_json is not None else None
             if args.cmd == "start":
+                routing = json.loads(args.routing_json) if args.routing_json else None
+                assessment = json.loads(args.assessment_json) if args.assessment_json else None
                 result = start_job(repo, job_id=job_id or "", files=files, access=args.access,
                                    queue_id=args.queue_id, native_agent_id=args.native_agent_id,
                                    writer_job_id=args.writer_job_id, writer_snapshot_id=args.writer_snapshot_id,
+                                   routing=routing, assessment=assessment,
                                    return_details=True, **common, **ownership)
                 print(json.dumps(result) if args.json else result["job_id"])
                 print(f"job {result['job_id']} status=running\ncredentials {result['credentials_path']}", file=sys.stderr)

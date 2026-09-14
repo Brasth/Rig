@@ -421,6 +421,8 @@ class InitPresence(unittest.TestCase):
         self.assertIn("curl -fsSL https://antigravity.google/cli/install.sh", doc.stdout)
 
     def test_job_start_accepts_cursor(self):
+        # Explicit native model registration remains manual compatibility, not
+        # permission to auto-select or launch a Cursor wrapper.
         run_rig(self.repo, "init", env={"PATH": _stub_path()})
         run_rig(self.repo, "workers", "cursor=on", env={"PATH": _stub_path()})
         proc = run_rig(
@@ -431,6 +433,7 @@ class InitPresence(unittest.TestCase):
             "cursor",
             "--role",
             "implement",
+            "--model", "composer-2.5",
             env={"PATH": _stub_path()},
         )
         self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
@@ -447,6 +450,8 @@ class InitPresence(unittest.TestCase):
             env={"PATH": _stub_path()},
         )
         for name in ("opencode", "omp", "pi", "agy"):
+            models = {"opencode": "openai/gpt-5.6-luna", "omp": "grok-4.6",
+                      "pi": "grok-4.6", "agy": "gemini-3.8-flash-high"}
             proc = run_rig(
                 self.repo,
                 "job",
@@ -455,6 +460,7 @@ class InitPresence(unittest.TestCase):
                 name,
                 "--role",
                 "implement",
+                "--model", models[name],
                 "--json", "--owner-session", "worker-availability-test",
                 env={"PATH": _stub_path()},
             )
@@ -553,7 +559,7 @@ class InitPresence(unittest.TestCase):
         self.assertIn("openai/gpt-5.6-luna", text)
         self.assertIn("gemini-3.8-flash-high", text)
         self.assertIn("~/.rig/cache/model-catalogs.json", text)
-        self.assertIn("pins are preferences", text)
+        self.assertIn("profiles require exact selectors or declared aliases", text)
         self.assertIn("never spawn a worker whose harness flag is false", text)
         self.assertIn("Timeout/fail does not unlock a disabled worker", text)
         self.assertIn("Parent checks first", text)

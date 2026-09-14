@@ -40,6 +40,28 @@ REVIEW_PROPERTIES = {
     "writer_provider": {"type": "string"},
     "review_mode": {"type": "string", "enum": ["standalone", "independent"], "default": "standalone"},
 }
+ASSESSMENT_LEVELS = ["low", "medium", "high"]
+RAW_ASSESSMENT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "complexity": {"type": "string", "enum": ASSESSMENT_LEVELS},
+        "risk": {"type": "string", "enum": ASSESSMENT_LEVELS},
+        "uncertainty": {"type": "string", "enum": ASSESSMENT_LEVELS},
+        "reason": {"type": "string"},
+        "defaulted": {"type": "array", "items": {"type": "string"}},
+        "supplied": {"type": "boolean"},
+    },
+    "additionalProperties": False,
+}
+ASSESSMENT_PROPERTIES = {
+    "complexity": {"type": "string", "enum": ASSESSMENT_LEVELS},
+    "risk": {"type": "string", "enum": ASSESSMENT_LEVELS},
+    "uncertainty": {"type": "string", "enum": ASSESSMENT_LEVELS},
+    "assessment_reason": {"type": "string"},
+    "assessment": RAW_ASSESSMENT_SCHEMA,
+    "explain": {"type": "boolean", "default": False, "description": "Expand routing trace in text output."},
+    "policy_mode": {"type": "string", "enum": ["smart", "legacy"]},
+}
 PARENT_METADATA_PROPERTIES = {
     "parent_model": {
         "type": "string",
@@ -265,8 +287,23 @@ TOOLS = [
                         "(example: grok). Skips native if live is excluded."
                     ),
                 },
+                **ASSESSMENT_PROPERTIES,
             },
             "required": ["case"],
+        },
+    },
+    {
+        "name": "rig_routing_report",
+        "description": (
+            "Read-only routing evidence report. Does not influence pick. "
+            "Groups policy version, required tier, profile, and actual model/effort."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "days": {"type": "integer", "minimum": 1, "default": 30},
+                "repo": {"type": "string"},
+            },
         },
     },
     {
@@ -389,6 +426,7 @@ TOOLS = [
                     "description": "Comma worker names to skip. Same as rig_pick exclude.",
                 },
                 "repo": {"type": "string", "description": "Project root. Default cwd."},
+                **ASSESSMENT_PROPERTIES,
             },
             "required": ["case"],
         },
@@ -481,6 +519,8 @@ TOOLS = [
                 "writer_model": {"type": "string"},
                 "writer_provider": {"type": "string"},
                 "review_mode": {"type": "string", "enum": ["standalone", "independent"], "default": "standalone"},
+                "routing": {"type": "object", "description": "Untrusted pick routing metadata. Never an ownership credential."},
+                "assessment": RAW_ASSESSMENT_SCHEMA,
                 "reservation_id": {"type": "string"},
                 "attempt_id": {"type": "string"},
                 "owner_token": {"type": "string"},
@@ -619,6 +659,8 @@ for _tool in TOOLS:
             "files": {"type": "array", "items": {"type": "string"}},
             "writer_job_id": {"type": "string"},
             "writer_snapshot_id": {"type": "string"},
+            "routing": {"type": "object", "description": "Untrusted pick routing metadata. Never an ownership credential."},
+            "assessment": RAW_ASSESSMENT_SCHEMA,
         })
 
 _JOB_REF_PROPERTIES = {"id": {"type": "string"}, "repo": {"type": "string"}}
@@ -699,6 +741,7 @@ TOOL_ORDER = (
     "rig_jobs",
     "rig_pick",
     "rig_status",
+    "rig_routing_report",
     "rig_job_start",
     "rig_job_launch",
     "rig_job_show",
@@ -798,7 +841,7 @@ LAUNCH_ARG_NAMES = frozenset({
     "repo", "id", "case", "role", "worker", "model", "effort", "access", "files", "brief",
     "queue_id", "reservation_id", "attempt_id", "owner_token", "owner_session",
     "writer_job_id", "writer_snapshot_id", "writer_cli", "writer_model",
-    "writer_provider", "review_mode",
+    "writer_provider", "review_mode", "routing", "assessment",
 })
 
 
@@ -826,6 +869,48 @@ def _review_args(args: dict) -> dict:
     if values["review_mode"] not in {"standalone", "independent"}:
         raise ValueError("review_mode must be standalone|independent")
     return values
+
+
+def _assessment_args(args: dict) -> dict:
+    import routing_policy
+
+    assessment = args.get("assessment")
+    if assessment not in (None, "") and not isinstance(assessment, dict):
+        raise ValueError("assessment must be an object")
+    if isinstance(assessment, dict):
+        extra = set(assessment) - (routing_policy.ASSESSMENT_FIELDS | routing_policy.ASSESSMENT_META)
+        if extra:
+            raise ValueError(f"unknown assessment key {sorted(extra)[0]}")
+        for key in ("complexity", "risk", "uncertainty", "reason"):
+            if key in assessment:
+                value = assessment[key]
+                if value is None:
+                    continue
+                if isinstance(value, bool) or not isinstance(value, str):
+                    raise ValueError(f"assessment.{key} must be a string")
+        if "supplied" in assessment and type(assessment["supplied"]) is not bool:
+            raise ValueError("assessment.supplied must be a boolean")
+        if "defaulted" in assessment and (
+            not isinstance(assessment["defaulted"], list)
+            or any(not isinstance(item, str) for item in assessment["defaulted"])
+        ):
+            raise ValueError("assessment.defaulted must be a list of strings")
+    policy_mode = args.get("policy_mode", "")
+    if policy_mode not in (None, "", "smart", "legacy"):
+        raise ValueError("policy_mode must be smart|legacy")
+    explain = args.get("explain", False)
+    if type(explain) is not bool:
+        raise ValueError("explain must be a boolean")
+    out = {
+        "assessment": assessment if isinstance(assessment, dict) else None,
+        "complexity": _optional_string(args, "complexity") if "complexity" in args else "",
+        "risk": _optional_string(args, "risk") if "risk" in args else "",
+        "uncertainty": _optional_string(args, "uncertainty") if "uncertainty" in args else "",
+        "assessment_reason": _optional_string(args, "assessment_reason") if "assessment_reason" in args else "",
+        "policy_mode": policy_mode or None,
+        "explain": explain,
+    }
+    return out
 
 
 def _compact_rows(listing: list[dict], terminal_limit: int, *, repo: Path, cache=None) -> list[dict]:
@@ -870,6 +955,13 @@ def format_session(
     writer_model: str = "",
     writer_provider: str = "",
     review_mode: str = "standalone",
+    assessment: dict | None = None,
+    complexity: str = "",
+    risk: str = "",
+    uncertainty: str = "",
+    assessment_reason: str = "",
+    policy_mode: str | None = None,
+    explain: bool = False,
 ) -> str:
     if type(compact) is not bool:
         raise ValueError("rig_session: compact must be a boolean")
@@ -894,8 +986,11 @@ def format_session(
             parent_model=parent_model, parent_effort=parent_effort,
             writer_job_id=writer_job_id, writer_cli=writer_cli, writer_model=writer_model,
             writer_provider=writer_provider, review_mode=review_mode, repo=repo, jobs_snapshot=listing,
-            hash_cache=hash_cache,
+            hash_cache=hash_cache, assessment=assessment, complexity=complexity, risk=risk,
+            uncertainty=uncertainty, assessment_reason=assessment_reason, policy_mode=policy_mode,
+            explain=explain,
         )
+        choice = {key: value for key, value in choice.items() if not str(key).startswith("_")}
     shown = _compact_rows(listing, terminal_limit, repo=repo, cache=hash_cache) if compact else listing
     history = {
         "total": len(listing),
@@ -938,6 +1033,9 @@ def format_session(
         "# pick",
         pick_err or json.dumps(choice, indent=2),
     ]
+    if explain and choice and not pick_err:
+        import routing_policy
+        parts.extend(["# routing explanation", *routing_policy.explain_lines(choice)])
     return "\n".join(parts)
 
 
@@ -1183,8 +1281,9 @@ def call_tool(name: str, args: dict, on_tick=None, *, wait_paths: list[Path] | N
                 live, effective, role, case, exclude=exclude,
                 parent_model=_optional_string(args, "parent_model"),
                 parent_effort=_optional_string(args, "parent_effort"),
-                repo=repo, **_review_args(args),
+                repo=repo, **_review_args(args), **_assessment_args(args),
             )
+            choice = {key: value for key, value in choice.items() if not str(key).startswith("_")}
             return _ok(json.dumps(choice, indent=2))
         if name == "rig_session":
             role = str(args.get("role") or "").strip()
@@ -1206,11 +1305,21 @@ def call_tool(name: str, args: dict, on_tick=None, *, wait_paths: list[Path] | N
                     terminal_limit=args.get("terminal_limit", 10),
                     parent_model=_optional_string(args, "parent_model"),
                     parent_effort=_optional_string(args, "parent_effort"),
-                    **_review_args(args),
+                    **_review_args(args), **_assessment_args(args),
                 )
             )
         if name == "rig_status":
             return _ok(rig_harness.format_status(repo, live=rig_harness.live_parent()))
+        if name == "rig_routing_report":
+            import routing_report
+
+            days = args.get("days", 30)
+            if days is None:
+                days = 30
+            if type(days) is not int or days < 1:
+                return _err("days must be a positive integer")
+            report = routing_report.build_report(repo, days=days)
+            return {**_ok(routing_report.format_report(report)), "structuredContent": report}
         if name == "rig_job_close":
             result = rig_jobs.close_job(repo, _optional_string(args, "id"),
                                         rationale=_optional_string(args, "rationale"), **_ownership_args(args))
@@ -1283,6 +1392,7 @@ def call_tool(name: str, args: dict, on_tick=None, *, wait_paths: list[Path] | N
                         writer_snapshot_id=_optional_string(args, "writer_snapshot_id"),
                         access=_optional_string(args, "access"), queue_id=_optional_string(args, "queue_id"),
                         native_agent_id=_optional_string(args, "native_agent_id"), return_details=True,
+                        routing=args.get("routing"), assessment=args.get("assessment"),
                         **_ownership_args(args),
                 )
                 return {**_ok(result["job_id"]), "structuredContent": result}
@@ -1346,6 +1456,8 @@ def call_tool(name: str, args: dict, on_tick=None, *, wait_paths: list[Path] | N
                     writer_model=_optional_string(args, "writer_model"),
                     writer_provider=_optional_string(args, "writer_provider"),
                     review_mode=review_mode if review_mode is not None else "standalone",
+                    routing=args.get("routing"),
+                    assessment=args.get("assessment"),
                     **_ownership_args(args),
                 )
             except rig_launch.LaunchError as exc:
@@ -1494,6 +1606,12 @@ def run_session_cli(argv: list[str]) -> int:
     parser.add_argument("--exclude", default="")
     parser.add_argument("--parent-model", default="")
     parser.add_argument("--parent-effort", default="")
+    parser.add_argument("--complexity", default="")
+    parser.add_argument("--risk", default="")
+    parser.add_argument("--uncertainty", default="")
+    parser.add_argument("--assessment-reason", default="")
+    parser.add_argument("--policy-mode", choices=["smart", "legacy"], default="")
+    parser.add_argument("--explain", action="store_true")
     parser.add_argument("--compact", action="store_true")
     parser.add_argument("--terminal-limit", type=int, default=10)
     parser.add_argument("--repo", default="")
@@ -1519,6 +1637,9 @@ def run_session_cli(argv: list[str]) -> int:
             writer_job_id=args.writer_job_id, writer_cli=args.writer_cli,
             writer_model=args.writer_model, writer_provider=args.writer_provider,
             review_mode=args.review_mode,
+            complexity=args.complexity, risk=args.risk, uncertainty=args.uncertainty,
+            assessment_reason=args.assessment_reason, policy_mode=args.policy_mode or None,
+            explain=args.explain,
         )
     )
     return 0
