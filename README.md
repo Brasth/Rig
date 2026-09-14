@@ -191,6 +191,8 @@ Type a normal prompt in that parent CLI. Example: `fix the failing tests in test
 
 ## Configure
 
+Smart routing assesses complexity, risk, and uncertainty, then selects the minimum sufficient model+effort profile from eligible workers. Simple implementation can use a fast profile; high-risk work requires strong capability. Use `rig pick implement --complexity low --risk low --uncertainty low --explain` to inspect a decision. `rig routing report` shows outcomes without changing future ranking. See [smart routing](docs/smart-routing.md) for profiles, assessment defaults, CLI/MCP examples, and legacy rollback.
+
 ```bash
 rig use grok|codex|opencode|omp|pi|agy
 rig workers grok=on|off claude=on|off codex=on|off cursor=on|off opencode=on|off omp=on|off pi=on|off agy=on|off
@@ -218,6 +220,7 @@ agy = false
 - **Live parent** is whichever Codex, Grok, OpenCode, OMP, Pi, or agy you actually opened (`rig status`). The `parent =` key is only the preferred default (`rig use grok|codex|opencode|omp|pi|agy`). Opening the CLI is what makes it live.
 - Parent **model** is the CLI’s model. Worker models come from `rig pick`. Never spawn Sol, Astra, or Fable as a child.
 - A worker is **effective** only when: flag true **and** binary on PATH **and** not the live parent.
+- Routing additionally requires job-scoped MCP readiness. Cursor remains excluded. `[routing] mode = "legacy"` restores the older routing ladder; omitted mode defaults to `smart`.
 - Claude Code and Cursor are never the parent.
 - Grok Bot.app and Cursor.app are GUIs, **not** spawnable workers. The Cursor worker binary is `cursor-agent`.
 

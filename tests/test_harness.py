@@ -151,7 +151,7 @@ class ParseAndPick(unittest.TestCase):
         os.environ["RIG_PARENT"] = "pi"
         eff = harness.effective_workers(self.repo, "pi")
         self.assertNotIn("grok", eff)
-        choice = route.pick("pi", eff, "implement", "add a header")
+        choice = route.pick("pi", eff, "implement", "add a header", policy_mode="legacy")
         self.assertEqual(choice["worker"], "pi")
         self.assertEqual(choice["spawn"], "native")
 
@@ -166,7 +166,7 @@ class ParseAndPick(unittest.TestCase):
         eff = harness.effective_workers(self.repo, "pi")
         self.assertNotIn("grok", eff)
         self.assertNotIn("pi", eff)
-        choice = route.pick("pi", eff, "implement", "add a header")
+        choice = route.pick("pi", eff, "implement", "add a header", policy_mode="legacy")
         self.assertEqual(choice["worker"], "pi")
         self.assertEqual(choice["spawn"], "native")
 
@@ -180,7 +180,7 @@ class ParseAndPick(unittest.TestCase):
         os.environ["RIG_PARENT"] = "grok"
         eff = harness.effective_workers(self.repo, "grok")
         self.assertNotIn("grok", eff)
-        choice = route.pick("grok", eff, "implement", "add a header")
+        choice = route.pick("grok", eff, "implement", "add a header", policy_mode="legacy")
         self.assertEqual(choice["worker"], "grok")
         self.assertEqual(choice["spawn"], "native")
 

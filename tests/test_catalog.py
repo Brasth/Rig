@@ -229,6 +229,7 @@ class PickAndEnvCatalog(unittest.TestCase):
             "implement",
             "add a header",
             catalogs={"opencode": ["anthropic/claude-sonnet-5"]},
+            policy_mode="legacy",
         )
         self.assertEqual(c["worker"], "opencode")
         self.assertEqual(c["model"], "anthropic/claude-sonnet-5")
@@ -241,6 +242,7 @@ class PickAndEnvCatalog(unittest.TestCase):
             "hard",
             "multi-file architecture",
             catalogs={"agy": ["gemini-3.1-pro-high", AGY_FLASH]},
+            policy_mode="legacy",
         )
         self.assertEqual(c["effort"], "high")
         self.assertEqual(c["model"], "gemini-3.1-pro-high")

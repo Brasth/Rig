@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import shutil
 import subprocess
@@ -15,6 +16,7 @@ from pathlib import Path
 
 CATALOG_WORKERS = frozenset({"opencode", "omp", "pi", "agy"})
 TTL_SECONDS = 3600
+STALE_MAX_SECONDS = 24 * 3600
 PROBE_TIMEOUT = 8.0
 _CACHE_LOCK = threading.Lock()
 _REFRESHING: set[str] = set()
@@ -212,6 +214,40 @@ def probe_worker(worker: str, timeout: float = PROBE_TIMEOUT) -> list[str] | Non
     return ids or None
 
 
+def probe_catalog(worker: str, timeout: float = PROBE_TIMEOUT) -> tuple[str, list[str] | None]:
+    """Return (ok|empty|unavailable, ids). Empty success is distinct from probe failure."""
+    if worker not in CATALOG_WORKERS:
+        return "unavailable", None
+    bin_path = shutil.which(worker)
+    if not bin_path:
+        return "unavailable", None
+    if worker == "omp":
+        proc = _run([bin_path, "models", "--json"], timeout)
+        if proc is not None and proc.returncode == 0:
+            parsed = parse_omp_json(proc.stdout or "")
+            if parsed:
+                return "ok", parsed
+            if parsed is not None:
+                return "empty", []
+        proc = _run([bin_path, "models"], timeout)
+        if proc is None or proc.returncode != 0:
+            return "unavailable", None
+        parsed = parse_omp_json(proc.stdout or "")
+        if parsed:
+            return "ok", parsed
+        if parsed is not None:
+            return "empty", []
+        ids = parse_omp_table(proc.stdout or "")
+        return ("ok", ids) if ids else ("empty", [])
+    argv = [bin_path, *PROBE_ARGV[worker]]
+    proc = _run(argv, timeout)
+    if proc is None or proc.returncode != 0:
+        return "unavailable", None
+    parsers = {"opencode": parse_opencode, "pi": parse_pi, "agy": parse_agy}
+    ids = parsers[worker](proc.stdout or "")
+    return ("ok", ids) if ids else ("empty", [])
+
+
 def _probe_omp(bin_path: str, timeout: float) -> list[str] | None:
     proc = _run([bin_path, "models", "--json"], timeout)
     if proc is not None and proc.returncode == 0:
@@ -262,7 +298,7 @@ def cache_get(worker: str, *, allow_stale: bool = False) -> list[str] | None:
         fetched = float(entry.get("fetched_at") or 0)
     except (TypeError, ValueError):
         return None
-    if fetched <= 0:
+    if not math.isfinite(fetched) or fetched <= 0 or fetched > time.time():
         return None
     ids = entry.get("ids")
     if not isinstance(ids, list):
@@ -273,10 +309,44 @@ def cache_get(worker: str, *, allow_stale: bool = False) -> list[str] | None:
     return cleaned
 
 
-def cache_put(worker: str, ids: list[str] | None) -> None:
+def cache_entry(worker: str) -> dict | None:
+    with _CACHE_LOCK:
+        entry = _read_cache_file().get(worker)
+    if not isinstance(entry, dict):
+        return None
+    try:
+        fetched = float(entry.get("fetched_at") or 0)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(fetched) or fetched <= 0 or fetched > time.time():
+        return None
+    ids = entry.get("ids")
+    if not isinstance(ids, list):
+        return None
+    status = str(entry.get("status") or "ok")
+    if status not in {"ok", "empty"}:
+        return None
+    return {
+        "ids": [str(x) for x in ids if str(x).strip()],
+        "fetched_at": fetched,
+        "status": status,
+        "age_s": time.time() - fetched,
+    }
+
+
+def cache_put(worker: str, ids: list[str] | None, *, status: str = "ok") -> None:
+    if status == "failure":
+        previous = cache_entry(worker)
+        if previous and previous.get("status") in {"ok", "empty"}:
+            return
+        return
     with _CACHE_LOCK:
         data = _read_cache_file()
-        data[worker] = {"ids": list(ids or []), "fetched_at": time.time()}
+        data[worker] = {
+            "ids": list(ids or []),
+            "fetched_at": time.time(),
+            "status": "empty" if status == "empty" or not ids else "ok",
+        }
         _write_cache_file(data)
 
 
@@ -290,7 +360,7 @@ def _lookup_cached(worker: str) -> tuple[str, list[str] | None]:
     return "miss", None
 
 
-def _schedule_refresh(worker: str, timeout: float) -> None:
+def _schedule_refresh(worker: str, timeout: float, *, distinguish_empty: bool = False) -> None:
     with _REFRESH_LOCK:
         if worker in _REFRESHING:
             return
@@ -298,6 +368,15 @@ def _schedule_refresh(worker: str, timeout: float) -> None:
 
     def _run() -> None:
         try:
+            if distinguish_empty:
+                status, ids = probe_catalog(worker, timeout=timeout)
+                if status == "ok":
+                    cache_put(worker, ids, status="ok")
+                elif status == "empty":
+                    cache_put(worker, [], status="empty")
+                else:
+                    cache_put(worker, None, status="failure")
+                return
             probed = probe_worker(worker, timeout=timeout)
             if probed is None:
                 return
@@ -315,6 +394,91 @@ def _schedule_refresh(worker: str, timeout: float) -> None:
     ).start()
 
 
+def load_catalog_info(worker: str, timeout: float = PROBE_TIMEOUT, *, require_fresh: bool = False) -> dict:
+    """Catalog state for smart routing. Distinguishes empty, stale, and unavailable."""
+    base = {
+        "worker": worker,
+        "ids": None,
+        "state": "unavailable",
+        "source": "none",
+        "freshness": "unavailable",
+        "confirmed_empty": False,
+        "fetched_at": None,
+        "age_s": None,
+        "refresh_failed": False,
+    }
+    if worker not in CATALOG_WORKERS:
+        return {**base, "state": "unverified", "source": "pin", "freshness": "unverified"}
+    if env_on("RIG_SKIP_MODEL_CATALOG"):
+        return {**base, "state": "skipped", "source": "skip", "freshness": "unverified"}
+    entry = cache_entry(worker)
+    refresh = env_on("RIG_REFRESH_MODELS") or require_fresh
+    if entry and not refresh:
+        age = entry["age_s"]
+        ids = entry["ids"]
+        empty = entry["status"] == "empty" or not ids
+        payload = {
+            **base,
+            "ids": ids,
+            "fetched_at": entry["fetched_at"],
+            "age_s": age,
+            "confirmed_empty": empty,
+            "source": "cache",
+        }
+        if age <= TTL_SECONDS:
+            return {
+                **payload,
+                "state": "empty" if empty else "fresh",
+                "freshness": "empty" if empty else "fresh",
+            }
+        if age <= STALE_MAX_SECONDS:
+            _schedule_refresh(worker, timeout, distinguish_empty=True)
+            return {
+                **payload,
+                "state": "empty" if empty else "stale",
+                "freshness": "empty" if empty else "stale",
+            }
+        refresh = True
+    status, ids = probe_catalog(worker, timeout=timeout)
+    if status == "ok":
+        cache_put(worker, ids, status="ok")
+        return {
+            **base,
+            "ids": ids,
+            "state": "fresh",
+            "source": "probe",
+            "freshness": "fresh",
+            "fetched_at": time.time(),
+            "age_s": 0.0,
+        }
+    if status == "empty":
+        cache_put(worker, [], status="empty")
+        return {
+            **base,
+            "ids": [],
+            "state": "empty",
+            "source": "probe",
+            "freshness": "empty",
+            "confirmed_empty": True,
+            "fetched_at": time.time(),
+            "age_s": 0.0,
+        }
+    if entry and entry["status"] in {"ok", "empty"} and entry["age_s"] <= STALE_MAX_SECONDS:
+        empty = entry["status"] == "empty" or not entry["ids"]
+        return {
+            **base,
+            "ids": entry["ids"],
+            "state": "empty" if empty else "stale",
+            "source": "cache",
+            "freshness": "empty" if empty else "stale",
+            "confirmed_empty": empty,
+            "fetched_at": entry["fetched_at"],
+            "age_s": entry["age_s"],
+            "refresh_failed": True,
+        }
+    return {**base, "refresh_failed": True}
+
+
 def load_catalog(worker: str, timeout: float = PROBE_TIMEOUT) -> list[str] | None:
     if worker not in CATALOG_WORKERS:
         return None
@@ -329,6 +493,9 @@ def load_catalog(worker: str, timeout: float = PROBE_TIMEOUT) -> list[str] | Non
             _schedule_refresh(worker, timeout)
             return ids
     probed = probe_worker(worker, timeout=timeout)
+    if probed is None:
+        cache_put(worker, None, status="failure")
+        return None
     cache_put(worker, probed)
     return probed
 
@@ -364,7 +531,10 @@ def load_catalogs(
             probed = probe_worker(name, timeout=timeout)
         except Exception:
             return name, None
-        cache_put(name, probed)
+        if probed is None:
+            cache_put(name, None, status="failure")
+        else:
+            cache_put(name, probed)
         return name, probed
 
     with ThreadPoolExecutor(max_workers=max(1, len(missing))) as pool:

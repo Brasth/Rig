@@ -33,6 +33,7 @@ PICK_KEYS = {
     "classification_rule",
     "executor_kind",
     "model_source",
+    "routing",
 }
 DISPATCH_TOOLS = (
     "rig_session",

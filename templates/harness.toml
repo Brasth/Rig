@@ -5,6 +5,10 @@ parent = "codex"
 # parent = "pi"
 # parent = "agy"
 
+[routing]
+# Smart is also the default when this section is omitted. Legacy restores the old ladder.
+mode = "smart"
+
 [workers]
 codex = false
 grok = true

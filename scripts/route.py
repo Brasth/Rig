@@ -455,6 +455,17 @@ def _base_choice(
     return choice
 
 
+def _with_legacy_routing(choice: dict, assessment: dict, fingerprint: str, required: str, explain: bool) -> dict:
+    import routing_policy
+
+    choice["routing"] = routing_policy.legacy_routing(
+        choice, assessment=assessment, fingerprint=fingerprint, required=required,
+    )
+    if explain:
+        choice["_explain"] = True
+    return choice
+
+
 def pick(
     live: str,
     effective: list[str],
@@ -472,12 +483,40 @@ def pick(
     repo: Path | None = None,
     jobs_snapshot: list[dict] | None = None,
     hash_cache: dict | None = None,
+    assessment: dict | None = None,
+    complexity: str = "",
+    risk: str = "",
+    uncertainty: str = "",
+    assessment_reason: str = "",
+    policy_mode: str | None = None,
+    explain: bool = False,
 ) -> dict:
+    import routing_policy
+
     classification = classify_details(role, case)
     kind = classification["kind"]
-    blocked = parse_exclude(exclude)
     if review_mode not in {"standalone", "independent"}:
         raise ValueError("review_mode must be standalone or independent")
+    mode = routing_policy.resolve_mode(repo, policy_mode)
+    assessed = routing_policy.normalize_assessment(
+        kind, assessment, complexity=complexity, risk=risk, uncertainty=uncertainty, reason=assessment_reason,
+    )
+    if mode == "smart":
+        choice = routing_policy.smart_pick(
+            live, effective, role, case, catalogs=catalogs, exclude=exclude,
+            parent_model=parent_model, parent_effort=parent_effort,
+            writer_job_id=writer_job_id, writer_cli=writer_cli, writer_model=writer_model,
+            writer_provider=writer_provider, review_mode=review_mode, repo=repo,
+            jobs_snapshot=jobs_snapshot, hash_cache=hash_cache, assessment=assessed,
+            policy_mode="smart",
+        )
+        if explain:
+            choice["_explain"] = True
+        return choice
+    cfg = routing_policy.load_config(repo, policy_mode="legacy")
+    fingerprint = routing_policy.config_fingerprint(cfg)
+    required = "" if kind == "stay" else routing_policy.required_tier(kind, assessed)
+    blocked = parse_exclude(exclude)
     if kind == "review":
         context, reason = _writer_context(
             writer_job_id=writer_job_id, writer_cli=writer_cli, writer_model=writer_model,
@@ -510,17 +549,21 @@ def pick(
             model, effort = resolved_model_for(worker, kind, catalogs)
             independence, rejection = _review_model(model, context)
             if not rejection:
-                return _base_choice(
+                choice = _base_choice(
                     kind, worker, spawn, classification=classification, model=model, effort=effort,
                     reason=f"review: {worker} child {model}" + (f" effort={effort}" if effort else ""),
                     executor_kind="wrapper", model_source="selected",
                     review={**context, "independence": independence},
                 )
+                return _with_legacy_routing(choice, assessed, fingerprint, required, explain)
             failures.append(f"{worker}: {rejection}")
             remaining = [w for w in remaining if w != worker]
-        return _base_choice(
-            kind, "", "none", classification=classification, reason=reason,
-            review={**context, "independence": "unavailable"},
+        return _with_legacy_routing(
+            _base_choice(
+                kind, "", "none", classification=classification, reason=reason,
+                review={**context, "independence": "unavailable"},
+            ),
+            assessed, fingerprint, required, explain,
         )
     worker, spawn = choose_worker(kind, effective, live, exclude=exclude)
     actual_model = (parent_model or "").strip()
@@ -536,16 +579,19 @@ def pick(
                 "parent keeps ask / plan / advise / vision / computer-use / chrome-profile. "
                 "Figma, computer-use, and chrome-profile stay with the parent."
             )
-        return _base_choice(
-            kind,
-            worker or live,
-            "stay",
-            classification=classification,
-            model=actual_model,
-            effort=actual_effort,
-            executor_kind="parent",
-            model_source="observed" if actual_model else "unknown",
-            reason=stay_reason,
+        return _with_legacy_routing(
+            _base_choice(
+                kind,
+                worker or live,
+                "stay",
+                classification=classification,
+                model=actual_model,
+                effort=actual_effort,
+                executor_kind="parent",
+                model_source="observed" if actual_model else "unknown",
+                reason=stay_reason,
+            ),
+            assessed, fingerprint, required, explain,
         )
     if spawn == "none" or not worker:
         if kind == "review":
@@ -566,7 +612,10 @@ def pick(
                 reason = "Cursor CLI has no isolated job-scoped MCP; excluded until a safe --mcp-config exists"
             else:
                 reason = "no effective worker; use cheaper same-CLI workers. That is success."
-        return _base_choice(kind, "", "none", classification=classification, reason=reason)
+        return _with_legacy_routing(
+            _base_choice(kind, "", "none", classification=classification, reason=reason),
+            assessed, fingerprint, required, explain,
+        )
     parent_writes = spawn == "native" and kind in {"implement", "hard", "mini", "bulk"}
     native_agent = "" if parent_writes else (NATIVE.get((worker, kind), "") if spawn == "native" else "")
     if parent_writes:
@@ -586,18 +635,21 @@ def pick(
             reason = f"{kind}: cheap same-CLI {worker} {native_agent} ({model} {effort or 'default'})"
         else:
             reason = f"{kind}: {worker} child {model}" + (f" effort={effort}" if effort else "")
-    return _base_choice(
-        kind,
-        worker,
-        spawn,
-        classification=classification,
-        model=model,
-        effort=effort,
-        native_agent=native_agent,
-        reason=reason,
-        parent_writes=parent_writes,
-        executor_kind=executor_kind,
-        model_source=model_source,
+    return _with_legacy_routing(
+        _base_choice(
+            kind,
+            worker,
+            spawn,
+            classification=classification,
+            model=model,
+            effort=effort,
+            native_agent=native_agent,
+            reason=reason,
+            parent_writes=parent_writes,
+            executor_kind=executor_kind,
+            model_source=model_source,
+        ),
+        assessed, fingerprint, required, explain,
     )
 
 
@@ -611,7 +663,9 @@ def assert_child_model(model: str) -> str | None:
     return None
 
 
-def format_text(choice: dict) -> str:
+def format_text(choice: dict, *, explain: bool = False) -> str:
+    import routing_policy
+
     lines = [
         f"kind={choice['kind']} worker={choice.get('worker') or '-'} spawn={choice['spawn']}",
         f"model={choice.get('model') or '-'} effort={choice.get('effort') or '-'}",
@@ -620,7 +674,19 @@ def format_text(choice: dict) -> str:
         lines.append(f"native_agent={choice['native_agent']}")
     if choice.get("parent_writes"):
         lines.append("parent_writes=true")
+    routing = choice.get("routing") or {}
+    if routing:
+        profile = routing.get("selected_profile") or {}
+        lines.append(
+            f"routing={routing.get('policy_mode') or '-'} tier={routing.get('required_tier') or '-'} "
+            f"profile={profile.get('id') or '-'}"
+        )
+        rec = routing.get("review_recommendation") or "none"
+        if rec != "none":
+            lines.append(f"review_recommendation={rec} (not a completion gate)")
     lines.append(choice.get("reason") or "")
+    if explain or choice.get("_explain"):
+        lines.extend(routing_policy.explain_lines(choice))
     if choice.get("spawn") == "run-worker" and choice.get("worker"):
         env = f"RIG_LIVE=1 RIG_ROLE={shlex.quote(choice['kind'])} RIG_MODEL={shlex.quote(choice['model'])}"
         if choice.get("effort"):
@@ -652,6 +718,12 @@ def main() -> int:
     parser.add_argument("--review-mode", choices=["standalone", "independent"], default="standalone")
     parser.add_argument("--repo", type=Path)
     parser.add_argument("--exclude", default="")
+    parser.add_argument("--complexity", default="")
+    parser.add_argument("--risk", default="")
+    parser.add_argument("--uncertainty", default="")
+    parser.add_argument("--assessment-reason", default="")
+    parser.add_argument("--policy-mode", choices=["smart", "legacy"], default="")
+    parser.add_argument("--explain", action="store_true")
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()
     writer_args = dict(
@@ -693,13 +765,17 @@ def main() -> int:
         choice = pick(
             args.live, effective, args.role, args.case, exclude=args.exclude,
             parent_model=args.parent_model, parent_effort=args.parent_effort, **writer_args,
+            complexity=args.complexity, risk=args.risk, uncertainty=args.uncertainty,
+            assessment_reason=args.assessment_reason, policy_mode=args.policy_mode or None,
+            explain=args.explain,
         )
     except ValueError as exc:
         parser.error(str(exc))
+    dumped = {key: value for key, value in choice.items() if not str(key).startswith("_")}
     if args.json:
-        print(json.dumps(choice, indent=2))
+        print(json.dumps(dumped, indent=2))
     else:
-        print(format_text(choice))
+        print(format_text(dumped, explain=args.explain))
     return 0
 
 

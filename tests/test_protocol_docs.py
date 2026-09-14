@@ -16,6 +16,21 @@ import verification
 
 
 class ProtocolDocumentation(unittest.TestCase):
+    def test_smart_policy_is_documented_across_managed_protocols(self):
+        sources = self.protocol_sources()
+        sources.pop("skills/rig-jobs/SKILL.md")
+        sources.pop("README.md")
+        sources["AGENTS.md"] = (ROOT / "AGENTS.md").read_text()
+        sources["managed skill"] = (ROOT / ".agents/skills/delegate-harness/SKILL.md").read_text()
+        for name, source in sources.items():
+            with self.subTest(source=name):
+                self.assertIn("complexity", source)
+                self.assertIn("uncertainty", source)
+                self.assertIn("routing.json", source)
+                self.assertIn("legacy", source)
+                self.assertIn("rig_routing_report", source)
+                self.assertNotIn("Implement: Grok child if effective.", source)
+
     @staticmethod
     def protocol_sources():
         sources = {str(path.relative_to(ROOT)): path.read_text() for path in (

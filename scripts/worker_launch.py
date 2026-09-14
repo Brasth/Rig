@@ -25,8 +25,9 @@ LAUNCH_KEYS = frozenset({
     "id", "case", "role", "worker", "model", "effort", "access", "files", "brief",
     "queue_id", "reservation_id", "attempt_id", "owner_token", "owner_session",
     "writer_job_id", "writer_snapshot_id", "writer_cli", "writer_model",
-    "writer_provider", "review_mode", "live",
+    "writer_provider", "review_mode", "live", "routing", "assessment",
 })
+OBJECT_LAUNCH_KEYS = frozenset({"files", "routing", "assessment"})
 WRAPPER_ENV = (
     "PATH", "HOME", "USER", "LANG", "LC_ALL", "LC_CTYPE", "TZ", "TMPDIR",
     "RIG_HOME", "RIG_PARENT", "RIG_SKIP_MODEL_CATALOG", "RIG_SKIP_UPDATE_CHECK",
@@ -34,7 +35,7 @@ WRAPPER_ENV = (
     "OPENCODE_CONFIG", "OMP_MCP", "PI_CODING_AGENT_DIR", "PI_AGENT_DIR", "AGY_MCP",
 )
 TERMINAL_STATUSES = frozenset({"ok", "fail", "timeout", "cancelled"})
-STRING_LAUNCH_KEYS = LAUNCH_KEYS - {"files"}
+STRING_LAUNCH_KEYS = LAUNCH_KEYS - OBJECT_LAUNCH_KEYS
 
 
 class LaunchError(ValueError):
@@ -184,6 +185,12 @@ def launch(repo, **kwargs) -> dict:
             _require_string(kwargs.get(key), key)
     if "files" in kwargs:
         _files(kwargs.get("files"))
+    routing_arg = kwargs.get("routing")
+    if routing_arg not in (None, "") and not isinstance(routing_arg, dict):
+        raise LaunchError("routing must be an object")
+    assessment_arg = kwargs.get("assessment")
+    if assessment_arg not in (None, "") and not isinstance(assessment_arg, dict):
+        raise LaunchError("assessment must be an object")
     repo = rig_jobs.repo_root(repo)
     harness_file = rig_harness.harness_path(repo)
     if not harness_file.is_file():
@@ -201,6 +208,9 @@ def launch(repo, **kwargs) -> dict:
         raise LaunchError("live must be a string")
     live_parent = (live_parent or "").strip()
     effective = rig_harness.effective_workers(repo, live_parent)
+    import routing_policy
+    picked_routing = routing_arg if isinstance(routing_arg, dict) else None
+    assessment_obj = assessment_arg if isinstance(assessment_arg, dict) else None
     if not worker:
         choice = rig_route.pick(
             live_parent, effective, role, case,
@@ -209,13 +219,15 @@ def launch(repo, **kwargs) -> dict:
             writer_model=_require_string(kwargs.get("writer_model"), "writer_model"),
             writer_provider=_require_string(kwargs.get("writer_provider"), "writer_provider"),
             review_mode=_require_string(kwargs.get("review_mode"), "review_mode").strip() or "standalone",
-            repo=repo,
+            repo=repo, assessment=assessment_obj,
         )
         if choice.get("spawn") != "run-worker" or not choice.get("worker"):
             raise LaunchError(choice.get("reason") or "no eligible wrapper worker")
         worker = choice["worker"]
         if not model:
             model, effort = choice.get("model") or "", choice.get("effort") or ""
+        if picked_routing is None and isinstance(choice.get("routing"), dict):
+            picked_routing = choice["routing"]
     if worker == "cursor":
         raise LaunchError(child_mcp.CURSOR_REASON)
     if worker not in LAUNCH_WORKERS:
@@ -234,10 +246,31 @@ def launch(repo, **kwargs) -> dict:
     if worker not in effective:
         raise LaunchError(f"worker '{worker}' is not effective for this parent")
     if not model:
-        model, effort = rig_route.resolved_model_for(worker, rig_route.classify(role, case))
+        if routing_policy.resolve_mode(repo, None) == "smart":
+            try:
+                choice = routing_policy.resolve_explicit_worker_choice(
+                    live_parent, worker, role, case, repo=repo, assessment=assessment_obj,
+                )
+            except (ValueError, routing_policy.ConfigError) as error:
+                raise LaunchError(str(error)) from error
+            if choice.get("spawn") != "run-worker":
+                raise LaunchError(choice.get("reason") or f"no eligible smart profile for worker '{worker}'")
+            model, effort = choice.get("model") or "", choice.get("effort") or ""
+            if picked_routing is None and isinstance(choice.get("routing"), dict):
+                picked_routing = choice["routing"]
+        else:
+            model, effort = rig_route.resolved_model_for(worker, rig_route.classify(role, case))
     blocked = rig_route.assert_child_model(model)
     if blocked:
         raise LaunchError(blocked)
+    try:
+        routing_obj = routing_policy.validate_launch_tuple(
+            repo, worker=worker, model=model, effort=effort, role=role, case=case,
+            routing=picked_routing, assessment=assessment_obj,
+            executor_kind="wrapper", access=_access(role, _require_string(kwargs.get("access"), "access")),
+        )
+    except (ValueError, routing_policy.ConfigError) as error:
+        raise LaunchError(str(error)) from error
     job_id = _job_id(_require_string(kwargs.get("id"), "id"))
     listed = _files(kwargs.get("files"))
     access = _access(role, _require_string(kwargs.get("access"), "access"))
@@ -286,6 +319,11 @@ def launch(repo, **kwargs) -> dict:
     def abort_setup(message: str, error: BaseException) -> None:
         try:
             _append_log(launcher_log, message)
+            if record is not None:
+                try:
+                    routing_policy.write_sidecar(job_dir, record["attempt_id"], routing_obj)
+                except (OSError, TypeError, ValueError):
+                    pass
             _fail_job(job_dir, job_id, worker, role, message, record=record, model=model, effort=effort, files=listed)
         except OSError:
             pass
@@ -319,6 +357,7 @@ def launch(repo, **kwargs) -> dict:
                 writer_job_id=writer_job_id, writer_snapshot_id=writer_snapshot_id,
                 reservation=record, capture_evidence=False,
             )
+            routing_policy.write_sidecar(job_dir, record["attempt_id"], routing_obj)
             child_mcp.mark_unknown(job_dir)
             spec = child_mcp.write_job_mcp(job_dir, job_id, repo, worker)
             if not spec["ready"]:

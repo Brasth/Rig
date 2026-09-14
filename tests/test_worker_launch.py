@@ -161,6 +161,36 @@ class WorkerLaunchTests(unittest.TestCase):
         with self.assertRaisesRegex(worker_launch.LaunchError, "live must be a string"):
             worker_launch.launch(self.repo, brief="x", live=1)
 
+    def test_auto_and_explicit_worker_selection_keep_smart_sidecar(self):
+        for worker in ("", "grok"):
+            with self.subTest(worker=worker):
+                result = self._launch("auto-" + (worker or "all"), files=["a.py" if worker else "b.py"], worker=worker,
+                                      model="", effort="", assessment={
+                                          "complexity": "low", "risk": "low", "uncertainty": "low"})
+                folder = self.repo / ".rig" / "jobs" / result["job_id"]
+                evidence = json.loads((folder / "routing.json").read_text())
+                self.assertEqual(evidence["attempt_id"], result["attempt_id"])
+                routing = evidence["routing"]
+                self.assertEqual(routing["policy_mode"], "smart")
+                self.assertEqual(routing["required_tier"], "fast")
+                self.assertEqual(routing["selected_profile"]["model"], "grok-4.5")
+                self.assertEqual(routing["selected_profile"]["effort"], "low")
+
+    def test_invalid_routing_does_not_consume_queue_claim(self):
+        import route
+        item = work_queue.add_item(self.repo, "scoped work")
+        claim = work_queue.claim_next(self.repo, item_id=item["id"], worker="grok",
+                                      access="write", files=["a.py"], owner_session="launch-tests")
+        choice = route.pick("codex", ["grok"], "implement", "scoped work", repo=self.repo)
+        routing = dict(choice["routing"], config_fingerprint="stale")
+        with self.assertRaisesRegex(worker_launch.LaunchError, "fingerprint"):
+            self._launch("bad-routing", routing=routing, queue_id=item["id"],
+                         reservation_id=claim["reservation_id"], attempt_id=claim["attempt_id"],
+                         owner_token=claim["owner_token"])
+        held = admission.get_reservation(self.repo, claim["reservation_id"])
+        self.assertFalse(held.get("claim_consumed"))
+        self.assertFalse((self.repo / ".rig" / "jobs" / "bad-routing").exists())
+
     def test_parent_only_schema_and_dispatch_reject_injection(self):
         tool = next(item for item in rig_mcp.TOOLS if item["name"] == "rig_job_launch")
         schema = tool["inputSchema"]
