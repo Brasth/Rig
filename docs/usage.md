@@ -8,7 +8,7 @@ In this file: [terminal companion](#optional-terminal-companion) · [diagram pre
 
 The point is to stop you being the tired reviewer of one agent. You talk to a **parent** (intended: Codex on Astra). The parent assigns work to a **child**, then checks and sends feedback — allow/deny, another prompt — the loop you used to do yourself.
 
-You stay in **one parent**: Codex, Grok, OpenCode, OMP, Pi, or agy. You talk to that parent. The parent picks **kind**. `rig pick` maps that kind to worker, model, and effort. Never spawn Astra, Sol, or Fable as a child.
+You stay in **one parent**: Codex, Grok, OpenCode, OMP, Pi, or agy. You talk to that parent. The parent picks **kind** and assesses complexity, risk, and uncertainty. `rig pick` selects an eligible model+effort profile at the minimum sufficient tier. Never spawn Astra, Sol, or Fable as a child.
 
 - **Parent** (you open this): Codex, Grok, OpenCode, OMP, Pi, or agy. It plans, checks, talks to you, does vision / computer-use / chrome-profile, and watches jobs. It does **not** sit on write/review/SSH when a worker is effective.
 - **Workers** (the parent may spawn these): Grok, Claude Code, Cursor CLI, OpenCode, OMP, Pi, agy, Codex. They write code, fix bugs, review, SSH/debug, and gather facts.
@@ -258,7 +258,7 @@ max_running = 3
   rig workers grok=on|off claude=on|off codex=on|off cursor=on|off opencode=on|off omp=on|off pi=on|off agy=on|off
   ```
 
-Effective worker = flag `true` **and** binary on PATH **and** not live parent. Check with `rig doctor` / `rig status`. `grok = false` turns off grok as a child. Open Grok and you still get native Grok. Open Pi with grok off and pick must stay Pi.
+Effective worker = flag `true` **and** binary on PATH **and** not live parent. Check with `rig doctor` / `rig status`. `grok = false` turns off grok as a child. Open Grok and you still get native Grok. With Grok off, smart pick still evaluates other eligible workers before parent fallback.
 
 - **`[queue].max_running`** — max reserved/running/ASK executions per repo (default 3). Slot cap, not “run the next 3.” Parent claims a disjoint subset **by id** (required when more than one pending). `job start` / `rig_job_launch` / `run-worker.sh` refuse a new job at cap or when requested access conflicts with a held file scope. `rig queue list` shows occupied files. Set to `1` to restore one-child. Existing values are never flipped on init.
 - **`[queue].max_per_worker`** — extra cap per worker name (default `0` = off). `[queue.workers].grok = 2` overrides for that worker. Fair drain is highest `priority` (0–9) then oldest pending.
@@ -312,7 +312,7 @@ rig workers opencode=on
 rig doctor
 ```
 
-If both OMP and Pi are on as workers of a *different* parent, pick uses **OMP** (same family; OMP is the Pi fork). They can be the parent when you open that CLI (`rig use omp` / `rig use pi` / `rig use agy`, then open it). OpenCode `--auto` is required for headless spawn (no TTY). OMP uses `--approval-mode write`, not `--auto-approve`. agy uses print-mode JSON with `--mode accept-edits`; it does **not** use `--dangerously-skip-permissions`.
+Default preferences put **OMP** before Pi when both offer sufficient eligible profiles. They can be the parent when you open that CLI (`rig use omp` / `rig use pi` / `rig use agy`, then open it). OpenCode `--auto` is required for headless spawn (no TTY). OMP uses `--approval-mode write`, not `--auto-approve`. agy uses print-mode JSON with `--mode accept-edits`; it does **not** use `--dangerously-skip-permissions`.
 
 Do **not** enable Claude on every project. You choose. Existing project flags stay until you run `rig workers`.
 
@@ -322,7 +322,7 @@ Do **not** enable Claude on every project. You choose. Existing project flags st
 rig use grok
 ```
 
-Then **open Grok** in the repo. Grok-as-parent means the Grok **child** is off for that session (`effective=off (is live parent)`). Implement work then goes to Claude if effective, else cheap same-CLI Grok.
+Then **open Grok** in the repo. Grok-as-parent means the Grok **child** is off for that session (`effective=off (is live parent)`). Smart routing evaluates other eligible profiles; if none is sufficient, this parent writes with its actual model/effort (or unknown provenance).
 
 **Prefer OpenCode, OMP, Pi, or agy as parent**
 
@@ -333,7 +333,7 @@ rig use opencode
 # or: rig use agy
 ```
 
-Then **open that CLI** in the repo. That CLI is off as a child. Implement: Grok child if effective, else Claude, else cheap same-CLI with that CLI's pins. Fully quit once after setup so MCP `/rig` loads. Pi also needs `pi install npm:pi-mcp-adapter`. When live parent is agy, do not use nested agy `/agent` dispatch for coding; use `rig pick`.
+Then **open that CLI** in the repo. That CLI is off as a child. Smart routing compares eligible profiles across the other workers; parent fallback never claims to switch the live model. Fully quit once after setup so MCP `/rig` loads. Pi also needs `pi install npm:pi-mcp-adapter`. When live parent is agy, do not use nested agy `/agent` dispatch for coding; use `rig pick`.
 
 **Prefer Codex as parent**
 
@@ -459,7 +459,7 @@ You: `tests/test_cli.py is failing — fix it.`
 
 1. Parent reads the test, names `tests/test_cli.py` and the production file it covers.
 2. Prepares brief TEXT with those files and the failing assertion, then MCP `rig_job_launch` (tool creates `brief.md`). Human shell fallback may write the brief path first.
-3. `rig pick` implement → usually a Grok child (or Claude if Grok is the live parent).
+3. `rig pick` implement plus task assessment → minimum sufficient eligible model+effort profile.
 4. You watch `/rig` or the HUD (`QUEUE 0 · live 1/3`).
 5. Parent waits, inspects scoped evidence, records requirements, runs checks/manual review, and accepts the current snapshot before reporting verified work.
 
@@ -518,7 +518,7 @@ Wrapper termination uses a bounded TERM/KILL attempt with process identity check
 
 ### 7. You are in Grok as parent
 
-Grok child is `effective=off (is live parent)`. `Fix the tests` still runs: Claude if effective, else this Grok writes (`parent_writes`). No second Grok session.
+Grok child is `effective=off (is live parent)`. Smart pick evaluates the other eligible profiles for `Fix the tests`; absent a sufficient wrapper, this Grok writes (`parent_writes`). No second Grok session.
 
 ### 8. Codex parent, you type `/queue` while Astra is streaming
 
@@ -551,18 +551,22 @@ Bash fallback when MCP is unavailable: `rig session --role implement --case "fix
 
 ### Routing
 
+`rig_routing_report` (CLI `rig routing report`) reports recorded execution and acceptance without adapting routing. Smart picks accept complexity, risk, uncertainty, assessment_reason and explain; see [smart routing](smart-routing.md).
+
 | Case | Who |
 | --- | --- |
 | Ask / plan / advise / vision / computer-use / chrome-profile / Figma | parent (MCP `rig_pick` stay). Do not spawn a clicker |
-| Docs/skills-only | cheap same-CLI (MCP `rig_pick` mini) |
-| Locate / trace / codebase gather | cheap same-CLI explore/mini only if the parent cannot name the files after a short check |
-| Implement / SSH / fix | Grok child if Grok is **effective**; if Grok/OpenCode/OMP/Pi/agy is the live parent (or Grok off) → Claude Code if effective, else native `parent_writes` (this parent writes; no second same-CLI session). Last-resort children: opencode, omp, pi, agy, codex, then cursor. Do not auto-spawn Cursor on fallback |
+| Docs/skills-only | assessed profile (MCP `rig_pick` mini); defaults fast |
+| Locate / trace / codebase gather | read-only assessed explore profile, only if the parent cannot name files after a short check |
+| Implement / SSH / fix | minimum sufficient eligible model+effort profile; no eligible wrapper means `parent_writes`, without a second same-CLI session. Cursor stays excluded |
 | Review | Standalone by default; independent post-write review requires current writer acceptance and a different known actual model provider. Unknown/unavailable independence stays explicit |
 | After implement+verify ok | MAY start read-only review **and** seed/bulk with **disjoint listed files** in parallel. One wait on both ids |
 | Independent queued items | Up to `[queue].max_running` (default 3 reserved/running/ASK executions) if listed files are disjoint. Parent **selects a subset by id** (skip overlap, try next; omit id only if one pending). List shows occupied files. Until **that write** is ok: one child on those files. Never a second writer on the same files. Never explore/fix/QA teammates on the same write. `/queue` parks only; drain is the parent on a free turn |
-| No extra CLIs | cheap same-CLI; register writes before edits and finish with the actual native agent/task completion |
+| No eligible wrapper | actual parent model/effort or unknown; register writes before edits and finish with actual task completion |
 
-Pin **full** model IDs (aliases drift). Codex / Grok / Claude / Cursor stay static pins. OpenCode / OMP / Pi / agy pins are **preferences**: `rig pick` and `run-worker.sh` list models from that CLI and pick one that exists. Catalog cache: `~/.rig/cache/model-catalogs.json` (TTL ~1 hour). `RIG_REFRESH_MODELS=1` refreshes. `RIG_SKIP_MODEL_CATALOG=1` keeps the static pin. Never Sol / Astra / Fable, even if the catalog lists them.
+Smart mode uses declared profiles: exact selectors/aliases, supported effort, role, tier and provider. Catalog-required profiles need successful confirmation (fresh <=1h, bounded stale <=24h); a skipped, unavailable or empty catalog does not confirm a model. `RIG_REFRESH_MODELS=1` refreshes; `RIG_SKIP_MODEL_CATALOG=1` makes catalog-required profiles ineligible in smart mode. Legacy mode retains the older resolver. Cache: `~/.rig/cache/model-catalogs.json`. Never Sol / Astra / Fable.
+
+See [smart routing](smart-routing.md) for assessment defaults, `.rig/routing.json`, `--explain`, reporting and `[routing] mode="legacy"` rollback. Pins below are built-in profile inputs, not unconditional role-to-model assignments.
 
 - Claude: `claude-haiku-4-5-20251001` cheap, `claude-sonnet-5` implement, `claude-opus-5` hard/review
 - Cursor: `composer-2.5-fast` cheap, `composer-2.5` implement, `cursor-grok-4.6-high` hard, `claude-opus-5-thinking-high` review
@@ -798,7 +802,7 @@ Fully quit the parent app once. Grok: statusline command in `~/.grok/config.toml
 
 **OpenCode / OMP / Pi / agy not spawning**
 
-Need the binary **and** `rig workers opencode=on` (or `omp=on` / `pi=on` / `agy=on`). Existing harness flags stay off. `rig doctor` prints the install hint if the CLI is missing. As workers they are last resort: a Grok parent with no Claude still uses cheap same-CLI Grok, not OpenCode, just because `opencode` is on PATH. As parents, open that CLI (`rig use opencode|omp|pi|agy`).
+Need the binary **and** `rig workers opencode=on` (or `omp=on` / `pi=on` / `agy=on`). Existing harness flags stay off. `rig doctor` prints the install hint if the CLI is missing. Smart mode compares their eligible profiles alongside other workers. Being on PATH alone is insufficient: harness flags, scoped MCP and model confirmation still apply. As parents, open that CLI (`rig use opencode|omp|pi|agy`).
 
 ## Parent agents
 
