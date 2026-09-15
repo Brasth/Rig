@@ -12,6 +12,7 @@ import routing_profiles as rig_profiles
 POLICY_VERSION = 1
 ROUTING_JSON = ".rig/routing.json"
 MODES = ("smart", "legacy")
+SCHEMA_VERSIONS = (1, 2)
 PROFILE_FIELDS = frozenset(
     {
         "worker",
@@ -25,7 +26,10 @@ PROFILE_FIELDS = frozenset(
         "catalog_required",
     }
 )
-CONFIG_FIELDS = frozenset({"schema_version", "profiles", "preferences"})
+V1_FIELDS = frozenset({"schema_version", "profiles", "preferences"})
+V2_FIELDS = V1_FIELDS | {"execution"}
+EXECUTION_FIELDS = frozenset({"direct_parent_low_risk"})
+CONFIG_FIELDS = V2_FIELDS
 
 
 class ConfigError(ValueError):
@@ -39,6 +43,7 @@ class RoutingConfig:
     preferences: dict[str, list[str]]
     routing_json: dict | None
     source: str
+    direct_parent_low_risk: bool = False
 
 
 def routing_json_path(repo: Path | None) -> Path | None:
@@ -84,6 +89,8 @@ def config_fingerprint(cfg: RoutingConfig) -> str:
         "profiles": [rig_profiles.as_dict(p) for p in sorted(cfg.profiles.values(), key=lambda item: item.id)],
         "preferences": {key: cfg.preferences.get(key, []) for key in rig_profiles.PREF_KEYS},
     }
+    if cfg.direct_parent_low_risk:
+        payload["execution"] = {"direct_parent_low_risk": True}
     return hashlib.sha256(_canonical(payload).encode("utf-8")).hexdigest()
 
 
@@ -272,15 +279,31 @@ def _default_preferences(profiles: dict[str, rig_profiles.Profile]) -> dict[str,
     }
 
 
-def _parse_routing_json(path: Path | None, raw: dict | None, profiles: dict[str, rig_profiles.Profile], preferences: dict[str, list[str]]) -> tuple[dict[str, rig_profiles.Profile], dict[str, list[str]], dict | None, str]:
+def _parse_execution(raw: dict, path: Path | None, version: int) -> bool:
+    if version == 1:
+        return False
+    if "execution" not in raw:
+        return False
+    spec = raw.get("execution")
+    if not isinstance(spec, dict) or isinstance(spec, bool):
+        raise ConfigError(f"{path} execution must be an object")
+    _unknown_fields(spec, EXECUTION_FIELDS, "execution")
+    if "direct_parent_low_risk" not in spec:
+        return False
+    return _strict_bool(spec["direct_parent_low_risk"], "execution.direct_parent_low_risk")
+
+
+def _parse_routing_json(path: Path | None, raw: dict | None, profiles: dict[str, rig_profiles.Profile], preferences: dict[str, list[str]]) -> tuple[dict[str, rig_profiles.Profile], dict[str, list[str]], dict | None, str, bool]:
     if raw is None:
-        return profiles, preferences, None, "builtin"
+        return profiles, preferences, None, "builtin", False
     version = raw.get("schema_version")
-    if type(version) is not int or version != 1:
-        raise ConfigError(f"{path} schema_version must be 1")
-    extra_keys = set(raw) - CONFIG_FIELDS
+    if type(version) is not int or version not in SCHEMA_VERSIONS:
+        raise ConfigError(f"{path} schema_version must be 1 or 2")
+    allowed = V2_FIELDS if version == 2 else V1_FIELDS
+    extra_keys = set(raw) - allowed
     if extra_keys:
         raise ConfigError(f"{path} unknown keys: {sorted(extra_keys)[0]}")
+    direct_parent = _parse_execution(raw, path, version)
     overrides = raw.get("profiles") or {}
     if overrides and not isinstance(overrides, dict):
         raise ConfigError(f"{path} profiles must be an object keyed by stable id")
@@ -315,7 +338,7 @@ def _parse_routing_json(path: Path | None, raw: dict | None, profiles: dict[str,
     for key, default in defaults.items():
         if key not in (pref_raw or {}):
             preferences[key] = default
-    return profiles, preferences, raw, str(path)
+    return profiles, preferences, raw, str(path), direct_parent
 
 
 def load_config(repo: Path | None, *, policy_mode: str | None = None, harness: dict | None = None) -> RoutingConfig:
@@ -345,8 +368,17 @@ def load_config(repo: Path | None, *, policy_mode: str | None = None, harness: d
     if raw is None:
         return builtin_cfg()
     try:
-        profiles, preferences, parsed, source = _parse_routing_json(path, raw, dict(builtin), _default_preferences(dict(builtin)))
-        cfg = RoutingConfig(mode=mode, profiles=profiles, preferences=preferences, routing_json=parsed, source=source)
+        profiles, preferences, parsed, source, direct_parent = _parse_routing_json(
+            path, raw, dict(builtin), _default_preferences(dict(builtin))
+        )
+        cfg = RoutingConfig(
+            mode=mode,
+            profiles=profiles,
+            preferences=preferences,
+            routing_json=parsed,
+            source=source,
+            direct_parent_low_risk=direct_parent,
+        )
         validate_profiles(cfg.profiles)
     except ConfigError:
         if mode != "smart":
@@ -365,6 +397,7 @@ def doctor_lines(repo: Path | None) -> list[str]:
     rows.append(f"  mode: {cfg.mode} (policy v{POLICY_VERSION})")
     rows.append(f"  fingerprint: {config_fingerprint(cfg)}")
     rows.append(f"  profiles: {len(cfg.profiles)}")
+    rows.append(f"  direct_parent_low_risk: {str(cfg.direct_parent_low_risk).lower()}")
     path = routing_json_path(repo)
     if path is not None and path.is_file():
         rows.append(f"  config: {path}")

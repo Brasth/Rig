@@ -393,5 +393,122 @@ class CatalogStale(unittest.TestCase):
         self.assertEqual(entry["ids"], [])
 
 
+def _opt_in(repo: Path, enabled=True, version=2, extra=None):
+    (repo / ".rig").mkdir(parents=True, exist_ok=True)
+    payload = {"schema_version": version}
+    if extra:
+        payload.update(extra)
+    if version >= 2:
+        payload["execution"] = {"direct_parent_low_risk": enabled}
+    (repo / ".rig" / "routing.json").write_text(json.dumps(payload))
+    return repo
+
+
+class SchemaAndDirectParent(unittest.TestCase):
+    def test_schema_v1_and_v2_false_share_fingerprint(self):
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp)
+            empty = policy.config_fingerprint(policy.load_config(repo, policy_mode="smart"))
+            _opt_in(repo, version=1, extra={"profiles": {}, "preferences": {}})
+            v1 = policy.load_config(repo, policy_mode="smart")
+            self.assertFalse(v1.direct_parent_low_risk)
+            _opt_in(repo, enabled=False)
+            v2 = policy.load_config(repo, policy_mode="smart")
+            self.assertFalse(v2.direct_parent_low_risk)
+            self.assertEqual(empty, policy.config_fingerprint(v1))
+            self.assertEqual(policy.config_fingerprint(v1), policy.config_fingerprint(v2))
+
+    def test_schema_v2_opt_in_changes_fingerprint(self):
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp)
+            _opt_in(repo, enabled=False)
+            off = policy.config_fingerprint(policy.load_config(repo, policy_mode="smart"))
+            _opt_in(repo, enabled=True)
+            on = policy.load_config(repo, policy_mode="smart")
+            self.assertTrue(on.direct_parent_low_risk)
+            self.assertNotEqual(off, policy.config_fingerprint(on))
+
+    def test_malformed_execution_rejected_in_smart_legacy_falls_back(self):
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp)
+            (repo / ".rig").mkdir()
+            for bad in (
+                {"schema_version": 2, "execution": True},
+                {"schema_version": 2, "execution": {"direct_parent_low_risk": "true"}},
+                {"schema_version": 2, "execution": {"direct_parent_low_risk": 1}},
+                {"schema_version": 2, "execution": {"direct_parent_low_risk": True, "extra": False}},
+                {"schema_version": 2, "execution": []},
+                {"schema_version": 1, "execution": {"direct_parent_low_risk": True}},
+                {"schema_version": 3},
+            ):
+                (repo / ".rig" / "routing.json").write_text(json.dumps(bad))
+                with self.assertRaises(policy.ConfigError):
+                    policy.load_config(repo, policy_mode="smart")
+                legacy = policy.load_config(repo, policy_mode="legacy")
+                self.assertEqual(legacy.source, "builtin")
+                self.assertFalse(legacy.direct_parent_low_risk)
+
+    def test_direct_parent_before_catalog_for_low_mini_implement(self):
+        with tempfile.TemporaryDirectory() as temp:
+            repo = _opt_in(Path(temp), enabled=True)
+            with patch.object(catalog, "load_catalog_info", side_effect=AssertionError("catalog lookup")):
+                for role in ("mini", "implement"):
+                    choice = smart_pick(
+                        "codex", ["grok", "opencode"], role, "tiny label",
+                        repo=repo, complexity="low", risk="low", uncertainty="low",
+                    )
+                    self.assertEqual(choice["spawn"], "native")
+                    self.assertTrue(choice["parent_writes"])
+                    self.assertEqual(choice["executor_kind"], "parent")
+                    self.assertEqual(choice["execution_strategy"], "direct-parent")
+                    self.assertEqual(choice["routing"]["execution_strategy"], "direct-parent")
+                    self.assertEqual(choice["routing"]["catalog"]["source"], "none")
+                    self.assertIsNone(choice["routing"]["selected_profile"])
+                    self.assertEqual(choice["worker"], "codex")
+
+    def test_direct_parent_not_used_without_opt_in_or_other_roles(self):
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp)
+            low = dict(complexity="low", risk="low", uncertainty="low", repo=repo)
+            choice = smart_pick("codex", ["grok"], "implement", "add a header", **low)
+            self.assertEqual(choice["spawn"], "run-worker")
+            self.assertEqual(choice["routing"]["execution_strategy"], "wrapper")
+            _opt_in(repo, enabled=True)
+            bulk = smart_pick("codex", ["grok"], "bulk", "many files", **low)
+            self.assertEqual(bulk["spawn"], "run-worker")
+            self.assertEqual(bulk["routing"]["execution_strategy"], "wrapper")
+            hard = smart_pick(
+                "codex", ["grok", "claude"], "hard", "risky",
+                repo=repo, complexity="low", risk="low", uncertainty="low",
+            )
+            self.assertEqual(hard["spawn"], "run-worker")
+            medium = smart_pick(
+                "codex", ["grok"], "implement", "add a header",
+                repo=repo, complexity="low", risk="medium", uncertainty="low",
+            )
+            self.assertEqual(medium["spawn"], "run-worker")
+            blocked = smart_pick(
+                "codex", ["grok"], "implement", "tiny",
+                repo=repo, complexity="low", risk="low", uncertainty="low", exclude="codex",
+            )
+            self.assertEqual(blocked["spawn"], "run-worker")
+            legacy = route.pick(
+                "codex", ["grok"], "implement", "tiny",
+                repo=repo, complexity="low", risk="low", uncertainty="low", policy_mode="legacy",
+            )
+            self.assertEqual(legacy["spawn"], "run-worker")
+            self.assertEqual(legacy["routing"]["execution_strategy"], "wrapper")
+
+    def test_parent_fallback_strategy_distinct_from_direct(self):
+        with tempfile.TemporaryDirectory() as temp:
+            repo = _opt_in(Path(temp), enabled=True)
+            fallback = smart_pick("codex", [], "implement", "add a header", repo=repo)
+            self.assertEqual(fallback["routing"]["execution_strategy"], "parent-fallback")
+            self.assertTrue(fallback["parent_writes"])
+            none = smart_pick("", [], "implement", "add a header", repo=repo)
+            self.assertEqual(none["spawn"], "none")
+            self.assertEqual(none["routing"]["execution_strategy"], "none")
+
+
 if __name__ == "__main__":
     unittest.main()

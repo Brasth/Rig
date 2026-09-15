@@ -200,6 +200,99 @@ class RoutingReport(unittest.TestCase):
         self.assertEqual(efforts, ["high", "low"] if efforts[0] == "high" else ["high", "low"])
         self.assertEqual(sorted(efforts), ["high", "low"])
 
+    def test_direct_parent_and_wrapper_token_coverage(self):
+        usage = {"input": 10, "output": 4, "reasoning": 2, "cached_input": 1, "total": 17}
+        jobs = [
+            _job(job_id="direct", dir="/tmp/direct", token_usage=usage, elapsed_s=5),
+            _job(job_id="wrap", dir="/tmp/wrap", token_usage=None, elapsed_s=9, model="grok-4.5", effort="low"),
+            _job(job_id="unknown", dir="/tmp/wrap-unknown", elapsed_s=3),
+        ]
+        direct = {
+            "schema_version": 1, "attempt_id": "att-1",
+            "routing": {"policy_mode": "smart", "policy_version": 1, "required_tier": "fast",
+                        "execution_strategy": "direct-parent"},
+        }
+        wrapper = {
+            "schema_version": 1, "attempt_id": "att-1",
+            "routing": {"policy_mode": "smart", "policy_version": 1, "required_tier": "fast",
+                        "execution_strategy": "wrapper",
+                        "selected_profile": {"id": "grok-4.5-low"}},
+        }
+
+        def fake_sidecar(folder, expected_attempt_id=None):
+            name = Path(folder).name if folder else ""
+            if name == "direct":
+                return direct
+            return wrapper
+
+        assessed = {"state": "verified", "acceptance": "accepted", "freshness": "current", "reason": ""}
+        with patch.object(report.rig_jobs, "list_jobs", return_value=jobs), patch.object(
+            policy, "read_sidecar", side_effect=fake_sidecar
+        ), patch.object(report.verification, "assessment", return_value=assessed):
+            result = report.build_report(self.repo, days=30, now=1_778_300_000.0)
+        self.assertEqual(result["totals"]["direct_parent_attempts"], 1)
+        self.assertEqual(result["totals"]["wrapper_attempts"], 2)
+        self.assertEqual(result["totals"]["token_coverage"]["known"], 1)
+        self.assertEqual(result["totals"]["token_coverage"]["unknown"], 2)
+        self.assertEqual(result["totals"]["token_components"]["total"]["sum"], 17)
+        self.assertEqual(result["totals"]["token_components"]["total"]["median"], 17.0)
+        self.assertIsNone(result["strategies"]["wrapper"]["token_components"]["total"]["sum"])
+        self.assertEqual(result["strategies"]["direct-parent"]["token_coverage"]["known"], 1)
+        self.assertEqual(result["strategies"]["wrapper"]["token_coverage"]["unknown"], 2)
+        self.assertEqual(result["strategies"]["wrapper"]["token_coverage"]["known"], 0)
+        self.assertEqual(result["strategies"]["direct-parent"]["accepted"], 1)
+        strategies = {row["execution_strategy"] for row in result["groups"]}
+        self.assertEqual(strategies, {"direct-parent", "wrapper"})
+
+    def test_partial_usage_aggregates_per_component(self):
+        jobs = [
+            _job(job_id="full", token_usage={
+                "input": 10, "output": 4, "reasoning": 2, "cached_input": 1, "total": 17,
+            }),
+            _job(job_id="partial", token_usage={"input": 6, "output": 2}),
+            _job(job_id="unknown", token_usage=None),
+        ]
+        sidecar = {
+            "schema_version": 1, "attempt_id": "att-1",
+            "routing": {"policy_mode": "smart", "policy_version": 1, "required_tier": "fast",
+                        "execution_strategy": "wrapper", "selected_profile": {"id": "p"}},
+        }
+        result = self._build(jobs, sidecar=sidecar)
+        totals = result["totals"]
+        self.assertEqual(totals["token_coverage"]["known"], 2)
+        self.assertEqual(totals["token_coverage"]["unknown"], 1)
+        self.assertEqual(totals["token_components"]["input"]["n"], 2)
+        self.assertEqual(totals["token_components"]["input"]["sum"], 16)
+        self.assertEqual(totals["token_components"]["output"]["n"], 2)
+        self.assertEqual(totals["token_components"]["output"]["sum"], 6)
+        self.assertEqual(totals["token_components"]["reasoning"]["n"], 1)
+        self.assertEqual(totals["token_components"]["reasoning"]["sum"], 2)
+        self.assertEqual(totals["token_components"]["cached_input"]["n"], 1)
+        self.assertEqual(totals["token_components"]["total"]["n"], 1)
+        self.assertEqual(totals["token_components"]["total"]["sum"], 17)
+        self.assertEqual(totals["token_components"]["total"]["median"], 17.0)
+        row = result["groups"][0]
+        self.assertEqual(row["token_components"]["input"]["n"], 2)
+        self.assertEqual(row["token_components"]["total"]["n"], 1)
+        self.assertEqual(row["token_components"]["reasoning"]["n"], 1)
+        self.assertEqual(row["token_components"]["cached_input"]["n"], 1)
+        self.assertNotEqual(row["token_components"]["input"]["sum"], 0)
+
+    def test_unknown_usage_is_not_zero(self):
+        sidecar = {
+            "schema_version": 1, "attempt_id": "att-1",
+            "routing": {"policy_mode": "smart", "policy_version": 1, "required_tier": "fast",
+                        "execution_strategy": "wrapper", "selected_profile": {"id": "p"}},
+        }
+        result = self._build(
+            [_job(token_usage={"input": -1, "output": 0, "reasoning": 0, "cached_input": 0, "total": 0})],
+            sidecar=sidecar,
+        )
+        self.assertEqual(result["totals"]["token_coverage"]["known"], 0)
+        self.assertEqual(result["totals"]["token_coverage"]["unknown"], 1)
+        self.assertIsNone(result["totals"]["token_components"]["total"]["sum"])
+        self.assertIsNone(result["groups"][0]["token_components"]["input"]["median"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -371,6 +371,10 @@ if started and ended:
         pass
 sys.path.insert(0, str(pathlib.Path(os.environ["RESULT_ADMISSION_SCRIPT"]).parent))
 import admission
+import token_usage as rig_tokens
+usage = rig_tokens.usage_from_job_dir(mpath.parent) or rig_tokens.load_token_usage(old.get("token_usage"))
+if usage:
+    obj["token_usage"] = usage
 credential_path = os.environ["RESULT_CREDENTIALS"]
 repo = pathlib.Path(os.environ["RESULT_REPO"])
 with admission.transaction(repo):

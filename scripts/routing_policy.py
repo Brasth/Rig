@@ -38,6 +38,8 @@ LEVELS = ("low", "medium", "high")
 TIER_ORDER = ("fast", "standard", "strong")
 ASSESSMENT_FIELDS = frozenset({"complexity", "risk", "uncertainty", "reason"})
 ASSESSMENT_META = frozenset({"defaulted", "supplied"})
+DIRECT_PARENT_ROLES = frozenset({"mini", "implement"})
+EXECUTION_STRATEGIES = ("direct-parent", "wrapper", "parent-fallback", "stay", "none")
 ROLE_DEFAULTS = {
     "explore": ("low", "low", "low"),
     "mini": ("low", "low", "low"),
@@ -215,8 +217,38 @@ def _decision(pid: str, code: str, detail: str = "") -> dict:
 
 
 def _finish_choice(choice: dict, routing: dict) -> dict:
+    strategy = str(routing.get("execution_strategy") or "").strip()
+    if strategy:
+        choice["execution_strategy"] = strategy
     choice["routing"] = routing
     return choice
+
+
+def assessment_all_low(assessment: dict | None) -> bool:
+    data = assessment or {}
+    return all(data.get(name) == "low" for name in ("complexity", "risk", "uncertainty"))
+
+
+def direct_parent_eligible(
+    kind: str,
+    assessment: dict | None,
+    cfg,
+    live: str,
+    blocked=None,
+) -> bool:
+    import route as rig_route
+
+    live_parent = str(live or "").strip()
+    blocked_set = set(blocked or [])
+    return (
+        getattr(cfg, "mode", "") == "smart"
+        and bool(getattr(cfg, "direct_parent_low_risk", False))
+        and kind in DIRECT_PARENT_ROLES
+        and assessment_all_low(assessment)
+        and live_parent in rig_route.NATIVE_PARENTS
+        and live_parent not in blocked_set
+        and "native" not in blocked_set
+    )
 
 
 def _hard_filter(profile: rig_profiles.Profile, *, live: str, blocked: set[str], wrapper_names: list[str], kind: str) -> tuple[str, str] | None:
@@ -319,6 +351,7 @@ def smart_pick(
 
     routing = empty_routing(mode="smart", fingerprint=fingerprint, assessment=assessed)
     if kind == "stay":
+        routing["execution_strategy"] = "stay"
         routing["parent_fit_limitations"] = (
             "stay uses the live parent; no catalog discovery; model is observed or unknown"
         )
@@ -343,6 +376,31 @@ def smart_pick(
     need = required_tier(kind, assessed)
     routing["required_tier"] = need
     routing["review_recommendation"] = "independent" if assessed.get("risk") == "high" else "none"
+    if direct_parent_eligible(kind, assessed, cfg, live, blocked):
+        routing["execution_strategy"] = "direct-parent"
+        routing["catalog"] = {"source": "none", "freshness": "n/a"}
+        routing["parent_fit_limitations"] = (
+            "opt-in direct parent writes for low-risk mini/implement; no catalog discovery"
+        )
+        if not actual_model:
+            routing["parent_fit_limitations"] += "; parent model/effort unverified"
+        return _finish_choice(
+            base(
+                worker=live,
+                spawn="native",
+                model=actual_model,
+                effort=actual_effort,
+                parent_writes=True,
+                executor_kind="parent",
+                model_source="observed" if actual_model else "unknown",
+                reason=(
+                    f"{kind}: this parent writes (direct-parent, low-risk opt-in). "
+                    "MCP rig_job_start BEFORE editing: concrete files, access=write, executor_kind=parent; "
+                    "retain ownership and finish authenticated. do not spawn a second same-CLI session."
+                ),
+            ),
+            routing,
+        )
     wrapper_names = [w for w in effective if w not in blocked and w != "cursor"]
     decisions: dict[str, dict] = {}
     session = CatalogSession(catalogs)
@@ -359,6 +417,7 @@ def smart_pick(
             if profile.id not in decisions:
                 decisions[profile.id] = _decision(profile.id, "review-unavailable", review_reason)
         routing["candidate_decisions"] = [decisions[pid] for pid in sorted(decisions)]
+        routing["execution_strategy"] = "none"
         return _finish_choice(
             base(worker="", spawn="none", reason=review_reason, review={**(review_ctx or {}), "independence": "unavailable"}),
             routing,
@@ -421,6 +480,7 @@ def smart_pick(
     routing["candidate_decisions"] = [decisions[pid] for pid in sorted(decisions)]
     routing["catalog"] = catalog_meta
     if selected:
+        routing["execution_strategy"] = "wrapper"
         routing["selected_profile"] = selected_profile_dict(selected, model=selected_model, tier=selected_tier)
         effort = selected.effort
         reason = f"{kind}: {selected.worker} child {selected_model}" + (f" effort={effort}" if effort else "")
@@ -445,6 +505,7 @@ def smart_pick(
         )
 
     if kind == "explore":
+        routing["execution_strategy"] = "stay"
         routing["parent_fit_limitations"] = "no eligible explore child; parent stays read-only; no native child"
         if not actual_model:
             routing["parent_fit_limitations"] += "; parent model/effort unverified"
@@ -460,6 +521,7 @@ def smart_pick(
         reason = review_reason or "review needs a different vendor; no eligible reviewer"
         if "cursor" in {str(x).strip().lower() for x in effective} and "Cursor" not in reason:
             reason = "review needs a different vendor; Cursor has no isolated job-scoped MCP"
+        routing["execution_strategy"] = "none"
         routing["parent_fit_limitations"] = "independent review unavailable without a different known provider"
         return _finish_choice(
             base(
@@ -470,6 +532,7 @@ def smart_pick(
         )
     skip_native = bool(live) and (live in blocked or "native" in blocked)
     if kind in {"implement", "hard", "mini", "bulk"} and live in rig_route.NATIVE_PARENTS and not skip_native:
+        routing["execution_strategy"] = "parent-fallback"
         routing["parent_fit_limitations"] = "no eligible wrapper; parent writes"
         if not actual_model:
             routing["parent_fit_limitations"] += "; parent model/effort unverified"
@@ -493,6 +556,7 @@ def smart_pick(
         reason = "no effective worker after exclude; do not unlock a disabled worker."
     else:
         reason = "no effective worker; use cheaper same-CLI workers. That is success."
+    routing["execution_strategy"] = "none"
     routing["parent_fit_limitations"] = reason
     return _finish_choice(base(worker="", spawn="none", reason=reason), routing)
 
@@ -575,6 +639,7 @@ def resolve_explicit_worker_choice(
     if selected is None:
         raise ValueError(f"no eligible smart profile for worker '{worker}'; re-pick")
     routing = empty_routing(mode="smart", fingerprint=fingerprint, assessment=assessed, required=need)
+    routing["execution_strategy"] = "wrapper"
     routing["selected_profile"] = selected_profile_dict(selected, model=selected_model, tier=selected_tier)
     routing["catalog"] = catalog_meta
     routing["candidate_decisions"] = [decisions[pid] for pid in sorted(decisions)]
@@ -585,6 +650,7 @@ def resolve_explicit_worker_choice(
         "spawn": "run-worker",
         "executor_kind": "wrapper",
         "parent_writes": False,
+        "execution_strategy": "wrapper",
         "routing": routing,
     }
 

@@ -470,6 +470,61 @@ def write_activity(
     tmp.replace(path)
 
 
+def _load_token_usage(value) -> dict | None:
+    import token_usage as rig_tokens
+
+    return rig_tokens.load_token_usage(value)
+
+
+def _resolve_token_usage(
+    job_dir: Path,
+    *,
+    executor_kind: str,
+    status: str,
+    supplied=None,
+    previous=None,
+) -> dict | None:
+    import token_usage as rig_tokens
+
+    if supplied is not None:
+        return rig_tokens.load_token_usage(supplied)
+    prior = rig_tokens.load_token_usage(previous)
+    if executor_kind == "parent":
+        return prior
+    if status not in {"ok", "fail", "timeout", "cancelled"}:
+        return prior
+    return rig_tokens.usage_from_job_dir(job_dir) or prior
+
+
+def persist_token_usage(job_dir: Path, *, supplied=None) -> dict | None:
+    """Write optional token_usage onto meta/result. Unknown stays omitted, never zero."""
+    job_dir = Path(job_dir)
+    meta = _read_meta_dict(job_dir)
+    usage = _resolve_token_usage(
+        job_dir,
+        executor_kind=str(meta.get("executor_kind") or ""),
+        status=str(meta.get("status") or ""),
+        supplied=supplied,
+        previous=meta.get("token_usage"),
+    )
+    if not usage:
+        return None
+    if meta.get("token_usage") != usage:
+        patch_meta(job_dir, token_usage=usage)
+        result_path = job_dir / "result.json"
+        if result_path.is_file():
+            try:
+                result = json.loads(result_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError, UnicodeError):
+                result = None
+            if isinstance(result, dict):
+                result["token_usage"] = usage
+                tmp = result_path.with_name(result_path.name + ".tmp")
+                tmp.write_text(json.dumps(result, indent=2) + "\n")
+                tmp.replace(result_path)
+    return usage
+
+
 def persist_activity(job_dir: Path, source: str = "stdout") -> list[str]:
     """Decode stdout.log into activity.json. Keep prior (child) lines if the log is empty."""
     job_dir = Path(job_dir)
@@ -790,6 +845,7 @@ def load_job(job_path: Path, *, include_activity: bool = True) -> dict | None:
         ]
         if isinstance(obj.get("files"), list)
         else [],
+        "token_usage": _load_token_usage(obj.get("token_usage")),
     }
     import verification
 
@@ -1240,7 +1296,9 @@ def format_show(job: dict, log_lines: int = 24) -> str:
         profile = routing.get("selected_profile") or {}
         lines.append(
             f"routing   {routing.get('policy_mode') or '-'} v{routing.get('policy_version') or '-'} "
-            f"tier={routing.get('required_tier') or '-'} profile={profile.get('id') or '-'}"
+            f"tier={routing.get('required_tier') or '-'} "
+            f"strategy={routing.get('execution_strategy') or '-'} "
+            f"profile={profile.get('id') or '-'}"
         )
         lines.append(f"routing_attempt  {sidecar['attempt_id']}")
         rec = routing.get("review_recommendation") or "none"
@@ -1417,6 +1475,7 @@ def write_job_files(
     reservation: dict | None = None,
     capture_evidence: bool = True,
     legacy_cancel_requested: bool | None = None,
+    token_usage=None,
 ) -> None:
     job_dir.mkdir(parents=True, exist_ok=True)
     old = _read_meta_dict(job_dir)
@@ -1534,6 +1593,15 @@ def write_job_files(
     elapsed = elapsed_seconds(started_at, ended_at, live=live)
     if elapsed is not None:
         obj["elapsed_s"] = elapsed
+    usage = _resolve_token_usage(
+        job_dir,
+        executor_kind=executor_kind,
+        status=status,
+        supplied=token_usage,
+        previous=old.get("token_usage"),
+    )
+    if usage:
+        obj["token_usage"] = usage
     blob = json.dumps(obj, indent=2) + "\n"
     for name in ("meta.json", "result.json"):
         path = job_dir / name
@@ -1714,7 +1782,7 @@ def start_job(
         routing_obj = routing_policy.validate_launch_tuple(
             repo, worker=worker, model=model, effort=effort, role=role,
             routing=picked_routing, assessment=assessment_obj,
-            executor_kind=kind, access=access,
+            executor_kind=kind, access=access, live=live,
         )
     except (ValueError, routing_policy.ConfigError) as error:
         raise SystemExit(f"rig job: {error}") from error
@@ -1787,6 +1855,7 @@ def finish_job(
     completion: dict | None = None,
     execution_mode: str = "",
     return_details: bool = False,
+    token_usage=None,
 ) -> str | dict:
     """Write result.json for a job. Does not kill a process."""
     _require_harness(repo)
@@ -1830,9 +1899,11 @@ def finish_job(
                         summary or "", str(meta.get("kind") or "native"), thread=_job_thread(repo),
                         model=model, effort=effort, executor_kind=executor_kind,
                         execution_mode=execution_mode or str(meta.get("execution_mode") or "unknown"),
-                        capture_evidence=transition is None or transition.get("stopped") is True)
+                        capture_evidence=transition is None or transition.get("stopped") is True,
+                        token_usage=token_usage)
         write_state(repo, job_id, worker, observed_status, summary or "")
     persist_activity(job_dir)
+    persist_token_usage(job_dir, supplied=token_usage)
     if status == "ok" and observed_status == "ok":
         _prune_stdout_log(job_dir)
     text = _finish_text(job_id, worker, role, observed_status, job_dir)
@@ -2260,6 +2331,7 @@ def main() -> int:
         if target is None:
             raise SystemExit("usage: jobs.py persist --dir DIR")
         persist_activity(target)
+        persist_token_usage(target)
         return 0
     if args.cmd == "thread":
         print(current_thread(repo))

@@ -101,6 +101,28 @@ class RoutingInterfaces(unittest.TestCase):
         self.assertIn("schema_version", result.stdout + result.stderr)
         self.assertEqual(path.read_bytes(), before)
 
+    def test_schema_v2_opt_in_pick_and_doctor(self):
+        (self.repo / ".rig" / "routing.json").write_text(json.dumps({
+            "schema_version": 2,
+            "execution": {"direct_parent_low_risk": True},
+        }))
+        doctor = self.cli("doctor")
+        self.assertEqual(doctor.returncode, 0, doctor.stderr)
+        self.assertIn("direct_parent_low_risk: true", doctor.stdout)
+        pick = self.cli(
+            "pick", "implement", "--case", "tiny label",
+            "--complexity", "low", "--risk", "low", "--uncertainty", "low", "--json",
+        )
+        self.assertEqual(pick.returncode, 0, pick.stderr)
+        body = json.loads(pick.stdout)
+        self.assertEqual(body["spawn"], "native")
+        self.assertTrue(body["parent_writes"])
+        self.assertEqual(body["routing"]["execution_strategy"], "direct-parent")
+        mcp = self.mcp("rig_pick", role="implement", complexity="low", risk="low", uncertainty="low")
+        self.assertFalse(mcp.get("isError"), mcp)
+        choice = json.loads(mcp["content"][0]["text"])
+        self.assertEqual(choice["routing"]["execution_strategy"], "direct-parent")
+
 
 if __name__ == "__main__":
     unittest.main()

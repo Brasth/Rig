@@ -34,6 +34,7 @@ PICK_KEYS = {
     "executor_kind",
     "model_source",
     "routing",
+    "execution_strategy",
 }
 DISPATCH_TOOLS = (
     "rig_session",

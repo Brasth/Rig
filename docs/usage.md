@@ -551,14 +551,16 @@ Bash fallback when MCP is unavailable: `rig session --role implement --case "fix
 
 ### Routing
 
-`rig_routing_report` (CLI `rig routing report`) reports recorded execution and acceptance without adapting routing. Smart picks accept complexity, risk, uncertainty, assessment_reason and explain; see [smart routing](smart-routing.md).
+`rig_routing_report` (CLI `rig routing report`) reports recorded execution and acceptance without adapting routing. It separates direct-parent from wrapper attempts and reports token coverage only from observed structured worker usage; unknown usage is omitted, never treated as zero. Smart picks accept complexity, risk, uncertainty, assessment_reason and explain; see [smart routing](smart-routing.md).
+
+Optional `.rig/routing.json` schema 1 stays valid. Schema 2 may set `execution.direct_parent_low_risk` (boolean, default false). When true, smart mini/implement with all assessment dimensions low and an eligible tracked live parent writes here (`execution_strategy=direct-parent`) without catalog lookup. Register with `rig_job_start`, finish with authenticated parent completion, then accept the current snapshot. Other roles, medium/high assessments, excluded parents, and legacy mode keep the previous wrapper/parent-fallback path. Malformed execution settings fail smart mode; legacy still falls back to builtin config. Disable only the cost-aware lane with `execution.direct_parent_low_risk: false` (or schema 1) without leaving smart mode.
 
 | Case | Who |
 | --- | --- |
 | Ask / plan / advise / vision / computer-use / chrome-profile / Figma | parent (MCP `rig_pick` stay). Do not spawn a clicker |
 | Docs/skills-only | assessed profile (MCP `rig_pick` mini); defaults fast |
 | Locate / trace / codebase gather | read-only assessed explore profile, only if the parent cannot name files after a short check |
-| Implement / SSH / fix | minimum sufficient eligible model+effort profile; no eligible wrapper means `parent_writes`, without a second same-CLI session. Cursor stays excluded |
+| Implement / SSH / fix | minimum sufficient eligible model+effort profile; optional schema-2 `direct_parent_low_risk` sends only low-risk mini/implement to this parent before catalog lookup; no eligible wrapper means `parent_writes` (`parent-fallback`), without a second same-CLI session. Cursor stays excluded |
 | Review | Standalone by default; independent post-write review requires current writer acceptance and a different known actual model provider. Unknown/unavailable independence stays explicit |
 | After implement+verify ok | MAY start read-only review **and** seed/bulk with **disjoint listed files** in parallel. One wait on both ids |
 | Independent queued items | Up to `[queue].max_running` (default 3 reserved/running/ASK executions) if listed files are disjoint. Parent **selects a subset by id** (skip overlap, try next; omit id only if one pending). List shows occupied files. Until **that write** is ok: one child on those files. Never a second writer on the same files. Never explore/fix/QA teammates on the same write. `/queue` parks only; drain is the parent on a free turn |
