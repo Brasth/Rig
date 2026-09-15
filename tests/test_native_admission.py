@@ -111,6 +111,46 @@ class NativeAdmission(NativeHarness):
         self.start("replacement")
         self.assertNotEqual(jobs.resolve_job(self.repo, "writer")["verification"]["state"], "verified")
 
+    def test_native_child_start_rejects_unresolved_model_without_a_live_job(self):
+        with patch("routing_policy.resolve_explicit_worker_choice", return_value={"model": "", "effort": ""}), \
+                patch("route.resolved_model_for", side_effect=RuntimeError("catalog unavailable")):
+            result = self.call("rig_job_start", id="child", role="mini", executor_kind="native_child",
+                               native_agent_id="agent-A", files=["subject.txt"])
+        self.assertTrue(result.get("isError"), result)
+        self.assertIn("selected model", result["content"][0]["text"])
+        folder = self.repo / ".rig" / "jobs" / "child"
+        self.assertFalse((folder / "meta.json").is_file())
+        self.assertEqual(admission.list_reservations(self.repo), [])
+
+    def test_native_child_start_preserves_selected_model_and_effort(self):
+        lease = self.start(role="mini", executor_kind="native_child", native_agent_id="agent-A",
+                           model="gpt-5.6-luna", effort="low")
+        folder = self.repo / ".rig" / "jobs" / "writer"
+        child = jobs.load_job(folder)
+        self.assertEqual(child["model"], "gpt-5.6-luna")
+        self.assertEqual(child["effort"], "low")
+        self.assertEqual(child["model_source"], "selected")
+        self.assertFalse(child["model_inferred"])
+        self.assertEqual(child["display_model"], "gpt-5.6-luna")
+        payload = json.loads(self.call("rig_session", role="stay", case="status", compact=True, terminal_limit=0)["content"][0]["text"])
+        row = next(job for job in payload["jobs"] if job["job_id"] == "writer")
+        self.assertEqual(row["model"], "gpt-5.6-luna")
+        self.assertEqual(row["effort"], "low")
+        self.assertEqual(row["model_source"], "selected")
+        self.assertEqual(row["display_model"], "gpt-5.6-luna")
+        self.assertFalse(row["model_inferred"])
+        self.assertNotIn(lease["owner_token"], json.dumps(payload))
+
+    def test_parent_start_allows_unknown_model(self):
+        lease = self.start()
+        parent = jobs.load_job(self.repo / ".rig" / "jobs" / "writer")
+        self.assertEqual(parent["executor_kind"], "parent")
+        self.assertEqual(parent["model"], "")
+        self.assertEqual(parent["model_source"], "unknown")
+        self.assertFalse(parent["model_inferred"])
+        self.assertEqual(parent["display_model"], "unknown")
+        self.assertNotEqual(lease["job_id"], "")
+
     def test_native_child_completion_requires_its_specific_agent_and_outcome(self):
         lease = self.start(role="mini", executor_kind="native_child", native_agent_id="agent-A", model="gpt-5.6-luna")
         result = self.finish(lease, completion={"kind": "native_child", "agent_id": "agent-B", "terminal": True, "outcome": "ok"})

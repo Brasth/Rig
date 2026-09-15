@@ -73,8 +73,20 @@ PARENT_METADATA_PROPERTIES = {
     },
 }
 JOB_EXECUTION_PROPERTIES = {
-    "model": {"type": "string", "description": "Executing model. For parent work, pass only the actual known model."},
-    "effort": {"type": "string", "description": "Executing model reasoning effort, when known."},
+    "model": {
+        "type": "string",
+        "description": (
+            "Executing model. Native child admission requires a selected model; "
+            "parent work may omit it when the actual parent model is unknown."
+        ),
+    },
+    "effort": {
+        "type": "string",
+        "description": (
+            "Executing model reasoning effort. Native child keeps the selected pick effort; "
+            "parent work may omit it when unknown."
+        ),
+    },
     "executor_kind": {
         "type": "string",
         "enum": ["parent", "native_child"],

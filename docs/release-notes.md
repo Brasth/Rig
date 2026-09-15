@@ -1,5 +1,14 @@
 # Release Notes
 
+## Native-Child Model Provenance (2026-09-15)
+
+Accepted fix for native-child model provenance on admission and the job board.
+
+- Fresh running native-child admission now requires a selected model and fails before a live job record if selection is missing.
+- Selected native children show their model/effort on the job board.
+- Parent and historical jobs remain unknown only when actual provenance is unavailable.
+- Rollout requires a fully restarted parent CLI/MCP session after update.
+
 ## Devin Child Worker
 
 Devin is a child-only worker. It is never a parent and defaults off.

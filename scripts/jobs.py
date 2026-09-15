@@ -1477,7 +1477,6 @@ def write_job_files(
     legacy_cancel_requested: bool | None = None,
     token_usage=None,
 ) -> None:
-    job_dir.mkdir(parents=True, exist_ok=True)
     old = _read_meta_dict(job_dir)
     executor_kind = executor_kind or str(old.get("executor_kind") or "")
     if worker == "parent" or role == "parent":
@@ -1500,7 +1499,9 @@ def write_job_files(
             else:
                 model, effort = rig_route.resolved_model_for(worker or "codex", route_kind)
             inferred = bool(old)
-        except Exception:
+        except Exception as error:
+            if executor_kind == "native_child" and status == "running" and not old:
+                raise SystemExit("rig job: native_child requires a selected model") from error
             model, effort = model or "", effort or ""
     if not model_source:
         if old and not supplied_model:
@@ -1511,6 +1512,9 @@ def write_job_files(
             model_source = "selected" if model else "unknown"
     if not model:
         effort = ""
+    if executor_kind == "native_child" and status == "running" and not old:
+        if not model or inferred or model_source != "selected":
+            raise SystemExit("rig job: native_child requires a selected model")
     if model and executor_kind != "parent" and status == "running" and (supplied_model or not old):
         import route as rig_route
 
@@ -1519,6 +1523,7 @@ def write_job_files(
             model_error = rig_route.assert_devin_model(worker, model, role)
         if model_error:
             raise SystemExit(model_error)
+    job_dir.mkdir(parents=True, exist_ok=True)
     if not execution_mode:
         execution_mode = str(old.get("execution_mode") or "unknown") if old else ("parent" if executor_kind == "parent" else "native")
     obj = {
@@ -1780,6 +1785,8 @@ def start_job(
         error = route.assert_child_model(model) or route.assert_devin_model(worker, model, role)
         if error:
             raise SystemExit(error)
+    if kind == "native_child" and not str(model or "").strip():
+        raise SystemExit("rig job: native_child requires a selected model")
     try:
         routing_obj = routing_policy.validate_launch_tuple(
             repo, worker=worker, model=model, effort=effort, role=role,

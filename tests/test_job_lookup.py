@@ -152,6 +152,48 @@ class JobLookup(unittest.TestCase):
         self.assertEqual(child["model"], available)
         self.assertEqual(child["model_source"], "selected")
         self.assertFalse(child["model_inferred"])
+        self.assertEqual(child["display_model"], available)
+
+    def test_fresh_native_child_rejects_failed_model_resolution(self):
+        folder = self.root / "unresolved-child"
+        with patch("route.resolved_model_for", side_effect=RuntimeError("catalog unavailable")):
+            with self.assertRaisesRegex(SystemExit, "selected model"):
+                jobs.write_job_files(folder, folder.name, "codex", "mini", "running", 0, "", "", "")
+        self.assertFalse((folder / "meta.json").is_file())
+        self.assertIsNone(jobs.load_job(folder))
+
+    def test_fresh_native_child_rejects_empty_selection(self):
+        folder = self.root / "empty-child"
+        with patch("route.resolved_model_for", return_value=("", "")):
+            with self.assertRaisesRegex(SystemExit, "selected model"):
+                jobs.write_job_files(folder, folder.name, "codex", "mini", "running", 0, "", "", "")
+        self.assertFalse((folder / "meta.json").is_file())
+
+    def test_selected_native_child_remains_displayed(self):
+        folder = self.root / "selected-child"
+        jobs.write_job_files(
+            folder, folder.name, "codex", "mini", "running", 0, "", "", "",
+            model="gpt-5.6-luna", effort="low",
+        )
+        child = jobs.load_job(folder)
+        self.assertEqual(child["model"], "gpt-5.6-luna")
+        self.assertEqual(child["effort"], "low")
+        self.assertEqual(child["model_source"], "selected")
+        self.assertFalse(child["model_inferred"])
+        self.assertEqual(child["executor_kind"], "native_child")
+        self.assertEqual(child["display_model"], "gpt-5.6-luna")
+
+    def test_legacy_native_child_unknown_stays_readable_without_backfill(self):
+        folder = self.seed("legacy-child")
+        (folder / "meta.json").write_text(json.dumps({
+            "job_id": folder.name, "role": "mini", "worker": "codex", "status": "ok",
+            "executor_kind": "native_child", "model": "", "model_source": "unknown",
+        }))
+        before = (folder / "meta.json").read_text()
+        loaded = jobs.load_job(folder)
+        self.assertEqual(loaded["model_source"], "unknown")
+        self.assertEqual(loaded["display_model"], "unknown")
+        self.assertEqual((folder / "meta.json").read_text(), before)
 
 
 if __name__ == "__main__":
