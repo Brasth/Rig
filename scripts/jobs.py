@@ -1379,7 +1379,7 @@ def format_log(job: dict, n: int = 40) -> str:
 
 
 JOB_WORKERS = frozenset(
-    {"grok", "codex", "claude", "cursor", "opencode", "omp", "pi", "agy", "parent"}
+    {"grok", "codex", "claude", "cursor", "opencode", "omp", "pi", "agy", "devin", "parent"}
 )
 JOB_STATUSES = frozenset({"ok", "fail", "timeout", "running", "cancelled"})
 JOB_ID_RE = re.compile(r"^[A-Za-z0-9._-]+$")
@@ -1515,6 +1515,8 @@ def write_job_files(
         import route as rig_route
 
         model_error = rig_route.assert_child_model(model)
+        if not model_error:
+            model_error = rig_route.assert_devin_model(worker, model, role)
         if model_error:
             raise SystemExit(model_error)
     if not execution_mode:
@@ -1628,7 +1630,7 @@ def _allocate_job_id(job_id: str) -> str:
 def _validate_worker(worker: str) -> str:
     if worker not in JOB_WORKERS:
         raise SystemExit(
-            "rig job: worker must be grok|codex|claude|cursor|opencode|omp|pi|agy|parent"
+            "rig job: worker must be grok|codex|claude|cursor|opencode|omp|pi|agy|devin|parent"
         )
     return worker
 
@@ -1775,7 +1777,7 @@ def start_job(
         else:
             model, effort = route.resolved_model_for(worker, route.classify(role, ""))
     if model and kind != "parent":
-        error = route.assert_child_model(model)
+        error = route.assert_child_model(model) or route.assert_devin_model(worker, model, role)
         if error:
             raise SystemExit(error)
     try:

@@ -30,7 +30,7 @@ import worker_launch as rig_launch  # noqa: E402
 import child_mcp as rig_child_mcp  # noqa: E402
 
 PICK_ROLES = ("explore", "mini", "bulk", "implement", "hard", "review", "stay")
-JOB_WORKERS = ("grok", "codex", "claude", "cursor", "opencode", "omp", "pi", "agy", "parent")
+JOB_WORKERS = ("grok", "codex", "claude", "cursor", "opencode", "omp", "pi", "agy", "devin", "parent")
 JOB_RECORD_STATUSES = ("ok", "fail", "timeout")
 JOB_FINISH_STATUSES = ("ok", "fail", "timeout", "cancelled")
 REVIEW_PROPERTIES = {
@@ -505,7 +505,7 @@ TOOLS = [
                 "role": {"type": "string", "description": "Pick kind or job role."},
                 "worker": {
                     "type": "string",
-                    "enum": ["grok", "codex", "claude", "opencode", "omp", "pi", "agy"],
+                    "enum": ["grok", "codex", "claude", "opencode", "omp", "pi", "agy", "devin"],
                 },
                 "model": {"type": "string"},
                 "effort": {"type": "string"},

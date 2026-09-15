@@ -167,6 +167,32 @@ class SmartSelection(unittest.TestCase):
             self.assertIn("grok-4.5-low", cfg.preferences["fast"])
             self.assertIn("codex-explorer-low", cfg.preferences["fast"])
 
+    def test_devin_requires_explicit_preference_and_exact_catalog_pin(self):
+        no_opt_in = smart_pick(
+            "codex", ["devin"], "implement", "add a header",
+            catalogs={"devin": ["swe-2-high"]},
+        )
+        self.assertNotEqual(no_opt_in.get("worker"), "devin")
+
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp)
+            (repo / ".rig").mkdir()
+            (repo / ".rig" / "routing.json").write_text(json.dumps({
+                "schema_version": 1,
+                "preferences": {"standard": ["devin-swe-2-high"]},
+            }))
+            selected = smart_pick(
+                "codex", ["devin"], "implement", "add a header", repo=repo,
+                catalogs={"devin": ["swe-2-high"]},
+            )
+            self.assertEqual((selected["worker"], selected["model"], selected["effort"]),
+                             ("devin", "swe-2-high", "high"))
+            missing = smart_pick(
+                "codex", ["devin"], "implement", "add a header", repo=repo,
+                catalogs={"devin": ["swe-2-medium"]},
+            )
+            self.assertNotEqual(missing.get("worker"), "devin")
+
     def test_parent_fallback_after_all_wrappers(self):
         choice = smart_pick("codex", [], "implement", "add a header")
         self.assertEqual(choice["spawn"], "native")

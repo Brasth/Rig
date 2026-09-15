@@ -13,7 +13,7 @@ iso_now() {
   date -u +%Y-%m-%dT%H:%M:%SZ
 }
 
-RIG_WORKERS=(grok claude codex cursor opencode omp pi agy)
+RIG_WORKERS=(grok claude codex cursor opencode omp pi agy devin)
 
 find_bin() {
   command -v "$1" 2>/dev/null || true
@@ -23,7 +23,7 @@ find_bin() {
 find_worker_bin() {
   local name="$1" p real
   case "$name" in
-    grok|claude|codex|opencode|omp|pi|agy)
+    grok|claude|codex|opencode|omp|pi|agy|devin)
       find_bin "$name"
       ;;
     cursor)
@@ -92,7 +92,7 @@ harness_path() {
   printf '%s\n' "$(repo_root)/.rig/harness.toml"
 }
 
-# Sets HARNESS_PARENT, HARNESS_WORKER_{CODEX,GROK,CLAUDE,CURSOR,OPENCODE,OMP,PI,AGY}.
+# Sets HARNESS_PARENT, HARNESS_WORKER_{CODEX,GROK,CLAUDE,CURSOR,OPENCODE,OMP,PI,AGY,DEVIN}.
 # [parent] profile in old harness files is ignored (not a spawn/pick input).
 parse_harness() {
   local file="${1:-$(harness_path)}"
@@ -105,6 +105,7 @@ parse_harness() {
   HARNESS_WORKER_OMP="false"
   HARNESS_WORKER_PI="false"
   HARNESS_WORKER_AGY="false"
+  HARNESS_WORKER_DEVIN="false"
   HARNESS_FILE="$file"
   [[ -f "$file" ]] || return 0
 
@@ -142,6 +143,7 @@ parse_harness() {
             omp) HARNESS_WORKER_OMP="$val" ;;
             pi) HARNESS_WORKER_PI="$val" ;;
             agy) HARNESS_WORKER_AGY="$val" ;;
+            devin) HARNESS_WORKER_DEVIN="$val" ;;
           esac
           ;;
       esac
@@ -166,6 +168,7 @@ worker_flag() {
     omp) printf '%s\n' "$HARNESS_WORKER_OMP" ;;
     pi) printf '%s\n' "$HARNESS_WORKER_PI" ;;
     agy) printf '%s\n' "$HARNESS_WORKER_AGY" ;;
+    devin) printf '%s\n' "$HARNESS_WORKER_DEVIN" ;;
     *) printf '%s\n' "false" ;;
   esac
 }
@@ -188,6 +191,9 @@ live_parent() {
     grok|codex|claude|cursor|opencode|omp|pi|agy)
       printf '%s\n' "$forced"
       return 0
+      ;;
+    devin)
+      # Devin is child-only; never treat it as the live parent.
       ;;
   esac
 
@@ -456,7 +462,7 @@ rig_ensure_codex_child_sandbox() {
   [[ -f "$file" ]] || return 0
   python3 - "$file" "$HOME/.grok" "$HOME/.claude" "$HOME/.cursor" \
     "$HOME/.opencode" "$HOME/.config/opencode" "$HOME/.omp" "$HOME/.pi" \
-    "$HOME/.gemini" <<'PY'
+    "$HOME/.gemini" "$HOME/.config/devin" <<'PY'
 import sys
 from pathlib import Path
 
@@ -607,4 +613,4 @@ rig_upsert_marked_block() {
   echo "$action"
 }
 
-WORKER_PREAMBLE='You are a worker, not the orchestrator. Do not spawn codex, grok, claude, cursor, opencode, omp, pi, or agy. Do not use computer-use, chrome-profile, or Figma MCP. Follow skill file paths listed in the brief. Write code, fix, review, SSH/debug, or gather facts. Do only the files and changes in the brief. Do not hunt extra updates. First Rig operation must be rig_job_inbox (strict child MCP handshake). Each turn, call rig_job_inbox once if listed (empty is fine); pull inbox/messages periodically. Inbox is not ASK. Doing/note/ask require the handshake. Print a short summary. Stop.'
+WORKER_PREAMBLE='You are a worker, not the orchestrator. Do not spawn codex, grok, claude, cursor, opencode, omp, pi, agy, or devin. Do not use computer-use, chrome-profile, or Figma MCP. Follow skill file paths listed in the brief. Write code, fix, review, SSH/debug, or gather facts. Do only the files and changes in the brief. Do not hunt extra updates. First Rig operation must be rig_job_inbox (strict child MCP handshake). Each turn, call rig_job_inbox once if listed (empty is fine); pull inbox/messages periodically. Inbox is not ASK. Doing/note/ask require the handshake. Print a short summary. Stop.'

@@ -20,7 +20,7 @@ import jobs as rig_jobs  # noqa: E402
 import route as rig_route  # noqa: E402
 
 JOB_ID_RE = re.compile(r"^[A-Za-z0-9._-]+$")
-LAUNCH_WORKERS = frozenset({"grok", "codex", "claude", "opencode", "omp", "pi", "agy"})
+LAUNCH_WORKERS = frozenset({"grok", "codex", "claude", "opencode", "omp", "pi", "agy", "devin"})
 LAUNCH_KEYS = frozenset({
     "id", "case", "role", "worker", "model", "effort", "access", "files", "brief",
     "queue_id", "reservation_id", "attempt_id", "owner_token", "owner_session",
@@ -231,7 +231,8 @@ def launch(repo, **kwargs) -> dict:
     if worker == "cursor":
         raise LaunchError(child_mcp.CURSOR_REASON)
     if worker not in LAUNCH_WORKERS:
-        raise LaunchError("worker must be grok|codex|claude|opencode|omp|pi|agy")
+        raise LaunchError("worker must be grok|codex|claude|opencode|omp|pi|agy|devin")
+    job_id = _job_id(_require_string(kwargs.get("id"), "id"))
     ready, reason = child_mcp.worker_mcp_ready(worker)
     if not ready:
         raise LaunchError(reason)
@@ -263,6 +264,13 @@ def launch(repo, **kwargs) -> dict:
     blocked = rig_route.assert_child_model(model)
     if blocked:
         raise LaunchError(blocked)
+    blocked = rig_route.assert_devin_model(worker, model, role)
+    if blocked:
+        raise LaunchError(blocked)
+    if worker == "devin":
+        busy = child_mcp.devin_busy_reason(repo, skip_id=job_id)
+        if busy:
+            raise LaunchError(busy)
     try:
         routing_obj = routing_policy.validate_launch_tuple(
             repo, worker=worker, model=model, effort=effort, role=role, case=case,
@@ -271,7 +279,6 @@ def launch(repo, **kwargs) -> dict:
         )
     except (ValueError, routing_policy.ConfigError) as error:
         raise LaunchError(str(error)) from error
-    job_id = _job_id(_require_string(kwargs.get("id"), "id"))
     listed = _files(kwargs.get("files"))
     access = _access(role, _require_string(kwargs.get("access"), "access"))
     review_mode = _require_string(kwargs.get("review_mode"), "review_mode").strip() or "standalone"

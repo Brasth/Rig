@@ -39,7 +39,7 @@ class ChildMcpReadiness(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.home = Path(self.temp.name).resolve()
         self.bins = self.home / "bins"
-        for name in ("grok", "codex", "claude", "opencode", "omp", "pi", "agy"):
+        for name in ("grok", "codex", "claude", "opencode", "omp", "pi", "agy", "devin"):
             mcp_test_support.fake_bin(self.bins, name)
         self.launcher = mcp_test_support.seed_installed_mcp(self.home)
         self._env = mock.patch.dict(os.environ, {
@@ -52,7 +52,7 @@ class ChildMcpReadiness(unittest.TestCase):
             os.environ.pop(key, None)
 
     def test_setup_configs_are_ready_when_binary_exists(self):
-        for worker in ("grok", "codex", "claude", "opencode", "omp", "pi", "agy"):
+        for worker in ("grok", "codex", "claude", "opencode", "omp", "pi", "agy", "devin"):
             ready, reason = child_mcp.worker_mcp_ready(worker, home=self.home)
             self.assertTrue(ready, f"{worker}: {reason}")
         ready, reason = child_mcp.worker_mcp_ready("cursor", home=self.home)
@@ -315,6 +315,33 @@ class ChildMcpJsonRpc(unittest.TestCase):
         self.assertNotEqual(meta.get("child_mcp_status"), child_mcp.CONNECTED)
         self.assertFalse(child_mcp.handshake_connected(self.job_dir))
         self.assertIsNone(self.proc.poll())
+
+
+class DevinRepoMcp(unittest.TestCase):
+    def test_install_restores_existing_config_and_releases_own_lock_only(self):
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp)
+            job_dir = repo / ".rig" / "jobs" / "devin-job"
+            job_dir.mkdir(parents=True)
+            config = repo / ".devin" / "mcp_config.local.json"
+            original = {"mcpServers": {"other": {"command": "keep"}}}
+            config.parent.mkdir()
+            config.write_text(json.dumps(original) + "\n")
+
+            state = child_mcp.install_devin_repo_mcp(job_dir, "devin-job", repo)
+            installed = json.loads(config.read_text())
+            self.assertIn("rig", installed["mcpServers"])
+            self.assertEqual((repo / ".rig" / "devin.lock").read_text().strip(), "devin-job")
+
+            child_mcp.restore_devin_repo_mcp(job_dir, repo)
+            self.assertEqual(json.loads(config.read_text()), original)
+            self.assertFalse((repo / ".rig" / "devin.lock").exists())
+            self.assertEqual(state["job_id"], "devin-job")
+
+            lock = repo / ".rig" / "devin.lock"
+            lock.write_text("other-job\n")
+            child_mcp.release_devin_lock(repo, "")
+            self.assertTrue(lock.exists())
 
 
 if __name__ == "__main__":

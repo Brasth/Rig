@@ -11,12 +11,12 @@ The point is to stop you being the tired reviewer of one agent. You talk to a **
 You stay in **one parent**: Codex, Grok, OpenCode, OMP, Pi, or agy. You talk to that parent. The parent picks **kind** and assesses complexity, risk, and uncertainty. `rig pick` selects an eligible model+effort profile at the minimum sufficient tier. Never spawn Astra, Sol, or Fable as a child.
 
 - **Parent** (you open this): Codex, Grok, OpenCode, OMP, Pi, or agy. It plans, checks, talks to you, does vision / computer-use / chrome-profile, and watches jobs. It does **not** sit on write/review/SSH when a worker is effective.
-- **Workers** (the parent may spawn these): Grok, Claude Code, Cursor CLI, OpenCode, OMP, Pi, agy, Codex. They write code, fix bugs, review, SSH/debug, and gather facts.
-- **Never the parent:** Claude Code and Cursor. Opening those CLIs does not make them the Rig parent. The Antigravity IDE/GUI is not a parent or worker; the CLI is `agy`.
+- **Workers** (the parent may spawn these): Grok, Claude Code, Cursor CLI, OpenCode, OMP, Pi, agy, Devin, Codex. They write code, fix bugs, review, SSH/debug, and gather facts.
+- **Never the parent:** Claude Code, Cursor, and Devin. Opening those CLIs does not make them the Rig parent. The Antigravity IDE/GUI is not a parent or worker; the CLI is `agy`. Devin is a child-only SWE-2 worker.
 - **Live parent** is whichever Codex, Grok, OpenCode, OMP, Pi, or agy you actually opened (`rig status`). The `parent =` key in `.rig/harness.toml` is only the preferred default (`rig use grok|codex|opencode|omp|pi|agy`). Opening the CLI is what makes it live.
 - **Missing binary is not a failure.** That worker is off. The parent uses a cheaper same-CLI worker. That is success.
 
-**You need** one parent CLI: Codex, Grok, OpenCode, OMP, Pi, or agy. Optional worker binaries: `grok`, `claude`, `cursor-agent`, `codex`, `opencode`, `omp`, `pi`, `agy`.
+**You need** one parent CLI: Codex, Grok, OpenCode, OMP, Pi, or agy. Optional worker binaries: `grok`, `claude`, `cursor-agent`, `codex`, `opencode`, `omp`, `pi`, `agy`, `devin`.
 
 Grok Bot.app and Cursor.app are GUIs, **not** spawnable workers. `rig doctor` may list them under **Apps (not spawnable)** as a hint. The Cursor worker binary is `cursor-agent`, not the GUI.
 
@@ -157,7 +157,7 @@ Project `.rig` jobs, queue, memory, reservations, and history remain. Host binar
 Install already ran `rig setup`. Re-run `rig setup` after you update Rig (`rig update` or the curl install does this for you).
 
 1. Fully quit Grok, Codex, OpenCode, OMP, Pi, and/or agy **once** so MCP tools, `/queue` adapters, and HUDs load (quit the apps, then reopen).
-2. Run `rig doctor`. MCP lines should show `[mcp_servers.rig]` for grok and/or codex, plus OpenCode/OMP/Pi/agy JSON MCP when those files exist.
+2. Run `rig doctor`. MCP lines should show `[mcp_servers.rig]` for grok and/or codex, plus OpenCode/OMP/Pi/agy JSON MCP when those files exist. Devin uses a job-scoped `.devin/mcp_config.local.json` (restored after the job).
 3. After setup, Grok gets a **bottom status line** with QUEUE. Restart Grok once if you do not see it. agy: `/statusline` if the row is hidden. OMP/Pi: widget under the editor. OpenCode: sidebar/footer from `tui.json` (file-path plugin). Codex: no native Rig HUD panel; `/plugins` install **Rig Queue**, then `/hooks` trust for parking. The optional [terminal companion](#optional-terminal-companion) adds the status row and F8/F9 controls.
 4. Pi `/rig` also needs `pi install npm:pi-mcp-adapter` (setup writes `mcp.json` but does not install the package).
 
@@ -187,7 +187,7 @@ How to read each section:
 **`effective=off` reasons** (printed in parentheses):
 
 - `flag` — `[workers].<name>` is `false`. Turn on with `rig workers <name>=on`.
-- `no binary` — flag is true but the CLI is not on PATH (`grok`, `claude`, `codex`, `cursor-agent`, `agy`).
+- `no binary` — flag is true but the CLI is not on PATH (`grok`, `claude`, `codex`, `cursor-agent`, `agy`, `devin`).
 - `is live parent` — you opened that CLI as the parent, so it cannot also be a child this session (typical: Grok parent → Grok child off; OpenCode parent → OpenCode child off).
 - MCP unavailable / excluded — binary or enabled config/launcher missing, or Cursor excluded until safe scoped MCP exists.
 
@@ -217,7 +217,7 @@ rig doctor
 | `CLAUDE.md` | Only with `--patch-claude`, and only if the file is **missing**. |
 | `.gitignore` | If the file exists, appends `.rig/jobs/`, `.rig/thread`, and `.rig/queue/` when those lines are not already there. |
 
-**New harness only:** Grok / Claude / Cursor / OpenCode / OMP / Pi / agy are turned **on** if that CLI is on PATH. Codex stays **off** (preferred parent). **Existing harness flags are never flipped.** Missing worker keys are appended as `false` → enable later with `rig workers <name>=on`. Missing `[queue] max_running` is appended as `3`; an existing value is kept.
+**New harness only:** Grok / Claude / Cursor / OpenCode / OMP / Pi / agy / Devin are turned **on** if that CLI is on PATH. Codex stays **off** (preferred parent). **Existing harness flags are never flipped.** Missing worker keys are appended as `false` → enable later with `rig workers <name>=on`. Missing `[queue] max_running` is appended as `3`; an existing value is kept.
 
 Open a **new** parent thread after init. An old Grok/Codex/OpenCode/OMP/Pi/agy session will not pick up `AGENTS.md` or skills.
 
@@ -244,6 +244,7 @@ opencode = false
 omp = false
 pi = false
 agy = false
+devin = false
 
 [queue]
 max_running = 3
@@ -255,7 +256,7 @@ max_running = 3
 - **`[workers].*`** — allow-list, not “install for me”. `true` means “this CLI may be spawned **if** its binary is on PATH and it is not the live parent”. Commands:
 
   ```bash
-  rig workers grok=on|off claude=on|off codex=on|off cursor=on|off opencode=on|off omp=on|off pi=on|off agy=on|off
+  rig workers grok=on|off claude=on|off codex=on|off cursor=on|off opencode=on|off omp=on|off pi=on|off agy=on|off devin=on|off
   ```
 
 Effective worker = flag `true` **and** binary on PATH **and** not live parent. Check with `rig doctor` / `rig status`. `grok = false` turns off grok as a child. Open Grok and you still get native Grok. With Grok off, smart pick still evaluates other eligible workers before parent fallback.
@@ -275,6 +276,7 @@ Effective worker = flag `true` **and** binary on PATH **and** not live parent. C
 | OMP | `omp` | — |
 | Pi | `pi` | another unrelated `pi` on PATH |
 | Antigravity | `agy` | Antigravity IDE/GUI |
+| Devin | `devin` | never a parent; Cognition GUI |
 
 ### Examples
 
@@ -313,6 +315,28 @@ rig doctor
 ```
 
 Default preferences put **OMP** before Pi when both offer sufficient eligible profiles. They can be the parent when you open that CLI (`rig use omp` / `rig use pi` / `rig use agy`, then open it). OpenCode `--auto` is required for headless spawn (no TTY). OMP uses `--approval-mode write`, not `--auto-approve`. agy uses print-mode JSON with `--mode accept-edits`; it does **not** use `--dangerously-skip-permissions`.
+
+**Enable Devin as a child-only worker**
+
+Devin is never `rig use` / never the live parent. Default smart preferences do not prioritize it. Turn the flag on, then optionally list Devin profile IDs first in `.rig/routing.json`:
+
+```bash
+rig workers devin=on
+```
+
+```json
+{
+  "schema_version": 1,
+  "preferences": {
+    "fast": ["devin-swe-2-medium"],
+    "standard": ["devin-swe-2-high"],
+    "strong": ["devin-swe-2-max"],
+    "review": ["devin-swe-2-max"]
+  }
+}
+```
+
+Every Devin launch is strict SWE-2: `swe-2-medium` explore/mini/bulk, `swe-2-high` implement, `swe-2-max` hard/review. Never `swe` aliases, SWE-1.x, Fusion, empty/default, dangerous, or `devin cloud`. The wrapper runs `devin --print --prompt-file <brief> --model <exact> --permission-mode accept-edits --respect-workspace-trust true`. Catalog confirmation is `devin models list --format json` only (no table/keyword fallback). One Devin job per repo: the wrapper writes job-scoped Rig stdio MCP into `.devin/mcp_config.local.json` with inherited `RIG_JOB_*` env, then restores a pre-existing file or deletes the file it created.
 
 Do **not** enable Claude on every project. You choose. Existing project flags stay until you run `rig workers`.
 
@@ -577,6 +601,7 @@ See [smart routing](smart-routing.md) for assessment defaults, `.rig/routing.jso
 - OpenCode: cheap `openai/gpt-5.4-mini` `--variant minimal`; implement `openai/gpt-5.6-luna` `--variant high`; hard/review `openai/gpt-5.6-terra` `--variant max`
 - OMP / Pi: cheap `grok-4.5` `--thinking low`; implement/hard `grok-4.6` `--thinking high`; review `claude-opus-5` `--thinking high`
 - agy: cheap `gemini-3.8-flash-low` `--effort low`; implement `gemini-3.8-flash-high` `--effort high`; hard/review `gemini-3.1-pro-high` `--effort high`
+- Devin (child-only): `swe-2-medium` explore/mini/bulk; `swe-2-high` implement; `swe-2-max` hard/review. No `--effort` flag; never swe aliases / SWE-1.x / Fusion / default
 
 Never Fable / Sol / Astra as a child. Opus is allowed.
 
@@ -822,7 +847,7 @@ A Claude Code child uses print-mode `stream-json` so the TUI can show tools whil
 
 A Cursor child is `cursor-agent -p` with `stream-json`, `--force`, `--trust`, and `--workspace` set to the repo. It does **not** use `--worktree` (edits would leave the repo). `rig doctor` mentions Grok Bot.app and Cursor.app when they exist; those GUIs cannot be spawned.
 
-An OpenCode child is `opencode run --format json --dir <repo> --auto`. An OMP child is `omp -p --mode json --approval-mode write`. A Pi child is `pi -p --mode json --approve`. An agy child is `agy -p` with `--output-format json --mode accept-edits --print-timeout <RIG_TIMEOUT>s --disable-slash-commands`. No `--dangerously-skip-permissions`. `run-worker.sh` fills `RIG_MODEL` / `RIG_EFFORT` from `rig pick` when unset (OpenCode `--variant`, OMP/Pi `--thinking`, agy `--effort`). OpenCode / OMP / Pi / agy models are resolved against that CLI’s live catalog (cached). If both OMP and Pi are effective, pick uses OMP. agy `denied_actions` in JSON is a fail even when the process exits 0.
+An OpenCode child is `opencode run --format json --dir <repo> --auto`. An OMP child is `omp -p --mode json --approval-mode write`. A Pi child is `pi -p --mode json --approve`. An agy child is `agy -p` with `--output-format json --mode accept-edits --print-timeout <RIG_TIMEOUT>s --disable-slash-commands`. A Devin child is `devin --print --prompt-file <brief> --model <swe-2-*> --permission-mode accept-edits --respect-workspace-trust true`. No `--dangerously-skip-permissions`. `run-worker.sh` fills `RIG_MODEL` / `RIG_EFFORT` from `rig pick` when unset (OpenCode `--variant`, OMP/Pi `--thinking`, agy `--effort`; Devin effort is in the SWE-2 selector). OpenCode / OMP / Pi / agy / Devin models are resolved against that CLI’s live catalog (cached). Devin catalog is JSON-only with no fallback. If both OMP and Pi are effective, pick uses OMP. agy `denied_actions` in JSON is a fail even when the process exits 0. Concurrent Devin jobs in one repo are refused.
 
 The parent picks **kind**. Pick maps kind to worker, model, and effort. Do not ask the user. Pass the kind: `rig pick implement --case "<task>"` or `rig pick stay --case "<task>"`. `--case` is fallback English when the parent did not choose a kind. Pick does not ship device skill names. Plan/vision/computer-use/chrome-profile/Figma: `rig pick stay`. Native implement/hard: `parent_writes` — this parent writes. Dead spawn: one `rig pick --exclude`. First parent call: `rig session` / MCP `rig_session` when present.
 

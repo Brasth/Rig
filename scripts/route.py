@@ -83,6 +83,13 @@ MODELS = {
     ("agy", "implement"): ("gemini-3.8-flash-high", "high"),
     ("agy", "hard"): ("gemini-3.1-pro-high", "high"),
     ("agy", "review"): ("gemini-3.1-pro-high", "high"),
+    # Devin is child-only. Exact SWE-2 selectors; never swe aliases, SWE-1.x, Fusion, or defaults.
+    ("devin", "explore"): ("swe-2-medium", "medium"),
+    ("devin", "mini"): ("swe-2-medium", "medium"),
+    ("devin", "bulk"): ("swe-2-medium", "medium"),
+    ("devin", "implement"): ("swe-2-high", "high"),
+    ("devin", "hard"): ("swe-2-max", "max"),
+    ("devin", "review"): ("swe-2-max", "max"),
 }
 
 NATIVE = {
@@ -121,9 +128,18 @@ NATIVE = {
 NATIVE_PARENTS = frozenset({"codex", "grok", "opencode", "omp", "pi", "agy"})
 LAST_RESORT = ("opencode", "omp", "pi", "agy", "codex")
 WORKER_NAMES = frozenset(
-    {"grok", "claude", "cursor", "opencode", "omp", "pi", "agy", "codex", "native"}
+    {"grok", "claude", "cursor", "opencode", "omp", "pi", "agy", "devin", "codex", "native"}
 )
-PROVIDERS = frozenset({"openai", "anthropic", "xai", "google", "cursor"})
+PROVIDERS = frozenset({"openai", "anthropic", "xai", "google", "cursor", "cognition"})
+DEVIN_SWE2 = frozenset({"swe-2-medium", "swe-2-high", "swe-2-max"})
+DEVIN_ROLE_MODELS = {
+    "explore": "swe-2-medium",
+    "mini": "swe-2-medium",
+    "bulk": "swe-2-medium",
+    "implement": "swe-2-high",
+    "hard": "swe-2-max",
+    "review": "swe-2-max",
+}
 
 KEYWORDS = (
     (
@@ -244,6 +260,7 @@ def provider_for(model: str) -> str:
         ("xai", r"grok-\d"),
         ("google", r"gemini-\d"),
         ("cursor", r"composer-\d"),
+        ("cognition", r"swe-2-(?:medium|high|max)$"),
     )
     for provider, pattern in families:
         if re.match(pattern, family):
@@ -663,6 +680,33 @@ def assert_child_model(model: str) -> str | None:
     return None
 
 
+def assert_devin_model(worker: str, model: str, role: str = "") -> str | None:
+    """Reject empty, default, alias, SWE-1.x, Fusion, and role-mismatched Devin models."""
+    if (worker or "").strip() != "devin":
+        return None
+    raw = (model or "").strip()
+    if not raw:
+        return "refuse Devin default model; pass an exact SWE-2 selector"
+    banned = assert_child_model(raw)
+    if banned:
+        return banned
+    family = raw.rsplit("/", 1)[-1].lower()
+    if family in {"swe", "swe-2"} or family.startswith("swe-1") or "swe-1." in family:
+        return f"refuse Devin non-SWE-2 model '{model}'"
+    if "fusion" in family:
+        return f"refuse Devin Fusion model '{model}'"
+    if family not in DEVIN_SWE2:
+        return (
+            f"refuse Devin model '{model}'; exact SWE-2 only "
+            "(swe-2-medium|swe-2-high|swe-2-max)"
+        )
+    kind = classify(role, "") if role else ""
+    expected = DEVIN_ROLE_MODELS.get(kind)
+    if expected and expected != family:
+        return f"refuse Devin model '{model}' for {kind}; expected {expected}"
+    return None
+
+
 def format_text(choice: dict, *, explain: bool = False) -> str:
     import routing_policy
 
@@ -733,7 +777,7 @@ def main() -> int:
     )
 
     if args.cmd == "allow":
-        err = assert_child_model(args.model)
+        err = assert_child_model(args.model) or assert_devin_model(args.worker, args.model, args.role)
         provider = provider_for(args.model)
         metadata = {"provider": provider, "provider_source": "model" if provider else "unknown"}
         if not err and classify(args.role, args.case) == "review":

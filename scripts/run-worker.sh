@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# run-worker.sh <grok|codex|claude|cursor|opencode|omp|pi|agy> <job-id> <brief-file>
+# run-worker.sh <grok|codex|claude|cursor|opencode|omp|pi|agy|devin> <job-id> <brief-file>
 set -euo pipefail
 
 _DETECT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/detect-binaries.sh"
@@ -7,7 +7,7 @@ _DETECT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/detect-binaries.sh"
 source "$_DETECT"
 
 usage() {
-  echo "usage: run-worker.sh <grok|codex|claude|cursor|opencode|omp|pi|agy> <job-id> <brief-file>" >&2
+  echo "usage: run-worker.sh <grok|codex|claude|cursor|opencode|omp|pi|agy|devin> <job-id> <brief-file>" >&2
   exit 2
 }
 
@@ -31,9 +31,10 @@ ADMISSION_ACTIVATED=0
 ADMISSION_FINISHED=0
 LAUNCH_COMMITTED=0
 AGY_PERMS_MERGED=0
+DEVIN_MCP_INSTALLED=0
 
 case "$WORKER" in
-  grok|codex|claude|cursor|opencode|omp|pi|agy) ;;
+  grok|codex|claude|cursor|opencode|omp|pi|agy|devin) ;;
   *)
     echo "run-worker: unknown worker '$WORKER'" >&2
     exit 2
@@ -216,6 +217,14 @@ agy_restore_settings() {
   python3 "$AGY_PERMS_PY" "${args[@]}" || true
 }
 
+devin_restore_mcp() {
+  if [[ "${DEVIN_MCP_INSTALLED:-0}" != "1" ]]; then
+    return 0
+  fi
+  DEVIN_MCP_INSTALLED=0
+  python3 "$CHILD_MCP_PY" restore-devin "$JOB_DIR" "$REPO" || true
+}
+
 wrapper_cleanup() {
   local rc=$?
   trap - EXIT
@@ -253,6 +262,7 @@ wrapper_cleanup() {
   fi
   cancel_requested && rc=130
   agy_restore_settings
+  devin_restore_mcp
   exit "$rc"
 }
 
@@ -540,6 +550,7 @@ MODEL="${RIG_MODEL:-}"
 EFFORT="${RIG_EFFORT:-}"
 launch_provenance() {
   python3 "$ROUTE_PY" allow --json --model "$MODEL" --role "$ROLE" --repo "$REPO" \
+    --worker "$WORKER" \
     --writer-job-id "${RIG_WRITER_JOB_ID:-}" --writer-cli "${RIG_WRITER_CLI:-}" \
     --writer-model "${RIG_WRITER_MODEL:-}" --writer-provider "${RIG_WRITER_PROVIDER:-}" \
     --review-mode "${RIG_REVIEW_MODE:-standalone}"
@@ -726,6 +737,16 @@ case "$WORKER" in
     [[ -n "$MODEL" ]] && CMD+=(--model "$MODEL")
     [[ -n "$EFFORT" ]] && CMD+=(--effort "$EFFORT")
     ;;
+  devin)
+    CMD=(
+      devin
+      --print
+      --prompt-file "$BRIEF"
+      --model "${MODEL:?Devin requires an exact SWE-2 model}"
+      --permission-mode accept-edits
+      --respect-workspace-trust true
+    )
+    ;;
 esac
 CHILD_MCP_PREPARE="$(python3 "$CHILD_MCP_PY" prepare "$JOB_DIR" "$JOB_ID" "$REPO" "$WORKER")"
 CMD_STR="$(shell_join "${CMD[@]}")"
@@ -744,6 +765,16 @@ if [[ "$WORKER" == "$LIVE" ]]; then
 fi
 if [[ "$FLAG" != "true" ]]; then
   refuse "worker '$WORKER' is off in .rig/harness.toml"
+fi
+if [[ "$WORKER" == "devin" ]]; then
+  if [[ -z "$MODEL" ]]; then
+    refuse "Devin requires an exact SWE-2 model"
+  fi
+  case "$CMD_STR" in
+    *"--permission-mode dangerous"*|*yolo*|*bypass*|*fusion*|*devin\ cloud*)
+      refuse "Devin forbids dangerous/cloud/Fusion/default launches"
+      ;;
+  esac
 fi
 
 if [[ -z "$BIN" ]]; then
@@ -774,6 +805,11 @@ if [[ "$WORKER" == "agy" ]]; then
   [[ -n "${AGY_SETTINGS:-}" ]] && agy_merge_args+=(--settings "$AGY_SETTINGS")
   AGY_PERMS_MERGED=1
   python3 "$AGY_PERMS_PY" "${agy_merge_args[@]}"
+fi
+
+if [[ "$WORKER" == "devin" ]]; then
+  python3 "$CHILD_MCP_PY" install-devin "$JOB_DIR" "$JOB_ID" "$REPO" || refuse "could not install job-scoped Devin MCP"
+  DEVIN_MCP_INSTALLED=1
 fi
 
 if ! python3 "$EVIDENCE_PY" begin --repo "$REPO" --job-dir "$JOB_DIR" --files-json "$JOB_FILES_JSON" >/dev/null; then
@@ -934,6 +970,7 @@ PY
 }
 
 agy_restore_settings
+devin_restore_mcp
 
 SUMMARY="$(summary_from_log)"
 JOBS_PY="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/jobs.py"

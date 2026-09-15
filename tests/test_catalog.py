@@ -104,6 +104,22 @@ class ParseCatalog(unittest.TestCase):
             ["gemini-3.8-flash-high", "gemini-3.8-flash-low"],
         )
 
+    def test_devin_accepts_json_model_uids_only(self):
+        payload = {
+            "families": [
+                {"family_uid": "swe-2", "variants": [
+                    {"model_uid": "swe-2-medium", "label": "SWE-2 Medium"},
+                    {"model_uid": "swe-2-high"},
+                    {"model_uid": "swe-2-max"},
+                ]},
+            ]
+        }
+        self.assertEqual(
+            catalog.parse_devin_json(json.dumps(payload)),
+            ["swe-2-medium", "swe-2-high", "swe-2-max"],
+        )
+        self.assertIsNone(catalog.parse_devin_json("swe-2-medium\nswe-2-high"))
+
 
 class PinMatch(unittest.TestCase):
     def test_suffix_and_slash(self):
@@ -170,6 +186,12 @@ class ResolveAgainstCatalog(unittest.TestCase):
         self.assertEqual(
             catalog.resolve_model("opencode", "implement", OPENCODE_LUNA, []),
             OPENCODE_LUNA,
+        )
+
+    def test_devin_never_substitutes_a_catalog_model(self):
+        self.assertEqual(
+            catalog.resolve_model("devin", "implement", "swe-2-high", ["swe-2-medium"]),
+            "swe-2-high",
         )
 
     def test_skip_env_is_static_pin(self):

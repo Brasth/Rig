@@ -270,6 +270,16 @@ class Pick(unittest.TestCase):
         self.assertIsNotNone(route.assert_child_model("claude-fable-5"))
         self.assertIsNotNone(route.assert_child_model("openai/gpt-5.6-sol"))
 
+    def test_devin_is_role_pinned_to_exact_swe2(self):
+        self.assertEqual(route.model_for("devin", "explore"), ("swe-2-medium", "medium"))
+        self.assertEqual(route.model_for("devin", "implement"), ("swe-2-high", "high"))
+        self.assertEqual(route.model_for("devin", "hard"), ("swe-2-max", "max"))
+        self.assertIsNone(route.assert_devin_model("devin", "swe-2-high", "implement"))
+        self.assertIsNotNone(route.assert_devin_model("devin", "swe", "implement"))
+        self.assertIsNotNone(route.assert_devin_model("devin", "swe-1.9", "implement"))
+        self.assertIsNotNone(route.assert_devin_model("devin", "swe-2-high", "hard"))
+        self.assertIsNotNone(route.assert_devin_model("devin", "fusion", "implement"))
+
     def test_same_cli_beats_cursor_and_codex(self):
         c = legacy_pick("grok", ["cursor", "codex"], "implement", "add a header")
         self.assertEqual(c["spawn"], "native")

@@ -72,6 +72,7 @@ class WorkerLaunchTests(unittest.TestCase):
         mcp_test_support.fake_bin(self.bins, "grok")
         mcp_test_support.fake_bin(self.bins, "claude")
         mcp_test_support.fake_bin(self.bins, "opencode")
+        mcp_test_support.fake_bin(self.bins, "devin")
         mcp_test_support.seed_installed_mcp(self.home)
         self._write_wrapper(SLEEP_WRAPPER)
         self.configure()
@@ -97,7 +98,7 @@ class WorkerLaunchTests(unittest.TestCase):
     def configure(self, cap=3):
         (self.repo / ".rig" / "harness.toml").write_text(
             'parent = "codex"\n[workers]\ngrok = true\nclaude = true\ncodex = true\n'
-            "opencode = true\nomp = true\npi = true\nagy = true\ncursor = false\n"
+            "opencode = true\nomp = true\npi = true\nagy = true\ndevin = true\ncursor = false\n"
             f"[queue]\nmax_running = {cap}\nmax_per_worker = 0\n"
         )
 
@@ -160,6 +161,14 @@ class WorkerLaunchTests(unittest.TestCase):
             worker_launch.launch(self.repo, brief=1)
         with self.assertRaisesRegex(worker_launch.LaunchError, "live must be a string"):
             worker_launch.launch(self.repo, brief="x", live=1)
+
+    def test_devin_rejects_wrong_selector_and_allows_its_own_reservation(self):
+        with self.assertRaisesRegex(worker_launch.LaunchError, "expected swe-2-high"):
+            self._launch("devin-bad", worker="devin", model="swe-2-medium", effort="medium")
+        launched = self._launch("devin-good", worker="devin", model="swe-2-high", effort="high")
+        self.assertEqual(launched["worker"], "devin")
+        with self.assertRaisesRegex(worker_launch.LaunchError, "one Devin job at a time"):
+            self._launch("devin-second", files=["b.py"], worker="devin", model="swe-2-high", effort="high")
 
     def test_auto_and_explicit_worker_selection_keep_smart_sidecar(self):
         for worker in ("", "grok"):
