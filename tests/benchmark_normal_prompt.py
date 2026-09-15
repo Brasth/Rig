@@ -23,10 +23,12 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
+sys.path.insert(0, str(ROOT / "tests"))
 import ask
 import catalog
 import harness
 import jobs
+import mcp_test_support
 import rig_mcp
 import route
 import change_evidence
@@ -93,7 +95,12 @@ class Fixture:
         self.accepted_clock = None
         self.cache = repo / "model-catalogs.json"
         self.bins = repo / "bins"
+        self.home = repo / "home"
         self.bins.mkdir()
+        self.home.mkdir()
+        # Setup-shaped MCP under fixture HOME so effective_workers is host-independent
+        # (includes Pi's pi-mcp-adapter marker).
+        mcp_test_support.seed_installed_mcp(self.home)
         (repo / ".git").mkdir()
         (repo / ".rig" / "jobs").mkdir(parents=True)
         (repo / ".rig" / "queue").mkdir()
@@ -164,15 +171,22 @@ class Fixture:
             self.counts["catalog_probes"] += 1
             self.probed.append(worker)
             return [route.model_for(worker, "review")[0]]
-        def refresh(worker, timeout):
+        def probe_catalog(worker, timeout=catalog.PROBE_TIMEOUT):
+            ids = probe(worker, timeout)
+            return ("ok", ids) if ids else ("unavailable", None)
+        def refresh(worker, timeout, *, distinguish_empty=False):
             self.counts["catalog_refresh_schedules"] += 1
             self.probed.append("refresh:" + worker)
         def forbidden(*args, **kwargs):
             raise RuntimeError("benchmark setup error: a process/network call escaped isolation")
-        env = {"PATH": str(self.bins), "RIG_PARENT": "codex", "RIG_THREAD": "benchmark-thread",
+        env = {"PATH": str(self.bins), "HOME": str(self.home), "RIG_PARENT": "codex",
+               "RIG_THREAD": "benchmark-thread",
                "RIG_MODEL_CATALOG_CACHE": str(self.cache), "RIG_REFRESH_MODELS": "0",
                "RIG_SKIP_MODEL_CATALOG": "0", "RIG_JOB_ID": "", "RIG_JOB_DIR": "",
-               "CLAUDECODE": "", "CLAUDE_CODE": ""}
+               "CLAUDECODE": "", "CLAUDE_CODE": "",
+               # Clear host MCP path overrides so readiness uses fixture HOME only.
+               "OPENCODE_CONFIG": "", "OMP_MCP": "", "PI_CODING_AGENT_DIR": "",
+               "PI_AGENT_DIR": "", "AGY_MCP": ""}
         with ExitStack() as stack:
             stack.enter_context(patch.dict(os.environ, env))
             stack.enter_context(patch.object(Path, "iterdir", scan))
@@ -181,6 +195,7 @@ class Fixture:
             if self.accepted_clock is not None:
                 stack.enter_context(patch.object(time, "time", lambda: self.accepted_clock))
             stack.enter_context(patch.object(catalog, "probe_worker", probe))
+            stack.enter_context(patch.object(catalog, "probe_catalog", probe_catalog))
             stack.enter_context(patch.object(catalog, "_schedule_refresh", refresh))
             stack.enter_context(patch.object(subprocess, "Popen", forbidden))
             stack.enter_context(patch.object(socket, "socket", forbidden))

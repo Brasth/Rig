@@ -56,7 +56,7 @@ def read_sidecar(job_dir: Path, expected_attempt_id: str | None = None) -> dict 
     # Sidecars are untrusted historical input to both job show and reports.
     # Reject malformed nested fields rather than crashing their readers.
     routing = data["routing"]
-    for key in ("policy_mode", "required_tier", "review_recommendation", "config_fingerprint"):
+    for key in ("policy_mode", "required_tier", "review_recommendation", "config_fingerprint", "execution_strategy"):
         if key in routing and not isinstance(routing[key], str):
             return None
     if "policy_version" in routing and type(routing["policy_version"]) is not int:
@@ -104,6 +104,7 @@ def empty_routing(*, mode: str, fingerprint: str, assessment: dict, required: st
         "catalog": {"source": "none", "freshness": "n/a"},
         "review_recommendation": _derived_review_recommendation(assessment),
         "parent_fit_limitations": "",
+        "execution_strategy": "",
     }
 
 
@@ -205,6 +206,7 @@ def explain_lines(choice: dict) -> list[str]:
         f"policy_mode={routing.get('policy_mode') or '-'} version={routing.get('policy_version') or '-'}",
         f"fingerprint={routing.get('config_fingerprint') or '-'}",
         f"required_tier={routing.get('required_tier') or '-'}",
+        f"execution_strategy={routing.get('execution_strategy') or '-'}",
     ]
     assessment = routing.get("assessment") or {}
     if assessment:
@@ -261,6 +263,15 @@ def legacy_routing(
         routing["parent_fit_limitations"] = "stay uses the live parent; no catalog discovery"
     routing["review_recommendation"] = _derived_review_recommendation(assessment)
     routing["candidate_decisions"] = [{"id": "", "code": "not-evaluated", "detail": "legacy worker ladder"}]
+    spawn = str(choice.get("spawn") or "")
+    if spawn == "stay":
+        routing["execution_strategy"] = "stay"
+    elif spawn == "none" or not (choice.get("worker") or choice.get("model")):
+        routing["execution_strategy"] = "none"
+    elif choice.get("parent_writes") or choice.get("executor_kind") == "parent":
+        routing["execution_strategy"] = "parent-fallback"
+    elif spawn == "run-worker":
+        routing["execution_strategy"] = "wrapper"
     return routing
 
 
@@ -328,6 +339,7 @@ def validate_launch_tuple(
     access: str = "",
     catalogs: dict | None = None,
     case: str = "",
+    live: str = "",
 ) -> dict:
     """Rebuild trusted launch routing. Fingerprint is not an admission credential."""
     import route as rig_route
@@ -340,6 +352,7 @@ def validate_launch_tuple(
     kind = rig_route.classify(role, case)
     exec_kind = str(executor_kind or "").strip()
     access_value = str(access or "").strip().lower()
+    live_parent = str(live or "").strip()
     if routing in (None, "", {}):
         return manual_routing(worker=worker, model=model, effort=effort, mode="manual")
     if not isinstance(routing, dict):
@@ -396,6 +409,26 @@ def validate_launch_tuple(
         out["review_recommendation"] = _derived_review_recommendation(assessed)
         decisions = routing.get("candidate_decisions")
         out["candidate_decisions"] = decisions if isinstance(decisions, list) else []
+        claimed_cli = "" if worker in {"", "parent"} else worker
+        claimed_direct = str(routing.get("execution_strategy") or "") == "direct-parent"
+        live_eligible = policy.direct_parent_eligible(kind, assessed, cfg, live_parent)
+        claimed_eligible = bool(claimed_cli) and policy.direct_parent_eligible(
+            kind, assessed, cfg, claimed_cli,
+        )
+        identity_mismatch = bool(live_parent and claimed_cli and claimed_cli != live_parent)
+        if kind == "stay":
+            out["execution_strategy"] = "stay"
+        elif identity_mismatch and (claimed_direct or live_eligible or claimed_eligible):
+            raise ValueError("direct-parent live parent mismatch; re-pick")
+        elif live_eligible:
+            out["execution_strategy"] = "direct-parent"
+            out["catalog"] = {"source": "none", "freshness": "n/a"}
+            if out["parent_fit_limitations"] in {"", "no eligible wrapper; parent writes"}:
+                out["parent_fit_limitations"] = (
+                    "opt-in direct parent writes for low-risk mini/implement; no catalog discovery"
+                )
+        else:
+            out["execution_strategy"] = "parent-fallback"
         _require_smart_access(kind, access_value, profile=None)
         return out
     if not isinstance(selected, dict):
@@ -438,6 +471,7 @@ def validate_launch_tuple(
     decisions = routing.get("candidate_decisions")
     out["candidate_decisions"] = decisions if isinstance(decisions, list) else []
     out["review_recommendation"] = _derived_review_recommendation(assessed)
+    out["execution_strategy"] = "wrapper"
     limits = routing.get("parent_fit_limitations")
     if isinstance(limits, str):
         out["parent_fit_limitations"] = limits

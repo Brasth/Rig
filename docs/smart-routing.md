@@ -14,9 +14,13 @@ Smart is the default for `rig pick`, `rig session`, and their MCP equivalents, i
 
 Any high dimension requires strong; otherwise any medium requires standard; otherwise fast. Hard and review cannot be downgraded below strong. Explicit role wins over task-text inference. Missing dimensions use role defaults and are listed in `assessment.defaulted`. High risk recommends independent review but does not add a new completion gate.
 
+In smart mode, an optional cost-aware lane can skip wrapper/catalog lookup. It is off by default. When `.rig/routing.json` schema 2 sets `execution.direct_parent_low_risk: true`, pick returns native parent writes only for **mini** or **implement** with complexity, risk, and uncertainty all **low**, and only when the live parent is an eligible tracked native parent (codex, grok, opencode, omp, pi, or agy) that is not excluded. That pick is additive provenance `execution_strategy=direct-parent` with `spawn=native`, `parent_writes=true`, `executor_kind=parent`. Catalog confirmation is not consulted on that lane.
+
+All other roles and assessments keep the wrapper catalog path. If no eligible wrapper remains, parent writes use a distinct `execution_strategy=parent-fallback`. Wrapper selections are `wrapper`. Stay is `stay`. Unavailable spawn is `none`. Legacy mode never takes the direct-parent lane.
+
 Profiles are filtered by worker eligibility, exclusion, role, model bans, catalog confirmation, and review-provider rules. Among remaining profiles, choose the minimum sufficient tier, configured preference, then stable ID. Default fast/standard worker order is Grok, Claude, OpenCode, OMP, Pi, agy, Codex. Strong/review order is Claude, Grok, OpenCode, OMP, Pi, agy, Codex. Cheap implementation can select a fast model; a high-risk mini task can select strong. There is no unconditional Grok-first ladder in smart mode.
 
-Worker flags, binary availability, scoped MCP readiness and live-parent exclusion remain mandatory. Cursor remains excluded. Explore/review are read-only. A parent fallback preserves the actual observed model/effort or reports unknown: picking a cheaper suggestion never changes the live parent model.
+Worker flags, binary availability, scoped MCP readiness and live-parent exclusion remain mandatory. Cursor remains excluded. Explore/review are read-only. A parent fallback preserves the actual observed model/effort or reports unknown: picking a cheaper suggestion never changes the live parent model. Direct-parent jobs use the same `rig_job_start` / authenticated `rig_job_finish` / parent acceptance lifecycle as other parent writes.
 
 ## CLI and MCP
 
@@ -29,7 +33,7 @@ rig routing report --days 30 --json
 
 MCP `rig_pick` and `rig_session` accept `complexity`, `risk`, `uncertainty`, `assessment_reason`, `policy_mode`, and boolean `explain`. They also accept an `assessment` object with `complexity`, `risk`, `uncertainty`, and `reason`; conflicting object/scalar values fail. Unknown keys and invalid types/levels fail. `rig_routing_report` accepts `repo` and positive integer `days` (default 30).
 
-JSON keeps existing pick fields and adds `routing`: policy version/mode, configuration fingerprint, assessment/defaults, required tier, selected profile, candidate decisions, catalog provenance, review recommendation, and parent-fit limitations. Text `--explain` expands that trace. JSON always includes the trace.
+JSON keeps existing pick fields and adds `routing`: policy version/mode, configuration fingerprint, assessment/defaults, required tier, selected profile, candidate decisions, catalog provenance, review recommendation, parent-fit limitations, and additive `execution_strategy` (`direct-parent`, `wrapper`, `parent-fallback`, `stay`, `none`). Text `--explain` expands that trace. JSON always includes the trace. Existing pick/sidecar consumers that ignore unknown fields stay compatible.
 
 Pass the returned `routing` object with the selected worker/model/effort to `rig_job_launch` or `rig_job_start`. Auto-selection during launch also retains routing metadata. A smart launch revalidates the current policy and tuple before consuming a queue claim or starting execution. Configuration drift, incompatible role/effort/tier, or missing required catalog confirmation requires a new pick. The fingerprint is not an authorization token; existing reservation/attempt/owner credentials are still required.
 
@@ -37,7 +41,7 @@ Each launch writes `.rig/jobs/<id>/routing.json`, bound to the exact attempt ID 
 
 ## Profile configuration
 
-Built-in selectors derive from `scripts/route.py` model pins. Optional `.rig/routing.json` has `schema_version: 1`, `profiles` keyed by stable ID, and `preferences` keyed by `fast`, `standard`, `strong`, or `review`.
+Built-in selectors derive from `scripts/route.py` model pins. Optional `.rig/routing.json` accepts `schema_version` **1** or **2**. Both may include `profiles` keyed by stable ID and `preferences` keyed by `fast`, `standard`, `strong`, or `review`. Schema 1 remains valid. Schema 2 adds optional `execution.direct_parent_low_risk` (boolean, default `false`). Unknown keys and non-boolean execution values fail smart picks and `rig doctor`; legacy mode still falls back to builtin config.
 
 Example: prefer Claude for standard tasks, without enabling its worker:
 
@@ -47,6 +51,17 @@ Example: prefer Claude for standard tasks, without enabling its worker:
   "profiles": {},
   "preferences": {
     "standard": ["claude-sonnet-5-medium", "grok-4.6-high"]
+  }
+}
+```
+
+Opt in to low-risk parent writes before catalog lookup:
+
+```json
+{
+  "schema_version": 2,
+  "execution": {
+    "direct_parent_low_risk": true
   }
 }
 ```
@@ -61,7 +76,9 @@ Cache is fresh for one hour. Successful results up to 24 hours old may be used w
 
 ## Reporting
 
-`rig routing report` is read-only. It groups recorded attempts by policy version, tier, profile, actual model and effort, while showing manual, legacy and missing provenance separately. It reports execution failures, cancellation, timeouts, duration, and acceptance/freshness without equating exit zero with verification. Acceptance rate uses assessed accepted/rejected work as its denominator, excluding pending/unverified work. Changed content makes old acceptance stale. Unknown actual models remain unknown; no inferred costs, correction counts, or adaptive ranking are invented.
+`rig routing report` is read-only. It groups recorded attempts by policy version, tier, profile, actual model, effort, and `execution_strategy`, while showing manual, legacy and missing provenance separately. Direct-parent and wrapper attempts are counted separately. It reports execution failures, cancellation, timeouts, duration, acceptance/freshness, and token coverage without equating exit zero with verification. Acceptance rate uses assessed accepted/rejected work as its denominator, excluding pending/unverified work. Changed content makes old acceptance stale.
+
+Optional `token_usage` is persisted only from an unambiguous final structured worker event: Claude-style `type=result`, or Grok `type=end` with a `stopReason` string. The usage object may include any subset of non-negative integer `input`, `output`, `reasoning`, `cached_input`, and `total`; only fields actually reported are kept. Totals and costs are never estimated or synthesized (`total_cost_usd` is ignored; a missing `total` stays unknown). Negative, malformed, non-final, or ambiguous payloads are omitted. Direct-parent jobs stay usage-unknown unless a real parent implementation supplies the same structured object. Overall known/unknown usage coverage is explicit. Per-component `n`/`sum`/`median` use only records that include that component; a missing field is unknown, not zero. Unknown actual models remain unknown; no inferred costs, correction counts, or adaptive ranking are invented.
 
 ## Rollout and rollback
 
@@ -70,6 +87,6 @@ Cache is fresh for one hour. Successful results up to 24 hours old may be used w
 mode = "legacy"
 ```
 
-Legacy restores the previous ladder and catalog resolver; `--policy-mode legacy` is a per-pick diagnostic override. Launching smart metadata against changed current policy is rejected; re-pick after configuration changes.
+Legacy restores the previous ladder and catalog resolver; `--policy-mode legacy` is a per-pick diagnostic override. To keep smart routing but disable the cost-aware lane, set `execution.direct_parent_low_risk` to `false` or omit it (schema 1 remains valid). Launching smart metadata against changed current policy is rejected; re-pick after configuration changes.
 
 For runtime upgrades or rollback: stop new admissions, finish or explicitly cancel existing work, confirm termination, and close/reconcile held scopes. Preserve pending queue text, credentials, worker flags, caps, memory, and custom overrides. Update all launchers and managed protocols, then fully restart parent/MCP sessions before admitting work. Mixed-version admission writers are unsupported. A tested checkout is not an installed or live-runtime-accepted upgrade.

@@ -328,6 +328,72 @@ class LaunchTupleValidation(unittest.TestCase):
         self.assertEqual(ok["selected_profile"]["model"], choice["model"])
         self.assertEqual(ok["selected_profile"]["id"], "grok-4.5-low")
 
+    def test_direct_parent_tuple_revalidates_without_catalog(self):
+        (self.repo / ".rig" / "routing.json").write_text(json.dumps({
+            "schema_version": 2,
+            "execution": {"direct_parent_low_risk": True},
+        }))
+        with patch.object(route, "resolved_model_for", side_effect=AssertionError("catalog")):
+            choice = route.pick(
+                "codex", ["grok", "opencode"], "implement", "tiny label",
+                repo=self.repo, policy_mode="smart", catalogs={},
+                complexity="low", risk="low", uncertainty="low",
+            )
+        self.assertEqual(choice["execution_strategy"], "direct-parent")
+        ok = policy.validate_launch_tuple(
+            self.repo, worker="codex", model="", effort="", role="implement",
+            routing=choice["routing"], executor_kind="parent", catalogs={}, live="codex",
+        )
+        self.assertEqual(ok["execution_strategy"], "direct-parent")
+        self.assertIsNone(ok["selected_profile"])
+        self.assertEqual(ok["catalog"]["source"], "none")
+        job_dir = self.repo / ".rig" / "jobs" / "direct"
+        payload = evidence.write_sidecar(job_dir, "att-direct", ok)
+        self.assertEqual(payload["routing"]["execution_strategy"], "direct-parent")
+        with self.assertRaisesRegex(ValueError, "executor_kind=parent"):
+            policy.validate_launch_tuple(
+                self.repo, worker="codex", model="", effort="", role="implement",
+                routing=choice["routing"], executor_kind="wrapper", catalogs={}, live="codex",
+            )
+
+    def test_direct_parent_rejects_live_parent_mismatch(self):
+        (self.repo / ".rig" / "routing.json").write_text(json.dumps({
+            "schema_version": 2,
+            "execution": {"direct_parent_low_risk": True},
+        }))
+        with patch.object(route, "resolved_model_for", side_effect=AssertionError("catalog")):
+            choice = route.pick(
+                "codex", ["grok", "opencode"], "implement", "tiny label",
+                repo=self.repo, policy_mode="smart", catalogs={},
+                complexity="low", risk="low", uncertainty="low",
+            )
+        self.assertEqual(choice["execution_strategy"], "direct-parent")
+        self.assertEqual(choice["worker"], "codex")
+        with self.assertRaisesRegex(ValueError, "live parent mismatch"):
+            policy.validate_launch_tuple(
+                self.repo, worker="codex", model="", effort="", role="implement",
+                routing=choice["routing"], executor_kind="parent", catalogs={}, live="grok",
+            )
+        ok = policy.validate_launch_tuple(
+            self.repo, worker="parent", model="", effort="", role="implement",
+            routing=choice["routing"], executor_kind="parent", catalogs={}, live="codex",
+        )
+        self.assertEqual(ok["execution_strategy"], "direct-parent")
+
+    def test_sidecar_accepts_execution_strategy_string(self):
+        job_dir = self.repo / ".rig" / "jobs" / "strategy"
+        routing = evidence.empty_routing(
+            mode="smart", fingerprint="x",
+            assessment=policy.normalize_assessment("implement", {"complexity": "low", "risk": "low", "uncertainty": "low"}),
+        )
+        routing["execution_strategy"] = "wrapper"
+        evidence.write_sidecar(job_dir, "att-1", routing)
+        got = evidence.read_sidecar(job_dir, expected_attempt_id="att-1")
+        self.assertEqual(got["routing"]["execution_strategy"], "wrapper")
+        routing["execution_strategy"] = True
+        evidence.write_sidecar(job_dir, "att-1", routing)
+        self.assertIsNone(evidence.read_sidecar(job_dir, expected_attempt_id="att-1"))
+
 
 if __name__ == "__main__":
     unittest.main()

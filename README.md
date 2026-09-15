@@ -142,7 +142,7 @@ flowchart TD
   pick --> launch[Eligible profile at that tier — or parent_writes]
 ```
 
-Eligibility still requires worker flags, binary, live-parent exclusion, scoped MCP readiness, excludes, model bans, and catalog confirmation where required. A tier is a floor: not every candidate has a fast (or any) profile. Default fast/standard worker preference order: Grok, Claude, OpenCode, OMP, Pi, agy, Codex. Strong/review: Claude, Grok, OpenCode, OMP, Pi, agy, Codex. Optional `.rig/routing.json` can override preferences; config never enables workers.
+Eligibility still requires worker flags, binary, live-parent exclusion, scoped MCP readiness, excludes, model bans, and catalog confirmation where required. A tier is a floor: not every candidate has a fast (or any) profile. Default fast/standard worker preference order: Grok, Claude, OpenCode, OMP, Pi, agy, Codex. Strong/review: Claude, Grok, OpenCode, OMP, Pi, agy, Codex. Optional `.rig/routing.json` can override preferences; config never enables workers. Schema 1 remains valid. Schema 2 may set `execution.direct_parent_low_risk` (default false) so low-risk mini/implement can use this parent before catalog lookup; that still uses `rig_job_start` / finish / accept. Rollback remains `[routing] mode = "legacy"`, or set `execution.direct_parent_low_risk` to false.
 
 Inspect a decision and outcomes:
 
@@ -240,5 +240,5 @@ More: [Usage troubleshooting](docs/usage.md#troubleshooting).
 
 ## Docs
 
-- [Visual flow](docs/rig-flow.md) · [Usage](docs/usage.md) · [Smart routing](docs/smart-routing.md)
+- [Visual flow](docs/rig-flow.md) · [Usage](docs/usage.md) · [Smart routing](docs/smart-routing.md) · [Release notes](docs/release-notes.md)
 - Parent spawn protocol: `.agents/skills/delegate-harness/SKILL.md` (also `<!-- rig:start -->` in `AGENTS.md`)

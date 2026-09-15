@@ -572,6 +572,161 @@ class Elapsed(unittest.TestCase):
         td.cleanup()
 
 
+class TokenUsagePersistence(unittest.TestCase):
+    def setUp(self):
+        import tempfile
+
+        self.td = tempfile.TemporaryDirectory()
+        self.job = Path(self.td.name) / "job"
+        self.job.mkdir()
+
+    def tearDown(self):
+        self.td.cleanup()
+
+    def test_wrapper_persists_final_usage_and_rejects_bad(self):
+        usage = {"input": 3, "output": 1, "reasoning": 0, "cached_input": 0, "total": 4}
+        (self.job / "stdout.log").write_text(json.dumps({"type": "result", "usage": usage}) + "\n")
+        jobs.write_job_files(
+            self.job, "job", "grok", "implement", "ok", 0,
+            "2026-09-14T00:00:00Z", "2026-09-14T00:00:01Z", "done",
+            kind="wrapper", executor_kind="wrapper",
+        )
+        meta = json.loads((self.job / "meta.json").read_text())
+        self.assertEqual(meta["token_usage"], usage)
+        loaded = jobs.load_job(self.job)
+        self.assertEqual(loaded["token_usage"], usage)
+
+        (self.job / "stdout.log").write_text(json.dumps({
+            "type": "result", "usage": {**usage, "input": -2},
+        }) + "\n")
+        jobs.write_job_files(
+            self.job, "job", "grok", "implement", "ok", 0,
+            "2026-09-14T00:00:00Z", "2026-09-14T00:00:01Z", "done",
+            kind="wrapper", executor_kind="wrapper", token_usage=None,
+        )
+        meta = json.loads((self.job / "meta.json").read_text())
+        self.assertEqual(meta.get("token_usage"), usage)
+
+    def test_wrapper_persists_grok_end_usage_without_cost(self):
+        usage = {"input": 3, "output": 1, "reasoning": 0, "cached_input": 0, "total": 4}
+        (self.job / "stdout.log").write_text(json.dumps({
+            "type": "end",
+            "stopReason": "end_turn",
+            "usage": {
+                "input_tokens": 3, "output_tokens": 1, "reasoning_tokens": 0,
+                "cache_read_input_tokens": 0, "total_tokens": 4, "total_cost_usd": 0.4,
+            },
+        }) + "\n")
+        jobs.write_job_files(
+            self.job, "job", "grok", "implement", "ok", 0,
+            "2026-09-14T00:00:00Z", "2026-09-14T00:00:01Z", "done",
+            kind="wrapper", executor_kind="wrapper",
+        )
+        meta = json.loads((self.job / "meta.json").read_text())
+        self.assertEqual(meta["token_usage"], usage)
+        self.assertNotIn("total_cost_usd", meta["token_usage"])
+
+    def test_parent_stays_unknown_unless_supplied(self):
+        usage = {"input": 9, "output": 1, "reasoning": 0, "cached_input": 0, "total": 10}
+        (self.job / "stdout.log").write_text(json.dumps({"type": "result", "usage": usage}) + "\n")
+        jobs.write_job_files(
+            self.job, "job", "codex", "implement", "ok", 0,
+            "2026-09-14T00:00:00Z", "2026-09-14T00:00:01Z", "done",
+            kind="native", executor_kind="parent",
+        )
+        meta = json.loads((self.job / "meta.json").read_text())
+        self.assertNotIn("token_usage", meta)
+        self.assertIsNone(jobs.load_job(self.job)["token_usage"])
+        jobs.write_job_files(
+            self.job, "job", "codex", "implement", "ok", 0,
+            "2026-09-14T00:00:00Z", "2026-09-14T00:00:01Z", "done",
+            kind="native", executor_kind="parent", token_usage=usage,
+        )
+        self.assertEqual(json.loads((self.job / "meta.json").read_text())["token_usage"], usage)
+
+    def test_partial_usage_persists_without_inventing_fields(self):
+        partial = {"input": 8, "output": 2}
+        (self.job / "stdout.log").write_text(json.dumps({"type": "result", "usage": partial}) + "\n")
+        jobs.write_job_files(
+            self.job, "job", "grok", "implement", "ok", 0,
+            "2026-09-14T00:00:00Z", "2026-09-14T00:00:01Z", "done",
+            kind="wrapper", executor_kind="wrapper",
+        )
+        meta = json.loads((self.job / "meta.json").read_text())
+        self.assertEqual(meta["token_usage"], partial)
+        self.assertNotIn("total", meta["token_usage"])
+        self.assertNotIn("reasoning", meta["token_usage"])
+        self.assertNotIn("cached_input", meta["token_usage"])
+        loaded = jobs.load_job(self.job)
+        self.assertEqual(loaded["token_usage"], partial)
+        self.assertNotIn("total", loaded["token_usage"])
+
+
+class DirectParentStartIdentity(unittest.TestCase):
+    def setUp(self):
+        import tempfile
+
+        self.td = tempfile.TemporaryDirectory()
+        self.repo = Path(self.td.name)
+        (self.repo / ".git").mkdir()
+        (self.repo / ".rig" / "jobs").mkdir(parents=True)
+        (self.repo / ".rig" / "harness.toml").write_text(
+            'parent = "codex"\n[workers]\ngrok = true\nclaude = true\ncodex = true\n'
+            "cursor = false\nopencode = true\nomp = true\npi = true\nagy = true\n"
+            '[routing]\nmode = "smart"\n'
+        )
+        (self.repo / ".rig" / "routing.json").write_text(json.dumps({
+            "schema_version": 2,
+            "execution": {"direct_parent_low_risk": True},
+        }))
+        self._env = {k: os.environ.get(k) for k in ("RIG_JOB_ID", "RIG_JOB_DIR", "RIG_LIVE")}
+        for key in self._env:
+            os.environ.pop(key, None)
+
+    def tearDown(self):
+        for key, val in self._env.items():
+            if val is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = val
+        self.td.cleanup()
+
+    def _direct_parent_routing(self):
+        import route
+        from unittest.mock import patch
+
+        with patch.object(route, "resolved_model_for", side_effect=AssertionError("catalog")):
+            return route.pick(
+                "codex", ["grok", "opencode"], "implement", "tiny label",
+                repo=self.repo, policy_mode="smart", catalogs={},
+                complexity="low", risk="low", uncertainty="low",
+            )
+
+    def test_start_rejects_live_parent_mismatch_for_direct_parent(self):
+        choice = self._direct_parent_routing()
+        self.assertEqual(choice["execution_strategy"], "direct-parent")
+        with self.assertRaises(SystemExit) as ctx:
+            jobs.start_job(
+                self.repo, worker="codex", role="implement", live="grok",
+                executor_kind="parent", routing=choice["routing"], files=["label.txt"],
+            )
+        self.assertIn("live parent mismatch", str(ctx.exception))
+
+    def test_start_accepts_matching_live_parent(self):
+        choice = self._direct_parent_routing()
+        details = jobs.start_job(
+            self.repo, worker="codex", role="implement", live="codex",
+            executor_kind="parent", routing=choice["routing"], files=["label.txt"],
+            owner_session="jobs-direct-parent", return_details=True,
+        )
+        self.assertTrue(details["job_id"])
+        meta = json.loads((self.repo / ".rig" / "jobs" / details["job_id"] / "meta.json").read_text())
+        self.assertEqual(meta["status"], "running")
+        self.assertEqual(meta["executor_kind"], "parent")
+        sidecar = json.loads((self.repo / ".rig" / "jobs" / details["job_id"] / "routing.json").read_text())
+        self.assertEqual(sidecar["routing"]["execution_strategy"], "direct-parent")
+
+
 class McpTools(unittest.TestCase):
     def test_list_and_show(self):
         sys.path.insert(0, str(ROOT / "scripts"))

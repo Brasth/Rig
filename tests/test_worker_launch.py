@@ -421,6 +421,21 @@ class WorkerLaunchTests(unittest.TestCase):
         self.assertNotIn("LD_PRELOAD", dumped)
         self.assertEqual(result["worker"], "opencode")
 
+    def test_direct_parent_opt_in_is_not_wrapper_launch(self):
+        (self.repo / ".rig" / "routing.json").write_text(json.dumps({
+            "schema_version": 2,
+            "execution": {"direct_parent_low_risk": True},
+        }))
+        with self.assertRaisesRegex(worker_launch.LaunchError, "direct-parent|parent writes"):
+            worker_launch.launch(
+                self.repo, id="direct-parent", brief="tiny label", worker="",
+                role="implement", model="", effort="", files=["a.py"],
+                assessment={"complexity": "low", "risk": "low", "uncertainty": "low"},
+                owner_session="launch-tests",
+            )
+        self.assertFalse((self.repo / ".rig" / "jobs" / "direct-parent").exists())
+        self.assertEqual(self._held(), [])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -11,7 +11,10 @@ from pathlib import Path
 
 import jobs as rig_jobs
 import routing_policy
+import token_usage as rig_tokens
 import verification
+
+STRATEGIES = routing_policy.EXECUTION_STRATEGIES
 
 
 def _parse_stamp(raw: str) -> float | None:
@@ -59,6 +62,18 @@ def _actual_model(job: dict) -> tuple[str, str]:
     return str(job.get("model") or ""), str(job.get("effort") or "")
 
 
+def _strategy(routing: dict | None) -> str:
+    routing = routing or {}
+    raw = str(routing.get("execution_strategy") or "").strip()
+    if raw in STRATEGIES:
+        return raw
+    if routing.get("selected_profile"):
+        return "wrapper"
+    if str(routing.get("policy_mode") or "").strip().lower() == "smart":
+        return "parent-fallback"
+    return ""
+
+
 def _group_key(routing: dict | None, job: dict) -> tuple:
     routing = routing or {}
     profile = routing.get("selected_profile") or {}
@@ -69,6 +84,7 @@ def _group_key(routing: dict | None, job: dict) -> tuple:
         (profile.get("id") if isinstance(profile, dict) else "") or "",
         model,
         effort,
+        _strategy(routing),
     )
 
 
@@ -88,6 +104,9 @@ def _empty_bucket() -> dict:
         "stale": 0,
         "exit0": 0,
         "durations": [],
+        "token_known": 0,
+        "token_unknown": 0,
+        "token_values": {field: [] for field in rig_tokens.FIELDS},
     }
 
 
@@ -149,7 +168,14 @@ def build_report(repo: Path, *, days: int = 30, now: float | None = None) -> dic
         "assessed": 0,
         "exit0": 0,
         "cancels": 0,
+        "direct_parent_attempts": 0,
+        "wrapper_attempts": 0,
+        "parent_fallback_attempts": 0,
+        "token_known": 0,
+        "token_unknown": 0,
+        "token_values": {field: [] for field in rig_tokens.FIELDS},
     }
+    strategies = {name: _empty_bucket() for name in STRATEGIES}
 
     def ensure(key: tuple) -> dict:
         if key not in groups:
@@ -159,6 +185,7 @@ def build_report(repo: Path, *, days: int = 30, now: float | None = None) -> dic
                 "profile": key[2],
                 "model": key[3],
                 "effort": key[4],
+                "execution_strategy": key[5],
                 **_empty_bucket(),
             }
         return groups[key]
@@ -177,9 +204,16 @@ def build_report(repo: Path, *, days: int = 30, now: float | None = None) -> dic
         totals["attempts"] += 1
         routing = (sidecar or {}).get("routing") if sidecar else None
         origin = _provenance(job, sidecar)
+        strategy = _strategy(routing if origin == "smart" else None)
         if origin == "smart":
             bucket = ensure(_group_key(routing, job))
             totals["smart_attempts"] += 1
+            if strategy == "direct-parent":
+                totals["direct_parent_attempts"] += 1
+            elif strategy == "wrapper":
+                totals["wrapper_attempts"] += 1
+            elif strategy == "parent-fallback":
+                totals["parent_fallback_attempts"] += 1
         elif origin == "legacy":
             bucket = legacy
             totals["legacy_attempts"] += 1
@@ -190,30 +224,55 @@ def build_report(repo: Path, *, days: int = 30, now: float | None = None) -> dic
             bucket = missing
             totals["missing_provenance"] += 1
             missing["missing_provenance"] += 1
-        bucket["attempts"] += 1
+        strategy_bucket = strategies.get(strategy) if origin == "smart" else None
+        targets = [bucket]
+        if strategy_bucket is not None:
+            targets.append(strategy_bucket)
+        for target in targets:
+            target["attempts"] += 1
+        usage = rig_tokens.load_token_usage(job.get("token_usage"))
+        usage_buckets = [bucket, totals]
+        if strategy_bucket is not None:
+            usage_buckets.append(strategy_bucket)
+        if usage:
+            for target in usage_buckets:
+                target["token_known"] += 1
+                for field in rig_tokens.FIELDS:
+                    if field in usage:
+                        target["token_values"][field].append(int(usage[field]))
+        else:
+            for target in usage_buckets:
+                target["token_unknown"] += 1
         status = str(job.get("status") or "")
         exit_code = job.get("exit_code")
         execution_mode = str(job.get("execution_mode") or "")
         if status == "ok" and exit_code == 0:
-            bucket["exit0"] += 1
-            totals["exit0"] += 1
+            for target in (*targets, totals):
+                target["exit0"] += 1
         if status == "timeout":
-            bucket["timeouts"] += 1
+            for target in targets:
+                target["timeouts"] += 1
         if status == "cancelled":
-            bucket["cancels"] += 1
-            totals["cancels"] += 1
+            for target in (*targets, totals):
+                target["cancels"] += 1
         if execution_mode == "not_started":
-            bucket["launch_failures"] += 1
+            for target in targets:
+                target["launch_failures"] += 1
         elif status == "fail":
-            bucket["execution_failures"] += 1
+            for target in targets:
+                target["execution_failures"] += 1
         if status in {"ok", "fail", "timeout"} and execution_mode != "not_started":
-            bucket["completed"] += 1
-            elapsed = job.get("elapsed_s")
-            if elapsed is not None:
+            elapsed = None
+            raw_elapsed = job.get("elapsed_s")
+            if raw_elapsed is not None:
                 try:
-                    bucket["durations"].append(float(elapsed))
+                    elapsed = float(raw_elapsed)
                 except (TypeError, ValueError):
-                    pass
+                    elapsed = None
+            for target in targets:
+                target["completed"] += 1
+                if elapsed is not None:
+                    target["durations"].append(elapsed)
         try:
             assessed = verification.assessment(root, job, refresh=True, cache=cache)
         except Exception:
@@ -225,47 +284,78 @@ def build_report(repo: Path, *, days: int = 30, now: float | None = None) -> dic
         if acceptance in {"accepted", "rejected"}:
             totals["assessed"] += 1
             if acceptance == "accepted" and state == "verified" and freshness == "current":
-                bucket["accepted"] += 1
-                totals["accepted"] += 1
+                for target in (*targets, totals):
+                    target["accepted"] += 1
             elif acceptance == "rejected":
-                bucket["rejected"] += 1
-                bucket["unverified"] += 1
+                for target in targets:
+                    target["rejected"] += 1
+                    target["unverified"] += 1
             elif stale:
-                bucket["stale"] += 1
-                bucket["unverified"] += 1
+                for target in targets:
+                    target["stale"] += 1
+                    target["unverified"] += 1
             else:
-                bucket["pending"] += 1
-                bucket["unverified"] += 1
+                for target in targets:
+                    target["pending"] += 1
+                    target["unverified"] += 1
         elif stale:
-            bucket["stale"] += 1
-            bucket["unverified"] += 1
+            for target in targets:
+                target["stale"] += 1
+                target["unverified"] += 1
         else:
-            bucket["pending"] += 1
-            bucket["unverified"] += 1
+            for target in targets:
+                target["pending"] += 1
+                target["unverified"] += 1
+
+    def _token_stats(values: dict) -> dict:
+        out = {}
+        for field in rig_tokens.FIELDS:
+            series = list(values.get(field) or [])
+            out[field] = {
+                "n": len(series),
+                "sum": int(sum(series)) if series else None,
+                "median": _median([float(item) for item in series]),
+            }
+        return out
 
     def finish(bucket: dict) -> dict:
         durations = bucket.pop("durations", [])
+        token_values = bucket.pop("token_values", {field: [] for field in rig_tokens.FIELDS})
         out = dict(bucket)
         out["median_duration_s"] = _median(durations)
+        known = int(out.get("token_known") or 0)
+        unknown = int(out.get("token_unknown") or 0)
+        out["token_coverage"] = {
+            "known": known,
+            "unknown": unknown,
+            "note": "unknown usage is not zero and is excluded from token aggregates",
+        }
+        out["token_components"] = _token_stats(token_values)
         return out
 
     grouped = [finish(item) for item in groups.values()]
     grouped.sort(key=lambda row: (
-        str(row["policy_version"]), row["required_tier"], row["profile"], row["model"], row["effort"],
+        str(row["policy_version"]), row["required_tier"], row["profile"], row["model"],
+        row["effort"], row.get("execution_strategy") or "",
     ))
+    finished_totals = finish(totals)
     return {
         "days": days,
         "policy_version": routing_policy.POLICY_VERSION,
         "totals": {
-            **{k: v for k, v in totals.items()},
+            **{k: v for k, v in finished_totals.items() if k not in {"accepted"}},
+            "accepted": totals["accepted"],
             "accepted_numerator": totals["accepted"],
             "accepted_denominator": totals["assessed"],
             "note": (
                 "exit0 is not acceptance; cancellation is not a model-quality failure; "
                 "smart, legacy, and manual provenance are counted separately; "
+                "direct-parent and wrapper attempts are counted separately; "
+                "unknown token usage is not zero and is excluded from token aggregates; "
                 "missing/malformed sidecar evidence is never accepted"
             ),
         },
+        "strategies": {name: finish(bucket) for name, bucket in strategies.items()},
         "groups": grouped,
         "legacy": finish(legacy),
         "manual": finish(manual),
@@ -279,6 +369,8 @@ def format_report(report: dict) -> str:
         f"routing report days={report['days']} policy_v={report['policy_version']}",
         (
             f"attempts={totals['attempts']} smart={totals['smart_attempts']} "
+            f"direct_parent={totals.get('direct_parent_attempts', 0)} "
+            f"wrapper={totals.get('wrapper_attempts', 0)} "
             f"legacy={totals['legacy_attempts']} manual={totals.get('manual_attempts', 0)} "
             f"missing_provenance={totals['missing_provenance']} "
             f"unknown_timestamps={totals.get('unknown_timestamps', 0)}"
@@ -287,17 +379,37 @@ def format_report(report: dict) -> str:
             f"accepted={totals['accepted_numerator']}/{totals['accepted_denominator']} "
             f"exit0={totals['exit0']} cancels={totals['cancels']}"
         ),
+        (
+            f"tokens known={((totals.get('token_coverage') or {}).get('known', 0))} "
+            f"unknown={((totals.get('token_coverage') or {}).get('unknown', 0))}"
+        ),
         totals["note"],
     ]
+    for name in STRATEGIES:
+        row = (report.get("strategies") or {}).get(name) or {}
+        if not row.get("attempts"):
+            continue
+        median = row.get("median_duration_s")
+        median_s = "-" if median is None else f"{median:.1f}s"
+        coverage = row.get("token_coverage") or {}
+        lines.append(
+            f"  strategy={name} n={row.get('attempts', 0)} ok_accept={row.get('accepted', 0)} "
+            f"tokens_known={coverage.get('known', 0)} tokens_unknown={coverage.get('unknown', 0)} "
+            f"median={median_s}"
+        )
     for row in report["groups"]:
         median = row["median_duration_s"]
         median_s = "-" if median is None else f"{median:.1f}s"
+        coverage = row.get("token_coverage") or {}
         lines.append(
             f"  v={row['policy_version']} tier={row['required_tier'] or '-'} "
+            f"strategy={row.get('execution_strategy') or '-'} "
             f"profile={row['profile'] or '-'} model={row['model'] or '-'} effort={row['effort'] or '-'} "
             f"n={row['attempts']} ok_accept={row['accepted']} fail_exec={row['execution_failures']} "
             f"launch_fail={row['launch_failures']} timeout={row['timeouts']} cancel={row['cancels']} "
-            f"unverified={row['unverified']} pending={row['pending']} stale={row['stale']} median={median_s}"
+            f"unverified={row['unverified']} pending={row['pending']} stale={row['stale']} "
+            f"tokens_known={coverage.get('known', 0)} tokens_unknown={coverage.get('unknown', 0)} "
+            f"median={median_s}"
         )
     legacy = report["legacy"]
     lines.append(
