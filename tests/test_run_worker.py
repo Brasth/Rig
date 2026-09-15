@@ -233,7 +233,7 @@ class OpenCodeOmpPiWorkerArgv(unittest.TestCase):
         (self.repo / ".rig").mkdir()
         (self.repo / ".rig" / "harness.toml").write_text(
             'parent = "codex"\n\n[workers]\ncodex = false\ngrok = false\nclaude = false\n'
-            "cursor = false\nopencode = true\nomp = true\npi = true\nagy = true\n"
+            "cursor = false\nopencode = true\nomp = true\npi = true\nagy = true\ndevin = true\n"
         )
         jobs = self.repo / ".rig" / "jobs" / "print-stream"
         jobs.mkdir(parents=True)
@@ -242,7 +242,7 @@ class OpenCodeOmpPiWorkerArgv(unittest.TestCase):
         self.bins = self.root / "bins"
         self.bins.mkdir()
         mcp_test_support.seed_installed_mcp(self.home)
-        for name in ("opencode", "omp", "pi", "agy"):
+        for name in ("opencode", "omp", "pi", "agy", "devin"):
             path = self.bins / name
             path.write_text(
                 f"#!{sys.executable}\n"
@@ -356,6 +356,30 @@ class OpenCodeOmpPiWorkerArgv(unittest.TestCase):
         self.assertIn("--effort high", out, out)
         self.assertIn("--print-timeout 90s", out, out)
         self.assertNotIn("--dangerously-skip-permissions", out)
+
+    def test_devin_dry_run_is_exact_swe2_and_never_dangerous(self):
+        proc = run_worker(
+            self.repo, "devin", "print-stream", str(self.brief),
+            env=self._env({"RIG_MODEL": "swe-2-high", "RIG_EFFORT": "high"}),
+        )
+        out = proc.stdout + proc.stderr
+        self.assertEqual(proc.returncode, 0, out)
+        self.assertIn("devin --print", out)
+        self.assertIn("--prompt-file", out)
+        self.assertIn("--model swe-2-high", out)
+        self.assertIn("--permission-mode accept-edits", out)
+        self.assertIn("--respect-workspace-trust true", out)
+        self.assertNotIn("dangerous", out)
+        self.assertNotIn("fusion", out.lower())
+
+    def test_devin_rejects_role_mismatched_selector(self):
+        proc = run_worker(
+            self.repo, "devin", "print-stream", str(self.brief),
+            env=self._env({"RIG_MODEL": "swe-2-medium", "RIG_EFFORT": "medium"}),
+        )
+        out = proc.stdout + proc.stderr
+        self.assertNotEqual(proc.returncode, 0, out)
+        self.assertIn("expected swe-2-high", out)
 
     def test_agy_live_denied_actions_fails_and_restores_settings(self):
         settings = self.repo / "agy-settings.json"

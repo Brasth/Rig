@@ -1,5 +1,39 @@
 # Release Notes
 
+## Devin Child Worker
+
+Devin is a child-only worker. It is never a parent and defaults off.
+
+### Opt-in
+
+Enable Devin via routing preferences in `.rig/routing.json`. Default preference order stays Grok, Claude, OpenCode, OMP, Pi, agy, Codex.
+
+### Role pins
+
+Exact selectors only:
+
+- `swe-2-medium` — explore, mini, bulk
+- `swe-2-high` — implement
+- `swe-2-max` — hard, review
+
+### Catalog confirmation
+
+Live catalog confirmation is JSON-only (`devin models list --format json`). No aliases, SWE-1.x, Fusion, defaults, or role mismatch.
+
+### Child wrapper
+
+The wrapper launches with accept-edits and a temporary job-scoped MCP config, then restores the previous config. One Devin job is permitted per repository.
+
+### Rollout
+
+1. Run `rig update`.
+2. Per repo: `rig init`, then `rig doctor`.
+3. Fully restart the parent CLI / MCP session before admitting new work.
+
+### Rollback
+
+Disable `workers.devin` and remove Devin preference IDs.
+
 ## Cost-aware Smart Routing
 
 Optional cost-aware lane for smart mode. Off by default.

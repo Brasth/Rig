@@ -26,7 +26,7 @@ usage: rig <command> [args]
   doctor
   status
   use codex|grok|opencode|omp|pi|agy
-  workers grok=on|off claude=on|off codex=on|off cursor=on|off opencode=on|off omp=on|off pi=on|off agy=on|off
+  workers grok=on|off claude=on|off codex=on|off cursor=on|off opencode=on|off omp=on|off pi=on|off agy=on|off devin=on|off
   prune
   run "prompt"
   jobs [--json] [--thread [ID]]
@@ -59,7 +59,7 @@ usage: rig <command> [args]
   routing report [--days N] [--json]
   diagram PATH [--ascii] [--popup] [--output PATH]
 
-Stay in Codex, Grok, OpenCode, OMP, Pi, or agy. They can invoke Claude, Cursor, OpenCode, OMP, Pi, agy, or each other.
+Stay in Codex, Grok, OpenCode, OMP, Pi, or agy. They can invoke Claude, Cursor, OpenCode, OMP, Pi, agy, Devin, or each other. Devin is child-only.
 EOF
   exit 2
 }
@@ -479,10 +479,13 @@ cmd_init() {
         fi
         rig_set_toml_key "$harness" "workers" "$name" "$flag"
       done
-      echo "workers from PATH: grok=$(worker_flag grok) claude=$(worker_flag claude) cursor=$(worker_flag cursor) opencode=$(worker_flag opencode) omp=$(worker_flag omp) pi=$(worker_flag pi) agy=$(worker_flag agy)"
+      echo "workers from PATH: grok=$(worker_flag grok) claude=$(worker_flag claude) cursor=$(worker_flag cursor) opencode=$(worker_flag opencode) omp=$(worker_flag omp) pi=$(worker_flag pi) agy=$(worker_flag agy) devin=$(worker_flag devin)"
     elif [[ -f "$harness" ]]; then
       local name
       for name in "${RIG_WORKERS[@]}"; do
+        # Older harnesses treat an absent Devin flag as off; keep them byte-for-byte
+        # stable until the user explicitly enables this opt-in worker.
+        [[ "$name" == "devin" ]] && continue
         if ! rig_has_section_key "$harness" "workers" "$name"; then
           rig_set_toml_key "$harness" "workers" "$name" "false"
           echo "appended $name = false (existing harness; run: rig workers $name=on)"
@@ -760,6 +763,10 @@ cmd_doctor() {
     echo "  Antigravity CLI missing:"
     echo "  curl -fsSL https://antigravity.google/cli/install.sh | bash"
   fi
+  if [[ -z "$(find_worker_bin devin)" ]]; then
+    echo "  Devin CLI missing (child-only SWE-2 worker):"
+    echo "  https://docs.devin.ai/cli"
+  fi
   echo
   echo "Skill"
   local p proj_skill
@@ -823,7 +830,7 @@ cmd_doctor() {
   echo "MCP"
   local mcp_name mcp_reason mcp_bin mcp_schema
   echo "  Cursor CLI has no isolated job-scoped MCP; excluded until a safe --mcp-config exists"
-  for mcp_name in grok codex claude opencode omp pi agy cursor; do
+  for mcp_name in grok codex claude opencode omp pi agy devin cursor; do
     mcp_reason="$(worker_mcp_reason "$mcp_name" 2>/dev/null || true)"
     mcp_bin="$(find_worker_bin "$mcp_name")"
     case "$mcp_name" in
@@ -831,6 +838,7 @@ cmd_doctor() {
       opencode) mcp_schema="mcp.rig" ;;
       omp|pi|agy) mcp_schema="mcpServers.rig" ;;
       claude) mcp_schema="job mcp.json" ;;
+      devin) mcp_schema="job .devin/mcp_config.local.json" ;;
       *) mcp_schema="mcp" ;;
     esac
     if [[ -z "$mcp_reason" ]]; then
@@ -1093,7 +1101,7 @@ cmd_parent() {
 
 cmd_workers() {
   [[ $# -ge 1 ]] || {
-    echo "usage: rig workers grok=on|off claude=on|off codex=on|off cursor=on|off opencode=on|off omp=on|off pi=on|off agy=on|off" >&2
+    echo "usage: rig workers grok=on|off claude=on|off codex=on|off cursor=on|off opencode=on|off omp=on|off pi=on|off agy=on|off devin=on|off" >&2
     exit 2
   }
   ensure_harness
@@ -1102,7 +1110,7 @@ cmd_workers() {
     name="${spec%%=*}"
     val="${spec#*=}"
     case "$name" in
-      grok|claude|codex|cursor|opencode|omp|pi|agy) ;;
+      grok|claude|codex|cursor|opencode|omp|pi|agy|devin) ;;
       *)
         echo "rig workers: unknown worker '$name'" >&2
         exit 2

@@ -7,7 +7,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
-WORKERS = ("grok", "claude", "codex", "cursor", "opencode", "omp", "pi", "agy")
+WORKERS = ("grok", "claude", "codex", "cursor", "opencode", "omp", "pi", "agy", "devin")
 PARENTS = frozenset({"grok", "codex", "claude", "cursor", "opencode", "omp", "pi", "agy"})
 
 # Missing harness file and missing keys are all false so pick cannot
@@ -79,7 +79,7 @@ def preferred_parent(repo: Path) -> str:
 
 
 def find_worker_bin(name: str) -> str:
-    if name in {"grok", "claude", "codex", "opencode", "omp", "pi", "agy"}:
+    if name in {"grok", "claude", "codex", "opencode", "omp", "pi", "agy", "devin"}:
         return shutil.which(name) or ""
     if name != "cursor":
         return shutil.which(name) or ""

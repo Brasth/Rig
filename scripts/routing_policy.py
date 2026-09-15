@@ -263,10 +263,20 @@ def _hard_filter(profile: rig_profiles.Profile, *, live: str, blocked: set[str],
     if profile.worker not in wrapper_names:
         return "worker-not-effective", ""
     banned = rig_route.assert_child_model(profile.selector)
+    if not banned:
+        for role in profile.roles:
+            banned = rig_route.assert_devin_model(profile.worker, profile.selector, role)
+            if banned:
+                break
     if banned:
         return "banned-model", banned
     for alias in profile.aliases:
         banned = rig_route.assert_child_model(alias)
+        if not banned:
+            for role in profile.roles:
+                banned = rig_route.assert_devin_model(profile.worker, alias, role)
+                if banned:
+                    break
         if banned:
             return "banned-model", banned
     if not profile.allows_role(kind):
@@ -597,6 +607,11 @@ def resolve_explicit_worker_choice(
             decisions[profile.id] = _decision(profile.id, "worker-excluded")
             continue
         banned = rig_route.assert_child_model(profile.selector)
+        if not banned:
+            for allowed_role in profile.roles:
+                banned = rig_route.assert_devin_model(profile.worker, profile.selector, allowed_role)
+                if banned:
+                    break
         if banned:
             decisions[profile.id] = _decision(profile.id, "banned-model", banned)
             continue

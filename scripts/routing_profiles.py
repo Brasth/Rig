@@ -10,8 +10,11 @@ PREF_KEYS = ("fast", "standard", "strong", "review")
 WRITER_ROLES = ("mini", "bulk", "implement", "hard")
 FAST_STANDARD_WORKERS = ("grok", "claude", "opencode", "omp", "pi", "agy", "codex")
 STRONG_REVIEW_WORKERS = ("claude", "grok", "opencode", "omp", "pi", "agy", "codex")
-CATALOG_WORKERS = frozenset({"opencode", "omp", "pi", "agy"})
-KNOWN_PROVIDERS = frozenset({"openai", "anthropic", "xai", "google", "cursor"})
+CATALOG_WORKERS = frozenset({"opencode", "omp", "pi", "agy", "devin"})
+KNOWN_PROVIDERS = frozenset({"openai", "anthropic", "xai", "google", "cursor", "cognition"})
+DEVIN_FAST_ROLES = ("explore", "mini", "bulk")
+DEVIN_IMPLEMENT_ROLES = ("implement",)
+DEVIN_STRONG_ROLES = ("hard", "review")
 CHEAP_ROLES = ("explore", "mini", "bulk", "implement")
 WRITE_ROLES = ("mini", "bulk", "implement", "hard", "review")
 STANDARD_ROLES = ("explore", "mini", "bulk", "implement")
@@ -101,6 +104,9 @@ def builtin_profiles() -> tuple[Profile, ...]:
     agy_fast_m, agy_fast_e = _pin("agy", "explore")
     agy_std_m, agy_std_e = _pin("agy", "implement")
     agy_strong_m, agy_strong_e = _pin("agy", "hard")
+    devin_fast_m, devin_fast_e = _pin("devin", "explore")
+    devin_std_m, devin_std_e = _pin("devin", "implement")
+    devin_strong_m, devin_strong_e = _pin("devin", "hard")
     cur_fast_m, cur_fast_e = _pin("cursor", "explore")
     cur_std_m, cur_std_e = _pin("cursor", "implement")
     cur_hard_m, cur_hard_e = _pin("cursor", "hard")
@@ -168,6 +174,14 @@ def builtin_profiles() -> tuple[Profile, ...]:
             provider="google",
         ),
         _p(
+            "devin-swe-2-medium",
+            "devin",
+            devin_fast_m,
+            roles=DEVIN_FAST_ROLES,
+            effort=devin_fast_e,
+            provider="cognition",
+        ),
+        _p(
             "cursor-composer-2.5-fast",
             "cursor",
             cur_fast_m,
@@ -233,6 +247,15 @@ def builtin_profiles() -> tuple[Profile, ...]:
             provider="google",
         ),
         _p(
+            "devin-swe-2-high",
+            "devin",
+            devin_std_m,
+            roles=DEVIN_IMPLEMENT_ROLES,
+            tiers=("standard",),
+            effort=devin_std_e,
+            provider="cognition",
+        ),
+        _p(
             "cursor-composer-2.5",
             "cursor",
             cur_std_m,
@@ -289,6 +312,15 @@ def builtin_profiles() -> tuple[Profile, ...]:
             tiers=("strong",),
             effort=agy_strong_e,
             provider="google",
+        ),
+        _p(
+            "devin-swe-2-max",
+            "devin",
+            devin_strong_m,
+            roles=DEVIN_STRONG_ROLES,
+            tiers=("strong",),
+            effort=devin_strong_e,
+            provider="cognition",
         ),
         _p(
             "codex-terra-medium",
@@ -361,6 +393,10 @@ def default_preference_ids(
                 ordered.append(profile.id)
     for profile in sorted(profiles.values(), key=lambda item: item.id):
         if profile.id in seen:
+            continue
+        # Devin is intentionally opt-in: a missing custom preference must not
+        # make it a fallback merely because every default worker is unavailable.
+        if profile.worker == "devin":
             continue
         if review and not profile.allows_role("review"):
             continue

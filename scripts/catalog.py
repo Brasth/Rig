@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Live OpenCode / OMP / Pi / agy model catalogs. Cached under ~/.rig."""
+"""Live OpenCode / OMP / Pi / agy / Devin model catalogs. Cached under ~/.rig."""
 from __future__ import annotations
 
 import argparse
@@ -14,7 +14,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
-CATALOG_WORKERS = frozenset({"opencode", "omp", "pi", "agy"})
+CATALOG_WORKERS = frozenset({"opencode", "omp", "pi", "agy", "devin"})
 TTL_SECONDS = 3600
 STALE_MAX_SECONDS = 24 * 3600
 PROBE_TIMEOUT = 8.0
@@ -33,6 +33,7 @@ PROBE_ARGV = {
     "opencode": ("models",),
     "pi": ("--list-models",),
     "agy": ("models",),
+    "devin": ("models", "list", "--format", "json"),
 }
 
 
@@ -170,6 +171,53 @@ def parse_pi(text: str) -> list[str]:
     return uniq_ids(ids)
 
 
+def parse_devin_json(text: str) -> list[str] | None:
+    """Exact JSON from `devin models list --format json`. No table fallback."""
+    raw = (text or "").strip()
+    if not raw:
+        return None
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    models = data
+    if isinstance(data, dict):
+        models = None
+        for key in ("models", "data", "items", "families"):
+            if key in data:
+                models = data[key]
+                break
+        if models is None:
+            return None
+    if not isinstance(models, list):
+        return None
+    ids: list[str] = []
+    for item in models:
+        if isinstance(item, str):
+            if item.strip():
+                ids.append(item.strip())
+            continue
+        if not isinstance(item, dict):
+            continue
+        variants = item.get("variants")
+        if isinstance(variants, list):
+            for variant in variants:
+                if not isinstance(variant, dict):
+                    continue
+                model_uid = str(variant.get("model_uid") or "").strip()
+                if model_uid:
+                    ids.append(model_uid)
+            continue
+        # Devin's JSON has used both model_uid/slug and id/name shapes.  Keep
+        # this JSON-only, exact-selector extraction deliberately narrow.
+        for key in ("model_uid", "slug", "selector", "id", "model", "name"):
+            chosen = str(item.get(key) or "").strip()
+            if chosen:
+                ids.append(chosen)
+                break
+    return uniq_ids(ids)
+
+
 def parse_agy(text: str) -> list[str]:
     ids: list[str] = []
     for line in (text or "").splitlines():
@@ -205,6 +253,8 @@ def probe_worker(worker: str, timeout: float = PROBE_TIMEOUT) -> list[str] | Non
         return None
     if worker == "omp":
         return _probe_omp(bin_path, timeout)
+    if worker == "devin":
+        return _probe_devin(bin_path, timeout)
     argv = [bin_path, *PROBE_ARGV[worker]]
     proc = _run(argv, timeout)
     if proc is None or proc.returncode != 0:
@@ -239,6 +289,16 @@ def probe_catalog(worker: str, timeout: float = PROBE_TIMEOUT) -> tuple[str, lis
             return "empty", []
         ids = parse_omp_table(proc.stdout or "")
         return ("ok", ids) if ids else ("empty", [])
+    if worker == "devin":
+        proc = _run([bin_path, "models", "list", "--format", "json"], timeout)
+        if proc is None or proc.returncode != 0:
+            return "unavailable", None
+        parsed = parse_devin_json(proc.stdout or "")
+        if parsed:
+            return "ok", parsed
+        if parsed is not None:
+            return "empty", []
+        return "unavailable", None
     argv = [bin_path, *PROBE_ARGV[worker]]
     proc = _run(argv, timeout)
     if proc is None or proc.returncode != 0:
@@ -246,6 +306,14 @@ def probe_catalog(worker: str, timeout: float = PROBE_TIMEOUT) -> tuple[str, lis
     parsers = {"opencode": parse_opencode, "pi": parse_pi, "agy": parse_agy}
     ids = parsers[worker](proc.stdout or "")
     return ("ok", ids) if ids else ("empty", [])
+
+
+def _probe_devin(bin_path: str, timeout: float) -> list[str] | None:
+    proc = _run([bin_path, "models", "list", "--format", "json"], timeout)
+    if proc is None or proc.returncode != 0:
+        return None
+    parsed = parse_devin_json(proc.stdout or "")
+    return parsed or None
 
 
 def _probe_omp(bin_path: str, timeout: float) -> list[str] | None:
@@ -612,6 +680,17 @@ def pick_from_catalog(kind: str, preferred: str, ids: list[str] | None) -> str:
     return usable[0]
 
 
+def _devin_exact(preferred: str, ids: list[str] | None) -> str:
+    """Devin never substitutes: exact SWE-2 pin only, no alias/keyword/first-model fallback."""
+    want = (preferred or "").strip().lower()
+    if not want:
+        return preferred
+    for catalog_id in drop_banned(ids):
+        if catalog_id.strip().lower() == want:
+            return preferred
+    return preferred
+
+
 def resolve_model(
     worker: str,
     kind: str,
@@ -622,6 +701,14 @@ def resolve_model(
 ) -> str:
     if worker not in CATALOG_WORKERS:
         return preferred
+    if worker == "devin":
+        if catalogs is not None:
+            if worker not in catalogs:
+                return preferred
+            return _devin_exact(preferred, catalogs.get(worker))
+        if catalog is not None:
+            return _devin_exact(preferred, catalog)
+        return _devin_exact(preferred, load_catalog(worker))
     if catalogs is not None:
         if worker not in catalogs:
             return preferred
@@ -635,7 +722,7 @@ def doctor_lines() -> list[str]:
     data = _read_cache_file()
     now = time.time()
     rows: list[str] = []
-    for worker in ("opencode", "omp", "pi", "agy"):
+    for worker in ("opencode", "omp", "pi", "agy", "devin"):
         entry = data.get(worker)
         if not isinstance(entry, dict):
             continue

@@ -24,7 +24,21 @@ INBOX_FIRST = "first Rig operation must be rig_job_inbox"
 CURSOR_REASON = (
     "Cursor CLI has no isolated job-scoped MCP; excluded until a safe --mcp-config exists"
 )
-SCOPED_WORKERS = frozenset({"grok", "codex", "claude", "opencode", "omp", "pi", "agy"})
+SCOPED_WORKERS = frozenset({"grok", "codex", "claude", "opencode", "omp", "pi", "agy", "devin"})
+DEVIN_MCP_REL = Path(".devin") / "mcp_config.local.json"
+DEVIN_LOCK_REL = Path(".rig") / "devin.lock"
+DEVIN_STATE = "devin-mcp-state.json"
+DEVIN_BACKUP = "devin-mcp_config.local.json.bak"
+DEVIN_LIVE = frozenset(
+    {
+        "reserved",
+        "running",
+        "ask",
+        "stop-requested",
+        "stop-unconfirmed",
+        "native-cancel-required",
+    }
+)
 BOOTSTRAP_TOOLS = frozenset({"rig_job_inbox", "permission_prompt"})
 HANDSHAKE_TOOL = "rig_job_inbox"
 
@@ -52,6 +66,7 @@ SCHEMA_LABEL = {
     "pi": "mcpServers.rig",
     "agy": "mcpServers.rig",
     "claude": "job mcp.json",
+    "devin": "job .devin/mcp_config.local.json",
 }
 
 
@@ -306,7 +321,7 @@ def worker_mcp_ready(worker: str, *, home: Path | None = None) -> tuple[bool, st
         return False, f"{name} has no isolated job-scoped MCP"
     if not worker_binary(name):
         return False, f"binary '{name}' not on PATH"
-    if name == "claude":
+    if name == "claude" or name == "devin":
         return True, ""
     path = config_path(name, home)
     if path is None:
@@ -344,7 +359,7 @@ def mcp_payload(job_dir: Path, job_id: str, repo: Path) -> dict:
 
 
 def write_job_mcp(job_dir: Path, job_id: str, repo: Path, worker: str) -> dict:
-    """Claude gets explicit --mcp-config. Others inherit RIG_JOB_ID/RIG_JOB_DIR."""
+    """Claude gets explicit --mcp-config. Devin uses repo .devin/mcp_config.local.json. Others inherit RIG_JOB_ID/RIG_JOB_DIR."""
     job_dir = Path(job_dir)
     job_dir.mkdir(parents=True, exist_ok=True)
     ready, reason = worker_mcp_ready(worker)
@@ -355,6 +370,189 @@ def write_job_mcp(job_dir: Path, job_id: str, repo: Path, worker: str) -> dict:
     if worker == "claude":
         argv = ["--mcp-config", str(path), "--strict-mcp-config"]
     return {"ready": ready, "reason": reason, "path": str(path), "argv": argv, "env": env}
+
+
+def devin_mcp_path(repo: Path) -> Path:
+    return Path(repo) / DEVIN_MCP_REL
+
+
+def devin_lock_path(repo: Path) -> Path:
+    return Path(repo) / DEVIN_LOCK_REL
+
+
+def _devin_job_live(job_dir: Path) -> bool:
+    meta = rig_jobs._read_meta_dict(Path(job_dir))
+    if str(meta.get("worker") or "").strip() != "devin":
+        return False
+    status = str(meta.get("status") or "").strip()
+    return status in DEVIN_LIVE
+
+
+def live_devin_job_ids(repo: Path, *, skip_id: str = "") -> list[str]:
+    root = Path(repo) / ".rig" / "jobs"
+    if not root.is_dir():
+        return []
+    skip = (skip_id or "").strip()
+    out: list[str] = []
+    try:
+        names = sorted(p.name for p in root.iterdir() if p.is_dir())
+    except OSError:
+        return []
+    for name in names:
+        if name == skip:
+            continue
+        if _devin_job_live(root / name):
+            out.append(name)
+    return out
+
+
+def _lock_holder(repo: Path) -> str:
+    path = devin_lock_path(repo)
+    try:
+        return path.read_text(encoding="utf-8").strip().splitlines()[0].strip()
+    except (OSError, IndexError):
+        return ""
+
+
+def devin_busy_reason(repo: Path, *, skip_id: str = "") -> str:
+    live = live_devin_job_ids(repo, skip_id=skip_id)
+    if live:
+        return f"devin already running in this repo ({live[0]}); one Devin job at a time"
+    holder = _lock_holder(repo)
+    skip = (skip_id or "").strip()
+    if holder and holder != skip:
+        job_dir = Path(repo) / ".rig" / "jobs" / holder
+        if _devin_job_live(job_dir):
+            return f"devin already running in this repo ({holder}); one Devin job at a time"
+    return ""
+
+
+def acquire_devin_lock(repo: Path, job_id: str) -> None:
+    job_id = (job_id or "").strip()
+    if not job_id:
+        raise RuntimeError("devin lock requires a job id")
+    busy = devin_busy_reason(repo, skip_id=job_id)
+    if busy:
+        raise RuntimeError(busy)
+    lock = devin_lock_path(repo)
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    payload = (job_id + "\n").encode("utf-8")
+    try:
+        fd = os.open(str(lock), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+    except FileExistsError:
+        holder = _lock_holder(repo)
+        if holder == job_id:
+            return
+        if holder and not _devin_job_live(Path(repo) / ".rig" / "jobs" / holder):
+            try:
+                lock.unlink()
+            except OSError:
+                pass
+            else:
+                return acquire_devin_lock(repo, job_id)
+        raise RuntimeError(
+            f"devin already running in this repo ({holder or 'unknown'}); one Devin job at a time"
+        )
+    try:
+        os.write(fd, payload)
+    finally:
+        os.close(fd)
+
+
+def release_devin_lock(repo: Path, job_id: str) -> None:
+    job_id = (job_id or "").strip()
+    lock = devin_lock_path(repo)
+    holder = _lock_holder(repo)
+    # A missing/corrupt state file must never remove another job's lock.
+    if not job_id or holder != job_id:
+        return
+    try:
+        lock.unlink()
+    except OSError:
+        return
+
+
+def _merge_devin_payload(existing: dict | None, job_dir: Path, job_id: str, repo: Path) -> dict:
+    payload = mcp_payload(job_dir, job_id, repo)
+    if not isinstance(existing, dict):
+        return payload
+    merged = dict(existing)
+    servers = merged.get("mcpServers")
+    if not isinstance(servers, dict):
+        servers = {}
+    else:
+        servers = dict(servers)
+    for key, value in payload["mcpServers"].items():
+        servers[key] = dict(value)
+    merged["mcpServers"] = servers
+    return merged
+
+
+def install_devin_repo_mcp(job_dir: Path, job_id: str, repo: Path) -> dict:
+    """Swap in job-scoped Rig stdio MCP. Backup an existing local file; lock the repo."""
+    job_dir = Path(job_dir)
+    repo = Path(repo)
+    job_dir.mkdir(parents=True, exist_ok=True)
+    acquire_devin_lock(repo, job_id)
+    try:
+        path = devin_mcp_path(repo)
+        created_dir = not path.parent.is_dir()
+        existed = path.is_file()
+        existing = None
+        if existed:
+            raw = path.read_bytes()
+            (job_dir / DEVIN_BACKUP).write_bytes(raw)
+            try:
+                parsed = json.loads(raw.decode("utf-8"))
+                existing = parsed if isinstance(parsed, dict) else None
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                existing = None
+        payload = _merge_devin_payload(existing, job_dir, job_id, repo)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(payload, indent=2) + "\n")
+        state = {
+            "job_id": str(job_id),
+            "path": str(path),
+            "created_file": not existed,
+            "created_dir": created_dir,
+        }
+        (job_dir / DEVIN_STATE).write_text(json.dumps(state, indent=2) + "\n")
+        return state
+    except Exception:
+        release_devin_lock(repo, job_id)
+        raise
+
+
+def restore_devin_repo_mcp(job_dir: Path, repo: Path) -> None:
+    """Restore a pre-existing .devin/mcp_config.local.json or remove a file we created."""
+    job_dir = Path(job_dir)
+    repo = Path(repo)
+    state: dict = {}
+    state_path = job_dir / DEVIN_STATE
+    try:
+        loaded = json.loads(state_path.read_text(encoding="utf-8"))
+        if isinstance(loaded, dict):
+            state = loaded
+    except (OSError, json.JSONDecodeError, UnicodeError):
+        state = {}
+    path = Path(state.get("path") or devin_mcp_path(repo))
+    backup = job_dir / DEVIN_BACKUP
+    try:
+        if backup.is_file():
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(backup.read_bytes())
+        elif state.get("created_file"):
+            try:
+                path.unlink()
+            except OSError:
+                pass
+            if state.get("created_dir"):
+                try:
+                    path.parent.rmdir()
+                except OSError:
+                    pass
+    finally:
+        release_devin_lock(repo, str(state.get("job_id") or ""))
 
 
 def display_status(meta: dict | None, *, running: bool = False) -> str:
@@ -411,7 +609,11 @@ def require_success(job_dir: Path) -> str | None:
 
 def main(argv: list[str]) -> int:
     if len(argv) < 2:
-        print("usage: child_mcp.py prepare|require-success <job-dir> [job-id repo worker]", file=sys.stderr)
+        print(
+            "usage: child_mcp.py prepare|require-success|install-devin|restore-devin|busy-devin "
+            "<job-dir> [job-id repo worker]",
+            file=sys.stderr,
+        )
         return 2
     cmd = argv[1]
     if cmd == "prepare":
@@ -423,6 +625,31 @@ def main(argv: list[str]) -> int:
         return 0
     if cmd == "require-success":
         reason = require_success(argv[2] if len(argv) > 2 else "")
+        if reason:
+            print(reason, file=sys.stderr)
+            return 1
+        return 0
+    if cmd == "install-devin":
+        if len(argv) < 5:
+            print("usage: child_mcp.py install-devin <job-dir> <job-id> <repo>", file=sys.stderr)
+            return 2
+        try:
+            spec = install_devin_repo_mcp(argv[2], argv[3], argv[4])
+        except RuntimeError as error:
+            print(str(error), file=sys.stderr)
+            return 1
+        print(json.dumps(spec))
+        return 0
+    if cmd == "restore-devin":
+        if len(argv) < 4:
+            print("usage: child_mcp.py restore-devin <job-dir> <repo>", file=sys.stderr)
+            return 2
+        restore_devin_repo_mcp(argv[2], argv[3])
+        return 0
+    if cmd == "busy-devin":
+        repo = argv[2] if len(argv) > 2 else ""
+        skip = argv[3] if len(argv) > 3 else ""
+        reason = devin_busy_reason(repo, skip_id=skip)
         if reason:
             print(reason, file=sys.stderr)
             return 1

@@ -18,6 +18,7 @@ opencode = false
 omp = false
 pi = false
 agy = false
+devin = false
 
 [queue]
 max_running = 3

@@ -2,7 +2,7 @@
 
 Rig coordinates local coding agents from the CLI you already use. You describe work to a **parent**; it scopes tasks, delegates to **workers**, verifies results, and gives feedback. Queue, job progress, and file ownership stay in the project.
 
-**Parents:** Intended: Codex on Astra. Also supported: Grok, OpenCode, OMP, Pi, or agy (open that CLI). **Never the parent:** Claude Code and Cursor. **Effective workers:** Grok, Claude, OpenCode, OMP, Pi, agy, Codex. Cursor integration is disabled pending scoped MCP. Missing worker binary → that worker is off. If no eligible worker exists, parent fallback preserves its actual model. Never spawn Astra, Sol, or Fable as a child.
+**Parents:** Intended: Codex on Astra. Also supported: Grok, OpenCode, OMP, Pi, or agy (open that CLI). **Never the parent:** Claude Code, Cursor, and Devin. **Effective workers:** Grok, Claude, OpenCode, OMP, Pi, agy, Codex, and opt-in Devin (SWE-2 only). Cursor integration is disabled pending scoped MCP. Missing worker binary → that worker is off. If no eligible worker exists, parent fallback preserves its actual model. Never spawn Astra, Sol, or Fable as a child.
 
 ## Navigation
 
@@ -62,7 +62,7 @@ source ~/.zshrc
 
 `which rig` must print `$HOME/.local/bin/rig`.
 
-You need one parent CLI: Codex, Grok, OpenCode, OMP, Pi, or agy. Optional worker binaries: `grok`, `claude`, `cursor-agent`, `codex`, `opencode`, `omp`, `pi`, `agy`.
+You need one parent CLI: Codex, Grok, OpenCode, OMP, Pi, or agy. Optional worker binaries: `grok`, `claude`, `cursor-agent`, `codex`, `opencode`, `omp`, `pi`, `agy`, `devin`.
 
 Before updating an active repository: stop new admissions, finish or cancel existing work, confirm termination, close or reconcile held reservations, then update launchers and fully restart all parent/MCP sessions. Mixed old/new admission writers are unsupported. See [safe upgrade](docs/usage.md#safe-upgrade-and-rollback).
 
@@ -103,6 +103,7 @@ opencode = false
 omp = false
 pi = false
 agy = false
+devin = false
 ```
 
 - **Live parent** is whichever Codex, Grok, OpenCode, OMP, Pi, or agy you actually opened (`rig status`). The `parent =` key is only the preferred default (`rig use …`). Opening the CLI makes it live.
@@ -142,7 +143,7 @@ flowchart TD
   pick --> launch[Eligible profile at that tier — or parent_writes]
 ```
 
-Eligibility still requires worker flags, binary, live-parent exclusion, scoped MCP readiness, excludes, model bans, and catalog confirmation where required. A tier is a floor: not every candidate has a fast (or any) profile. Default fast/standard worker preference order: Grok, Claude, OpenCode, OMP, Pi, agy, Codex. Strong/review: Claude, Grok, OpenCode, OMP, Pi, agy, Codex. Optional `.rig/routing.json` can override preferences; config never enables workers. Schema 1 remains valid. Schema 2 may set `execution.direct_parent_low_risk` (default false) so low-risk mini/implement can use this parent before catalog lookup; that still uses `rig_job_start` / finish / accept. Rollback remains `[routing] mode = "legacy"`, or set `execution.direct_parent_low_risk` to false.
+Eligibility still requires worker flags, binary, live-parent exclusion, scoped MCP readiness, excludes, model bans, and catalog confirmation where required. A tier is a floor: not every candidate has a fast (or any) profile. Default fast/standard worker preference order: Grok, Claude, OpenCode, OMP, Pi, agy, Codex. Strong/review: Claude, Grok, OpenCode, OMP, Pi, agy, Codex. Devin is child-only SWE-2 (`swe-2-medium` / `swe-2-high` / `swe-2-max`) and is not in that default order; list its profile IDs in `.rig/routing.json` preferences to opt in. Optional `.rig/routing.json` can override preferences; config never enables workers. Schema 1 remains valid. Schema 2 may set `execution.direct_parent_low_risk` (default false) so low-risk mini/implement can use this parent before catalog lookup; that still uses `rig_job_start` / finish / accept. Rollback remains `[routing] mode = "legacy"`, or set `execution.direct_parent_low_risk` to false.
 
 Inspect a decision and outcomes:
 

@@ -268,6 +268,16 @@ def validate_profiles(rows: dict[str, rig_profiles.Profile]) -> None:
                 raise ConfigError(f"profile {pid}: codex explorer cannot write")
         if profile.worker in rig_profiles.CATALOG_WORKERS and not profile.catalog_required:
             raise ConfigError(f"profile {pid}: catalog-required worker cannot disable confirmation")
+        if profile.worker == "devin":
+            for role in profile.roles:
+                err = rig_route.assert_devin_model("devin", profile.selector, role)
+                if err:
+                    raise ConfigError(f"profile {pid}: {err}")
+            for alias in profile.aliases:
+                for role in profile.roles:
+                    err = rig_route.assert_devin_model("devin", alias, role)
+                    if err:
+                        raise ConfigError(f"profile {pid}: {err}")
 
 
 def _default_preferences(profiles: dict[str, rig_profiles.Profile]) -> dict[str, list[str]]:

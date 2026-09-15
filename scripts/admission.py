@@ -498,6 +498,8 @@ def _validate(root, worker, role, model, access, owner, *, allow_unknown_worker=
     if owner.get("kind") != "parent":
         import route
         problem = route.assert_child_model(model)
+        if not problem:
+            problem = route.assert_devin_model(worker, model, role)
         if problem:
             raise AdmissionError(problem)
 
