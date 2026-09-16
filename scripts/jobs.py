@@ -2404,6 +2404,16 @@ def recover_cancelled_job(repo: Path, job_id: str, *, reservation_id: str = "", 
     )
 
 
+def recover_wrapper_receipt_job(repo: Path, job_id: str) -> dict:
+    _require_harness(repo)
+    _native_parent_only()
+    import admission
+
+    if not job_id:
+        raise ValueError("rig job: recover-wrapper-receipt requires a job ID")
+    return admission.recover_wrapper_receipt(repo, job_id=job_id)
+
+
 def _record_abandoned_parent_job(repo: Path, job_id: str, record: dict) -> None:
     job_dir = _job_path(repo, job_id)
     if not (job_dir / "meta.json").is_file():

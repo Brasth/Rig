@@ -548,6 +548,69 @@ class ParentVerification(unittest.TestCase):
         evidence.write_json(self.job / "verification.json", {**accepted, "reservation_id": "another-reservation"})
         self.assertEqual(verification.assessment(self.repo, self.meta, refresh=True)["reason"], "acceptance_attempt_changed")
 
+    def test_credentials_path_resolves_for_acceptance_and_preserves_raw_callers(self):
+        self.requirements([], ["Manual criterion"])
+        path = admission.write_credentials(self.repo, {**self.reservation(), "owner_token": self.auth["owner_token"]})
+        loaded = admission.resolve_ownership(
+            self.repo, credentials_path=str(path), job_id=self.job.name, owner_session=self.owner_session,
+        )
+        self.assertEqual(loaded["reservation_id"], self.auth["reservation_id"])
+        self.assertEqual(loaded["attempt_id"], self.auth["attempt_id"])
+        self.assertEqual(loaded["owner_token"], self.auth["owner_token"])
+        accepted = verification.accept(
+            self.repo, self.job, "accept", self.snapshot_id(),
+            rationale="All declared criteria satisfied.", **loaded,
+        )
+        self.assertEqual(accepted["state"], "verified")
+        self.assertNotIn("owner_token", accepted)
+
+    def test_credentials_path_denies_insecure_malformed_symlink_and_mismatch(self):
+        path = admission.write_credentials(self.repo, {**self.reservation(), "owner_token": self.auth["owner_token"]})
+        token = self.auth["owner_token"]
+        os.chmod(path, 0o644)
+        with self.assertRaisesRegex(admission.AdmissionError, "0600") as insecure:
+            admission.resolve_owner_credentials(self.repo, str(path), job_id=self.job.name)
+        self.assertNotIn(token, str(insecure.exception))
+        os.chmod(path, 0o600)
+        path.write_text("{")
+        os.chmod(path, 0o600)
+        with self.assertRaisesRegex(admission.AdmissionError, "malformed") as malformed:
+            admission.resolve_owner_credentials(self.repo, str(path), job_id=self.job.name)
+        self.assertNotIn(token, str(malformed.exception))
+        path = admission.write_credentials(self.repo, {**self.reservation(), "owner_token": token})
+        payload = json.loads(path.read_text())
+        payload["job_id"] = "other-job"
+        path.write_text(json.dumps(payload))
+        os.chmod(path, 0o600)
+        with self.assertRaisesRegex(admission.AdmissionError, "bound to this job") as bound:
+            admission.resolve_owner_credentials(self.repo, str(path), job_id=self.job.name)
+        self.assertNotIn(token, str(bound.exception))
+        path = admission.write_credentials(self.repo, {**self.reservation(), "owner_token": token})
+        alias = path.parent / "owner-credentials.link.json"
+        alias.symlink_to(path)
+        with self.assertRaisesRegex(admission.AdmissionError, "canonical owner-credentials") as linked:
+            admission.resolve_owner_credentials(self.repo, str(alias), job_id=self.job.name)
+        self.assertNotIn(token, str(linked.exception))
+        other = path.parent / "not-owner-credentials.json"
+        other.write_text(path.read_text())
+        os.chmod(other, 0o600)
+        with self.assertRaisesRegex(admission.AdmissionError, "canonical owner-credentials") as wrong:
+            admission.resolve_owner_credentials(self.repo, str(other), job_id=self.job.name)
+        self.assertNotIn(token, str(wrong.exception))
+        with self.assertRaisesRegex(admission.AdmissionError, "absolute") as relative:
+            admission.resolve_owner_credentials(self.repo, "owner-credentials.json", job_id=self.job.name)
+        self.assertNotIn(token, str(relative.exception))
+        with self.assertRaisesRegex(admission.AdmissionError, "does not match supplied"):
+            admission.resolve_ownership(
+                self.repo, credentials_path=str(path), job_id=self.job.name,
+                reservation_id="different-reservation", owner_session=self.owner_session,
+            )
+        raw = admission.resolve_ownership(self.repo, **{k: self.auth[k] for k in
+            ("reservation_id", "attempt_id", "owner_token", "owner_session")})
+        self.assertEqual(raw["owner_token"], token)
+        with self.assertRaisesRegex(admission.AdmissionError, "non-wrapper"):
+            admission.recover_wrapper_receipt(self.repo, job_id=self.job.name)
+
 
 if __name__ == "__main__":
     unittest.main()
