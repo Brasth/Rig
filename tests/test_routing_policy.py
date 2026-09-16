@@ -411,7 +411,7 @@ class ConfigValidation(unittest.TestCase):
             for config in (
                 {"schema_version": True}, {"schema_version": 1.0},
                 {"schema_version": 1, "profiles": {"codex-luna-low": {
-                    "aliases": ["GPT-5.3-CODEX-MINI"]}}},
+                    "aliases": ["gpt-5.6-sol"]}}},
                 {"schema_version": 1, "profiles": {
                     "grok-4.6-high": {}, " grok-4.6-high ": {}}},
             ):
@@ -438,6 +438,44 @@ class ConfigValidation(unittest.TestCase):
             (repo / ".rig" / "routing.json").write_text(json.dumps({
                 "schema_version": 1,
                 "profiles": {"codex-explorer-low": {"roles": ["explore", "implement"]}},
+            }))
+            with self.assertRaises(policy.ConfigError) as ctx:
+                policy.load_config(repo, policy_mode="smart")
+            self.assertIn("cannot write", str(ctx.exception))
+            (repo / ".rig" / "routing.json").write_text(json.dumps({
+                "schema_version": 1,
+                "profiles": {"codex-luna-low": {"selector": "gpt-5.3-codex-spark"}},
+            }))
+            with self.assertRaises(policy.ConfigError) as ctx:
+                policy.load_config(repo, policy_mode="smart")
+            self.assertIn("cannot write", str(ctx.exception))
+
+    def test_luna_write_profile_valid_and_spark_override_stays_explore_only(self):
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp)
+            (repo / ".rig").mkdir()
+            cfg = policy.load_config(repo, policy_mode="smart")
+            luna = cfg.profiles["codex-luna-low"]
+            explorer = cfg.profiles["codex-explorer-low"]
+            self.assertEqual(luna.selector, "gpt-5.6-luna")
+            self.assertEqual(explorer.selector, "gpt-5.6-luna")
+            self.assertEqual(luna.selector, explorer.selector)
+            self.assertTrue(set(luna.roles) & set(profiles.WRITE_ROLES))
+            self.assertEqual(explorer.roles, ("explore",))
+            (repo / ".rig" / "routing.json").write_text(json.dumps({
+                "schema_version": 1,
+                "profiles": {"codex-explorer-low": {"selector": "gpt-5.3-codex-spark"}},
+            }))
+            spark = policy.load_config(repo, policy_mode="smart")
+            self.assertEqual(spark.profiles["codex-explorer-low"].selector, "gpt-5.3-codex-spark")
+            self.assertEqual(spark.profiles["codex-explorer-low"].roles, ("explore",))
+            self.assertTrue(set(spark.profiles["codex-luna-low"].roles) & set(profiles.WRITE_ROLES))
+            (repo / ".rig" / "routing.json").write_text(json.dumps({
+                "schema_version": 1,
+                "profiles": {"codex-explorer-low": {
+                    "selector": "gpt-5.3-codex-spark",
+                    "roles": ["explore", "implement"],
+                }},
             }))
             with self.assertRaises(policy.ConfigError) as ctx:
                 policy.load_config(repo, policy_mode="smart")

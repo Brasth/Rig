@@ -221,6 +221,35 @@ class CursorWorkerArgv(unittest.TestCase):
         self.assertIn("isolated job-scoped MCP", out)
 
 
+class CodexWorkerArgv(unittest.TestCase):
+    def setUp(self):
+        self.td = tempfile.TemporaryDirectory()
+        self.repo = Path(self.td.name)
+        (self.repo / ".git").mkdir()
+        (self.repo / ".rig").mkdir()
+        (self.repo / ".rig" / "harness.toml").write_text(
+            'parent = "grok"\n\n[workers]\ncodex = true\ngrok = false\nclaude = false\n'
+        )
+        jobs = self.repo / ".rig" / "jobs" / "codex-json"
+        jobs.mkdir(parents=True)
+        self.brief = jobs / "brief.md"
+        self.brief.write_text("You are a worker, not the orchestrator.\nFix the helper.\n")
+
+    def tearDown(self):
+        self.td.cleanup()
+
+    def test_codex_dry_run_exec_json(self):
+        proc = run_worker(self.repo, "codex", "codex-json", str(self.brief))
+        out = proc.stdout + proc.stderr
+        self.assertIn(proc.returncode, (0, 127), out)
+        self.assertIn("would run:", out, out)
+        self.assertIn("codex exec", out)
+        self.assertIn("--json", out)
+        self.assertIn("--ephemeral", out)
+        self.assertIn("-s workspace-write", out)
+        self.assertNotIn("gpt-5.3-codex-mini", out)
+
+
 class OpenCodeOmpPiWorkerArgv(unittest.TestCase):
     def setUp(self):
         self.td = tempfile.TemporaryDirectory()

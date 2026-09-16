@@ -735,7 +735,7 @@ def install_agy_mcp(cfg: Path, script: Path) -> str:
 def refresh_codex_agents() -> str:
     agents = Path.home() / ".codex" / "agents"
     wanted = {
-        "explorer.toml": ("gpt-5.3-codex-mini", "low"),
+        "explorer.toml": ("gpt-5.6-luna", "low"),
         "worker.toml": ("gpt-5.6-luna", "low"),
         "bulk.toml": ("gpt-5.6-luna", "low"),
     }

@@ -262,6 +262,347 @@ def _assistant_tools(obj: dict) -> list[str]:
     return out
 
 
+def _visible_text_blocks(content) -> str:
+    if isinstance(content, str):
+        return content
+    if not isinstance(content, list):
+        return ""
+    bits = []
+    for block in content:
+        if not isinstance(block, dict):
+            continue
+        kind = str(block.get("type") or "")
+        if kind in {"thinking", "thought", "reasoning", "toolCall", "tool_use", "image"}:
+            continue
+        if kind in {"text", ""} and block.get("text"):
+            bits.append(str(block["text"]))
+    return "".join(bits)
+
+
+def _message_visible_text(message) -> str:
+    if isinstance(message, str):
+        return message.strip()
+    if not isinstance(message, dict):
+        return ""
+    role = str(message.get("role") or "").lower()
+    if role in {"user", "system", "developer", "toolresult"}:
+        return ""
+    text = _visible_text_blocks(message.get("content"))
+    if not text and isinstance(message.get("text"), str):
+        text = message["text"]
+    return text.strip()
+
+
+def _append_act(lines: list[str], act: str | None) -> None:
+    act = (act or "").strip()
+    if act and (not lines or lines[-1] != act):
+        lines.append(act)
+
+
+def _input_brief(inp: object) -> str:
+    if not isinstance(inp, dict):
+        return ""
+    # Worker activity is visible in the normal TUI, so only expose a file
+    # target. Commands, prompts, and arbitrary tool arguments stay in stdout.
+    for key in ("path", "target_file", "file_path"):
+        val = inp.get(key)
+        if isinstance(val, str) and val.strip():
+            return _first_line(_short_path(val), 120)
+    return ""
+
+
+def _error_line(obj: dict) -> str | None:
+    for key in ("message", "error", "errorMessage"):
+        val = obj.get(key)
+        if isinstance(val, str) and val.strip():
+            return "error: " + _first_line(val, 140)
+        if isinstance(val, dict):
+            msg = val.get("message") or val.get("error") or ""
+            if isinstance(msg, str) and msg.strip():
+                return "error: " + _first_line(msg, 140)
+    if obj.get("isError") or obj.get("is_error") or str(obj.get("stopReason") or "").lower() == "error":
+        return "error: " + _first_line(str(obj.get("subtype") or obj.get("toolName") or "error"), 140)
+    return None
+
+
+def _flush_text(lines: list[str], text: str) -> None:
+    for para in text.split("\n"):
+        s = para.strip()
+        if s:
+            _append_act(lines, _first_line(s, 160))
+
+
+_PI_SKIP = frozenset(
+    {
+        "system",
+        "user",
+        "session",
+        "agent_start",
+        "turn_start",
+        "message_start",
+        "thinking_start",
+        "thinking_delta",
+        "thinking_end",
+        "toolcall_start",
+        "toolcall_delta",
+        "toolcall_end",
+        "text_start",
+        "text_end",
+        "tool_execution_update",
+        "bash_execution_update",
+        "queue_update",
+        "compaction_start",
+        "compaction_end",
+        "agent_end",
+    }
+)
+
+
+def _decode_pi_json_lines(json_lines: list[str]) -> list[str]:
+    lines: list[str] = []
+    buf_kind: str | None = None
+    buf: list[str] = []
+    for raw in json_lines:
+        try:
+            obj = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(obj, dict):
+            continue
+        kind = str(obj.get("type") or "")
+        inner = obj.get("assistantMessageEvent") if kind == "message_update" else None
+        inner = inner if isinstance(inner, dict) else {}
+        inner_kind = str(inner.get("type") or "")
+        delta = None
+        if kind == "message_update" and inner_kind == "text_delta":
+            delta = inner.get("delta")
+        elif kind == "text_delta":
+            delta = obj.get("delta") or obj.get("text")
+        if isinstance(delta, str) and delta:
+            if buf_kind not in (None, "text"):
+                _flush_stream(buf_kind, buf, lines)
+            buf_kind = "text"
+            buf.append(delta)
+            continue
+        if kind in _PI_SKIP or inner_kind in _PI_SKIP:
+            continue
+        if kind in {"message_end", "turn_end"}:
+            message = obj.get("message")
+            text = _message_visible_text(message)
+            err = _error_line(message if isinstance(message, dict) else {}) or _error_line(obj)
+            if text:
+                buf.clear()
+                buf_kind = None
+                _flush_text(lines, text)
+            else:
+                _flush_stream(buf_kind, buf, lines)
+                buf_kind = None
+                if err:
+                    _append_act(lines, err)
+            continue
+        _flush_stream(buf_kind, buf, lines)
+        buf_kind = None
+        if kind == "tool_execution_start":
+            name = str(obj.get("toolName") or obj.get("tool_name") or "tool")
+            detail = _input_brief(obj.get("args") or {})
+            _append_act(lines, f"{name} {detail}".strip())
+            continue
+        if kind == "tool_execution_end":
+            name = str(obj.get("toolName") or obj.get("tool_name") or "tool")
+            if obj.get("isError"):
+                err = _error_line(obj)
+                result = obj.get("result")
+                if not err and isinstance(result, dict):
+                    err = _error_line(result)
+                _append_act(lines, err or f"{name} error")
+            else:
+                _append_act(lines, f"{name} done")
+            continue
+        if kind == "error":
+            _append_act(lines, _error_line(obj) or "error: error")
+            continue
+        act = activity_from_event(obj)
+        if act and not act.startswith("think "):
+            _append_act(lines, act)
+            continue
+        blob = obj.get("text") or obj.get("result") or obj.get("response") or ""
+        if isinstance(blob, str) and blob.strip():
+            _append_act(lines, _first_line(blob, 160))
+    _flush_stream(buf_kind, buf, lines)
+    return lines
+
+
+def _codex_kind(obj: dict) -> str:
+    kind = str(obj.get("type") or "")
+    payload = obj.get("payload")
+    if kind in {"event_msg", "event"} and isinstance(payload, dict) and payload.get("type"):
+        kind = str(payload.get("type") or "")
+    return kind.replace("_", ".")
+
+
+def _codex_item(obj: dict) -> dict:
+    item = obj.get("item")
+    if isinstance(item, dict):
+        return item
+    payload = obj.get("payload")
+    if isinstance(payload, dict) and isinstance(payload.get("item"), dict):
+        return payload["item"]
+    return {}
+
+
+def _codex_command(item: dict) -> str:
+    cmd = item.get("command")
+    if isinstance(cmd, list):
+        cmd = " ".join(str(x) for x in cmd)
+    if not isinstance(cmd, str):
+        return ""
+    return _first_line(cmd.strip(), 120)
+
+
+def _codex_file_lines(item: dict) -> list[str]:
+    changes = item.get("changes")
+    verbs = {
+        "add": "add",
+        "added": "add",
+        "delete": "delete",
+        "deleted": "delete",
+        "remove": "delete",
+        "update": "edit",
+        "updated": "edit",
+        "modify": "edit",
+    }
+    if isinstance(changes, list):
+        rows = changes
+    elif isinstance(changes, dict):
+        rows = []
+        for key, val in changes.items():
+            row = dict(val) if isinstance(val, dict) else {"kind": val}
+            row.setdefault("path", key)
+            rows.append(row)
+    else:
+        rows = []
+    out: list[str] = []
+    for change in rows:
+        if not isinstance(change, dict):
+            continue
+        path = change.get("path") or change.get("file") or ""
+        kind = str(change.get("kind") or change.get("type") or "update").lower()
+        if isinstance(path, str) and path.strip():
+            out.append(f"{verbs.get(kind, 'edit')} {_short_path(path)}")
+    return out
+
+
+def _codex_item_type(item: dict) -> str:
+    return str(item.get("type") or "").replace("_", "").lower()
+
+
+def _decode_codex_json_lines(json_lines: list[str]) -> list[str]:
+    lines: list[str] = []
+    buf_kind: str | None = None
+    buf: list[str] = []
+    for raw in json_lines:
+        try:
+            obj = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(obj, dict):
+            continue
+        kind = _codex_kind(obj)
+        item = _codex_item(obj)
+        item_type = _codex_item_type(item)
+        if kind in {"system", "user", "thread.started", "turn.started"}:
+            continue
+        if item_type in {"reasoning", "thought", "usermessage"}:
+            continue
+        if kind in {"item.started", "item.updated", "item.completed"}:
+            if item_type == "agentmessage":
+                text = item.get("text")
+                if not isinstance(text, str) or not text:
+                    text = _message_visible_text(item)
+                if isinstance(text, str) and text:
+                    if kind == "item.completed":
+                        buf.clear()
+                        buf_kind = None
+                        _flush_text(lines, text)
+                    else:
+                        if buf_kind not in (None, "text"):
+                            _flush_stream(buf_kind, buf, lines)
+                        buf_kind = "text"
+                        if kind == "item.updated" and len(text) >= len("".join(buf)):
+                            buf[:] = [text]
+                        elif kind == "item.started":
+                            buf[:] = [text]
+                        else:
+                            buf.append(text)
+                continue
+            _flush_stream(buf_kind, buf, lines)
+            buf_kind = None
+            if item_type == "commandexecution":
+                cmd = _codex_command(item)
+                line = f"command {cmd}".strip()
+                exit_code = item.get("exit_code")
+                status = str(item.get("status") or "").lower()
+                if exit_code not in (None, 0, "0"):
+                    line += f" (exit {exit_code})"
+                elif status in {"failed", "error"}:
+                    line += " error"
+                _append_act(lines, line)
+                continue
+            if item_type == "filechange":
+                for line in _codex_file_lines(item):
+                    _append_act(lines, line)
+                continue
+            if item_type == "mcptoolcall":
+                name = str(item.get("tool") or item.get("name") or "mcp")
+                server = str(item.get("server") or "")
+                label = f"{server}.{name}" if server else name
+                line = f"mcp {label}".strip()
+                if str(item.get("status") or "").lower() in {"failed", "error"}:
+                    line += " error"
+                _append_act(lines, line)
+                continue
+            if item_type == "websearch":
+                query = item.get("query") or item.get("text") or ""
+                if isinstance(query, str) and query.strip():
+                    _append_act(lines, "search " + _first_line(query, 120))
+                else:
+                    _append_act(lines, "search")
+                continue
+            if item_type == "error":
+                _append_act(lines, _error_line(item) or "error: error")
+                continue
+            continue
+        _flush_stream(buf_kind, buf, lines)
+        buf_kind = None
+        if kind in {"error", "turn.failed"}:
+            payload = obj.get("error")
+            err_obj = payload if isinstance(payload, dict) else obj
+            _append_act(lines, _error_line(err_obj) or _error_line(obj) or "error: error")
+            continue
+        if kind in {"turn.completed", "task.complete"}:
+            blob = obj.get("last_agent_message") or obj.get("result") or ""
+            if isinstance(blob, str) and blob.strip():
+                _append_act(lines, _first_line(blob, 160))
+            continue
+        if kind in {"agent.message", "assistant", "result"}:
+            if kind == "assistant":
+                text = _assistant_text(obj) or ""
+            else:
+                text = obj.get("text") or obj.get("message") or obj.get("result") or ""
+                if isinstance(text, dict):
+                    text = _message_visible_text(text)
+            if obj.get("is_error"):
+                _append_act(lines, "error: " + _first_line(str(text or obj.get("subtype") or "result"), 140))
+            elif isinstance(text, str) and text.strip():
+                _append_act(lines, _first_line(text, 160))
+            continue
+        act = activity_from_event(obj)
+        if act and not act.startswith("think "):
+            _append_act(lines, act)
+    _flush_stream(buf_kind, buf, lines)
+    return lines
+
+
 def activity_from_event(obj: dict) -> str | None:
     kind = obj.get("type")
     if kind == "tool_call":
@@ -320,7 +661,12 @@ def _flush_stream(buf_kind: str | None, buf: list[str], out: list[str]) -> None:
             out.append(_first_line(s, 160))
 
 
-def _decode_json_lines(json_lines: list[str]) -> list[str]:
+def _decode_json_lines(json_lines: list[str], worker: str | None = None) -> list[str]:
+    name = str(worker or "").strip().lower()
+    if name == "pi":
+        return _decode_pi_json_lines(json_lines)
+    if name == "codex":
+        return _decode_codex_json_lines(json_lines)
     lines: list[str] = []
     buf_kind: str | None = None
     buf: list[str] = []
@@ -365,7 +711,7 @@ def _decode_json_lines(json_lines: list[str]) -> list[str]:
     return lines
 
 
-def decode_log_text(raw: str) -> list[str]:
+def decode_log_text(raw: str, worker: str | None = None) -> list[str]:
     text = raw.strip()
     if not text:
         return []
@@ -380,7 +726,7 @@ def decode_log_text(raw: str) -> list[str]:
         else:
             text_lines.append(line)
     if json_lines:
-        decoded = _decode_json_lines(json_lines)
+        decoded = _decode_json_lines(json_lines, worker=worker)
         if decoded:
             return decoded[-120:]
         last = json_lines[-1]
@@ -531,7 +877,8 @@ def persist_activity(job_dir: Path, source: str = "stdout") -> list[str]:
     """Decode stdout.log into activity.json. Keep prior (child) lines if the log is empty."""
     job_dir = Path(job_dir)
     log_path = job_dir / "stdout.log"
-    decoded = decode_log_text(read_log_tail(log_path)) if log_path.is_file() else []
+    worker = str(_read_meta_dict(job_dir).get("worker") or "")
+    decoded = decode_log_text(read_log_tail(log_path), worker=worker) if log_path.is_file() else []
     prior = activity_lines(job_dir)
     if decoded:
         extra = [line for line in prior if line not in decoded]
@@ -734,7 +1081,12 @@ def load_job(job_path: Path, *, include_activity: bool = True) -> dict | None:
     elif pending_ask and (alive or not pid_i):
         effective = "ask"
     log_path = job_path / "stdout.log"
-    activities = decode_log_text(read_log_tail(log_path)) if include_activity and log_path.is_file() else []
+    worker = str(obj.get("worker") or "")
+    activities = (
+        decode_log_text(read_log_tail(log_path), worker=worker)
+        if include_activity and log_path.is_file()
+        else []
+    )
     if include_activity and not activities:
         activities = activity_lines(job_path)
     kind = str(obj.get("kind") or "")
@@ -1379,7 +1731,9 @@ def format_show(job: dict, log_lines: int = 24) -> str:
 
 
 def format_log(job: dict, n: int = 40) -> str:
-    acts = job.get("activities") or decode_log_text(read_log_tail(Path(job["log"])))
+    acts = job.get("activities") or decode_log_text(
+        read_log_tail(Path(job["log"])), worker=job.get("worker")
+    )
     if not acts:
         if job["effective"] == "ask":
             return f"ASK — parent must answer: rig job allow {job['job_id']}  |  rig job deny {job['job_id']}"
