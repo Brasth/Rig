@@ -1,15 +1,39 @@
 # Rig
 
-Rig coordinates local coding agents from the CLI you already use. You describe work to a **parent**; it scopes tasks, delegates to **workers**, verifies results, and gives feedback. Queue, job progress, and file ownership stay in the project.
+Stop babysitting coding agents.
+
+Rig is a CLI harness. You talk to a parent agent; it scopes work, briefs workers over MCP, then verifies results. Done means accepted checks, not exit 0 vibes.
+
+**New: Adaptive workflows** (default). The parent can decompose eligible work into a DAG of disjoint workers, own the graph, briefs, and acceptance, and only mark verified after parent checks. Children never spawn children. See [Adaptive workflows](#adaptive-workflows) and [How an adaptive workflow moves](#how-an-adaptive-workflow-moves).
+
+[![Watch the Rig demo](https://img.youtube.com/vi/KuhHMH--oGk/maxresdefault.jpg)](https://youtu.be/KuhHMH--oGk)
+
+Failing tests → Codex parent → Rig TUI → Grok worker over MCP → parent verifies → green.
+
+- Parent scopes files (no dumping the whole chat as the child prompt)
+- Worker runs from a brief over MCP (adaptive: parallel disjoint nodes under parent control)
+- Parent verifies before you merge
+
+## Quickstart
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Brasth/Rig/main/install.sh | bash
+cd your-repo
+rig init
+```
+
+Configure the preferred parent and workers in `.rig/harness.toml` (preferred). Then open a parent CLI and type a normal prompt, for example `fix the failing tests in tests/test_cli.py`. Do not use `rig run` for normal work.
 
 **Parents:** Intended: Codex on Astra. Also supported: Grok, OpenCode, OMP, Pi, or agy (open that CLI). **Never the parent:** Claude Code, Cursor, and Devin. **Effective workers:** Grok, Claude, OpenCode, OMP, Pi, agy, Codex, and opt-in Devin (SWE-2 only). Cursor integration is disabled pending scoped MCP. Missing worker binary → that worker is off. If no eligible worker exists, parent fallback preserves its actual model. Never spawn Astra, Sol, or Fable as a child.
+
+**Try the demo:** [failing tests through parent verify](https://youtu.be/KuhHMH--oGk).
 
 ## Navigation
 
 - [Overall flow](#overall-flow)
 - [Install](#install) · [Per project](#per-project) · [Configure](#configure)
 - [Smart routing](#smart-routing)
-- [Adaptive workflows](#adaptive-workflows)
+- [Adaptive workflows](#adaptive-workflows) · [How an adaptive workflow moves](#how-an-adaptive-workflow-moves)
 - [Everyday prompts and queue](#everyday-prompts-and-queue)
 - [Optional terminal companion](#optional-terminal-companion) · [Watch](#watch)
 - [Verification and cancellation](#verification-and-cancellation)
@@ -83,14 +107,7 @@ Type a normal prompt in that parent CLI. Example: `fix the failing tests in test
 
 ## Configure
 
-Choose your preferred parent, then enable only installed/configured workers:
-
-```bash
-rig use codex
-rig workers grok=on claude=on
-```
-
-Example `.rig/harness.toml`:
+Edit `.rig/harness.toml` to set the preferred parent and enable only installed, configured workers:
 
 ```toml
 parent = "codex"
@@ -105,9 +122,20 @@ omp = false
 pi = false
 agy = false
 devin = false
+
+[orchestration]
+mode = "adaptive"
+max_nodes = 12
 ```
 
-- **Live parent** is whichever Codex, Grok, OpenCode, OMP, Pi, or agy you actually opened (`rig status`). The `parent =` key is only the preferred default (`rig use …`). Opening the CLI makes it live.
+Optional shortcuts for the same keys:
+
+```bash
+rig use codex
+rig workers grok=on claude=on
+```
+
+- **Live parent** is whichever Codex, Grok, OpenCode, OMP, Pi, or agy you actually opened (`rig status`). The `parent =` key is only the preferred default. Optional shortcut: `rig use …`. Opening the CLI makes it live.
 - Parent **model** is that CLI’s model. Worker models come from `rig pick`. Picking never switches the live parent model.
 - A worker is **effective** only when: flag true, binary on PATH, not the live parent, and job-scoped MCP ready. **Cursor remains excluded** until safe scoped MCP exists.
 - Claude Code and Cursor are never the parent. Grok Bot.app and Cursor.app are GUIs, not spawnable workers. Cursor worker binary is `cursor-agent`.
@@ -165,6 +193,8 @@ rig routing report --days 30 --json
 Full profiles, catalog rules, MCP fields, and rollback: [smart routing](docs/smart-routing.md). Independent review unavailable stays explicit.
 
 ## Adaptive workflows
+
+Adaptive workflows are the default way Rig splits work you should not babysit. The parent owns the graph: it briefs disjoint workers in parallel when scopes do not overlap, then only marks the workflow verified after its own checks. Children never spawn children, so parallelism stays under the parent instead of a pile of nested agents.
 
 When `[orchestration] mode = "adaptive"`, the parent decomposes eligible work into a DAG (at most `max_nodes` 12) and owns the graph, briefs, and acceptance. `single` keeps one-job behavior. Queue and worker caps remain authoritative. Children never spawn or message children; the parent uses `rig_workflow_advance` / `rig_workflow_wait`.
 
@@ -343,3 +373,4 @@ More: [Usage troubleshooting](docs/usage.md#troubleshooting).
 
 - [Visual flow](docs/rig-flow.md) · [Usage](docs/usage.md) · [Smart routing](docs/smart-routing.md) · [Release notes](docs/release-notes.md)
 - Parent spawn protocol: `.agents/skills/delegate-harness/SKILL.md` (also `<!-- rig:start -->` in `AGENTS.md`)
+- [Contributing](CONTRIBUTING.md)
