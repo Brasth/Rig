@@ -663,6 +663,258 @@ class AdmissionTests(unittest.TestCase):
             if child.poll() is None:
                 child.kill(); child.wait()
 
+    def stopped_wrapper(self, job="wrap", status="fail", *, session="wrapper-owner", queue_id="", files=None):
+        owner = _owner("wrapper", session)
+        files = ["a.py"] if files is None else list(files)
+        extra = {}
+        if queue_id:
+            claim = work_queue.claim_next(self.repo, item_id=queue_id, files=files, owner=owner)
+            extra.update(queue_id=queue_id, **admission.credentials(claim))
+        lease = self.reserve(job, files=files, owner=owner, **extra)
+        folder = self.repo / ".rig" / "jobs" / job
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / "meta.json").write_text(json.dumps({
+            "job_id": job, "worker": "grok", "role": "implement", "files": files,
+            "status": status, "executor_kind": "wrapper", "kind": "wrapper",
+            "reservation_id": lease["reservation_id"], "attempt_id": lease["attempt_id"],
+            "ownership_established": True,
+        }))
+        path = admission.write_credentials(self.repo, lease)
+        record = admission._read(admission._reservation_path(self.repo, lease["reservation_id"]), required=True)
+        record.update(stopped=True, execution_status=status, stage="verifying", slot_held=False)
+        admission._save(self.repo, record)
+        return lease, path, owner
+
+    def breakglass(self, job, credentials_path, **options):
+        return admission.breakglass_close_stopped_wrapper(
+            self.repo, job_id=job, credentials_path=str(credentials_path),
+            confirmed_stopped=options.pop("confirmed_stopped", True),
+            rationale=options.pop("rationale", "audited break-glass close of stopped wrapper"),
+            **options)
+
+    def test_breakglass_close_stopped_wrapper_success_and_idempotency(self):
+        lease, path, _wrapper = self.stopped_wrapper()
+        caller = _owner("parent", "breakglass-caller")
+        result = self.breakglass("wrap", path, owner=caller)
+        self.assertEqual(result["applied"], 1)
+        recovery = result["recovery"]
+        self.assertEqual(recovery["action"], "breakglass_close_stopped_wrapper")
+        self.assertEqual(recovery["outcome"], "released")
+        self.assertEqual(recovery["observed_status"], "fail")
+        self.assertTrue(recovery["confirmed_stopped"])
+        self.assertEqual(recovery["job_id"], "wrap")
+        self.assertEqual(recovery["reservation_id"], lease["reservation_id"])
+        self.assertEqual(recovery["attempt_id"], lease["attempt_id"])
+        self.assertEqual(recovery["reason"], "audited break-glass close of stopped wrapper")
+        self.assertEqual(recovery["caller"]["session_id"], "breakglass-caller")
+        public = admission.get_reservation(self.repo, lease["reservation_id"])
+        self.assertEqual(public["stage"], "released")
+        self.assertFalse(public["slot_held"])
+        self.assertEqual(admission._accounting(self.repo), [])
+        audit_path = self.repo / ".rig" / "jobs" / "wrap" / "breakglass-recovery.json"
+        self.assertTrue(audit_path.is_file())
+        self.assertEqual(json.loads(audit_path.read_text()), recovery)
+        repeat = self.breakglass("wrap", path, owner=caller, rationale="repeat must not rewrite")
+        self.assertEqual(repeat["applied"], 0)
+        self.assertEqual(repeat["recovery"], recovery)
+        self.assertEqual(json.loads(audit_path.read_text()), recovery)
+        self.reserve("replacement")
+
+    def test_breakglass_close_stopped_wrapper_cli_and_cancelled_status(self):
+        lease, path, _wrapper = self.stopped_wrapper("wrap-cli", status="cancelled")
+        payload = {
+            "job_id": "wrap-cli", "credentials_path": str(path),
+            "confirmed_stopped": True, "rationale": "CLI audited close",
+        }
+        proc = subprocess.run(
+            [sys.executable, str(ROOT / "scripts" / "admission.py"),
+             "breakglass_close_stopped_wrapper", "--repo", str(self.repo),
+             "--input-json", json.dumps(payload)],
+            capture_output=True, text=True)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        result = json.loads(proc.stdout)
+        self.assertEqual(result["applied"], 1)
+        self.assertEqual(result["recovery"]["observed_status"], "cancelled")
+        self.assertNotIn(lease["owner_token"], proc.stdout)
+        self.assertNotIn(lease["owner_token"], proc.stderr)
+        again = subprocess.run(
+            [sys.executable, str(ROOT / "scripts" / "admission.py"),
+             "breakglass_close_stopped_wrapper", "--repo", str(self.repo),
+             "--input-json", json.dumps(payload)],
+            capture_output=True, text=True)
+        self.assertEqual(again.returncode, 0, again.stderr)
+        self.assertEqual(json.loads(again.stdout)["applied"], 0)
+        self.assertEqual(json.loads(again.stdout)["recovery"], result["recovery"])
+
+    def test_breakglass_close_stopped_wrapper_updates_queue(self):
+        item = self.queue()
+        lease, path, _wrapper = self.stopped_wrapper("queued-wrap", status="cancelled", queue_id=item["id"])
+        result = self.breakglass("queued-wrap", path)
+        self.assertEqual(result["applied"], 1)
+        self.assertEqual(work_queue.load_item(self.repo, item["id"])["status"], "cancelled")
+        self.assertNotEqual(work_queue.load_item(self.repo, item["id"])["status"], "pending")
+        self.assertEqual(admission._accounting(self.repo), [])
+
+    def test_breakglass_close_stopped_wrapper_audit_is_redacted(self):
+        lease, path, wrapper_owner = self.stopped_wrapper()
+        result = self.breakglass("wrap", path, owner=_owner("parent", "breakglass-caller"))
+        dumped = json.dumps(result)
+        audit = (self.repo / ".rig" / "jobs" / "wrap" / "breakglass-recovery.json").read_text()
+        public = json.dumps(admission.list_reservations(self.repo, include_released=True))
+        for blob in (dumped, audit, json.dumps(result["recovery"])):
+            self.assertNotIn(lease["owner_token"], blob)
+            self.assertNotIn("owner_token", blob)
+            self.assertNotIn(wrapper_owner["session_id"], blob)
+            self.assertNotIn("owner_session", blob)
+        self.assertNotIn(lease["owner_token"], public)
+        self.assertNotIn("owner_token", public)
+        creds = json.loads(path.read_text())
+        self.assertNotIn(json.dumps(creds), dumped)
+        self.assertNotIn(json.dumps(creds), audit)
+
+    def test_ordinary_close_still_requires_original_owner_session(self):
+        lease, path, owner = self.stopped_wrapper("ordinary")
+        with self.assertRaisesRegex(admission.AdmissionError, "session mismatch"):
+            admission.release(self.repo, **admission.credentials(lease),
+                              owner=_owner("wrapper", "other-session"),
+                              rationale="parent explicitly closed task")
+        held = admission.get_reservation(self.repo, lease["reservation_id"])
+        self.assertNotEqual(held["stage"], "released")
+        closed = admission.release(self.repo, **admission.credentials(lease), owner=owner,
+                                   rationale="parent explicitly closed task")
+        self.assertEqual(closed["stage"], "released")
+        with self.assertRaisesRegex(admission.AdmissionError, "already released"):
+            self.breakglass("ordinary", path)
+
+    def test_breakglass_close_stopped_wrapper_rejections(self):
+        lease, path, owner = self.stopped_wrapper()
+        args = dict(job_id="wrap", credentials_path=str(path), confirmed_stopped=True,
+                    rationale="audited break-glass close of stopped wrapper")
+
+        with self.assertRaisesRegex(admission.AdmissionError, "confirmed_stopped=true"):
+            self.breakglass("wrap", path, confirmed_stopped=False)
+        with self.assertRaisesRegex(admission.AdmissionError, "rationale"):
+            self.breakglass("wrap", path, rationale="   ")
+        with self.assertRaisesRegex(admission.AdmissionError, "raw owner tokens"):
+            self.breakglass("wrap", path, owner_token=lease["owner_token"])
+        with self.assertRaisesRegex(admission.AdmissionError, "raw owner tokens"):
+            self.breakglass("wrap", path, reservation_id=lease["reservation_id"])
+
+        missing = path.with_name("missing-owner-credentials.json")
+        with self.assertRaisesRegex(admission.AdmissionError, "canonical owner-credentials"):
+            self.breakglass("wrap", missing)
+        path.unlink()
+        with self.assertRaisesRegex(admission.AdmissionError, "missing"):
+            self.breakglass("wrap", path)
+        admission.write_credentials(self.repo, lease)
+        path.write_text("{")
+        os.chmod(path, 0o600)
+        with self.assertRaisesRegex(admission.AdmissionError, "malformed"):
+            self.breakglass("wrap", path)
+        admission.write_credentials(self.repo, lease)
+        os.chmod(path, 0o644)
+        with self.assertRaisesRegex(admission.AdmissionError, "0600"):
+            self.breakglass("wrap", path)
+        os.chmod(path, 0o600)
+        real = path.with_name("real-credentials.json")
+        os.rename(path, real)
+        path.symlink_to(real)
+        os.chmod(real, 0o600)
+        with self.assertRaisesRegex(admission.AdmissionError, "regular mode 0600"):
+            self.breakglass("wrap", path)
+        path.unlink()
+        os.rename(real, path)
+        os.chmod(path, 0o600)
+        alias = path.parent / "alias-credentials.json"
+        alias.symlink_to(path)
+        with self.assertRaisesRegex(admission.AdmissionError, "canonical owner-credentials"):
+            self.breakglass("wrap", alias)
+
+        other = self.stopped_wrapper("other", session="other-wrapper", files=["b.py"])
+        with self.assertRaisesRegex(admission.AdmissionError, "canonical owner-credentials"):
+            self.breakglass("wrap", other[1])
+        creds = json.loads(path.read_text())
+        creds["reservation_id"] = other[0]["reservation_id"]
+        creds["attempt_id"] = other[0]["attempt_id"]
+        creds["owner_token"] = other[0]["owner_token"]
+        path.write_text(json.dumps(creds))
+        os.chmod(path, 0o600)
+        with self.assertRaisesRegex(admission.AdmissionError, "mismatch|another job"):
+            self.breakglass("wrap", path)
+        admission.write_credentials(self.repo, lease)
+
+        rec_path = admission._reservation_path(self.repo, lease["reservation_id"])
+        record = admission._read(rec_path, required=True)
+        record["stopped"] = False
+        record["execution_status"] = "fail"
+        admission._save(self.repo, record)
+        with self.assertRaisesRegex(admission.AdmissionError, "active work"):
+            self.breakglass("wrap", path)
+        record.update(stopped=True, execution_status="ok")
+        admission._save(self.repo, record)
+        with self.assertRaisesRegex(admission.AdmissionError, "ok or unknown"):
+            self.breakglass("wrap", path)
+        record["execution_status"] = ""
+        admission._save(self.repo, record)
+        with self.assertRaisesRegex(admission.AdmissionError, "ok or unknown"):
+            self.breakglass("wrap", path)
+        record["execution_status"] = "timeout"
+        admission._save(self.repo, record)
+        with self.assertRaisesRegex(admission.AdmissionError, "ok or unknown"):
+            self.breakglass("wrap", path)
+        record.update(execution_status="fail", operation={"id": "check", "operation": "check"})
+        admission._save(self.repo, record)
+        with self.assertRaisesRegex(admission.AdmissionError, "active work"):
+            self.breakglass("wrap", path)
+        record.pop("operation")
+        admission._save(self.repo, record)
+        folder = self.repo / ".rig" / "jobs" / "wrap"
+        (folder / "check-running.json").write_text(json.dumps({"pid": os.getpid()}))
+        with self.assertRaisesRegex(admission.AdmissionError, "active work"):
+            self.breakglass("wrap", path)
+        (folder / "check-running.json").unlink()
+        (folder / "verification.json").write_text(json.dumps({"acceptance": "accepted", "next": "complete"}))
+        with self.assertRaisesRegex(admission.AdmissionError, "accepted"):
+            self.breakglass("wrap", path)
+        (folder / "verification.json").unlink()
+
+        meta = json.loads((folder / "meta.json").read_text())
+        meta["executor_kind"] = "parent"
+        meta["kind"] = "parent"
+        (folder / "meta.json").write_text(json.dumps(meta))
+        with self.assertRaisesRegex(admission.AdmissionError, "non-wrapper"):
+            self.breakglass("wrap", path)
+        meta["executor_kind"] = "wrapper"
+        meta["kind"] = "wrapper"
+        (folder / "meta.json").write_text(json.dumps(meta))
+        (folder / "meta.json").unlink()
+        with self.assertRaisesRegex(admission.AdmissionError, "non-wrapper"):
+            self.breakglass("wrap", path)
+        (folder / "meta.json").write_text(json.dumps(meta))
+
+        child_owner = _owner("native_child", "native-child")
+        child = self.reserve("child", owner=child_owner, files=["c.py"], model="grok-4")
+        child_folder = self.repo / ".rig" / "jobs" / "child"
+        child_folder.mkdir(parents=True)
+        (child_folder / "meta.json").write_text(json.dumps({
+            "job_id": "child", "executor_kind": "native_child", "kind": "native_child",
+            "reservation_id": child["reservation_id"], "attempt_id": child["attempt_id"],
+        }))
+        child_path = admission.write_credentials(self.repo, child)
+        child_record = admission._read(admission._reservation_path(self.repo, child["reservation_id"]), required=True)
+        child_record.update(stopped=True, execution_status="fail", stage="verifying", slot_held=False)
+        admission._save(self.repo, child_record)
+        with self.assertRaisesRegex(admission.AdmissionError, "non-wrapper"):
+            self.breakglass("child", child_path)
+
+        with mock.patch.dict(os.environ, {"RIG_JOB_ID": "child-job", "RIG_JOB_DIR": str(folder)}):
+            with self.assertRaisesRegex(admission.AdmissionError, "child environment"):
+                self.breakglass("wrap", path)
+
+        self.assertEqual(admission.get_reservation(self.repo, lease["reservation_id"])["stage"], "verifying")
+        admission.release(self.repo, **admission.credentials(lease), owner=owner,
+                          rationale="parent explicitly closed task")
+
 
 if __name__ == "__main__":
     unittest.main()

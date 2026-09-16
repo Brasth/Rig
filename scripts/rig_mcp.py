@@ -325,6 +325,56 @@ TOOLS = [
         },
     },
     {
+        "name": "rig_billing_report",
+        "description": "Read-only invoice-dollar report. Actual receipts only; never estimates.",
+        "inputSchema": {"type": "object", "properties": {
+            "repo": {"type": "string"}, "scope": {"type": "string"},
+        }},
+    },
+    {
+        "name": "rig_billing_import",
+        "description": "Parent-only. Import one actual USD receipt into the local billing ledger. Idempotent. Never stores credentials. dry_run validates without writing.",
+        "inputSchema": {"type": "object", "properties": {
+            "repo": {"type": "string"}, "scope": {"type": "string"},
+            "receipt": {"type": "object"},
+            "dry_run": {"type": "boolean", "default": False},
+        }, "required": ["receipt"]},
+    },
+    {
+        "name": "rig_billing_sync",
+        "description": "Parent-only. OpenAI or Anthropic read-only receipt adapters. Network is explicit/opt-in. Generic providers use rig_billing_import. Never prints credential values.",
+        "inputSchema": {"type": "object", "properties": {
+            "repo": {"type": "string"}, "scope": {"type": "string"},
+            "provider": {"type": "string", "enum": ["openai", "anthropic"]},
+            "receipts": {"type": "array", "items": {"type": "object"}},
+            "dry_run": {"type": "boolean", "default": False},
+            "network": {"type": "boolean", "default": False},
+        }, "required": ["provider"]},
+    },
+    {
+        "name": "rig_benchmark_report",
+        "description": "Read-only benchmark coverage report. Separates observed tokens from actual invoice dollars. Savings is gated.",
+        "inputSchema": {"type": "object", "properties": {
+            "repo": {"type": "string"}, "id": {"type": "string"}, "scope": {"type": "string"},
+        }, "required": ["id"]},
+    },
+    {
+        "name": "rig_benchmark_create",
+        "description": "Parent-only. Freeze a local benchmark spec under .rig/benchmarks/<id>.",
+        "inputSchema": {"type": "object", "properties": {
+            "repo": {"type": "string"}, "spec": {"type": "object"},
+        }, "required": ["spec"]},
+    },
+    {
+        "name": "rig_benchmark_outcome",
+        "description": "Parent-only. Attribute a currently accepted job to a frozen benchmark task and arm.",
+        "inputSchema": {"type": "object", "properties": {
+            "repo": {"type": "string"}, "id": {"type": "string"},
+            "job_id": {"type": "string"}, "task": {"type": "string"},
+            "arm": {"type": "string", "enum": ["rig", "baseline"]},
+        }, "required": ["id", "job_id", "task", "arm"]},
+    },
+    {
         "name": "rig_status",
         "description": (
             "Show live parent (this process / RIG_PARENT, not the toml parent key), "
@@ -377,6 +427,10 @@ TOOLS = [
                 },
                 "summary": {"type": "string"},
                 "repo": {"type": "string"},
+                "token_usage": {
+                    "type": "object",
+                    "description": "Optional observed canonical token usage. Never estimated. Opaque parent usage stays unknown if omitted.",
+                },
             },
             "required": ["id"],
         },
@@ -404,6 +458,10 @@ TOOLS = [
                 "summary": {"type": "string"},
                 "id": {"type": "string"},
                 "repo": {"type": "string"},
+                "token_usage": {
+                    "type": "object",
+                    "description": "Optional observed canonical token usage. Never estimated.",
+                },
             },
         },
     },
@@ -515,7 +573,8 @@ TOOLS = [
         "description": (
             "Parent only. Admit a scoped wrapper child and detach the installed "
             "run-worker.sh. Returns immediately with job_id, worker, role, "
-            "wrapper_pid, and status. Does not wait. Shell launch is the "
+            "wrapper_pid, status, reservation_id, attempt_id, and credentials_path. "
+            "Public text and structuredContent never include owner_token. Does not wait. Shell launch is the "
             "internal/human fallback only."
         ),
         "inputSchema": {
@@ -687,7 +746,8 @@ for _tool in TOOLS:
 
 _JOB_REF_PROPERTIES = {"id": {"type": "string"}, "repo": {"type": "string"}}
 _OWNERSHIP_PROPERTIES = {key: {"type": "string"} for key in
-                         ("reservation_id", "attempt_id", "owner_token", "owner_session")}
+                         ("reservation_id", "attempt_id", "owner_token", "owner_session",
+                          "credentials_path")}
 TOOLS.extend([
     {
         "name": "rig_job_requirements",
@@ -720,10 +780,10 @@ TOOLS.extend([
 ])
 
 TOOLS.extend([
-    {"name": "rig_job_close", "description": "Parent deliberately releases a confirmed-stopped attempt without accepting or retrying it. Requires exact ownership credentials and rationale.",
+    {"name": "rig_job_close", "description": "Parent deliberately releases a confirmed-stopped attempt without accepting or retrying it. Requires exact ownership credentials or a validated credentials_path, plus rationale.",
      "inputSchema": {"type": "object", "properties": {
          **_JOB_REF_PROPERTIES, **_OWNERSHIP_PROPERTIES, "rationale": {"type": "string"},
-     }, "required": ["id", "reservation_id", "attempt_id", "owner_token", "rationale"]}},
+     }, "required": ["id", "rationale"]}},
     {"name": "rig_job_reconcile", "description": "Report held ownership by default. Apply only provably dead unlaunched recovery; explicit adopt/release reconciles legacy queue claims with parent attestation. Never expires live or unknown execution.",
      "inputSchema": {"type": "object", "properties": {
          **_JOB_REF_PROPERTIES, "queue_id": {"type": "string"}, "apply": {"type": "boolean", "default": False},
@@ -733,11 +793,11 @@ TOOLS.extend([
          "files": {"type": "array", "items": {"type": "string"}},
          "rationale": {"type": "string"}, "completion": {"type": "object"},
      }}},
-    {"name": "rig_job_recover_cancelled", "description": "Parent-only. Recover a cancelled native child after the original parent CLI is dead, using exact credentials and Codex host evidence. Dry-run unless apply=true. Does not accept caller terminal=true attestation. Releases files without acceptance.",
+    {"name": "rig_job_recover_cancelled", "description": "Parent-only. Recover a cancelled native child after the original parent CLI is dead, using exact credentials or a validated credentials_path, plus Codex host evidence. Dry-run unless apply=true. Does not accept caller terminal=true attestation. Releases files without acceptance.",
      "inputSchema": {"type": "object", "properties": {
          **_JOB_REF_PROPERTIES, **_OWNERSHIP_PROPERTIES, "rationale": {"type": "string"},
          "apply": {"type": "boolean", "default": False},
-     }, "required": ["id", "reservation_id", "attempt_id", "owner_token", "rationale"]}},
+     }, "required": ["id", "rationale"]}},
     {"name": "rig_job_recover_parent_write",
      "description": (
          "Parent-only Codex/Pi self-service recovery for a native parent write whose owning turn was "
@@ -760,6 +820,29 @@ TOOLS.extend([
          },
          "rationale": {"type": "string"},
      }, "required": ["id", "confirmed_stopped", "rationale"]}},
+    {"name": "rig_job_recover_wrapper_receipt",
+     "description": (
+         "Parent-only read-only recovery of a stopped wrapper's ownership receipt. "
+         "Returns non-secret metadata including credentials_path. Rejects released scopes, "
+         "active work, missing/malformed/insecure/mismatched artifacts, and non-wrapper executions. "
+         "Never accepts, closes, releases, mutates a reservation, or invents a token."
+     ),
+     "inputSchema": {"type": "object", "properties": {**_JOB_REF_PROPERTIES}, "required": ["id"]}},
+    {"name": "rig_job_break_glass_close",
+     "description": (
+         "Parent-only audited break-glass close of a confirmed-stopped failed or cancelled wrapper. "
+         "Requires the canonical mode-0600 owner-credentials path, confirmed_stopped=true, and rationale. "
+         "Validates current job/reservation/attempt binding, wrapper executor, stopped state, and no "
+         "active/accepted verification. Atomically releases only that scope and writes redacted audit "
+         "evidence. Idempotent. Does not accept raw owner tokens. Ordinary authenticated close is unchanged."
+     ),
+     "inputSchema": {"type": "object", "properties": {
+         **_JOB_REF_PROPERTIES,
+         "credentials_path": {"type": "string"},
+         "confirmed_stopped": {"type": "boolean"},
+         "rationale": {"type": "string"},
+         "owner_session": {"type": "string"},
+     }, "required": ["id", "credentials_path", "confirmed_stopped", "rationale"]}},
 ])
 _WORKFLOW_ID = {"id": {"type": "string", "description": "Workflow id."}, "repo": {"type": "string"}}
 _WORKFLOW_OWNER = {"owner_token": {"type": "string"}, "owner_session": {"type": "string"}}
@@ -817,6 +900,12 @@ TOOL_ORDER = (
     "rig_pick",
     "rig_status",
     "rig_routing_report",
+    "rig_billing_report",
+    "rig_billing_import",
+    "rig_billing_sync",
+    "rig_benchmark_report",
+    "rig_benchmark_create",
+    "rig_benchmark_outcome",
     "rig_job_start",
     "rig_job_launch",
     "rig_job_show",
@@ -829,6 +918,8 @@ TOOL_ORDER = (
     "rig_job_reconcile",
     "rig_job_recover_cancelled",
     "rig_job_recover_parent_write",
+    "rig_job_recover_wrapper_receipt",
+    "rig_job_break_glass_close",
     "rig_job_accept",
     "rig_memory",
     "rig_memory_add",
@@ -928,9 +1019,14 @@ def _bound_child_repo(args: dict) -> Path:
 LAUNCH_ARG_NAMES = frozenset({
     "repo", "id", "case", "role", "worker", "model", "effort", "access", "files", "brief",
     "queue_id", "reservation_id", "attempt_id", "owner_token", "owner_session",
+    "credentials_path",
     "writer_job_id", "writer_snapshot_id", "writer_cli", "writer_model",
     "writer_provider", "review_mode", "routing", "assessment",
 })
+_LAUNCH_PUBLIC_KEYS = (
+    "job_id", "worker", "role", "wrapper_pid", "status",
+    "reservation_id", "attempt_id", "credentials_path",
+)
 
 
 def _optional_string(args: dict, name: str) -> str:
@@ -952,8 +1048,22 @@ def _workflow_response(obj, *, include_secrets=False) -> dict:
     return {**_ok(json.dumps(safe, indent=2, default=str)), "structuredContent": obj if include_secrets else safe}
 
 
-def _ownership_args(args: dict) -> dict:
-    return {key: _optional_string(args, key) for key in _OWNERSHIP_PROPERTIES}
+def _ownership_args(args: dict, repo: Path, *, job_id: str = "") -> dict:
+    import admission as rig_admission
+
+    return rig_admission.resolve_ownership(
+        repo,
+        reservation_id=_optional_string(args, "reservation_id"),
+        attempt_id=_optional_string(args, "attempt_id"),
+        owner_token=_optional_string(args, "owner_token"),
+        owner_session=_optional_string(args, "owner_session"),
+        credentials_path=_optional_string(args, "credentials_path"),
+        job_id=job_id,
+    )
+
+
+def _job_ownership_args(args: dict, repo: Path) -> dict:
+    return _ownership_args(args, repo, job_id=_optional_string(args, "id"))
 
 
 def _execution_args(args: dict) -> dict:
@@ -1271,7 +1381,7 @@ def call_tool(name: str, args: dict, on_tick=None, *, wait_paths: list[Path] | N
             if not qid:
                 return _err("rig_queue_cancel needs id")
             try:
-                obj = rig_queue.cancel_item(repo, qid, **_ownership_args(args))
+                obj = rig_queue.cancel_item(repo, qid, **_ownership_args(args, repo))
             except FileNotFoundError:
                 return _err(f"queue item not found: {qid}")
             except ValueError as exc:
@@ -1297,7 +1407,7 @@ def call_tool(name: str, args: dict, on_tick=None, *, wait_paths: list[Path] | N
             if not qid:
                 return _err("rig_queue_unclaim needs id")
             try:
-                obj = rig_queue.unclaim(repo, qid, **_ownership_args(args))
+                obj = rig_queue.unclaim(repo, qid, **_ownership_args(args, repo))
             except FileNotFoundError:
                 return _err(f"queue item not found: {qid}")
             except rig_queue.QueueError as exc:
@@ -1309,7 +1419,7 @@ def call_tool(name: str, args: dict, on_tick=None, *, wait_paths: list[Path] | N
             try:
                 obj = rig_queue.mark_spawned(
                     repo, qid, jid, files=args.get("files"), worker=_optional_string(args, "worker"),
-                    access=_optional_string(args, "access"), **_ownership_args(args),
+                    access=_optional_string(args, "access"), **_ownership_args(args, repo),
                 )
             except FileNotFoundError:
                 return _err(f"queue item not found: {qid}")
@@ -1438,9 +1548,90 @@ def call_tool(name: str, args: dict, on_tick=None, *, wait_paths: list[Path] | N
                 return _err("days must be a positive integer")
             report = routing_report.build_report(repo, days=days)
             return {**_ok(routing_report.format_report(report)), "structuredContent": report}
+        if name == "rig_billing_report":
+            import billing_ledger
+
+            report = billing_ledger.build_report(repo, scope=_optional_string(args, "scope"))
+            report = billing_ledger.redact_secrets(report)
+            return {**_ok(billing_ledger.format_report(report)), "structuredContent": report}
+        if name == "rig_billing_import":
+            import billing_ledger
+
+            receipt = args.get("receipt")
+            if not isinstance(receipt, dict):
+                return _err("receipt must be an object")
+            if args.get("dry_run") not in (None, True, False):
+                return _err("dry_run must be a boolean")
+            result = billing_ledger.import_receipt(
+                repo, receipt, scope=_optional_string(args, "scope"),
+                dry_run=args.get("dry_run") is True,
+            )
+            result = billing_ledger.redact_secrets(result)
+            return {**_ok(billing_ledger.public_json(result)), "structuredContent": result}
+        if name == "rig_billing_sync":
+            import billing_ledger
+
+            provider = _optional_string(args, "provider")
+            receipts = args.get("receipts")
+            if receipts is not None and not isinstance(receipts, list):
+                return _err("receipts must be an array of objects")
+            if args.get("dry_run") not in (None, True, False) or args.get("network") not in (None, True, False):
+                return _err("dry_run and network must be booleans")
+            result = billing_ledger.sync_receipts(
+                repo, provider, receipts=receipts, scope=_optional_string(args, "scope"),
+                dry_run=args.get("dry_run") is True, network=args.get("network") is True,
+            )
+            result = billing_ledger.redact_secrets(result)
+            return {**_ok(billing_ledger.public_json(result)), "structuredContent": result}
+        if name == "rig_benchmark_report":
+            import benchmark_reporting as bench
+
+            bid = _optional_string(args, "id").strip()
+            if not bid:
+                return _err("rig_benchmark_report needs id")
+            report = bench.build_report(repo, bid, scope=_optional_string(args, "scope"))
+            return {**_ok(bench.format_report(report)), "structuredContent": report}
+        if name == "rig_benchmark_create":
+            import benchmark_reporting as bench
+
+            spec = args.get("spec")
+            if not isinstance(spec, dict):
+                return _err("spec must be an object")
+            result = bench.create_spec(repo, spec)
+            return {**_ok(json.dumps(result, indent=2)), "structuredContent": result}
+        if name == "rig_benchmark_outcome":
+            import benchmark_reporting as bench
+
+            result = bench.record_outcome(
+                repo, _optional_string(args, "id"),
+                job_id=_optional_string(args, "job_id"),
+                task=_optional_string(args, "task"),
+                arm=_optional_string(args, "arm"),
+            )
+            return {**_ok(json.dumps(result, indent=2)), "structuredContent": result}
+        if name == "rig_job_break_glass_close":
+            job_id = _optional_string(args, "id").strip()
+            if not job_id:
+                return _err("rig_job_break_glass_close needs id")
+            if args.get("confirmed_stopped") is not True:
+                return _err("break-glass close requires confirmed_stopped=true")
+            for banned in ("owner_token", "reservation_id", "attempt_id"):
+                if args.get(banned) not in (None, ""):
+                    return _err("break-glass close does not accept raw owner tokens")
+            result = rig_jobs.break_glass_close_job(
+                repo, job_id,
+                credentials_path=_optional_string(args, "credentials_path"),
+                confirmed_stopped=True,
+                rationale=_optional_string(args, "rationale"),
+                owner_session=_optional_string(args, "owner_session"),
+            )
+            dumped = json.dumps(result, indent=2)
+            if "owner_token" in dumped:
+                dumped = json.dumps({key: value for key, value in result.items() if key != "owner_token"}, indent=2)
+            return {**_ok(dumped), "structuredContent": result}
         if name == "rig_job_close":
             result = rig_jobs.close_job(repo, _optional_string(args, "id"),
-                                        rationale=_optional_string(args, "rationale"), **_ownership_args(args))
+                                        rationale=_optional_string(args, "rationale"), **_job_ownership_args(args, repo))
             return _ok(json.dumps(result, indent=2))
         if name == "rig_job_reconcile":
             if not isinstance(args.get("apply", False), bool):
@@ -1448,7 +1639,7 @@ def call_tool(name: str, args: dict, on_tick=None, *, wait_paths: list[Path] | N
             result = rig_jobs.reconcile_jobs(
                 repo, _optional_string(args, "id"), queue_id=_optional_string(args, "queue_id"),
                 apply=args.get("apply", False), action=args.get("action", "report"),
-                worker=_optional_string(args, "worker"), **_ownership_args(args),
+                worker=_optional_string(args, "worker"), **_job_ownership_args(args, repo),
                 access=args.get("access", "write"), files=args.get("files"),
                 rationale=_optional_string(args, "rationale"), completion=args.get("completion"),
             )
@@ -1461,7 +1652,7 @@ def call_tool(name: str, args: dict, on_tick=None, *, wait_paths: list[Path] | N
                 return _err("rig_job_recover_cancelled needs id")
             result = rig_jobs.recover_cancelled_job(
                 repo, job_id, rationale=_optional_string(args, "rationale"),
-                apply=args.get("apply", False), **_ownership_args(args),
+                apply=args.get("apply", False), **_job_ownership_args(args, repo),
             )
             return {**_ok(json.dumps(result, indent=2)), "structuredContent": result}
         if name == "rig_job_recover_parent_write":
@@ -1478,6 +1669,14 @@ def call_tool(name: str, args: dict, on_tick=None, *, wait_paths: list[Path] | N
                 confirmed_stopped=True, owner_session=_optional_string(args, "owner_session"),
             )
             return {**_ok(json.dumps(result, indent=2)), "structuredContent": result}
+        if name == "rig_job_recover_wrapper_receipt":
+            job_id = _optional_string(args, "id").strip()
+            if not job_id:
+                return _err("rig_job_recover_wrapper_receipt needs id")
+            result = rig_jobs.recover_wrapper_receipt_job(repo, job_id)
+            if "owner_token" in result:
+                result = {key: value for key, value in result.items() if key != "owner_token"}
+            return {**_ok(json.dumps(result, indent=2, default=str)), "structuredContent": result}
         if name in {"rig_job_requirements", "rig_job_check", "rig_job_accept"}:
             job_id = _optional_string(args, "id").strip()
             if not job_id:
@@ -1486,20 +1685,20 @@ def call_tool(name: str, args: dict, on_tick=None, *, wait_paths: list[Path] | N
             if name == "rig_job_requirements":
                 result = rig_verification.record_requirements(
                     repo, job_dir, args.get("requirements", []), args.get("manual_criteria", []),
-                    **_ownership_args(args),
+                    **_job_ownership_args(args, repo),
                 )
             elif name == "rig_job_check":
                 result = rig_verification.run_check(
                     repo, job_dir, _optional_string(args, "name"), args.get("argv"),
                     cwd=args.get("cwd"), on_tick=on_tick,
-                    **_ownership_args(args),
+                    **_job_ownership_args(args, repo),
                 )
             else:
                 result = rig_verification.accept(
                     repo, job_dir, _optional_string(args, "decision"),
                     _optional_string(args, "snapshot_id"), check_ids=args.get("check_ids", []),
                     rationale=_optional_string(args, "rationale"), next=args.get("next", "complete"),
-                    **_ownership_args(args),
+                    **_job_ownership_args(args, repo),
                 )
             return _ok(json.dumps(result, indent=2))
         if name in {"rig_job_start", "rig_job_finish", "rig_job_record"}:
@@ -1525,13 +1724,16 @@ def call_tool(name: str, args: dict, on_tick=None, *, wait_paths: list[Path] | N
                         access=_optional_string(args, "access"), queue_id=_optional_string(args, "queue_id"),
                         native_agent_id=_optional_string(args, "native_agent_id"), return_details=True,
                         routing=args.get("routing"), assessment=args.get("assessment"),
-                        **_ownership_args(args),
+                        **_job_ownership_args(args, repo),
                 )
                 return {**_ok(result["job_id"]), "structuredContent": result}
             status = str(args.get("status") or "ok")
             if name == "rig_job_finish":
                 if status not in JOB_FINISH_STATUSES:
                     return _err("status must be ok|fail|timeout|cancelled")
+                usage = args.get("token_usage")
+                if usage not in (None, "") and not isinstance(usage, dict):
+                    return _err("token_usage must be an object")
                 result = rig_jobs.finish_job(
                         repo,
                         job_id,
@@ -1541,11 +1743,16 @@ def call_tool(name: str, args: dict, on_tick=None, *, wait_paths: list[Path] | N
                         role=role,
                         live=live,
                         preferred=preferred,
-                        completion=args.get("completion"), return_details=True, **_ownership_args(args),
+                        completion=args.get("completion"), return_details=True,
+                        token_usage=usage if usage not in (None, "") else None,
+                        **_job_ownership_args(args, repo),
                 )
                 return {**_ok(result["text"]), "structuredContent": result}
             if status not in JOB_RECORD_STATUSES:
                 return _err("record status must be ok|fail|timeout")
+            usage = args.get("token_usage")
+            if usage not in (None, "") and not isinstance(usage, dict):
+                return _err("token_usage must be an object")
             return _ok(
                 rig_jobs.record_job(
                     repo,
@@ -1556,6 +1763,7 @@ def call_tool(name: str, args: dict, on_tick=None, *, wait_paths: list[Path] | N
                     job_id=job_id,
                     live=live,
                     preferred=preferred,
+                    token_usage=usage if usage not in (None, "") else None,
                     **_execution_args(args),
                 )
             )
@@ -1710,14 +1918,12 @@ def call_tool(name: str, args: dict, on_tick=None, *, wait_paths: list[Path] | N
                     review_mode=review_mode if review_mode is not None else "standalone",
                     routing=args.get("routing"),
                     assessment=args.get("assessment"),
-                    **_ownership_args(args),
+                    **_job_ownership_args(args, repo),
                 )
             except rig_launch.LaunchError as exc:
                 return _err(str(exc))
-            return {**_ok(json.dumps({
-                "job_id": result["job_id"], "worker": result["worker"], "role": result["role"],
-                "wrapper_pid": result["wrapper_pid"], "status": result["status"],
-            }, indent=2)), "structuredContent": result}
+            public = {key: result[key] for key in _LAUNCH_PUBLIC_KEYS if key in result}
+            return {**_ok(json.dumps(public, indent=2)), "structuredContent": dict(public)}
         return _err(f"unknown tool {name}")
     except SystemExit as exc:
         return _err(str(exc) or "rig error")

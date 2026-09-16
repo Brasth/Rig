@@ -14,6 +14,7 @@ import json
 import os
 import re
 import secrets
+import stat
 import subprocess
 import sys
 import threading
@@ -178,6 +179,9 @@ def _public(record):
         recovery.pop("owner_token", None)
         if isinstance(recovery.get("owner"), dict):
             recovery["owner"].pop("owner_token", None)
+    glass = result.get("breakglass_recovery")
+    if isinstance(glass, dict):
+        result["breakglass_recovery"] = _redact_breakglass(glass)
     return result
 
 
@@ -196,12 +200,142 @@ def get_reservation(repo, reservation_id):
     return _public(record) if record else None
 
 
+def owner_credentials_path(repo, job_id):
+    return _root(repo) / ".rig" / "jobs" / _id(job_id, "job id") / "owner-credentials.json"
+
+
 def write_credentials(repo, record):
     root = _root(repo)
     job = _id(record.get("job_id"), "job id")
-    path = root / ".rig" / "jobs" / job / "owner-credentials.json"
+    path = owner_credentials_path(root, job)
     _write(path, {**credentials(record), "job_id": job, "owner": record.get("owner", {})})
+    try:
+        os.chmod(path, 0o600)
+    except OSError as error:
+        raise AdmissionError("owner credentials artifact could not be restricted to mode 0600") from error
     return path
+
+
+def _canonical_owner_credentials_path(root, credentials_path, job_id=""):
+    if not isinstance(credentials_path, str) or not credentials_path.strip():
+        raise AdmissionError("credentials_path required")
+    supplied = Path(credentials_path)
+    if not supplied.is_absolute():
+        raise AdmissionError("credentials_path must be an absolute canonical owner-credentials path")
+    normalized = Path(os.path.normpath(str(supplied)))
+    if job_id:
+        expected = Path(os.path.normpath(str(owner_credentials_path(root, job_id))))
+        if normalized != expected:
+            raise AdmissionError("credentials_path is not the canonical owner-credentials file")
+        return _id(job_id, "job id"), expected
+    try:
+        relative = normalized.relative_to(_root(root))
+    except ValueError as error:
+        raise AdmissionError("credentials_path is not the canonical owner-credentials file") from error
+    parts = relative.parts
+    if len(parts) != 4 or parts[0] != ".rig" or parts[1] != "jobs" or parts[3] != "owner-credentials.json":
+        raise AdmissionError("credentials_path is not the canonical owner-credentials file")
+    job = _id(parts[2], "job id")
+    expected = Path(os.path.normpath(str(owner_credentials_path(root, job))))
+    if normalized != expected:
+        raise AdmissionError("credentials_path is not the canonical owner-credentials file")
+    return job, expected
+
+
+def _load_owner_credentials_artifact(path):
+    try:
+        info = os.lstat(path)
+    except FileNotFoundError:
+        raise AdmissionError("owner credentials artifact is missing") from None
+    except OSError as error:
+        raise AdmissionError("owner credentials artifact is unreadable") from error
+    if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode) or stat.S_IMODE(info.st_mode) != 0o600:
+        raise AdmissionError("owner credentials artifact is not a regular mode 0600 file")
+    flags = os.O_RDONLY
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        fd = os.open(str(path), flags)
+    except FileNotFoundError:
+        raise AdmissionError("owner credentials artifact is missing") from None
+    except OSError as error:
+        raise AdmissionError("owner credentials artifact is unreadable") from error
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or stat.S_IMODE(info.st_mode) != 0o600:
+            raise AdmissionError("owner credentials artifact is not a regular mode 0600 file")
+        raw = os.read(fd, 1024 * 1024 + 1)
+    finally:
+        os.close(fd)
+    if not raw or len(raw) > 1024 * 1024:
+        raise AdmissionError("owner credentials artifact is malformed")
+    try:
+        value = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as error:
+        raise AdmissionError("owner credentials artifact is malformed") from error
+    if not isinstance(value, dict):
+        raise AdmissionError("owner credentials artifact is malformed")
+    return value
+
+
+def resolve_owner_credentials(repo, credentials_path, *, job_id=""):
+    """Load a private owner-credentials.json path into the ownership triple.
+
+    Validates the canonical job artifact in this repository. Never prints the token.
+    """
+    root = _root(repo)
+    job, path = _canonical_owner_credentials_path(root, credentials_path, job_id)
+    payload = _load_owner_credentials_artifact(path)
+    bound_job = payload.get("job_id")
+    reservation_id = payload.get("reservation_id")
+    attempt_id = payload.get("attempt_id")
+    owner_token = payload.get("owner_token")
+    if bound_job != job:
+        raise AdmissionError("owner credentials artifact is not bound to this job")
+    if not isinstance(reservation_id, str) or not isinstance(attempt_id, str) or not isinstance(owner_token, str):
+        raise AdmissionError("owner credentials artifact is malformed")
+    if not reservation_id or not attempt_id or not owner_token:
+        raise AdmissionError("owner credentials artifact is malformed")
+    record = match_credentials(root, reservation_id, attempt_id, owner_token, job_id=job)
+    return {
+        "job_id": job,
+        "reservation_id": record.get("reservation_id") or reservation_id,
+        "attempt_id": record.get("attempt_id") or attempt_id,
+        "owner_token": owner_token,
+        "credentials_path": str(path),
+    }
+
+
+def resolve_ownership(repo, *, reservation_id="", attempt_id="", owner_token="", owner_session="",
+                      credentials_path="", job_id=""):
+    """Accept either a raw ownership triple or a validated credentials_path."""
+    path = credentials_path if isinstance(credentials_path, str) else ""
+    if path.strip():
+        loaded = resolve_owner_credentials(repo, path, job_id=job_id)
+        supplied = {
+            "reservation_id": reservation_id if isinstance(reservation_id, str) else "",
+            "attempt_id": attempt_id if isinstance(attempt_id, str) else "",
+            "owner_token": owner_token if isinstance(owner_token, str) else "",
+        }
+        for key, value in supplied.items():
+            if not value:
+                continue
+            expected = loaded[key]
+            matched = hmac.compare_digest(value, expected) if key == "owner_token" else value == expected
+            if not matched:
+                raise AdmissionError("credentials_path does not match supplied ownership identifiers")
+        return {
+            "reservation_id": loaded["reservation_id"],
+            "attempt_id": loaded["attempt_id"],
+            "owner_token": loaded["owner_token"],
+            "owner_session": owner_session or "",
+        }
+    return {
+        "reservation_id": reservation_id or "",
+        "attempt_id": attempt_id or "",
+        "owner_token": owner_token or "",
+        "owner_session": owner_session or "",
+    }
 
 
 def process_identity(pid, timeout=1.0):
@@ -1386,9 +1520,183 @@ def recover_parent_write(repo, *, job_id, rationale, confirmed_stopped=False, ow
         return _parent_write_recovery_result(record, 1)
 
 
+def recover_wrapper_receipt(repo, *, job_id):
+    """Read-only stopped-wrapper receipt: non-secret metadata including credentials_path.
+
+    Never accepts, closes, releases, mutates a reservation, or invents a token.
+    """
+    if os.environ.get("RIG_JOB_ID") or os.environ.get("RIG_JOB_DIR"):
+        raise AdmissionError("wrapper receipt recovery is parent-only")
+    job_id = _id(job_id, "job id")
+    with transaction(repo) as root:
+        matches = [row for row in _records(root) if row.get("job_id") == job_id]
+        if not matches:
+            raise AdmissionError("no reservation bound to this job")
+        held = [row for row in matches if row.get("stage") != "released"]
+        if not held:
+            raise AdmissionError("wrapper receipt recovery rejects released scopes")
+        if len(held) != 1:
+            raise AdmissionError("job is not bound to exactly one current reservation")
+        record = held[0]
+        folder = root / ".rig" / "jobs" / job_id
+        meta = _read(folder / "meta.json")
+        if not meta:
+            raise AdmissionError("wrapper receipt recovery rejects missing artifacts")
+        executor = str(meta.get("executor_kind") or meta.get("kind") or "")
+        kind = (record.get("owner") or {}).get("kind")
+        if kind == "native_child" or executor != "wrapper":
+            raise AdmissionError("wrapper receipt recovery rejects non-wrapper executions")
+        if not record.get("stopped") or _active_verification(root, record):
+            raise AdmissionError("wrapper receipt recovery rejects active work")
+        if meta.get("reservation_id") and meta.get("reservation_id") != record.get("reservation_id"):
+            raise AdmissionError("wrapper receipt recovery rejects mismatched artifacts")
+        if meta.get("attempt_id") and meta.get("attempt_id") != record.get("attempt_id"):
+            raise AdmissionError("wrapper receipt recovery rejects mismatched artifacts")
+        loaded = resolve_owner_credentials(root, str(owner_credentials_path(root, job_id)), job_id=job_id)
+        if loaded["reservation_id"] != record.get("reservation_id") or loaded["attempt_id"] != record.get("attempt_id"):
+            raise AdmissionError("wrapper receipt recovery rejects mismatched artifacts")
+        return {
+            "job_id": job_id,
+            "reservation_id": loaded["reservation_id"],
+            "attempt_id": loaded["attempt_id"],
+            "credentials_path": loaded["credentials_path"],
+            "stopped": True,
+            "stage": record.get("stage") or "",
+            "execution_status": record.get("execution_status") or "",
+            "executor_kind": "wrapper",
+            "worker": record.get("worker") or meta.get("worker") or "",
+            "role": record.get("role") or meta.get("role") or "",
+        }
+
+
+BREAKGLASS_CLOSE_STOPPED_WRAPPER = "breakglass_close_stopped_wrapper"
+_BREAKGLASS_TOKEN_KEYS = {"owner_token", "reservation_id", "attempt_id"}
+
+
+def _parent_only_breakglass():
+    if os.environ.get("RIG_JOB_ID") or os.environ.get("RIG_JOB_DIR"):
+        raise AdmissionError("break-glass close rejects child environment")
+
+
+def _redact_breakglass(audit):
+    result = copy.deepcopy(audit) if isinstance(audit, dict) else {}
+    result.pop("owner_token", None)
+    result.pop("owner_session", None)
+    caller = result.get("caller")
+    if isinstance(caller, dict):
+        caller = _public_owner(caller)
+        caller.pop("owner_token", None)
+        caller.pop("owner_session", None)
+        result["caller"] = caller
+    owner = result.get("owner")
+    if isinstance(owner, dict):
+        owner = _public_owner(owner)
+        owner.pop("owner_token", None)
+        owner.pop("owner_session", None)
+        owner.pop("session_id", None)
+        result["owner"] = owner
+    return result
+
+
+def _breakglass_result(audit, applied):
+    return {"applied": applied, "recovery": _redact_breakglass(audit)}
+
+
+def _wrapper_meta_executor(meta):
+    if not isinstance(meta, dict):
+        return False
+    return str(meta.get("executor_kind") or meta.get("kind") or "") == "wrapper"
+
+
+def _accepted_result(root, record):
+    job_id = record.get("job_id") or ""
+    if not job_id:
+        return False
+    accepted = _read(root / ".rig" / "jobs" / job_id / "verification.json") or {}
+    return accepted.get("acceptance") == "accepted"
+
+
+def breakglass_close_stopped_wrapper(repo, *, job_id, credentials_path, confirmed_stopped=False,
+                                     rationale="", owner=None, owner_session="", **extra):
+    """One-time audited close of a confirmed-stopped failed or cancelled wrapper.
+
+    Authenticates only the canonical mode-0600 owner-credentials artifact. Does
+    not require the original owner_session. Never accepts raw tokens.
+    """
+    _parent_only_breakglass()
+    if extra.keys() & _BREAKGLASS_TOKEN_KEYS:
+        raise AdmissionError("break-glass close does not accept raw owner tokens")
+    if confirmed_stopped is not True:
+        raise AdmissionError("break-glass close requires confirmed_stopped=true")
+    if not isinstance(rationale, str) or not rationale.strip():
+        raise AdmissionError("break-glass close rationale required")
+    job_id = _id(job_id, "job id")
+    actor = copy.deepcopy(owner) if isinstance(owner, dict) else caller_owner("parent", owner_session=owner_session)
+    with transaction(repo) as root:
+        loaded = resolve_owner_credentials(root, credentials_path, job_id=job_id)
+        matches = [row for row in _records(root) if row.get("job_id") == job_id]
+        if not matches:
+            raise AdmissionError("no reservation bound to this job")
+        held = [row for row in matches if row.get("stage") != "released"]
+        if not held:
+            recovered = [
+                row for row in matches
+                if (row.get("breakglass_recovery") or {}).get("action") == BREAKGLASS_CLOSE_STOPPED_WRAPPER
+                and (row.get("breakglass_recovery") or {}).get("outcome") == "released"
+                and (row.get("breakglass_recovery") or {}).get("reservation_id") == loaded["reservation_id"]
+                and (row.get("breakglass_recovery") or {}).get("attempt_id") == loaded["attempt_id"]
+            ]
+            if len(recovered) == 1:
+                return _breakglass_result(recovered[0]["breakglass_recovery"], 0)
+            raise AdmissionError("already released work cannot use break-glass close")
+        if len(held) != 1:
+            raise AdmissionError("job is not bound to exactly one current reservation")
+        record = held[0]
+        if (record.get("reservation_id") != loaded["reservation_id"]
+                or record.get("attempt_id") != loaded["attempt_id"]):
+            raise AdmissionError("credentials belong to another job")
+        folder = root / ".rig" / "jobs" / job_id
+        meta = _read(folder / "meta.json")
+        kind = (record.get("owner") or {}).get("kind")
+        if kind == "native_child" or not _wrapper_meta_executor(meta):
+            raise AdmissionError("break-glass close rejects non-wrapper executions")
+        if not record.get("stopped") or _active_verification(root, record):
+            raise AdmissionError("break-glass close rejects active work")
+        status = record.get("execution_status")
+        if status not in {"fail", "cancelled"}:
+            raise AdmissionError("break-glass close rejects ok or unknown execution status")
+        if _accepted_result(root, record):
+            raise AdmissionError("break-glass close rejects accepted work")
+        audit = {
+            "action": BREAKGLASS_CLOSE_STOPPED_WRAPPER,
+            "caller": _public_owner(actor),
+            "reason": rationale.strip(),
+            "timestamp": _now(),
+            "job_id": job_id,
+            "reservation_id": record.get("reservation_id"),
+            "attempt_id": record.get("attempt_id"),
+            "observed_status": status,
+            "confirmed_stopped": True,
+            "outcome": "released",
+        }
+        audit = _redact_breakglass(audit)
+        record.update(
+            stopped=True, slot_held=False, stage="released",
+            needs_reconciliation=False, reconciliation_reason="",
+            release_reason=rationale.strip(),
+            breakglass_recovery=audit, pending_operation="queue_done",
+        )
+        _save(root, record)
+        _write(folder / "breakglass-recovery.json", audit)
+        _queue_update(root, record, "cancelled")
+        record.pop("pending_operation", None)
+        _save(root, record)
+        return _breakglass_result(audit, 1)
+
+
 def main():
     parser = argparse.ArgumentParser(prog="admission.py")
-    parser.add_argument("command", choices=["reserve", "activate", "finish", "release", "reconcile", "recover_parent_write", "list"])
+    parser.add_argument("command", choices=["reserve", "activate", "finish", "release", "reconcile", "recover_parent_write", "breakglass_close_stopped_wrapper", "list"])
     parser.add_argument("--repo", default=".")
     parser.add_argument("--input-json", default="{}", help="Explicit operation arguments; tokens may instead use RIG_OWNER_TOKEN.")
     args = parser.parse_args()

@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 FIELDS = ("input", "output", "reasoning", "cached_input", "total")
+SOURCES = frozenset({"wrapper", "parent", "native_child"})
 ALIASES = {
     "input": ("input", "input_tokens", "prompt_tokens"),
     "output": ("output", "output_tokens", "completion_tokens"),
@@ -61,6 +62,20 @@ def load_token_usage(value) -> dict | None:
         return normalize_token_usage(value)
     except UsageError:
         return None
+
+
+def usage_source(value, *, default: str = "") -> str:
+    """Return validated provenance. Empty means unknown, never inferred."""
+    raw = default
+    if isinstance(value, dict) and "source" in value:
+        raw = value.get("source")
+    if raw in (None, ""):
+        return ""
+    if raw not in SOURCES:
+        raise UsageError("token_usage.source must be wrapper|parent|native_child")
+    if default and default not in (None, "") and default != raw:
+        raise UsageError("token_usage.source conflicts with executor")
+    return raw
 
 
 def _payload(event: dict):

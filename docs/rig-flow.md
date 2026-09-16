@@ -57,6 +57,30 @@ flowchart TD
 
 Reservations prevent conflicting work from being admitted. The default cap is three reserved/running/ASK executions. A stopped execution frees its slot, but its files remain protected through verification or explicit close. See [protected writes and acceptance](usage.md#protected-writes-and-parent-acceptance) and [adaptive workflows](usage.md#adaptive-workflows).
 
+`rig_job_launch` public text includes the issued `credentials_path` plus non-secret identifiers (`job_id`, `reservation_id`, `attempt_id`, `wrapper_pid`, `status`). It never prints `owner_token`. Parent ownership tools (`close`, `accept`, checks, finish, and the same family) accept that path instead of a raw reservation/attempt/token triple. The server resolves only the canonical `.rig/jobs/<id>/owner-credentials.json` in this repository after it is a regular, non-symlink mode 0600 file, valid JSON, bound to that job/reservation/attempt, and matched to the active reservation. Direct raw credential callers keep working.
+
+If the launch receipt is lost, parent-only `rig_job_recover_wrapper_receipt` returns the same non-secret metadata, including `credentials_path`, for a confirmed-stopped wrapper. It rejects released scopes, active work, missing, malformed, insecure, or mismatched artifacts, and non-wrapper executions. It does not accept, close, release, mutate a reservation, or invent a token. Never reconstruct `owner_token` from the artifact or from a guessed job id.
+
+Ordinary authenticated close is unchanged: `rig_job_close` / `rig job close` still requires the ownership triple or a validated `credentials_path` plus rationale, and still releases only confirmed-stopped work.
+
+Parent-only **break-glass close** is a separate audited path for a **confirmed-stopped failed or cancelled wrapper** when the original session cannot perform ordinary close. It requires the canonical mode-0600 `.rig/jobs/<id>/owner-credentials.json` path, `confirmed_stopped=true`, and a rationale. It validates the current job/reservation/attempt binding, wrapper executor, stopped state, and that verification is neither active nor accepted. It atomically releases only that scope, writes redacted `breakglass-recovery.json` evidence, and is idempotent. It never accepts raw `owner_token` / reservation / attempt arguments and never prints tokens.
+
+```bash
+rig job break-glass-close <id> --credentials-path PATH --confirmed-stopped --rationale TEXT
+```
+
+MCP: `rig_job_break_glass_close` with `id`, `credentials_path`, `confirmed_stopped`, and `rationale`.
+
+## Observed tokens and actual invoice dollars
+
+Token usage is observed-only and actor-aware (`parent`, `wrapper`, `native_child`). Unknown values stay omitted; totals and USD are never inferred from tokens.
+
+Actual invoiced USD lives in a provider-neutral ledger under `.rig/billing/`. Named scopes/cohorts hold receipts with provider, period, exact USD, currency, source identity, and import evidence. Credential **references** are allowed; secrets are not. OpenAI and Anthropic have first-class read-only adapters (network opt-in, dry-run/validate). Every other provider uses generic receipt import.
+
+Benchmark reporting requires paired baseline and Rig tasks and **20 matched completed pairs** before any savings conclusion. It reports cohort dollars and tokens separately, coverage/missing data, and the quality gate. It makes no savings claim unless quality is non-inferior and actual costs are comparable/covered. If the provider reports only cohort aggregates, dollars cannot be assigned to individual jobs.
+
+Commands and the 20-task procedure: [Cost accounting](cost-accounting.md).
+
 ## While the parent is busy
 
 The companion observes repository state independently of the host's model turn. Its status row shows work, queued items, attention, freshness, and workflow active/attention counts (`wf`, `wf!`). **F8** opens Jobs / Queue / Notices. **F9** opens the queue editor, so you can park a new task without waiting for the parent to finish its current turn. Notices distinguish approval requests, finished execution, verification, stop progress, and workflow attention/blocked/cancel-requested/failed/verified/started; history remains in the popup after a brief status message expires. `rig tui` Tab Jobs/Queue/Workflows shows workflow id, status, accepted/required, running, ASK, blocker, next parent action, and title. No estimated progress, savings, or ETA.

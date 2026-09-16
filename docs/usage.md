@@ -750,7 +750,7 @@ Parent agent: MCP. First call: `rig_session` with explicit semantic role, `compa
 Human terminal (not the parent agent):
 
 ```bash
-rig tui                 # Jobs/Queue tabs, status, activity, snapshot age/errors
+rig tui                 # attention-first Jobs/Queue/Workflows board; ? help
 rig jobs                # same data as a table
 rig jobs --json
 rig jobs --thread
@@ -783,7 +783,7 @@ rig queue cancel <id>
 
 `--timeout SECS` is an optional cap, not the default. Omit timeout to block. `0` snapshots once. Exit 124 only if still running when a cap hits.
 
-TUI controls: Tab switches Jobs/Queue/Workflows; `j`/`k` or arrows select. The Queue tab shows pending text and known capacity/ownership blockers; it does not infer file scope from task text. The Workflows tab shows workflow id, status, accepted/required, running, ASK, blocker, next parent action, and title. No estimated progress, savings, or ETA. `e` opens the Unicode editor, Enter commits, Esc cancels the draft, and arrows/Home/End/Delete edit. Bracketed paste treats embedded newlines as spaces and is capped at 2,000 characters. A failed save retains the draft for retry. `x` requests cancellation for the selected job or queue item; repeated requests for the same target are suppressed while pending. `y`/`n` answer the selected job's ASK, `l` toggles its in-board activity log, and PgUp/PgDn scroll activity. `r` refreshes; `q` closes the board without stopping work. Snapshot collection and actions run in the background; a slow or failed refresh leaves the last snapshot visible with its age/error.
+TUI controls: Tab switches Jobs/Queue/Workflows; `j`/`k` or arrows select. The Jobs list is attention-first (ASK, attention, and active jobs before historical terminal jobs) and shows a state label plus task text in each row so context is readable before opening details. Narrow terminals stack the list above a one-line summary; color is never the only status cue. The Queue tab shows pending text and known capacity/ownership blockers; it does not infer file scope from task text. The Workflows tab shows workflow id, status, accepted/required, running, ASK, blocker, next parent action, and title. No estimated progress, savings, or ETA. `e` opens the Unicode editor, Enter commits, Esc cancels the draft, and arrows/Home/End/Delete edit. Bracketed paste treats embedded newlines as spaces and is capped at 2,000 characters. A failed save retains the draft for retry. `x` starts cancellation for the selected job or pending queue item and names that target; it does not run until `y` confirms. Esc or any other key aborts. After confirmation, the request stays non-blocking and repeated requests for the same target are suppressed while pending. `?` opens a help overlay (Esc or `?` closes it). `y`/`n` answer the selected job's ASK when not confirming, `l` toggles its in-board activity log, and PgUp/PgDn scroll activity. `r` refreshes; `q` closes the board without stopping work. Snapshot collection and actions run in the background; a slow or failed refresh leaves the last snapshot visible with its age/error.
 
 In Grok, Codex, OpenCode, OMP, Pi, or agy type `/rig` or `/queue`. `/queue` parks a line in `.rig/queue/` and does **not** spawn.
 

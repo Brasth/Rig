@@ -550,6 +550,92 @@ class WorkerLaunchTests(unittest.TestCase):
         job_dirs = {path.name for path in (self.repo / ".rig" / "jobs").iterdir() if path.is_dir()}
         self.assertEqual(job_dirs, set(ids))
 
+    def _finish_wrapper(self, launched):
+        creds = json.loads(Path(launched["credentials_path"]).read_text())
+        admission.finish(
+            self.repo, status="ok", completion={"kind": "parent_task", "completed": True},
+            reservation_id=creds["reservation_id"], attempt_id=creds["attempt_id"],
+            owner_token=creds["owner_token"], owner_session="launch-tests",
+        )
+        return self.repo / ".rig" / "reservations" / f"{launched['reservation_id']}.json"
+
+    def test_mcp_launch_public_text_includes_credentials_path_not_token(self):
+        out = rig_mcp.call_tool("rig_job_launch", {
+            "repo": str(self.repo), "id": "pub-creds", "brief": "go",
+            "worker": "grok", "role": "implement", "model": "grok-4.6",
+            "effort": "high", "files": ["a.py"],
+        })
+        self.assertNotIn("isError", out, out)
+        result = out["structuredContent"]
+        self.pids.append(result["wrapper_pid"])
+        payload = json.loads(out["content"][0]["text"])
+        creds = json.loads(Path(payload["credentials_path"]).read_text())
+        token = creds["owner_token"]
+        public_keys = {
+            "job_id", "worker", "role", "wrapper_pid", "status",
+            "reservation_id", "attempt_id", "credentials_path",
+        }
+        self.assertEqual(payload["job_id"], "pub-creds")
+        self.assertEqual(payload["credentials_path"], result["credentials_path"])
+        self.assertEqual(payload["reservation_id"], result["reservation_id"])
+        self.assertEqual(payload["attempt_id"], result["attempt_id"])
+        self.assertIn("wrapper_pid", payload)
+        self.assertLessEqual(set(payload), public_keys)
+        self.assertLessEqual(set(result), public_keys)
+        self.assertNotIn("owner_token", payload)
+        self.assertNotIn("owner_token", result)
+        self.assertNotIn(token, out["content"][0]["text"])
+        self.assertNotIn(token, json.dumps(result))
+        self.assertEqual(Path(payload["credentials_path"]).stat().st_mode & 0o777, 0o600)
+
+    def test_stopped_wrapper_receipt_and_credentials_path_close(self):
+        launched = self._launch("wrap-receipt")
+        creds = json.loads(Path(launched["credentials_path"]).read_text())
+        token = creds["owner_token"]
+        rec_path = self._finish_wrapper(launched)
+        before = rec_path.read_bytes()
+        recovered = rig_mcp.call_tool(
+            "rig_job_recover_wrapper_receipt",
+            {"repo": str(self.repo), "id": "wrap-receipt"},
+        )
+        self.assertNotIn("isError", recovered, recovered)
+        payload = json.loads(recovered["content"][0]["text"])
+        self.assertEqual(payload["credentials_path"], launched["credentials_path"])
+        self.assertNotIn("owner_token", payload)
+        self.assertNotIn(token, recovered["content"][0]["text"])
+        self.assertEqual(rec_path.read_bytes(), before)
+        again = rig_mcp.call_tool(
+            "rig_job_recover_wrapper_receipt",
+            {"repo": str(self.repo), "id": "wrap-receipt"},
+        )
+        self.assertNotIn("isError", again)
+        self.assertEqual(rec_path.read_bytes(), before)
+        closed = rig_mcp.call_tool(
+            "rig_job_close",
+            {"repo": str(self.repo), "id": "wrap-receipt", "rationale": "wrapper handoff",
+             "credentials_path": payload["credentials_path"], "owner_session": "launch-tests"},
+        )
+        self.assertFalse(closed.get("isError"), closed)
+        self.assertNotIn(token, closed["content"][0]["text"])
+        released = rig_mcp.call_tool(
+            "rig_job_recover_wrapper_receipt",
+            {"repo": str(self.repo), "id": "wrap-receipt"},
+        )
+        self.assertTrue(released.get("isError"))
+        self.assertIn("released", released["content"][0]["text"])
+        self.assertNotIn(token, released["content"][0]["text"])
+
+    def test_wrapper_receipt_rejects_live_launch(self):
+        launched = self._launch("wrap-live")
+        token = json.loads(Path(launched["credentials_path"]).read_text())["owner_token"]
+        denied = rig_mcp.call_tool(
+            "rig_job_recover_wrapper_receipt",
+            {"repo": str(self.repo), "id": "wrap-live"},
+        )
+        self.assertTrue(denied.get("isError"))
+        self.assertIn("active work", denied["content"][0]["text"])
+        self.assertNotIn(token, denied["content"][0]["text"])
+
 
 if __name__ == "__main__":
     unittest.main()

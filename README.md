@@ -343,7 +343,7 @@ Bash and zsh supported. `rig ui disable` / `rig ui enable`, `rig ui sessions`, `
 
 Jobs and MEMORY are this repo, not the chat. A new thread still sees `.rig/jobs`.
 
-In `rig tui`: Tab switches Jobs/Queue/Workflows; `e` queue editor; `x` cancel selected; `l` activity; `q` exits without stopping jobs. Workflow rows show id, status, accepted/required, running, ASK, blocker, next parent action, and title. No estimated progress, savings, or ETA.
+In `rig tui`: the Jobs list is attention-first (ASK / attention / active, then history) with state labels and task text in each row. Tab switches Jobs/Queue/Workflows; `e` queue editor; `x` then `y` cancels the selected job or pending queue item (`Esc` or any other key aborts); `?` help; `l` activity; `q` exits without stopping jobs. Workflow rows show id, status, accepted/required, running, ASK, blocker, next parent action, and title. No estimated progress, savings, or ETA.
 
 Parent orchestration is MCP (`rig_session`, `rig_job_launch`, `rig_workflow_create` / `rig_workflow_advance` / `rig_workflow_wait`, allow/deny, requirements/check/accept). Shell `run-worker.sh` is human/internal fallback. Claude `ask` → allow/deny; never kill that job because it asked. Children never spawn or message children.
 
