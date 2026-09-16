@@ -17,12 +17,13 @@ import work_queue as rig_queue  # noqa: E402
 from tui_editor import Draft, InputDecoder  # noqa: E402
 from tui_runtime import BoardRuntime, visible_jobs as _visible_jobs  # noqa: E402
 from tui_view import (  # noqa: E402,F401
-    _TABS, _add, _detail_lines, _elide, _listing_id, _next_tab, _room, _viewport,
-    _workflow_detail_lines, render,
+    PRIMARY_FOOTER, _TABS, _add, _detail_lines, _elide, _listing_id, _next_tab,
+    _room, _row_task, _viewport, _workflow_detail_lines, attention_first_jobs,
+    board_listing, format_list_row, render,
 )
 from ui_snapshot import collect_workflows  # noqa: E402
 
-HELP = "Tab Jobs/Queue/Workflows  j/k select  e enqueue  y/n answer  x cancel  l log  r refresh  q quit"
+HELP = PRIMARY_FOOTER
 
 
 def _snapshot_status(runtime):
@@ -54,17 +55,15 @@ def _paint(stdscr, repo: Path, *, runtime=None) -> None:
     draft, decoder = Draft(), InputDecoder()
     requested = set()
     pasted_outside_editor = False
+    help_mode = False
+    confirm = None
     bracketed = sys.stdout.isatty()
     if bracketed:
         sys.stdout.write("\x1b[?2004h")
         sys.stdout.flush()
 
     def listing(name, workflows=()):
-        if name == "Jobs":
-            return runtime.snapshot.jobs
-        if name == "Queue":
-            return runtime.snapshot.pending
-        return list(workflows or ())
+        return board_listing(name, runtime.snapshot, workflows)
 
     try:
         while True:
@@ -110,7 +109,8 @@ def _paint(stdscr, repo: Path, *, runtime=None) -> None:
             curses.curs_set(1 if draft.active else 0)
             offsets[tab] = render(stdscr, repo, runtime.snapshot, tab=tab, selected=selected[tab], offset=offsets[tab],
                                   follow=follow, log_off=log_off, footer=footer, snapshot_status=_snapshot_status(runtime),
-                                  requested=requested, draft=draft, log_mode=log_mode, workflows=board_workflows)
+                                  requested=requested, draft=draft, log_mode=log_mode, workflows=board_workflows,
+                                  help_mode=help_mode, confirm=confirm)
             try:
                 key = stdscr.get_wch()
                 incoming = decoder.feed(key)
@@ -144,8 +144,37 @@ def _paint(stdscr, repo: Path, *, runtime=None) -> None:
                         draft.active = False
                         footer = draft.message or "Enqueue cancelled"
                     continue
+                if confirm is not None:
+                    pending = confirm
+                    confirm = None
+                    if key in ("y", "Y"):
+                        jid = pending["id"]
+                        target_tab = pending["tab"]
+                        action_key = f"cancel:{target_tab}:{jid}"
+                        if action_key in requested:
+                            footer = f"stop already requested {jid}"
+                        else:
+                            action = ((lambda jid=jid: rig_jobs.cancel_job(repo, jid, "tui"))
+                                      if target_tab == "Jobs" else
+                                      (lambda jid=jid: rig_queue.cancel_item(repo, jid)))
+                            if runtime.submit(action_key, action, cancellation=True):
+                                requested.add(action_key)
+                                footer = (f"stop requested {jid}" if target_tab == "Jobs"
+                                          else f"queue cancellation requested {jid}")
+                            else:
+                                footer = "Cancellation lane busy; x retries"
+                    else:
+                        footer = f"Cancellation aborted {pending['id']}"
+                    continue
+                if help_mode:
+                    help_mode = False
+                    if key != "q":
+                        continue
                 if key == "q":
                     return
+                if key == "?":
+                    help_mode = True
+                    continue
                 if key == "\x1b" or pasted_outside_editor:
                     continue
                 rows = listing(tab, board_workflows)
@@ -182,12 +211,8 @@ def _paint(stdscr, repo: Path, *, runtime=None) -> None:
                     if action_key in requested:
                         footer = f"stop already requested {jid}"
                         continue
-                    action = (lambda jid=jid: rig_jobs.cancel_job(repo, jid, "tui")) if tab == "Jobs" else (lambda jid=jid: rig_queue.cancel_item(repo, jid))
-                    if runtime.submit(action_key, action, cancellation=True):
-                        requested.add(action_key)
-                        footer = f"stop requested {jid}" if tab == "Jobs" else f"queue cancellation requested {jid}"
-                    else:
-                        footer = "Cancellation lane busy; x retries"
+                    confirm = {"tab": tab, "id": jid, "task": _row_task(tab, row)}
+                    footer = f"Confirm cancellation {jid}"
                 elif key == "l" and tab == "Jobs":
                     log_mode = not log_mode
                 elif key == "f":

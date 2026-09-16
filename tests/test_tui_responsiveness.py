@@ -129,15 +129,18 @@ class InputResponsiveness(unittest.TestCase):
 
         runtime = BoardRuntime(Path("/fixture"), loader=lambda *_args, **_kwargs: snapshot())
         runtime.snapshot = snapshot()
-        screen = MeasuredScreen(["x", "x", "j", "k", "q"])
+        screen = MeasuredScreen(["x", "y", "x", "j", "k", "q"])
         try:
             with terminal(), mock.patch.object(rig_tui.rig_jobs, "cancel_job", side_effect=slow_cancel) as cancel:
                 rig_tui._paint(screen, Path("/fixture"), runtime=runtime)
                 self.assertTrue(entered.wait(1))
                 cancel.assert_called_once_with(Path("/fixture"), "job-000", "tui")
             screen.assert_responsive(self)
-            self.assertTrue(any("stop requested job-000" in cell[2] for cell in screen.frames[1]))
-            self.assertTrue(any("stop already requested job-000" in cell[2] for cell in screen.frames[2]))
+            confirm = "\n".join(cell[2] for cell in screen.frames[1])
+            self.assertIn("Stop job job-000", confirm)
+            self.assertIn("y confirm", confirm)
+            self.assertTrue(any("stop requested job-000" in cell[2] for cell in screen.frames[2]))
+            self.assertTrue(any("stop already requested job-000" in cell[2] for cell in screen.frames[3]))
         finally:
             release.set()
 
@@ -151,15 +154,32 @@ class InputResponsiveness(unittest.TestCase):
         runtime.submit.assert_not_called()
         self.assertEqual(len(screen.frames), len(keys))
 
+    def test_cancel_confirmation_does_not_mutate_before_confirm_or_on_abort(self):
+        runtime = ScriptedRuntime([snapshot()])
+        runtime.submit = mock.Mock(return_value=True)
+        screen = BoardScr(["x", "n", "q"])
+        with terminal():
+            rig_tui._paint(screen, Path("/fixture"), runtime=runtime)
+        runtime.submit.assert_not_called()
+        first = "\n".join(cell[2] for cell in screen.frames[1])
+        self.assertIn("Stop job job-000", first)
+        self.assertIn("scoped task", first)
+        self.assertIn("y confirm · any other key aborts", first)
+        aborted = "\n".join(cell[2] for cell in screen.frames[2])
+        self.assertIn("Cancellation aborted job-000", aborted)
+
     def test_queued_rows_can_be_selected_without_guessing_scope(self):
         state = Snapshot(pending=[{"id": "queue-one", "text": "one", "status": "pending", "waiting_reason": "Execution capacity full (3/3)"},
                                   {"id": "queue-two", "text": "two", "status": "pending", "waiting_reason": "Awaiting parent scope and claim"}],
                          captured_at=time.monotonic())
         runtime = ScriptedRuntime([state])
         runtime.submit = mock.Mock(return_value=True)
-        screen = BoardScr(["\t", "j", "x", "q"])
+        screen = BoardScr(["\t", "j", "x", "y", "q"])
         with terminal():
             rig_tui._paint(screen, Path("/fixture"), runtime=runtime)
+        confirm = "\n".join(cell[2] for cell in screen.frames[3])
+        self.assertIn("Cancel queue item queue-two", confirm)
+        self.assertIn("y confirm", confirm)
         self.assertEqual(runtime.submit.call_count, 1)
         self.assertEqual(runtime.submit.call_args.args[0], "cancel:Queue:queue-two")
         action = runtime.submit.call_args.args[1]
@@ -208,11 +228,12 @@ class InputResponsiveness(unittest.TestCase):
                 return results
 
         runtime = Refused()
-        screen = BoardScr(["x", "x", "q"])
+        screen = BoardScr(["x", "y", "x", "y", "q"])
         with terminal():
             rig_tui._paint(screen, Path("/fixture"), runtime=runtime)
         self.assertEqual(runtime.submitted, ["cancel:Jobs:job-000"] * 2)
-        self.assertTrue(any("Action failed: job disappeared" in cell[2] for cell in screen.frames[1]))
+        self.assertTrue(any("Action failed: job disappeared" in cell[2]
+                            for frame in screen.frames for cell in frame))
 
 
 class RuntimeIsolation(unittest.TestCase):

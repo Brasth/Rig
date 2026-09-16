@@ -129,8 +129,10 @@ class BoardProjection(unittest.TestCase):
 
     @staticmethod
     def project(job, **_kwargs):
-        return {**job, "display_state": "working", "display_reason": "", "display_action": "",
-                "verification_summary": {"state": "pending"}, "independence": "unknown"}
+        return {**job, "display_state": job.get("display_state") or "working", "display_reason": job.get("display_reason") or "",
+                "display_action": job.get("display_action") or "",
+                "verification_summary": job.get("verification_summary") or {"state": "pending"},
+                "independence": job.get("independence") or "unknown"}
 
     def paint(self, screen, snapshots, times=None, workflows=None):
         snaps = []
@@ -170,7 +172,8 @@ class BoardProjection(unittest.TestCase):
         first, second = self.job(1), self.job(2)
         screen = BoardScr([ord("j"), ord("q")])
         self.paint(screen, [[first, second], [second, first]], times=[10, 11])
-        detail_id = next(call[2] for call in screen.frames[-1] if call[0] == 2 and call[1] > 33)
+        detail_id = next(call[2] for call in screen.frames[-1]
+                         if call[0] == 2 and call[1] > 0 and call[2] == second["job_id"])
         self.assertEqual(detail_id, second["job_id"])
 
     def test_visible_rows_share_cache_and_history_is_not_refreshed(self):
@@ -327,6 +330,51 @@ class BoardProjection(unittest.TestCase):
         self.assertIn("wf-active", body)
         self.assertNotIn("press y", body.lower())
         self.assertNotIn("owner_token", body)
+
+    def test_attention_first_list_shows_task_and_state_label(self):
+        done = {**self.job(1), "effective": "ok", "display_state": "completed-unverified",
+                "task": "historical work"}
+        running = {**self.job(2), "effective": "running", "display_state": "working",
+                   "task": "live implementation"}
+        ask = {**self.job(3), "effective": "ask", "display_state": "needs-input",
+               "task": "needs a decision"}
+        ordered = rig_tui.attention_first_jobs([done, running, ask])
+        self.assertEqual([row["job_id"] for row in ordered], ["job-003", "job-002", "job-001"])
+        row = rig_tui.format_list_row("Jobs", ask, 48, selected=True, state="needs-input")
+        self.assertIn("ASK", row)
+        self.assertIn("needs a decision", row)
+        self.assertIn("job-003", row)
+        self.assertTrue(row.startswith("▸"))
+        screen = BoardScr([ord("q")], h=16, w=100)
+        self.paint(screen, [[done, running, ask]])
+        left = [call[2] for call in screen.frames[0] if call[1] == 0 and 2 <= call[0] < 5]
+        self.assertTrue(any("ASK" in line and "needs a decision" in line for line in left), left)
+        self.assertLess(left[0].find("ASK"), left[0].find("needs a decision"))
+        self.assertIn("job-003", left[0])
+        self.assertTrue(any("WORK" in line and "live implementation" in line for line in left), left)
+        self.assertTrue(any("DONE" in line and "historical work" in line for line in left), left)
+
+    def test_help_overlay_is_discoverable(self):
+        screen = BoardScr(["?", "q"], h=18, w=100)
+        self.paint(screen, [[self.job(1)]])
+        idle = "\n".join(call[2] for call in screen.frames[0])
+        self.assertIn("? help", idle)
+        help_frame = "\n".join(call[2] for call in screen.frames[1])
+        self.assertIn("Help", help_frame)
+        self.assertIn("y / n", help_frame)
+        self.assertIn("Cancel selected job or queue item", help_frame)
+        self.assertIn("attention-first", help_frame)
+
+    def test_narrow_stack_keeps_task_and_identity_readable(self):
+        job = {**self.job(1), "display_state": "needs-input", "effective": "ask",
+               "task": "approve the patch"}
+        screen = BoardScr([ord("q")], h=12, w=60)
+        self.paint(screen, [[job]])
+        frame = "\n".join(call[2] for call in screen.frames[0])
+        self.assertIn("job-001", frame)
+        self.assertIn("ASK", frame)
+        self.assertIn("approve the patch", frame)
+        self.assertNotIn("│", frame)
 
 
 if __name__ == "__main__":
