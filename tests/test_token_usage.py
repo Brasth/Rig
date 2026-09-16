@@ -118,6 +118,17 @@ class TokenUsage(unittest.TestCase):
             {"type": "result", "usage": {"input": 8, "output": 1}},
         ]))
 
+    def test_source_provenance_strict(self):
+        self.assertEqual(usage.usage_source({"source": "parent"}, default="parent"), "parent")
+        self.assertEqual(usage.usage_source({"input": 1}, default="wrapper"), "wrapper")
+        self.assertEqual(usage.usage_source({"source": "native_child"}), "native_child")
+        self.assertEqual(usage.usage_source(None), "")
+        with self.assertRaises(usage.UsageError):
+            usage.usage_source({"source": "guessed"})
+        with self.assertRaises(usage.UsageError):
+            usage.usage_source({"source": "parent"}, default="wrapper")
+        self.assertNotIn("cost", usage.FIELDS)
+
     def test_job_dir_reads_stdout_only(self):
         with tempfile.TemporaryDirectory() as temp:
             job = Path(temp)

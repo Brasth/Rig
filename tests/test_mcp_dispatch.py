@@ -45,6 +45,14 @@ DISPATCH_TOOLS = (
     "rig_job_finish",
     "rig_job_record",
 )
+BILLING_TOOLS = (
+    "rig_billing_report",
+    "rig_billing_import",
+    "rig_billing_sync",
+    "rig_benchmark_report",
+    "rig_benchmark_create",
+    "rig_benchmark_outcome",
+)
 EXISTING_TOOLS = (
     "rig_jobs",
     "rig_job_show",
@@ -65,6 +73,7 @@ EXISTING_TOOLS = (
     "rig_job_recover_cancelled",
     "rig_job_recover_parent_write",
     "rig_job_recover_wrapper_receipt",
+    "rig_job_break_glass_close",
 )
 WORKFLOW_TOOLS = (
     "rig_workflow_create",
@@ -155,6 +164,7 @@ class McpDispatch(unittest.TestCase):
                 "RIG_SKIP_MODEL_CATALOG",
                 "RIG_JOB_ID",
                 "RIG_JOB_DIR",
+                "RIG_REPO",
             )
         }
         os.environ["PATH"] = _stub_path(self.bins)
@@ -165,6 +175,7 @@ class McpDispatch(unittest.TestCase):
         os.environ.pop("RIG_THREAD", None)
         os.environ.pop("RIG_JOB_ID", None)
         os.environ.pop("RIG_JOB_DIR", None)
+        os.environ.pop("RIG_REPO", None)
 
     def tearDown(self):
         for key, val in self._env.items():
@@ -190,7 +201,7 @@ class McpDispatch(unittest.TestCase):
 
     def test_tools_list_includes_dispatch(self):
         names = [t["name"] for t in rig_mcp.TOOLS]
-        for name in DISPATCH_TOOLS + EXISTING_TOOLS + WORKFLOW_TOOLS:
+        for name in DISPATCH_TOOLS + EXISTING_TOOLS + WORKFLOW_TOOLS + BILLING_TOOLS:
             self.assertIn(name, names)
         self.assertEqual(names[0], "rig_session")
         self.assertNotIn("rig_spawn", names)
@@ -454,6 +465,8 @@ class McpDispatch(unittest.TestCase):
             self.assertNotIn("rig_job_recover_cancelled", names)
             self.assertNotIn("rig_job_recover_parent_write", names)
             self.assertNotIn("rig_job_recover_wrapper_receipt", names)
+            self.assertNotIn("rig_job_break_glass_close", names)
+            self.assertNotIn("rig_billing_import", names)
             self.assertNotIn("rig_job_message", names)
             self.assertNotIn("rig_queue_add", names)
             self.assertNotIn("rig_queue_claim", names)
@@ -482,6 +495,13 @@ class McpDispatch(unittest.TestCase):
             )
             self.assertTrue(receipt.get("isError"))
             self.assertIn("not a child tool", self._text(receipt))
+            glass = rig_mcp.call_tool(
+                "rig_job_break_glass_close",
+                {"id": job_id, "repo": str(self.repo), "credentials_path": "/tmp/x",
+                 "confirmed_stopped": True, "rationale": "child must not break-glass"},
+            )
+            self.assertTrue(glass.get("isError"))
+            self.assertIn("not a child tool", self._text(glass))
             inbox0 = rig_mcp.call_tool("rig_job_inbox", {})
             self.assertNotIn("isError", inbox0)
             self.assertEqual(self._text(inbox0), "(empty)")
@@ -1263,6 +1283,73 @@ class McpDispatch(unittest.TestCase):
         )
         self.assertTrue(linked.get("isError"))
         self.assertNotIn(lease["owner_token"], self._text(linked))
+
+    def _failed_wrapper(self, job_id="wrap-fail", status="fail"):
+        files = ["fail.py"]
+        (self.repo / "fail.py").write_text("x\n")
+        owner = admission.caller_owner("wrapper", owner_session="mcp-wrap")
+        lease = admission.reserve(
+            self.repo, job_id=job_id, worker="grok", role="implement", files=files,
+            access="write", owner=owner, owner_session="mcp-wrap",
+        )
+        job = self.repo / ".rig" / "jobs" / job_id
+        job.mkdir(parents=True, exist_ok=True)
+        (job / "meta.json").write_text(json.dumps({
+            "job_id": job_id, "worker": "grok", "role": "implement", "files": files,
+            "status": status, "executor_kind": "wrapper", "kind": "wrapper",
+            "reservation_id": lease["reservation_id"], "attempt_id": lease["attempt_id"],
+            "ownership_established": True,
+        }))
+        path = admission.write_credentials(self.repo, {**lease, **admission.credentials(lease)})
+        rec_path = self.repo / ".rig" / "reservations" / f"{lease['reservation_id']}.json"
+        record = json.loads(rec_path.read_text())
+        record.update(stopped=True, execution_status=status, stage="verifying", slot_held=False)
+        rec_path.write_text(json.dumps(record, indent=2) + "\n")
+        return lease, path
+
+    def test_break_glass_close_mcp_success_idempotent_and_redacted(self):
+        lease, path = self._failed_wrapper()
+        token = lease["owner_token"]
+        first = rig_mcp.call_tool("rig_job_break_glass_close", {
+            "repo": str(self.repo), "id": "wrap-fail",
+            "credentials_path": str(path), "confirmed_stopped": True,
+            "rationale": "MCP audited close",
+        })
+        self.assertFalse(first.get("isError"), first)
+        payload = json.loads(self._text(first))
+        self.assertEqual(payload["applied"], 1)
+        self.assertEqual(payload["recovery"]["outcome"], "released")
+        self.assertNotIn(token, self._text(first))
+        self.assertNotIn("owner_token", self._text(first))
+        self.assertNotIn(token, json.dumps(first.get("structuredContent") or {}))
+        again = rig_mcp.call_tool("rig_job_break_glass_close", {
+            "repo": str(self.repo), "id": "wrap-fail",
+            "credentials_path": str(path), "confirmed_stopped": True,
+            "rationale": "repeat",
+        })
+        self.assertFalse(again.get("isError"), again)
+        self.assertEqual(json.loads(self._text(again))["applied"], 0)
+        self.assertNotIn(token, self._text(again))
+
+    def test_break_glass_close_mcp_rejects_raw_token_and_ok_status(self):
+        lease, path = self._failed_wrapper("wrap-token")
+        denied = rig_mcp.call_tool("rig_job_break_glass_close", {
+            "repo": str(self.repo), "id": "wrap-token",
+            "credentials_path": str(path), "confirmed_stopped": True,
+            "rationale": "nope", "owner_token": lease["owner_token"],
+        })
+        self.assertTrue(denied.get("isError"))
+        self.assertIn("raw owner tokens", self._text(denied))
+        self.assertNotIn(lease["owner_token"], self._text(denied))
+        ok_lease, ok_path, _rec_path = self._wrapper_job("wrap-ok-status", stopped=True)
+        rejected = rig_mcp.call_tool("rig_job_break_glass_close", {
+            "repo": str(self.repo), "id": "wrap-ok-status",
+            "credentials_path": str(ok_path), "confirmed_stopped": True,
+            "rationale": "ok jobs use ordinary close",
+        })
+        self.assertTrue(rejected.get("isError"))
+        self.assertIn("ok or unknown", self._text(rejected))
+        self.assertNotIn(ok_lease["owner_token"], self._text(rejected))
 
 
 if __name__ == "__main__":

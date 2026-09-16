@@ -325,6 +325,56 @@ TOOLS = [
         },
     },
     {
+        "name": "rig_billing_report",
+        "description": "Read-only invoice-dollar report. Actual receipts only; never estimates.",
+        "inputSchema": {"type": "object", "properties": {
+            "repo": {"type": "string"}, "scope": {"type": "string"},
+        }},
+    },
+    {
+        "name": "rig_billing_import",
+        "description": "Parent-only. Import one actual USD receipt into the local billing ledger. Idempotent. Never stores credentials. dry_run validates without writing.",
+        "inputSchema": {"type": "object", "properties": {
+            "repo": {"type": "string"}, "scope": {"type": "string"},
+            "receipt": {"type": "object"},
+            "dry_run": {"type": "boolean", "default": False},
+        }, "required": ["receipt"]},
+    },
+    {
+        "name": "rig_billing_sync",
+        "description": "Parent-only. OpenAI or Anthropic read-only receipt adapters. Network is explicit/opt-in. Generic providers use rig_billing_import. Never prints credential values.",
+        "inputSchema": {"type": "object", "properties": {
+            "repo": {"type": "string"}, "scope": {"type": "string"},
+            "provider": {"type": "string", "enum": ["openai", "anthropic"]},
+            "receipts": {"type": "array", "items": {"type": "object"}},
+            "dry_run": {"type": "boolean", "default": False},
+            "network": {"type": "boolean", "default": False},
+        }, "required": ["provider"]},
+    },
+    {
+        "name": "rig_benchmark_report",
+        "description": "Read-only benchmark coverage report. Separates observed tokens from actual invoice dollars. Savings is gated.",
+        "inputSchema": {"type": "object", "properties": {
+            "repo": {"type": "string"}, "id": {"type": "string"}, "scope": {"type": "string"},
+        }, "required": ["id"]},
+    },
+    {
+        "name": "rig_benchmark_create",
+        "description": "Parent-only. Freeze a local benchmark spec under .rig/benchmarks/<id>.",
+        "inputSchema": {"type": "object", "properties": {
+            "repo": {"type": "string"}, "spec": {"type": "object"},
+        }, "required": ["spec"]},
+    },
+    {
+        "name": "rig_benchmark_outcome",
+        "description": "Parent-only. Attribute a currently accepted job to a frozen benchmark task and arm.",
+        "inputSchema": {"type": "object", "properties": {
+            "repo": {"type": "string"}, "id": {"type": "string"},
+            "job_id": {"type": "string"}, "task": {"type": "string"},
+            "arm": {"type": "string", "enum": ["rig", "baseline"]},
+        }, "required": ["id", "job_id", "task", "arm"]},
+    },
+    {
         "name": "rig_status",
         "description": (
             "Show live parent (this process / RIG_PARENT, not the toml parent key), "
@@ -377,6 +427,10 @@ TOOLS = [
                 },
                 "summary": {"type": "string"},
                 "repo": {"type": "string"},
+                "token_usage": {
+                    "type": "object",
+                    "description": "Optional observed canonical token usage. Never estimated. Opaque parent usage stays unknown if omitted.",
+                },
             },
             "required": ["id"],
         },
@@ -404,6 +458,10 @@ TOOLS = [
                 "summary": {"type": "string"},
                 "id": {"type": "string"},
                 "repo": {"type": "string"},
+                "token_usage": {
+                    "type": "object",
+                    "description": "Optional observed canonical token usage. Never estimated.",
+                },
             },
         },
     },
@@ -770,6 +828,21 @@ TOOLS.extend([
          "Never accepts, closes, releases, mutates a reservation, or invents a token."
      ),
      "inputSchema": {"type": "object", "properties": {**_JOB_REF_PROPERTIES}, "required": ["id"]}},
+    {"name": "rig_job_break_glass_close",
+     "description": (
+         "Parent-only audited break-glass close of a confirmed-stopped failed or cancelled wrapper. "
+         "Requires the canonical mode-0600 owner-credentials path, confirmed_stopped=true, and rationale. "
+         "Validates current job/reservation/attempt binding, wrapper executor, stopped state, and no "
+         "active/accepted verification. Atomically releases only that scope and writes redacted audit "
+         "evidence. Idempotent. Does not accept raw owner tokens. Ordinary authenticated close is unchanged."
+     ),
+     "inputSchema": {"type": "object", "properties": {
+         **_JOB_REF_PROPERTIES,
+         "credentials_path": {"type": "string"},
+         "confirmed_stopped": {"type": "boolean"},
+         "rationale": {"type": "string"},
+         "owner_session": {"type": "string"},
+     }, "required": ["id", "credentials_path", "confirmed_stopped", "rationale"]}},
 ])
 _WORKFLOW_ID = {"id": {"type": "string", "description": "Workflow id."}, "repo": {"type": "string"}}
 _WORKFLOW_OWNER = {"owner_token": {"type": "string"}, "owner_session": {"type": "string"}}
@@ -827,6 +900,12 @@ TOOL_ORDER = (
     "rig_pick",
     "rig_status",
     "rig_routing_report",
+    "rig_billing_report",
+    "rig_billing_import",
+    "rig_billing_sync",
+    "rig_benchmark_report",
+    "rig_benchmark_create",
+    "rig_benchmark_outcome",
     "rig_job_start",
     "rig_job_launch",
     "rig_job_show",
@@ -840,6 +919,7 @@ TOOL_ORDER = (
     "rig_job_recover_cancelled",
     "rig_job_recover_parent_write",
     "rig_job_recover_wrapper_receipt",
+    "rig_job_break_glass_close",
     "rig_job_accept",
     "rig_memory",
     "rig_memory_add",
@@ -1468,6 +1548,87 @@ def call_tool(name: str, args: dict, on_tick=None, *, wait_paths: list[Path] | N
                 return _err("days must be a positive integer")
             report = routing_report.build_report(repo, days=days)
             return {**_ok(routing_report.format_report(report)), "structuredContent": report}
+        if name == "rig_billing_report":
+            import billing_ledger
+
+            report = billing_ledger.build_report(repo, scope=_optional_string(args, "scope"))
+            report = billing_ledger.redact_secrets(report)
+            return {**_ok(billing_ledger.format_report(report)), "structuredContent": report}
+        if name == "rig_billing_import":
+            import billing_ledger
+
+            receipt = args.get("receipt")
+            if not isinstance(receipt, dict):
+                return _err("receipt must be an object")
+            if args.get("dry_run") not in (None, True, False):
+                return _err("dry_run must be a boolean")
+            result = billing_ledger.import_receipt(
+                repo, receipt, scope=_optional_string(args, "scope"),
+                dry_run=args.get("dry_run") is True,
+            )
+            result = billing_ledger.redact_secrets(result)
+            return {**_ok(billing_ledger.public_json(result)), "structuredContent": result}
+        if name == "rig_billing_sync":
+            import billing_ledger
+
+            provider = _optional_string(args, "provider")
+            receipts = args.get("receipts")
+            if receipts is not None and not isinstance(receipts, list):
+                return _err("receipts must be an array of objects")
+            if args.get("dry_run") not in (None, True, False) or args.get("network") not in (None, True, False):
+                return _err("dry_run and network must be booleans")
+            result = billing_ledger.sync_receipts(
+                repo, provider, receipts=receipts, scope=_optional_string(args, "scope"),
+                dry_run=args.get("dry_run") is True, network=args.get("network") is True,
+            )
+            result = billing_ledger.redact_secrets(result)
+            return {**_ok(billing_ledger.public_json(result)), "structuredContent": result}
+        if name == "rig_benchmark_report":
+            import benchmark_reporting as bench
+
+            bid = _optional_string(args, "id").strip()
+            if not bid:
+                return _err("rig_benchmark_report needs id")
+            report = bench.build_report(repo, bid, scope=_optional_string(args, "scope"))
+            return {**_ok(bench.format_report(report)), "structuredContent": report}
+        if name == "rig_benchmark_create":
+            import benchmark_reporting as bench
+
+            spec = args.get("spec")
+            if not isinstance(spec, dict):
+                return _err("spec must be an object")
+            result = bench.create_spec(repo, spec)
+            return {**_ok(json.dumps(result, indent=2)), "structuredContent": result}
+        if name == "rig_benchmark_outcome":
+            import benchmark_reporting as bench
+
+            result = bench.record_outcome(
+                repo, _optional_string(args, "id"),
+                job_id=_optional_string(args, "job_id"),
+                task=_optional_string(args, "task"),
+                arm=_optional_string(args, "arm"),
+            )
+            return {**_ok(json.dumps(result, indent=2)), "structuredContent": result}
+        if name == "rig_job_break_glass_close":
+            job_id = _optional_string(args, "id").strip()
+            if not job_id:
+                return _err("rig_job_break_glass_close needs id")
+            if args.get("confirmed_stopped") is not True:
+                return _err("break-glass close requires confirmed_stopped=true")
+            for banned in ("owner_token", "reservation_id", "attempt_id"):
+                if args.get(banned) not in (None, ""):
+                    return _err("break-glass close does not accept raw owner tokens")
+            result = rig_jobs.break_glass_close_job(
+                repo, job_id,
+                credentials_path=_optional_string(args, "credentials_path"),
+                confirmed_stopped=True,
+                rationale=_optional_string(args, "rationale"),
+                owner_session=_optional_string(args, "owner_session"),
+            )
+            dumped = json.dumps(result, indent=2)
+            if "owner_token" in dumped:
+                dumped = json.dumps({key: value for key, value in result.items() if key != "owner_token"}, indent=2)
+            return {**_ok(dumped), "structuredContent": result}
         if name == "rig_job_close":
             result = rig_jobs.close_job(repo, _optional_string(args, "id"),
                                         rationale=_optional_string(args, "rationale"), **_job_ownership_args(args, repo))
@@ -1570,6 +1731,9 @@ def call_tool(name: str, args: dict, on_tick=None, *, wait_paths: list[Path] | N
             if name == "rig_job_finish":
                 if status not in JOB_FINISH_STATUSES:
                     return _err("status must be ok|fail|timeout|cancelled")
+                usage = args.get("token_usage")
+                if usage not in (None, "") and not isinstance(usage, dict):
+                    return _err("token_usage must be an object")
                 result = rig_jobs.finish_job(
                         repo,
                         job_id,
@@ -1579,11 +1743,16 @@ def call_tool(name: str, args: dict, on_tick=None, *, wait_paths: list[Path] | N
                         role=role,
                         live=live,
                         preferred=preferred,
-                        completion=args.get("completion"), return_details=True, **_job_ownership_args(args, repo),
+                        completion=args.get("completion"), return_details=True,
+                        token_usage=usage if usage not in (None, "") else None,
+                        **_job_ownership_args(args, repo),
                 )
                 return {**_ok(result["text"]), "structuredContent": result}
             if status not in JOB_RECORD_STATUSES:
                 return _err("record status must be ok|fail|timeout")
+            usage = args.get("token_usage")
+            if usage not in (None, "") and not isinstance(usage, dict):
+                return _err("token_usage must be an object")
             return _ok(
                 rig_jobs.record_job(
                     repo,
@@ -1594,6 +1763,7 @@ def call_tool(name: str, args: dict, on_tick=None, *, wait_paths: list[Path] | N
                     job_id=job_id,
                     live=live,
                     preferred=preferred,
+                    token_usage=usage if usage not in (None, "") else None,
                     **_execution_args(args),
                 )
             )

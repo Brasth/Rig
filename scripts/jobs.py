@@ -831,44 +831,65 @@ def _resolve_token_usage(
     status: str,
     supplied=None,
     previous=None,
-) -> dict | None:
+    previous_source: str = "",
+) -> tuple[dict | None, str]:
     import token_usage as rig_tokens
 
+    kind = executor_kind if executor_kind in rig_tokens.SOURCES else ""
     if supplied is not None:
-        return rig_tokens.load_token_usage(supplied)
+        tokens = rig_tokens.normalize_token_usage(supplied)
+        source = rig_tokens.usage_source(supplied, default=kind)
+        if not tokens or not source:
+            raise rig_tokens.UsageError("observed usage requires canonical tokens and source provenance")
+        return tokens, source
     prior = rig_tokens.load_token_usage(previous)
-    if executor_kind == "parent":
-        return prior
-    if status not in {"ok", "fail", "timeout", "cancelled"}:
-        return prior
-    return rig_tokens.usage_from_job_dir(job_dir) or prior
+    prior_source = ""
+    if prior and previous_source:
+        try:
+            prior_source = rig_tokens.usage_source({"source": previous_source}, default=previous_source)
+        except rig_tokens.UsageError:
+            prior_source = ""
+    if executor_kind == "parent" or status not in {"ok", "fail", "timeout", "cancelled"}:
+        return (prior, prior_source) if prior else (None, "")
+    found = rig_tokens.usage_from_job_dir(job_dir)
+    if found:
+        return found, kind or "wrapper"
+    return (prior, prior_source) if prior else (None, "")
 
 
 def persist_token_usage(job_dir: Path, *, supplied=None) -> dict | None:
     """Write optional token_usage onto meta/result. Unknown stays omitted, never zero."""
+    import token_usage as rig_tokens
+
     job_dir = Path(job_dir)
     snapshot = _read_meta_dict(job_dir)
-    usage = _resolve_token_usage(
-        job_dir,
-        executor_kind=str(snapshot.get("executor_kind") or ""),
-        status=str(snapshot.get("status") or ""),
-        supplied=supplied,
-        previous=snapshot.get("token_usage"),
-    )
+    try:
+        usage, source = _resolve_token_usage(
+            job_dir,
+            executor_kind=str(snapshot.get("executor_kind") or ""),
+            status=str(snapshot.get("status") or ""),
+            supplied=supplied,
+            previous=snapshot.get("token_usage"),
+            previous_source=str(snapshot.get("token_usage_source") or ""),
+        )
+    except rig_tokens.UsageError as error:
+        raise SystemExit(f"rig job: {error}") from error
     if not usage:
         return None
     with job_metadata.metadata_lock(job_dir):
         if not (job_dir / "meta.json").is_file():
             return usage
         meta = job_metadata.read_json_object(job_dir / "meta.json")
-        if meta.get("token_usage") != usage:
+        if meta.get("token_usage") != usage or meta.get("token_usage_source") != source:
             meta["token_usage"] = usage
+            meta["token_usage_source"] = source
             job_metadata.write_json_atomic(job_dir / "meta.json", meta)
         result_path = job_dir / "result.json"
         if result_path.is_file():
             result = job_metadata.read_json_object(result_path)
-            if result.get("token_usage") != usage:
+            if result.get("token_usage") != usage or result.get("token_usage_source") != source:
                 result["token_usage"] = usage
+                result["token_usage_source"] = source
                 job_metadata.write_json_atomic(result_path, result)
     return usage
 
@@ -1211,6 +1232,9 @@ def load_job(job_path: Path, *, include_activity: bool = True) -> dict | None:
         if isinstance(obj.get("files"), list)
         else [],
         "token_usage": _load_token_usage(obj.get("token_usage")),
+        "token_usage_source": (
+            str(obj.get("token_usage_source") or "") if _load_token_usage(obj.get("token_usage")) else ""
+        ),
     }
     import verification
 
@@ -2010,15 +2034,22 @@ def write_job_files(
     elapsed = elapsed_seconds(started_at, ended_at, live=live)
     if elapsed is not None:
         obj["elapsed_s"] = elapsed
-    usage = _resolve_token_usage(
-        job_dir,
-        executor_kind=executor_kind,
-        status=status,
-        supplied=token_usage,
-        previous=old.get("token_usage"),
-    )
+    import token_usage as rig_tokens
+
+    try:
+        usage, usage_source = _resolve_token_usage(
+            job_dir,
+            executor_kind=executor_kind,
+            status=status,
+            supplied=token_usage,
+            previous=old.get("token_usage"),
+            previous_source=str(old.get("token_usage_source") or ""),
+        )
+    except rig_tokens.UsageError as error:
+        raise SystemExit(f"rig job: {error}") from error
     if usage:
         obj["token_usage"] = usage
+        obj["token_usage_source"] = usage_source
 
     def commit(latest):
         merged = job_metadata.merge_record(latest, obj)
@@ -2381,6 +2412,24 @@ def close_job(repo: Path, job_id: str, *, reservation_id: str = "", attempt_id: 
                                  rationale=rationale, mode="close")
 
 
+def break_glass_close_job(repo: Path, job_id: str, *, credentials_path: str = "",
+                          confirmed_stopped: bool = False, rationale: str = "",
+                          owner=None, owner_session: str = "") -> dict:
+    """Parent-only audited close of a confirmed-stopped failed/cancelled wrapper."""
+    _require_harness(repo)
+    _native_parent_only()
+    import admission
+
+    if not job_id:
+        raise ValueError("rig job: break-glass-close requires a job ID")
+    with admission.transaction(repo):
+        return admission.breakglass_close_stopped_wrapper(
+            repo, job_id=job_id, credentials_path=credentials_path,
+            confirmed_stopped=confirmed_stopped, rationale=rationale,
+            owner=owner, owner_session=owner_session,
+        )
+
+
 def reconcile_jobs(repo: Path, job_id: str = "", **options) -> dict:
     _require_harness(repo)
     _native_parent_only()
@@ -2469,6 +2518,7 @@ def record_job(
     effort: str = "",
     executor_kind: str = "",
     files: list | None = None,
+    token_usage=None,
 ) -> str:
     """One-shot start+finish like `rig job record`. Files only."""
     _require_harness(repo)
@@ -2500,6 +2550,7 @@ def record_job(
         effort=effort,
         executor_kind=executor_kind,
         execution_mode="retrospective",
+        token_usage=token_usage,
     )
 
 
@@ -2683,7 +2734,7 @@ def main() -> int:
             "persist",
             "message",
             "start", "finish", "record", "close", "reconcile", "recover-cancelled",
-            "recover-parent-write",
+            "recover-parent-write", "break-glass-close",
         ],
     )
     parser.add_argument("job_id", nargs="*")
@@ -2716,6 +2767,7 @@ def main() -> int:
     parser.add_argument("--queue-id", default="")
     parser.add_argument("--native-agent-id", default="")
     parser.add_argument("--completion-json")
+    parser.add_argument("--token-usage-json", default="")
     parser.add_argument("--writer-job-id", default="")
     parser.add_argument("--writer-snapshot-id", default="")
     parser.add_argument("--routing-json", default="")
@@ -2723,12 +2775,13 @@ def main() -> int:
     parser.add_argument("--rationale", default="")
     parser.add_argument("--apply", action="store_true")
     parser.add_argument("--confirmed-stopped", action="store_true")
+    parser.add_argument("--credentials-path", default="")
     parser.add_argument("--action", choices=["report", "adopt", "release"], default="report")
     args = parser.parse_intermixed_args()
     repo = repo_root(args.repo)
     wait_ids = [str(x).strip() for x in (args.job_id or []) if str(x).strip()]
     job_id = wait_ids[0] if wait_ids else None
-    if args.cmd in {"start", "finish", "record", "close", "reconcile", "recover-cancelled", "recover-parent-write"}:
+    if args.cmd in {"start", "finish", "record", "close", "reconcile", "recover-cancelled", "recover-parent-write", "break-glass-close"}:
         if len(wait_ids) > 1:
             parser.error("this command accepts one job ID")
         ownership = {"reservation_id": args.reservation_id, "attempt_id": args.attempt_id,
@@ -2738,6 +2791,7 @@ def main() -> int:
         try:
             files = json.loads(args.files_json) if args.files_json is not None else None
             completion = json.loads(args.completion_json) if args.completion_json is not None else None
+            token_usage = json.loads(args.token_usage_json) if args.token_usage_json else None
             if args.cmd == "start":
                 routing = json.loads(args.routing_json) if args.routing_json else None
                 assessment = json.loads(args.assessment_json) if args.assessment_json else None
@@ -2750,13 +2804,24 @@ def main() -> int:
                 print(f"job {result['job_id']} status=running\ncredentials {result['credentials_path']}", file=sys.stderr)
             elif args.cmd == "finish":
                 result = finish_job(repo, job_id or "", status=args.status, completion=completion,
-                                    return_details=True, **common, **ownership)
+                                    return_details=True, token_usage=token_usage, **common, **ownership)
                 print(json.dumps(result) if args.json else result["text"])
             elif args.cmd == "record":
-                result = record_job(repo, job_id=job_id or "", status=args.status, files=files, **common)
+                result = record_job(repo, job_id=job_id or "", status=args.status, files=files,
+                                    token_usage=token_usage, **common)
                 print(result)
             elif args.cmd == "close":
                 print(json.dumps(close_job(repo, job_id or "", rationale=args.rationale, **ownership)))
+            elif args.cmd == "break-glass-close":
+                result = break_glass_close_job(
+                    repo, job_id or "", credentials_path=args.credentials_path,
+                    confirmed_stopped=args.confirmed_stopped, rationale=args.rationale,
+                    owner_session=args.owner_session,
+                )
+                dumped = json.dumps(result)
+                if ownership.get("owner_token"):
+                    dumped = dumped.replace(ownership["owner_token"], "")
+                print(dumped)
             elif args.cmd == "recover-cancelled":
                 print(json.dumps(recover_cancelled_job(repo, job_id or "", rationale=args.rationale,
                                                        apply=args.apply, **ownership)))
@@ -2771,7 +2836,14 @@ def main() -> int:
                     worker=args.worker, access=args.access or "write", files=files,
                     rationale=args.rationale, completion=completion)))
         except (ValueError, OSError) as error:
-            parser.exit(2, f"rig job: {error}\n")
+            message = str(error)
+            token = ownership.get("owner_token") or ""
+            if token:
+                message = message.replace(token, "")
+            if args.cmd == "break-glass-close" or args.json:
+                print(json.dumps({"error": message}), file=sys.stderr)
+                parser.exit(2)
+            parser.exit(2, f"rig job: {message}\n")
         return 0
     if args.cmd == "message":
         job = resolve_job(repo, job_id)

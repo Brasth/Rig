@@ -932,6 +932,28 @@ class TokenUsagePersistence(unittest.TestCase):
             kind="native", executor_kind="parent", token_usage=usage,
         )
         self.assertEqual(json.loads((self.job / "meta.json").read_text())["token_usage"], usage)
+        self.assertEqual(json.loads((self.job / "meta.json").read_text())["token_usage_source"], "parent")
+
+    def test_malformed_supplied_usage_is_rejected(self):
+        with self.assertRaises(SystemExit):
+            jobs.write_job_files(
+                self.job, "job", "codex", "implement", "ok", 0,
+                "2026-09-14T00:00:00Z", "2026-09-14T00:00:01Z", "done",
+                kind="native", executor_kind="parent", token_usage={"input": -1},
+            )
+
+    def test_wrapper_records_source_provenance(self):
+        usage = {"input": 3, "output": 1, "total": 4}
+        (self.job / "stdout.log").write_text(json.dumps({"type": "result", "usage": usage}) + "\n")
+        jobs.write_job_files(
+            self.job, "job", "grok", "implement", "ok", 0,
+            "2026-09-14T00:00:00Z", "2026-09-14T00:00:01Z", "done",
+            kind="wrapper", executor_kind="wrapper",
+        )
+        meta = json.loads((self.job / "meta.json").read_text())
+        self.assertEqual(meta["token_usage"], usage)
+        self.assertEqual(meta["token_usage_source"], "wrapper")
+        self.assertEqual(jobs.load_job(self.job)["token_usage_source"], "wrapper")
 
     def test_partial_usage_persists_without_inventing_fields(self):
         partial = {"input": 8, "output": 2}
@@ -949,6 +971,22 @@ class TokenUsagePersistence(unittest.TestCase):
         loaded = jobs.load_job(self.job)
         self.assertEqual(loaded["token_usage"], partial)
         self.assertNotIn("total", loaded["token_usage"])
+
+    def test_native_child_records_source_and_does_not_infer_dollars(self):
+        usage = {"input": 5, "output": 2, "total": 7}
+        (self.job / "stdout.log").write_text(json.dumps({
+            "type": "result",
+            "usage": {**usage, "total_cost_usd": 0.42},
+        }) + "\n")
+        jobs.write_job_files(
+            self.job, "job", "codex", "implement", "ok", 0,
+            "2026-09-14T00:00:00Z", "2026-09-14T00:00:01Z", "done",
+            kind="native", executor_kind="native_child",
+        )
+        meta = json.loads((self.job / "meta.json").read_text())
+        self.assertEqual(meta["token_usage"], usage)
+        self.assertEqual(meta["token_usage_source"], "native_child")
+        self.assertNotIn("total_cost_usd", meta["token_usage"])
 
 
 class DirectParentStartIdentity(unittest.TestCase):
@@ -1106,6 +1144,96 @@ class McpTools(unittest.TestCase):
         p.wait(timeout=2)
         self.assertIn(b'"protocolVersion": "2025-03-26"', buf)
         self.assertIn(b'"name": "rig"', buf)
+
+
+class BreakGlassClose(unittest.TestCase):
+    def setUp(self):
+        import tempfile
+
+        self.td = tempfile.TemporaryDirectory()
+        self.repo = Path(self.td.name).resolve()
+        (self.repo / ".git").mkdir()
+        (self.repo / ".rig").mkdir()
+        (self.repo / ".rig" / "harness.toml").write_text(
+            'parent = "codex"\n[workers]\ngrok = true\nclaude = true\ncodex = true\n'
+        )
+        self._env = {k: os.environ.get(k) for k in ("RIG_JOB_ID", "RIG_JOB_DIR", "RIG_OWNER_TOKEN")}
+        for key in self._env:
+            os.environ.pop(key, None)
+
+    def tearDown(self):
+        for key, val in self._env.items():
+            if val is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = val
+        self.td.cleanup()
+
+    def _stopped_wrapper(self, job="wrap", status="fail"):
+        import admission
+
+        owner = admission.caller_owner("wrapper", owner_session="jobs-wrap")
+        lease = admission.reserve(
+            self.repo, job_id=job, worker="grok", files=["a.py"], owner=owner,
+            owner_session="jobs-wrap",
+        )
+        folder = self.repo / ".rig" / "jobs" / job
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / "meta.json").write_text(json.dumps({
+            "job_id": job, "worker": "grok", "role": "implement", "files": ["a.py"],
+            "status": status, "executor_kind": "wrapper", "kind": "wrapper",
+            "reservation_id": lease["reservation_id"], "attempt_id": lease["attempt_id"],
+            "ownership_established": True,
+        }))
+        path = admission.write_credentials(self.repo, lease)
+        record = admission._read(admission._reservation_path(self.repo, lease["reservation_id"]), required=True)
+        record.update(stopped=True, execution_status=status, stage="verifying", slot_held=False)
+        admission._save(self.repo, record)
+        return lease, path
+
+    def test_jobs_cli_hyphenated_break_glass_close_is_json_and_redacted(self):
+        import subprocess
+
+        lease, path = self._stopped_wrapper()
+        proc = subprocess.run(
+            [sys.executable, str(ROOT / "scripts" / "jobs.py"), "break-glass-close", "wrap",
+             "--repo", str(self.repo), "--credentials-path", str(path),
+             "--confirmed-stopped", "--rationale", "jobs CLI close"],
+            capture_output=True, text=True,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        result = json.loads(proc.stdout)
+        self.assertEqual(result["applied"], 1)
+        self.assertEqual(result["recovery"]["outcome"], "released")
+        self.assertNotIn(lease["owner_token"], proc.stdout)
+        self.assertNotIn(lease["owner_token"], proc.stderr)
+        self.assertNotIn("owner_token", proc.stdout)
+        denied = subprocess.run(
+            [sys.executable, str(ROOT / "scripts" / "jobs.py"), "break-glass-close", "wrap",
+             "--repo", str(self.repo), "--credentials-path", str(path),
+             "--json"],
+            capture_output=True, text=True,
+        )
+        self.assertNotEqual(denied.returncode, 0)
+        err = json.loads(denied.stderr)
+        self.assertIn("error", err)
+        self.assertNotIn(lease["owner_token"], denied.stdout + denied.stderr)
+
+    def test_ordinary_close_unchanged_and_break_glass_rejects_raw_token(self):
+        import admission
+
+        lease, path = self._stopped_wrapper("ordinary")
+        with self.assertRaisesRegex(admission.AdmissionError, "raw owner tokens"):
+            admission.breakglass_close_stopped_wrapper(
+                self.repo, job_id="ordinary", credentials_path=str(path),
+                confirmed_stopped=True, rationale="nope",
+                owner_token=lease["owner_token"],
+            )
+        closed = jobs.close_job(
+            self.repo, "ordinary", rationale="ordinary close",
+            **admission.credentials(lease), owner_session="jobs-wrap",
+        )
+        self.assertEqual(closed["stage"], "released")
 
 
 if __name__ == "__main__":

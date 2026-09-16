@@ -34,7 +34,7 @@ usage: rig <command> [args]
   memory [show]
   memory add "standing fact"
   job start [--worker NAME] [--role ROLE] [id]
-  job finish <id> [--status ok|fail] [--summary TEXT]
+  job finish <id> [--status ok|fail] [--summary TEXT] [--token-usage-json JSON]
   job record [--worker NAME] [--role ROLE] [--status ok|fail] [--summary TEXT] [id]
     start/record metadata: [--model MODEL] [--effort EFFORT] [--executor-kind parent|native_child]
   job show [id]
@@ -45,6 +45,7 @@ usage: rig <command> [args]
   job wait [id ...] [--timeout SECS]
   job message <id> --text TEXT
   job recover-parent-write <id> --confirmed-stopped --rationale TEXT
+  job break-glass-close <id> --credentials-path PATH --confirmed-stopped --rationale TEXT
   queue add [--priority N] [--worker NAME] "text"
   queue list
   queue cancel <id>
@@ -60,6 +61,12 @@ usage: rig <command> [args]
     assessment: [--complexity low|medium|high] [--risk ...] [--uncertainty ...] [--assessment-reason TEXT]
     [--explain] [--policy-mode smart|legacy]
   routing report [--days N] [--json]
+  billing import [--file PATH] [--scope NAME] [--dry-run] [--json]
+  billing sync openai|anthropic [--file PATH] [--scope NAME] [--dry-run] [--validate] [--network] [--json]
+  billing report [--scope NAME] [--json]
+  benchmark create [--file PATH] [--json]
+  benchmark outcome --id ID --job JOB --task TASK --arm rig|baseline [--json]
+  benchmark report --id ID [--json]
   diagram PATH [--ascii] [--popup] [--output PATH]
 
 Stay in Codex, Grok, OpenCode, OMP, Pi, or agy. They can invoke Claude, Cursor, OpenCode, OMP, Pi, agy, Devin, or each other. Devin is child-only.
@@ -1103,6 +1110,25 @@ cmd_routing() {
   esac
 }
 
+cmd_billing() {
+  local sub="${1:-}"
+  case "$sub" in
+    import|sync|report)
+      python3 "$(py_script billing_ledger.py)" --repo "$(repo_root)" "$@"
+      ;;
+    *)
+      echo "usage: rig billing import [--file PATH] [--scope NAME] [--dry-run] [--json]" >&2
+      echo "       rig billing sync openai|anthropic [--file PATH] [--scope NAME] [--dry-run] [--validate] [--network] [--json]" >&2
+      echo "       rig billing report [--scope NAME] [--json]" >&2
+      exit 2
+      ;;
+  esac
+}
+
+cmd_benchmark() {
+  python3 "$(py_script benchmark_reporting.py)" --repo "$(repo_root)" "$@"
+}
+
 cmd_use() {
   local who="${1:-}"
   case "$who" in
@@ -1279,11 +1305,11 @@ cmd_job() {
     requirements|check|accept)
       python3 "$(py_script verification.py)" --repo "$(repo_root)" "$sub" "$@"
       ;;
-    start|finish|record|close|reconcile|recover-parent-write|show|log|allow|deny|cancel|wait|message)
+    start|finish|record|close|reconcile|recover-parent-write|break-glass-close|show|log|allow|deny|cancel|wait|message)
       python3 "$(py_script jobs.py)" "$sub" "$@" --repo "$(repo_root)"
       ;;
     *)
-      echo "usage: rig job start|finish|record|close|reconcile|recover-parent-write|requirements|check|accept|show|log|allow|deny|cancel|wait|message [arguments]" >&2
+      echo "usage: rig job start|finish|record|close|reconcile|recover-parent-write|break-glass-close|requirements|check|accept|show|log|allow|deny|cancel|wait|message [arguments]" >&2
       return 2
       ;;
   esac
@@ -1395,6 +1421,8 @@ main() {
     job) cmd_job "$@" ;;
     pick) cmd_pick "$@" ;;
     routing) cmd_routing "$@" ;;
+    billing) cmd_billing "$@" ;;
+    benchmark) cmd_benchmark "$@" ;;
     session) cmd_session "$@" ;;
     diagram) python3 "$(py_script diagram_preview.py)" "$@" ;;
     -h|--help|help|"") usage ;;
