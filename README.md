@@ -168,6 +168,93 @@ Full profiles, catalog rules, MCP fields, and rollback: [smart routing](docs/sma
 
 When `[orchestration] mode = "adaptive"`, the parent decomposes eligible work into a DAG (at most `max_nodes` 12) and owns the graph, briefs, and acceptance. `single` keeps one-job behavior. Queue and worker caps remain authoritative. Children never spawn or message children; the parent uses `rig_workflow_advance` / `rig_workflow_wait`.
 
+### How an adaptive workflow moves
+
+Parent control plane freezes the spec, schedules ready nodes, and alone unlocks dependents after requirements, checks, and acceptance.
+
+```mermaid
+flowchart TD
+  prompt[User prompt or parked queue] --> parent
+
+  subgraph CP["Parent control plane"]
+    parent[Owns graph briefs acceptance]
+    create[Freeze spec + durable state/events]
+    parent --> create
+  end
+
+  create --> sched
+
+  subgraph ADM["Scheduler / admission"]
+    sched[Routing capacity file/resource side-effect checks]
+    ready{Disjoint ready nodes?}
+    sched --> ready
+  end
+
+  ready -->|yes| n1
+  ready -->|yes| n2
+
+  subgraph WRK["Parallel disjoint workers"]
+    n1[Worker node A]
+    n2[Worker node B]
+    exitA[Exit completed-unverified]
+    exitB[Exit completed-unverified]
+    noChild[Children never spawn children]
+    n1 --> exitA
+    n2 --> exitB
+    n1 -.- noChild
+    n2 -.- noChild
+  end
+
+  exitA --> gate
+  exitB --> gate
+
+  subgraph ACC["Acceptance barrier"]
+    gate[Parent requirements checks acceptance]
+    verify[Final verify]
+    acceptWF[Parent acceptance]
+    verified[Workflow verified]
+    gate -->|accepted required| verify
+    verify --> acceptWF
+    acceptWF --> verified
+  end
+
+  gate -->|reject or exec fail| block
+
+  subgraph FAIL["Reject / exec fail"]
+    block[Blocked or attention isolate]
+    depBlock[Block dependants]
+    finishInd[Independent active work may finish]
+    block --> depBlock
+    block --> finishInd
+  end
+
+  n1 -.->|ASK or coordination| parent
+  n2 -.->|ASK or coordination| parent
+  parent -.->|allow deny or reply then resume| n1
+  parent -.->|allow deny or reply then resume| n2
+
+  parent --> cancel
+
+  subgraph CAN["Cancellation"]
+    cancel[Cancel freezes advancement]
+    cancelDone[cancel-requested / cancelled]
+    cancel --> cancelDone
+  end
+
+  classDef plane fill:#f6f8fa,stroke:#57606a
+  classDef admit fill:#ddf4ff,stroke:#0969da
+  classDef work fill:#dafbe1,stroke:#1a7f37
+  classDef ok fill:#dafbe1,stroke:#1a7f37
+  classDef bad fill:#ffebe9,stroke:#cf222e
+  classDef stop fill:#fff8c5,stroke:#9a6700
+  class parent,create plane
+  class sched,ready,gate admit
+  class n1,n2,exitA,exitB,noChild work
+  class verify,acceptWF,verified ok
+  class block,depBlock,finishInd bad
+  class cancel,cancelDone stop
+```
+
 Durable files: `.rig/workflows/<id>/spec.json`, `state.json`, `events/`, `owner-credentials.json` (mode 0600). Statuses: `planned`, `running`, `attention`, `blocked`, `completed-unverified`, `verified`, `failed`, `cancel-requested`, `cancelled`. Workflow `verified` only after required nodes (and final `verify` when present) have current parent acceptance.
 
 `verify` is parent/final integration (including automatic `final-verify`). `review` is independent post-write review; independent review unavailable stays explicit. Review+seed and parallel writers require file AND resource disjointness. Overlapping writer scopes are rejected, not sequenced. No estimated progress, savings, or ETA.
