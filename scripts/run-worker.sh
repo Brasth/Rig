@@ -666,7 +666,7 @@ case "$WORKER" in
     [[ -n "$EFFORT" ]] && CMD+=(--effort "$EFFORT")
     ;;
   codex)
-    CMD=(codex exec --ephemeral -s workspace-write -C "$REPO")
+    CMD=(codex exec --json --ephemeral -s workspace-write -C "$REPO")
     [[ -n "$MODEL" ]] && CMD+=(-m "$MODEL")
     [[ -n "$EFFORT" ]] && CMD+=(-c "model_reasoning_effort=\"$EFFORT\"")
     CMD+=("$BRIEF_TEXT")

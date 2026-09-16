@@ -1,5 +1,36 @@
 # Release Notes
 
+## Live TUI and Codex Explorer (2026-09-16)
+
+Accepted release for live TUI activity, Codex JSON streaming, and explorer defaults.
+
+Rig TUI now shows normalized live Pi and Codex assistant replies, concise tool status, errors, and final output. Reasoning, raw arguments, and raw tool output remain hidden. Raw logs remain available.
+
+The Codex worker uses JSON streaming.
+
+The shipped explorer default is `gpt-5.6-luna` on profile `codex-explorer-low`. Unsupported `gpt-5.3-codex-mini` is no longer the shipped explorer selector.
+
+`gpt-5.3-codex-spark` is an opt-in `codex-explorer-low` selector override. It is explore-only and cannot be assigned to write roles:
+
+```json
+{
+  "schema_version": 1,
+  "profiles": {
+    "codex-explorer-low": { "selector": "gpt-5.3-codex-spark" }
+  }
+}
+```
+
+### Rollout / restart
+
+Finish or cancel existing work, confirm stopped, accept or close scopes, then fully restart all parent/MCP sessions before admitting new work. Mixed-version admission writers are unsupported.
+
+Spark smoke-test: after the override, explore-only routing may select Spark; write roles must still refuse it. Do not make Spark a baseline.
+
+### Rollback
+
+Remove the `codex-explorer-low` Spark selector override to restore shipped `gpt-5.6-luna`.
+
 ## Adaptive Workflows (combined wait-cancel rollout)
 
 Parent-owned DAG orchestration is locally parent-verified. Documented contracts:

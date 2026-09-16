@@ -219,6 +219,8 @@ class Pick(unittest.TestCase):
         self.assertEqual(c["model"], "")
         self.assertEqual(c["effort"], "")
         self.assertEqual(route.model_for("codex", "hard"), ("gpt-5.6-terra", "medium"))
+        self.assertEqual(route.model_for("codex", "explore"), ("gpt-5.6-luna", "low"))
+        self.assertEqual(route.model_for("codex", "mini"), ("gpt-5.6-luna", "low"))
 
     def test_review_different_vendor(self):
         c = legacy_pick("grok", ["claude", "codex"], "review", "review the writer diff")
@@ -256,7 +258,7 @@ class Pick(unittest.TestCase):
         self.assertIsNotNone(route.assert_child_model("gpt-5.6-sol-high"))
         self.assertIsNotNone(route.assert_child_model("gpt-6-astra"))
         self.assertIsNone(route.assert_child_model("gpt-5.6-luna"))
-        self.assertIsNone(route.assert_child_model("gpt-5.3-codex-mini"))
+        self.assertIsNone(route.assert_child_model("gpt-5.3-codex-spark"))
         self.assertIsNone(route.assert_child_model("claude-opus-5"))
         self.assertIsNone(route.assert_child_model("claude-sonnet-5"))
         self.assertIsNone(route.assert_child_model("claude-haiku-4-5-20251001"))

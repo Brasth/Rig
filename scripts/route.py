@@ -34,7 +34,7 @@ PARENT_ONLY = frozenset(
 # `haiku` has resolved to Sonnet on some CLIs. Opus is allowed as a child.
 # (worker, kind) -> (model, effort)
 MODELS = {
-    ("codex", "explore"): ("gpt-5.3-codex-mini", "low"),
+    ("codex", "explore"): ("gpt-5.6-luna", "low"),
     ("codex", "mini"): ("gpt-5.6-luna", "low"),
     ("codex", "bulk"): ("gpt-5.6-luna", "low"),
     ("codex", "implement"): ("gpt-5.6-luna", "low"),

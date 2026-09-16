@@ -303,7 +303,7 @@ class LaunchTupleValidation(unittest.TestCase):
             "selected_profile": {"id": "codex-explorer-low", "provider": "forged"},
         }
         manual = policy.validate_launch_tuple(
-            self.repo, worker="codex", model="gpt-5.3-codex-mini", effort="low", role="explore",
+            self.repo, worker="codex", model="gpt-5.6-luna", effort="low", role="explore",
             routing=dirty, access="write",
         )
         self.assertEqual(manual["policy_mode"], "manual")

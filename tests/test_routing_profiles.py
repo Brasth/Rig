@@ -45,7 +45,11 @@ class BuiltinPins(unittest.TestCase):
         explorer = self.rows["codex-explorer-low"]
         self.assertEqual(explorer.roles, ("explore",))
         self.assertEqual(explorer.tiers, ("fast",))
+        self.assertEqual(explorer.selector, "gpt-5.6-luna")
         self.assertTrue(set(explorer.roles).isdisjoint(profiles.WRITE_ROLES))
+        luna = self.rows["codex-luna-low"]
+        self.assertEqual(luna.selector, "gpt-5.6-luna")
+        self.assertTrue(set(luna.roles) & set(profiles.WRITE_ROLES))
 
     def test_high_explore_uses_standard_and_strong_read_profiles(self):
         for pid in (

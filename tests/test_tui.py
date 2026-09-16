@@ -225,6 +225,31 @@ class BoardProjection(unittest.TestCase):
         self.assertIn("status completed-unverified", rig_tui._detail_lines(projected))
         self.assertIn("model gpt-5.6-luna", "\n".join(rig_tui._detail_lines(projected)))
 
+    def test_pi_and_codex_activity_hides_thought_and_raw_payloads(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            repo = Path(temporary)
+            folder = repo / ".rig" / "jobs" / "pi-live"
+            folder.mkdir(parents=True)
+            (folder / "meta.json").write_text(json.dumps({
+                "job_id": "pi-live", "worker": "pi", "role": "implement", "status": "ok",
+                "execution_mode": "live",
+            }))
+            (folder / "stdout.log").write_text("\n".join([
+                json.dumps({"type": "message_update", "assistantMessageEvent": {
+                    "type": "thinking_delta", "delta": "secret plan"}}),
+                json.dumps({"type": "message_update", "assistantMessageEvent": {
+                    "type": "text_delta", "delta": "I will edit jobs.py"}}),
+                json.dumps({"type": "tool_execution_start", "toolName": "edit",
+                            "args": {"path": "scripts/jobs.py", "oldText": "RAW_SECRET_ARGS"}}),
+                json.dumps({"type": "tool_execution_update", "toolName": "edit",
+                            "partialResult": "RAW_OUTPUT"}),
+            ]))
+            job = rig_tui.rig_jobs.load_job(folder)
+        acts = job["activities"]
+        self.assertTrue(any("I will edit jobs.py" in a for a in acts), acts)
+        self.assertFalse(any("secret plan" in a for a in acts), acts)
+        self.assertFalse(any("RAW_SECRET_ARGS" in a or "RAW_OUTPUT" in a for a in acts), acts)
+
     def test_board_does_not_present_inferred_model_as_actual(self):
         job = {**self.job(1), "model": "gpt-5.6-luna", "model_inferred": True,
                "model_source": "unknown", "display_state": "completed-unverified"}

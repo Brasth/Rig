@@ -261,11 +261,13 @@ def validate_profiles(rows: dict[str, rig_profiles.Profile]) -> None:
                 raise ConfigError(
                     f"profile {pid}: provider {profile.provider} conflicts with alias family {alias_family}"
                 )
-        explore_model, _effort = rig_route.model_for("codex", "explore")
-        if profile.worker == "codex" and explore_model.lower() in {key.lower() for key in profile.model_keys()}:
+        spark_selector = "gpt-5.3-codex-spark"
+        is_explorer = pid == "codex-explorer-low"
+        is_spark = spark_selector in {key.lower() for key in profile.model_keys()}
+        if is_explorer or (profile.worker == "codex" and is_spark):
             writes = set(profile.roles) & set(rig_profiles.WRITE_ROLES)
             if writes:
-                raise ConfigError(f"profile {pid}: codex explorer cannot write")
+                raise ConfigError(f"profile {pid}: codex explorer/Spark cannot write")
         if profile.worker in rig_profiles.CATALOG_WORKERS and not profile.catalog_required:
             raise ConfigError(f"profile {pid}: catalog-required worker cannot disable confirmation")
         if profile.worker == "devin":

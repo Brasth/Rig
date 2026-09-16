@@ -179,6 +179,168 @@ class TaskAndLog(unittest.TestCase):
         )
         self.assertEqual(acts, ["Updated the shared container utility."])
 
+    def test_pi_text_delta_coalesces_and_hides_thought_output_args(self):
+        raw = "\n".join(
+            [
+                json.dumps({"type": "session", "id": "s1"}),
+                json.dumps({"type": "agent_start"}),
+                json.dumps({"type": "turn_start"}),
+                json.dumps(
+                    {
+                        "type": "message_update",
+                        "assistantMessageEvent": {"type": "thinking_delta", "delta": "secret plan"},
+                    }
+                ),
+                json.dumps(
+                    {
+                        "type": "message_update",
+                        "assistantMessageEvent": {"type": "text_delta", "delta": "I will "},
+                    }
+                ),
+                json.dumps({"type": "text_delta", "delta": "edit jobs.py"}),
+                json.dumps(
+                    {
+                        "type": "tool_execution_start",
+                        "toolName": "edit",
+                        "args": {
+                            "path": "scripts/jobs.py",
+                            "command": "printf RAW_SECRET_ARGS",
+                            "oldText": "RAW_SECRET_ARGS",
+                        },
+                    }
+                ),
+                json.dumps(
+                    {
+                        "type": "tool_execution_update",
+                        "toolName": "edit",
+                        "args": {"path": "scripts/jobs.py"},
+                        "partialResult": "RAW_OUTPUT",
+                    }
+                ),
+                json.dumps(
+                    {
+                        "type": "tool_execution_end",
+                        "toolName": "edit",
+                        "result": {"content": [{"type": "text", "text": "RAW_OUTPUT"}]},
+                        "isError": False,
+                    }
+                ),
+                json.dumps(
+                    {
+                        "type": "message_end",
+                        "message": {
+                            "role": "assistant",
+                            "content": [
+                                {"type": "thinking", "text": "secret plan"},
+                                {"type": "text", "text": "I will edit jobs.py"},
+                            ],
+                        },
+                    }
+                ),
+                json.dumps({"type": "error", "message": "disk full"}),
+                "not-json",
+                '{"broken',
+            ]
+        )
+        acts = jobs.decode_log_text(raw, worker="pi")
+        joined = "\n".join(acts)
+        self.assertIn("I will edit jobs.py", joined)
+        self.assertTrue(any(a.startswith("edit") and "jobs.py" in a for a in acts), acts)
+        self.assertIn("edit done", acts)
+        self.assertIn("error: disk full", acts)
+        self.assertFalse(any("secret plan" in a for a in acts), acts)
+        self.assertFalse(any("RAW_SECRET_ARGS" in a or "RAW_OUTPUT" in a for a in acts), acts)
+        self.assertFalse(any("system" in a or "user" in a.lower() for a in acts))
+
+    def test_codex_json_shows_text_command_files_errors(self):
+        raw = "\n".join(
+            [
+                json.dumps({"type": "thread.started", "thread_id": "t1"}),
+                json.dumps({"type": "turn.started"}),
+                json.dumps(
+                    {
+                        "type": "item.completed",
+                        "item": {"id": "r1", "type": "reasoning", "text": "hidden thought"},
+                    }
+                ),
+                json.dumps(
+                    {
+                        "type": "item.updated",
+                        "item": {"id": "m1", "type": "agent_message", "text": "I will patch "},
+                    }
+                ),
+                json.dumps(
+                    {
+                        "type": "item.completed",
+                        "item": {"id": "m1", "type": "agent_message", "text": "I will patch jobs.py"},
+                    }
+                ),
+                json.dumps(
+                    {
+                        "type": "item.started",
+                        "item": {
+                            "id": "c1",
+                            "type": "command_execution",
+                            "command": "rg activity_from_event",
+                            "aggregated_output": "",
+                            "status": "in_progress",
+                        },
+                    }
+                ),
+                json.dumps(
+                    {
+                        "type": "item.completed",
+                        "item": {
+                            "id": "c1",
+                            "type": "command_execution",
+                            "command": "rg activity_from_event",
+                            "aggregated_output": "RAW_COMMAND_OUTPUT\nsecret",
+                            "exit_code": 0,
+                            "status": "completed",
+                        },
+                    }
+                ),
+                json.dumps(
+                    {
+                        "type": "item.completed",
+                        "item": {
+                            "id": "f1",
+                            "type": "file_change",
+                            "changes": [{"path": "scripts/jobs.py", "kind": "update"}],
+                        },
+                    }
+                ),
+                json.dumps({"type": "error", "message": "sandbox denied"}),
+                json.dumps(
+                    {
+                        "type": "item.completed",
+                        "item": {
+                            "id": "m2",
+                            "type": "agent_message",
+                            "text": "Updated the activity decoder.",
+                        },
+                    }
+                ),
+                "not-json",
+                '{"broken',
+            ]
+        )
+        acts = jobs.decode_log_text(raw, worker="codex")
+        joined = "\n".join(acts)
+        self.assertIn("I will patch jobs.py", joined)
+        self.assertIn("command rg activity_from_event", acts)
+        self.assertIn("edit scripts/jobs.py", acts)
+        self.assertIn("error: sandbox denied", acts)
+        self.assertIn("Updated the activity decoder.", acts)
+        self.assertFalse(any("hidden thought" in a for a in acts), acts)
+        self.assertFalse(any("RAW_COMMAND_OUTPUT" in a or "secret" == a for a in acts), acts)
+        self.assertFalse(any("thread.started" in a or "turn.started" in a for a in acts))
+
+    def test_unknown_worker_keeps_generic_decode(self):
+        acts = jobs.decode_log_text(STREAM)
+        self.assertTrue(any("read_file" in a and "opencode-go-client.ts" in a for a in acts))
+        self.assertEqual(acts[-1], "I will add a session header")
+
     def test_running_job_hides_claude_settings_noise(self):
         import tempfile
 
@@ -441,6 +603,35 @@ class JobBoard(unittest.TestCase):
         lines = jobs.persist_activity(d)
         self.assertIn("writing activity.json", lines)
         self.assertTrue(any("read_file" in line for line in lines))
+
+    def test_persist_activity_uses_worker_decoder(self):
+        d = self.repo / ".rig" / "jobs" / "pi-activity"
+        d.mkdir()
+        (d / "meta.json").write_text(
+            json.dumps({"job_id": "pi-activity", "worker": "pi", "role": "implement", "status": "ok"})
+        )
+        (d / "stdout.log").write_text(
+            json.dumps(
+                {
+                    "type": "message_update",
+                    "assistantMessageEvent": {"type": "text_delta", "delta": "hello from pi"},
+                }
+            )
+            + "\n"
+            + json.dumps(
+                {
+                    "type": "message_update",
+                    "assistantMessageEvent": {"type": "thinking_delta", "delta": "hidden"},
+                }
+            )
+            + "\n"
+        )
+        lines = jobs.persist_activity(d)
+        self.assertIn("hello from pi", "\n".join(lines))
+        self.assertFalse(any("hidden" in line for line in lines))
+        stored = jobs.read_activity(d)
+        self.assertEqual(stored["source"], "stdout")
+        self.assertIn("hello from pi", stored["lines"])
 
     def test_child_doing_wins_over_log_decode(self):
         d = self.repo / ".rig" / "jobs" / "child-doing"
