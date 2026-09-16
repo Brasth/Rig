@@ -38,11 +38,28 @@ flowchart TD
 
 If selection returns `parent_writes`, the parent registers its scope and does the work itself. A successful worker exit means execution finished; **verified** means the parent accepted the current scoped result against its requirements. Further edits can invalidate acceptance.
 
-Reservations prevent conflicting work from being admitted. The default cap is three reserved/running/ASK executions. A stopped execution frees its slot, but its files remain protected through verification or explicit close. See [protected writes and acceptance](usage.md#protected-writes-and-parent-acceptance).
+When `[orchestration] mode = "adaptive"` (default; `max_nodes` 12), the parent decomposes eligible work into a DAG under `.rig/workflows/<id>/` (`spec.json`, `state.json`, `events/`, `owner-credentials.json` mode 0600). `single` keeps one-job behavior. Queue and worker caps remain authoritative. The parent owns the graph, briefs, and acceptance and uses `rig_workflow_advance` / `rig_workflow_wait`. Children never spawn or message children. `verify` is parent/final integration; `review` is independent post-write review (independent review unavailable stays explicit). Review+seed and parallel writers require file AND resource disjointness. Overlapping writer scopes are rejected, not sequenced. No estimated progress, savings, or ETA.
+
+```mermaid
+flowchart TD
+    parent[Parent owns graph and briefs] --> create[rig_workflow_create]
+    create --> creds[".rig/workflows/id owner-credentials.json mode 0600"]
+    creds --> advance[rig_workflow_advance]
+    advance --> child[Worker does one node brief]
+    child --> wait[rig_workflow_wait]
+    wait -->|ASK or COORDINATION| parentAct[Parent allow/deny/reply]
+    parentAct --> wait
+    wait -->|node stopped| accept[Parent verify or accept]
+    accept --> next{More ready nodes?}
+    next -->|yes| advance
+    next -->|required accepted| verified[Workflow verified]
+```
+
+Reservations prevent conflicting work from being admitted. The default cap is three reserved/running/ASK executions. A stopped execution frees its slot, but its files remain protected through verification or explicit close. See [protected writes and acceptance](usage.md#protected-writes-and-parent-acceptance) and [adaptive workflows](usage.md#adaptive-workflows).
 
 ## While the parent is busy
 
-The companion observes repository state independently of the host's model turn. Its status row shows work, queued items, attention, and freshness. **F8** opens Jobs / Queue / Notices. **F9** opens the queue editor, so you can park a new task without waiting for the parent to finish its current turn. Notices distinguish approval requests, finished execution, verification, and stop progress; history remains in the popup after a brief status message expires.
+The companion observes repository state independently of the host's model turn. Its status row shows work, queued items, attention, freshness, and workflow active/attention counts (`wf`, `wf!`). **F8** opens Jobs / Queue / Notices. **F9** opens the queue editor, so you can park a new task without waiting for the parent to finish its current turn. Notices distinguish approval requests, finished execution, verification, stop progress, and workflow attention/blocked/cancel-requested/failed/verified/started; history remains in the popup after a brief status message expires. `rig tui` Tab Jobs/Queue/Workflows shows workflow id, status, accepted/required, running, ASK, blocker, next parent action, and title. No estimated progress, savings, or ETA.
 
 ```mermaid
 flowchart LR
@@ -78,7 +95,7 @@ Parking, refreshing the status row, and opening a popup **never dispatch workers
 | `native-cancel-required` | The owning host must interrupt its native agent and report authenticated completion. |
 | Confirmed stopped | Execution slot is free; explicitly close cancelled work to release held files. |
 
-Closing a popup does not undo a submitted action. If an action receipt becomes uncertain after an observer restart, inspect the item before retrying. After explicit cancellation, the parent must not automatically re-wait, re-pick, or drain pending work. See [recovery](usage.md#queue-ownership-and-recovery).
+Closing a popup does not undo a submitted action. If an action receipt becomes uncertain after an observer restart, inspect the item before retrying. After explicit cancellation, the parent must not automatically re-wait, re-pick, or drain pending work. Combined rollout with wait-cancel: stop new admissions, finish or cancel, confirm stopped, accept or close scopes, preserve data, update every launcher and protocol, then fully restart. Rollback sets `[orchestration] mode = "single"` and never deletes data. See [recovery](usage.md#queue-ownership-and-recovery) and [safe upgrade](usage.md#safe-upgrade-and-rollback).
 
 ## Session-local mouse (companion)
 

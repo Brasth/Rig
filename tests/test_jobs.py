@@ -2,8 +2,11 @@
 import json
 import os
 import sys
+import threading
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
@@ -205,6 +208,70 @@ class TaskAndLog(unittest.TestCase):
         self.assertEqual(job["doing"], "running (no log yet)")
         self.assertEqual(job["activities"], [])
         td.cleanup()
+
+
+def _legacy_new_job_id() -> str:
+    stamp = jobs.datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    return f"{stamp}-{os.getpid()}"
+
+
+class _FrozenDateTime(datetime):
+    @classmethod
+    def now(cls, tz=None):
+        frozen = datetime(2026, 9, 16, 12, 0, 0, tzinfo=timezone.utc)
+        return frozen if tz is None else frozen.astimezone(tz)
+
+
+class JobIdGeneration(unittest.TestCase):
+    def _freeze_time_pid(self):
+        return mock.patch("jobs.datetime", _FrozenDateTime), mock.patch(
+            "os.getpid", return_value=4242
+        )
+
+    def test_legacy_helper_collides_new_ids_unique_under_frozen_time_pid(self):
+        time_patch, pid_patch = self._freeze_time_pid()
+        with time_patch, pid_patch:
+            legacy = [_legacy_new_job_id() for _ in range(16)]
+            rapid = [jobs.new_job_id() for _ in range(32)]
+            collected = []
+            barrier = threading.Barrier(8)
+
+            def worker():
+                barrier.wait()
+                collected.extend(jobs.new_job_id() for _ in range(8))
+
+            threads = [threading.Thread(target=worker) for _ in range(8)]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join()
+        self.assertEqual(len(set(legacy)), 1)
+        self.assertEqual(legacy[0], "20260916T120000Z-4242")
+        generated = rapid + collected
+        self.assertEqual(len(generated), 96)
+        self.assertEqual(len(set(generated)), 96)
+        prefix = "20260916T120000Z-4242-"
+        for job_id in generated:
+            self.assertTrue(job_id.startswith(prefix), job_id)
+            self.assertRegex(job_id, r"^20260916T120000Z-4242-[0-9a-f]{32}$")
+            self.assertTrue(jobs.JOB_ID_RE.fullmatch(job_id))
+            self.assertNotIn(job_id, {".", ".."})
+
+    def test_allocate_preserves_explicit_ids_and_generates_when_empty(self):
+        self.assertEqual(jobs._allocate_job_id("keep-slot"), "keep-slot")
+        self.assertEqual(jobs._allocate_job_id("  keep-slot  "), "keep-slot")
+        time_patch, pid_patch = self._freeze_time_pid()
+        with time_patch, pid_patch:
+            first = jobs._allocate_job_id("")
+            second = jobs._allocate_job_id("   ")
+        self.assertNotEqual(first, second)
+        self.assertTrue(first.startswith("20260916T120000Z-4242-"))
+        self.assertTrue(second.startswith("20260916T120000Z-4242-"))
+        self.assertTrue(jobs.JOB_ID_RE.fullmatch(first))
+        self.assertTrue(jobs.JOB_ID_RE.fullmatch(second))
+        with self.assertRaises(SystemExit) as ctx:
+            jobs._allocate_job_id("bad id")
+        self.assertIn("invalid job id", str(ctx.exception))
 
 
 class JobBoard(unittest.TestCase):
@@ -571,6 +638,37 @@ class Elapsed(unittest.TestCase):
         self.assertEqual(jobs.format_elapsed(316), "5m16s")
         td.cleanup()
 
+    def test_additive_workflow_and_writer_provenance_keep_singular_fields(self):
+        import tempfile
+
+        td = tempfile.TemporaryDirectory()
+        job_dir = Path(td.name) / "wf-job"
+        jobs.write_job_files(
+            job_dir, "wf-job", "grok", "verify", "ok", 0,
+            "2026-09-10T07:00:00Z", "2026-09-10T07:01:00Z", "checked",
+            kind="wrapper", executor_kind="wrapper",
+            writer_job_id="writer-a", writer_snapshot_id="snap-a",
+            writer_job_ids=["writer-b"], writer_snapshot_ids=["snap-b"],
+            writer_providers=["xai"],
+            workflow_id="wf1", workflow_node_id="n1", workflow_spec_hash="abc",
+            workflow_attempt=2, resources=[{"name": "db.main", "access": "read"}],
+        )
+        meta = json.loads((job_dir / "meta.json").read_text())
+        self.assertEqual(meta["writer_job_id"], "writer-a")
+        self.assertEqual(meta["writer_snapshot_id"], "snap-a")
+        self.assertEqual(meta["writer_job_ids"][0], "writer-a")
+        self.assertIn("writer-b", meta["writer_job_ids"])
+        self.assertEqual(meta["workflow_id"], "wf1")
+        self.assertEqual(meta["workflow_attempt"], 2)
+        self.assertEqual(meta["resources"], [{"name": "db.main", "access": "read"}])
+        loaded = jobs.load_job(job_dir)
+        self.assertEqual(loaded["writer_job_id"], "writer-a")
+        self.assertEqual(loaded["workflow_id"], "wf1")
+        self.assertEqual(loaded["workflow_node_id"], "n1")
+        self.assertIn("writer-b", loaded["writer_job_ids"])
+        self.assertEqual(loaded["resources"], [{"name": "db.main", "access": "read"}])
+        td.cleanup()
+
 
 class TokenUsagePersistence(unittest.TestCase):
     def setUp(self):
@@ -725,6 +823,25 @@ class DirectParentStartIdentity(unittest.TestCase):
         self.assertEqual(meta["executor_kind"], "parent")
         sidecar = json.loads((self.repo / ".rig" / "jobs" / details["job_id"] / "routing.json").read_text())
         self.assertEqual(sidecar["routing"]["execution_strategy"], "direct-parent")
+
+    def test_verify_start_is_read_and_keeps_writer_provenance_without_handoff(self):
+        (self.repo / "subject.txt").write_text("ok\n")
+        details = jobs.start_job(
+            self.repo, worker="codex", role="verify", live="codex",
+            executor_kind="parent", files=["subject.txt"],
+            writer_job_id="writer-a", writer_job_ids=["writer-b"],
+            workflow_id="wf1", workflow_node_id="final-verify",
+            workflow_spec_hash="hash", workflow_attempt=1,
+            resources=[{"name": "vm.build", "access": "read"}],
+            owner_session="jobs-verify", return_details=True,
+        )
+        meta = json.loads((self.repo / ".rig" / "jobs" / details["job_id"] / "meta.json").read_text())
+        self.assertEqual(meta["access"], "read")
+        self.assertEqual(meta["writer_job_id"], "writer-a")
+        self.assertIn("writer-b", meta["writer_job_ids"])
+        self.assertEqual(meta["workflow_id"], "wf1")
+        self.assertEqual(meta["resources"], [{"name": "vm.build", "access": "read"}])
+        self.assertNotEqual(details.get("writer_job_id"), "writer-a")
 
 
 class McpTools(unittest.TestCase):

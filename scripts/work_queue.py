@@ -24,8 +24,9 @@ import jobs as rig_jobs  # noqa: E402
 TEXT_CAP = 2000
 OCCUPIED_SHOW = 8
 STATUSES = frozenset({"pending", "cancelled", "claimed", "spawned", "done"})
+WORKFLOW_QUEUE_STATUSES = frozenset({"claimed", "spawned", "done", "cancelled"})
 WRITER_ROLES = frozenset({"implement", "hard", "worker", "bulk"})
-NON_WRITER_ROLES = frozenset({"explore", "explorer", "reviewer", "review"})
+NON_WRITER_ROLES = frozenset({"explore", "explorer", "reviewer", "review", "verify"})
 THREAD_ENV = (
     "RIG_THREAD",
     "GROK_SESSION_ID",
@@ -445,8 +446,39 @@ def mark_done_for_job(repo: Path, job_id: str, *, reservation_id="", attempt_id=
                                         owner_token=owner_token, owner=owner, owner_session=owner_session)
         if record.get("job_id") != job_id or not record.get("stopped"):
             raise QueueError("queue completion requires its confirmed-stopped attempt")
+        item = load_item(repo, record["queue_id"]) if record.get("queue_id") else None
+        if item and item.get("workflow_id"):
+            raise QueueError("workflow-bound queue is done only after verification")
         admission._queue_update(Path(repo).resolve(), record, "done")
         return load_item(repo, record["queue_id"]) if record.get("queue_id") else None
+
+
+def bind_workflow_queue(repo: Path, item_id: str, status: str, *, workflow_id: str, verified: bool = False) -> dict:
+    """Claim on workflow create, spawn after first node, done only verified, cancel on cancel."""
+    if status not in WORKFLOW_QUEUE_STATUSES:
+        raise QueueError("workflow-bound queue is never pending")
+    if status == "done" and not verified:
+        raise QueueError("workflow-bound queue is done only after verification")
+    wid = admission._id(workflow_id, "workflow id")
+    with admission.transaction(repo, timeout=1.0):
+        item = load_item(repo, item_id)
+        if not item:
+            raise FileNotFoundError(item_id)
+        if item.get("workflow_id") not in {None, "", wid}:
+            raise QueueError("queue belongs to another workflow")
+        if item.get("status") == "cancelled" and status != "cancelled":
+            return item
+        if item.get("status") == "done" and status in {"claimed", "spawned"}:
+            return item
+        if status == "claimed" and item.get("status") not in {"pending", "claimed"}:
+            raise QueueError("workflow create binds a parked pending queue item")
+        item["workflow_id"] = wid
+        item["status"] = status
+        if status == "claimed":
+            item["claimed_at"] = item.get("claimed_at") or iso_now()
+        item.pop("owner_token", None)
+        _write_json(item_path(repo, item_id), item)
+        return item
 
 
 def _add_item_unlocked(
@@ -534,7 +566,7 @@ def _cancel_item_unlocked(repo: Path, item_id: str) -> dict:
     if not obj:
         raise FileNotFoundError(name)
     st = str(obj.get("status") or "")
-    if st not in {"pending", "claimed"}:
+    if st not in {"pending", "claimed"} and not (st == "spawned" and obj.get("workflow_id")):
         raise ValueError(f"cannot cancel {name} status={st or '-'}")
     obj["status"] = "cancelled"
     _write_json(item_path(repo, name), obj)

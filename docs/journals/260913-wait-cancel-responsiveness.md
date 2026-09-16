@@ -25,8 +25,18 @@ The preliminary integrated run covered 578 tests and exposed compatibility asser
 
 After final TUI footer and MCP schema changes, **29 TUI tests** and **33 MCP tests** passed; two TUI tests were added after the full suite began, so no 582-test full-suite run is claimed. Focused wait/process runs passed 5/7 tests. Python compilation, Bash syntax, and diff checks passed. Final review reported no remaining concrete defects.
 
+## Sept16 installed-smoke note
+
+Local install and user cold restart happened on 2026-09-16. Live workflow `installed-smoke-20260916` observed child handshake plus ASK approval/resume. Fan-out then failed with `job id already belongs to an attempt; use a fresh job id` because `jobs.new_job_id` used timestamp+PID only. That smoke was cancelled and the stopped reader scope closed.
+
+Fix job `20260916-job-id-collision-fix` adds a uuid4 hex suffix while preserving timestamp/PID and explicit IDs. Parent accepted the current snapshot after 156 jobs/launch/workflow/admission/queue tests passed in 7.423s; the old-helper injection regression fails once and the fixed helper passes. Compilation and diff checks passed. No independent reviewer was eligible (only xAI worker).
+
+Metadata writer `20260916-metadata-race-fix` timed out but left its patch on disk. Parent focused validation of that surface passed **111 tests**. A later parent `full1015` run hit a HUD timeout, stopped the interactive shell, and failed on a stale journal assertion; that full-suite rerun remains pending. No invented success is recorded for those incomplete runs.
+
+Partial live handshake+ASK really occurred during the Sept16 installed-smoke attempt. Combined rollout with adaptive workflow remains pending successful installed smoke: corrected runtime reinstall, cold restart, and final live smoke are still outstanding. This note does not claim final installed-smoke success or combined-rollout success.
+
 ## Next steps
 
-Implementation and automated validation are complete. Rig has not been installed from this checkout, and the real installed Codex end-to-end wait/Stop/next-input workflow remains untested. Deployment remains separate: stop admissions, finish/cancel and reconcile held work, update every launcher and managed protocol, then restart all parent/MCP sessions together. Mixed-version admission writers remain unsupported. No production installation or Git publication was performed for this entry.
+Sept13 implementation and automated validation remain as recorded above. Sept16 installed smoke partially exercised handshake/ASK but hit job-id collision; the collision fix is parent-accepted in-tree. Metadata-race patch is present after writer timeout; focused 111 passed; full1015 rerun after HUD/shell stop is pending. Still pending: reinstall the corrected runtime, cold restart, and rerun live installed smoke so combined rollout with adaptive workflow can finish. Mixed-version admission writers remain unsupported. Do not treat this entry as final installed-rollout success or combined-rollout success.
 
-Unresolved questions: none. Installation and installed Codex smoke testing remain pending.
+Unresolved questions: none.

@@ -2,7 +2,7 @@
 
 Start here: [Rig flow](rig-flow.md) (parent, workers, queue, and terminal companion). Landing page: [README](../README.md).
 
-In this file: [terminal companion](#optional-terminal-companion) · [diagram preview](#diagram-preview) · [protected writes and acceptance](#protected-writes-and-parent-acceptance) · [recovery](#queue-ownership-and-recovery) · [safe rollout](#safe-upgrade-and-rollback) · [how your prompt is handled](#how-your-prompt-is-handled) · [why the queue](#why-the-queue-exists) · [queue](#how-the-queue-works) · [scenarios](#scenarios) · [install](#install) · [daily use](#daily-use) · [watch](#watch-jobs-memory) · [troubleshooting](#troubleshooting).
+In this file: [terminal companion](#optional-terminal-companion) · [diagram preview](#diagram-preview) · [protected writes and acceptance](#protected-writes-and-parent-acceptance) · [adaptive workflows](#adaptive-workflows) · [recovery](#queue-ownership-and-recovery) · [safe rollout](#safe-upgrade-and-rollback) · [how your prompt is handled](#how-your-prompt-is-handled) · [why the queue](#why-the-queue-exists) · [queue](#how-the-queue-works) · [scenarios](#scenarios) · [install](#install) · [daily use](#daily-use) · [watch](#watch-jobs-memory) · [troubleshooting](#troubleshooting).
 
 ## What Rig is
 
@@ -215,7 +215,8 @@ rig doctor
 | `.agents/skills/rig-queue/SKILL.md` | **Refreshed every init.** `/queue` parks work; does not spawn. |
 | `AGENTS.md` | Inserts a **MUST use Rig** block at the **top** (markers `<!-- rig:start -->` / `<!-- rig:end -->`). Never replaces the rest of the file. `--no-patch-agents` skips. |
 | `CLAUDE.md` | Only with `--patch-claude`, and only if the file is **missing**. |
-| `.gitignore` | If the file exists, appends `.rig/jobs/`, `.rig/thread`, and `.rig/queue/` when those lines are not already there. |
+| `.gitignore` | Idempotently applies every nonempty line from `templates/gitignore-fragment` (creates the file if missing; preserves unrelated content). Current entries: `.rig/jobs/`, `.rig/thread`, `.rig/queue/`, `.rig/workflows/`, `.rig/workflows/*/owner-credentials.json`. |
+| `.rig/workflows/<id>/` | Workflow `spec.json`, `state.json`, `events/`, and `owner-credentials.json` (mode 0600). Gitignored. |
 
 **New harness only:** Grok / Claude / Cursor / OpenCode / OMP / Pi / agy / Devin are turned **on** if that CLI is on PATH. Codex stays **off** (preferred parent). **Existing harness flags are never flipped.** Missing worker keys are appended as `false` → enable later with `rig workers <name>=on`. Missing `[queue] max_running` is appended as `3`; an existing value is kept.
 
@@ -246,6 +247,10 @@ pi = false
 agy = false
 devin = false
 
+[orchestration]
+mode = "adaptive"
+max_nodes = 12
+
 [queue]
 max_running = 3
 ```
@@ -261,8 +266,9 @@ max_running = 3
 
 Effective worker = flag `true` **and** binary on PATH **and** not live parent. Check with `rig doctor` / `rig status`. `grok = false` turns off grok as a child. Open Grok and you still get native Grok. With Grok off, smart pick still evaluates other eligible workers before parent fallback.
 
-- **`[queue].max_running`** — max reserved/running/ASK executions per repo (default 3). Slot cap, not “run the next 3.” Parent claims a disjoint subset **by id** (required when more than one pending). `job start` / `rig_job_launch` / `run-worker.sh` refuse a new job at cap or when requested access conflicts with a held file scope. `rig queue list` shows occupied files. Set to `1` to restore one-child. Existing values are never flipped on init.
+- **`[queue].max_running`** — max reserved/running/ASK executions per repo (default 3). Slot cap, not “run the next 3.” Parent claims a disjoint subset **by id** (required when more than one pending). `job start` / `rig_job_launch` / `run-worker.sh` refuse a new job at cap or when requested access conflicts with a held file scope. `rig queue list` shows occupied files. Set to `1` to restore one-child. Existing values are never flipped on init. Queue and worker caps remain authoritative when adaptive workflows run.
 - **`[queue].max_per_worker`** — extra cap per worker name (default `0` = off). `[queue.workers].grok = 2` overrides for that worker. Fair drain is highest `priority` (0–9) then oldest pending.
+- **`[orchestration].mode`** — `adaptive` (default) or `single`. Adaptive decomposes eligible work into a DAG of at most `max_nodes` (default 12). `single` keeps one-job behavior. Rollback sets `mode = "single"` and never deletes data.
 
 **Binaries:**
 
@@ -556,7 +562,7 @@ Mini uses an edit-capable worker and starts a write reservation before editing `
 
 ### 10. Review after a successful implement
 
-After confirmed execution and parent acceptance with `next=review`, the parent may transfer the held scope to one independent read-only reviewer and run one seed/bulk whose files are disjoint. Review needs the original writer ID, current accepted snapshot, and a different actual model provider. A different CLI alone is insufficient. Wait wrapper IDs together through MCP and native agents through the owning host. If seed changes the reviewed scope, run seed before the accepted snapshot.
+After confirmed execution and parent acceptance with `next=review`, the parent may transfer the held scope to one independent read-only reviewer and run one seed/bulk whose files AND resources are disjoint. Review needs the original writer ID, current accepted snapshot, and a different actual model provider. A different CLI alone is insufficient. Independent review unavailable stays explicit. Wait wrapper IDs together through MCP and native agents through the owning host. If seed changes the reviewed scope, run seed before the accepted snapshot.
 
 ### 11. Park on agy
 
@@ -586,8 +592,8 @@ Optional `.rig/routing.json` schema 1 stays valid. Schema 2 may set `execution.d
 | Locate / trace / codebase gather | read-only assessed explore profile, only if the parent cannot name files after a short check |
 | Implement / SSH / fix | minimum sufficient eligible model+effort profile; optional schema-2 `direct_parent_low_risk` sends only low-risk mini/implement to this parent before catalog lookup; no eligible wrapper means `parent_writes` (`parent-fallback`), without a second same-CLI session. Cursor stays excluded |
 | Review | Standalone by default; independent post-write review requires current writer acceptance and a different known actual model provider. Unknown/unavailable independence stays explicit |
-| After implement+verify ok | MAY start read-only review **and** seed/bulk with **disjoint listed files** in parallel. One wait on both ids |
-| Independent queued items | Up to `[queue].max_running` (default 3 reserved/running/ASK executions) if listed files are disjoint. Parent **selects a subset by id** (skip overlap, try next; omit id only if one pending). List shows occupied files. Until **that write** is ok: one child on those files. Never a second writer on the same files. Never explore/fix/QA teammates on the same write. `/queue` parks only; drain is the parent on a free turn |
+| After implement+verify ok | MAY start read-only review **and** seed/bulk with **file AND resource** disjoint listed scopes in parallel. One wait on both ids. Independent review unavailable stays explicit |
+| Independent queued items | Up to `[queue].max_running` (default 3 reserved/running/ASK executions) if listed files AND resources are disjoint. Queue and worker caps remain authoritative. Parent **selects a subset by id** (skip overlap, try next; omit id only if one pending). List shows occupied files. Until **that write** is ok: one child on those files. Never a second writer on the same files. Never explore/fix/QA teammates on the same write. `/queue` parks only; drain is the parent on a free turn |
 | No eligible wrapper | actual parent model/effort or unknown; register writes before edits and finish with actual task completion |
 
 Smart mode uses declared profiles: exact selectors/aliases, supported effort, role, tier and provider. Catalog-required profiles need successful confirmation (fresh <=1h, bounded stale <=24h); a skipped, unavailable or empty catalog does not confirm a model. `RIG_REFRESH_MODELS=1` refreshes; `RIG_SKIP_MODEL_CATALOG=1` makes catalog-required profiles ineligible in smart mode. Legacy mode retains the older resolver. Cache: `~/.rig/cache/model-catalogs.json`. Never Sol / Astra / Fable.
@@ -638,7 +644,47 @@ unset RIG_OWNER_TOKEN
 
 The complete manifest is authoritative. `rig_job_requirements`, `rig_job_check`, `rig_job_accept`, `rig_job_close`, `rig_job_reconcile`, and `rig_job_recover_parent_write` are parent-only MCP tools. Declare it with `rig_job_requirements` (`requirements`: id/argv/cwd; `manual_criteria`), deliberately run each exact `rig_job_check`, then use `rig_job_accept`. Required checks cannot be removed, renamed, or omitted from acceptance after checks start. Logs and before/after content snapshots are stored per check. Child claims do not satisfy parent requirements. Changed content invalidates previous acceptance. Manual-only work still needs explicit criteria and a parent rationale.
 
-For independent review, accept the stopped writer with `next=review`; this retains its files. Pick using `review_mode=independent` and `writer_job_id`. Native reviewer start includes writer ID/snapshot and the current holder credentials; wrapper uses `RIG_REVIEW_MODE=independent`, `RIG_WRITER_JOB_ID`, selected model/effort, and those credentials. The new reviewer attempt/token replaces the writer's credentials atomically; retain the new response/artifact. Its read scope protects all reviewed files. A failed reviewer launch keeps that scope without a slot; retry with a fresh reviewer ID, original writer context, and current holder credentials, or explicitly close it. Do not claim independence from different CLI names or unknown model provenance.
+For independent review, accept the stopped writer with `next=review`; this retains its files. Pick using `review_mode=independent` and `writer_job_id`. Native reviewer start includes writer ID/snapshot and the current holder credentials; wrapper uses `RIG_REVIEW_MODE=independent`, `RIG_WRITER_JOB_ID`, selected model/effort, and those credentials. The new reviewer attempt/token replaces the writer's credentials atomically; retain the new response/artifact. Its read scope protects all reviewed files. A failed reviewer launch keeps that scope without a slot; retry with a fresh reviewer ID, original writer context, and current holder credentials, or explicitly close it. Do not claim independence from different CLI names or unknown model provenance. Independent review unavailable stays explicit.
+
+## Adaptive workflows
+
+`[orchestration] mode = "adaptive"` (default) decomposes eligible work into a DAG of at most `max_nodes` (default 12). `single` keeps one-job behavior. Queue and worker caps remain authoritative. Automatic safe decomposition: writers must be file AND resource disjoint; overlapping writer scopes are rejected, not sequenced; unknown write scope is exclusive; read overlap with a writer is only after that writer is accepted; multiple writers or any side effects require a final `verify` node (automatic `final-verify` if omitted). Children never spawn or message children. The parent owns the graph, briefs, and acceptance and uses `rig_workflow_advance` / `rig_workflow_wait`.
+
+Durable files under `.rig/workflows/<id>/`: `spec.json`, `state.json`, `events/`, `owner-credentials.json` (mode 0600). Create returns `credentials_path`; never print owner tokens.
+
+Workflow statuses: `planned`, `running`, `attention`, `blocked`, `completed-unverified`, `verified`, `failed`, `cancel-requested`, `cancelled`. Node statuses include `pending`, `ready`, `launching`, `running`, `ask`, `completed-unverified`, `accepted`, `failed`, `skipped`, `cancelled`, `blocked`. Workflow `verified` only after required nodes (and final verify when present) have current parent acceptance. `completed-unverified` means execution finished without that acceptance.
+
+**Verify vs review.** `verify` is parent/final integration (role `verify`, including automatic `final-verify`). `review` is independent post-write review. Independent review unavailable stays explicit.
+
+Parent-only MCP:
+
+| Tool | Contract |
+| --- | --- |
+| `rig_workflow_create` | Spec object; optional `queue_id` / `owner_session`. Returns `credentials_path`. |
+| `rig_workflows` | accepted/required, running, ASK, blocker, next parent action. No ETA. |
+| `rig_workflow_show` | Spec, node state, coordination, next parent action. Sanitizes tokens. |
+| `rig_workflow_advance` | Refresh then launch ready nodes up to capacity. Refuses any repo ASK. Stops on cancel, unresolved failure, or coordination. `parent_writes` returns one registered parent action and launches no siblings that turn. |
+| `rig_workflow_wait` | Wakes COORDINATION and ASK. Shows sibling node status. Do not pass timeout unless you must cap the wait. |
+| `rig_workflow_extend` | Append-only. Cannot alter launched nodes or contracts. No extension after final verify launches. |
+| `rig_workflow_resolve` | `retry` identical stopped/released, `skip` with rationale, or `fail`. Required nodes cannot be silently waived. Accepted nodes cannot retry. |
+| `rig_workflow_approve` | Gated `external` / `production` / `destructive`. Bound to workflow+node+owner session+current spec hash; invalidated by spec change. |
+| `rig_workflow_cancel` | Freeze advancement; cancel active attempts and unstarted nodes. Unrelated jobs and queues stay. Confirmed-stop semantics unchanged. |
+| `rig_workflow_report` | Observed wall time, node time, max concurrency, outcomes, acceptance. No estimated progress, savings, or ETA. |
+| `rig_job_coordination_reply` | Parent `reply` or `stop`. Coordination never expands files, resources, effects, or frozen contracts. |
+
+Child after inbox handshake may `rig_job_coordination_request` (`dependency` / `contract` / `scope`). Resource claims are opaque `{name, access}` with `read|write`; never secrets.
+
+CLI:
+
+```bash
+rig workflows [--json]
+rig workflow create [--file PATH] [--json]
+rig workflow show|advance|wait|extend|resolve|approve|cancel|report <id>
+```
+
+Queue lifecycle when bound to a workflow: claimed on create from a parked pending item, spawned after the first node, done only after verification, cancelled on cancel. A workflow-bound queue is never pending.
+
+`rig tui` Tab Jobs/Queue/Workflows fields: workflow id, status, accepted/required, running, ASK, blocker, next parent action, title. Status row may show `wf` active and attention counts. Notices report workflow attention/blocked/cancel-requested/failed/verified/started. No estimated progress, savings, or ETA.
 
 ## Queue ownership and recovery
 
@@ -663,9 +709,9 @@ Repeated allow/approve is not completion. If a Codex or Pi parent write turn was
 
 ## Safe upgrade and rollback
 
-Stop new admissions before upgrading. Finish or explicitly cancel existing work, confirm process/native-task completion, assess or close held scopes, and reconcile legacy claims. Keep pending queue text intact. Update **every** launcher, refresh managed skills/protocol via init/setup, then fully restart all parent/MCP sessions before admitting new work. Concurrent mixed-version admission writers are unsupported. Existing worker/cap values, memory, unrelated AGENTS content, and custom agent overrides must remain intact; inspect a custom native agent's write capability before using it for mini work.
+Combined rollout with wait-cancel: stop new admissions, finish or cancel existing work, confirm stopped, accept or close scopes, preserve data (pending queue text, credentials, workflow spec/state/events, reservations), update **every** launcher and managed protocol, then fully restart all parent/MCP sessions before admitting new work. Concurrent mixed-version admission writers are unsupported. Existing worker/cap values, memory, unrelated AGENTS content, and custom agent overrides must remain intact; inspect a custom native agent's write capability before using it for mini work.
 
-Test rollout in temporary homes/repos. Rollback uses the same stopped-admission, confirmed-completion, and reconciliation sequence; preserve reservations, snapshots, checks, queue text, and overrides. Restore one compatible set of launchers and protocol, then restart all sessions before resuming. Terminal HUD expiry is presentation only and never releases ownership.
+Test rollout in temporary homes/repos. Rollback uses the same stopped-admission, confirmed-stopped, accept/close, and preserve-data sequence. Adaptive-workflow rollback sets `[orchestration] mode = "single"` and never deletes data. Restore one compatible set of launchers and protocol, then restart all sessions before resuming. Terminal HUD expiry is presentation only and never releases ownership. No estimated progress, savings, or ETA.
 
 ## Watch, jobs, memory
 
@@ -686,7 +732,7 @@ Pre-job “checking” is parent commentary, not a fabricated job or percent com
 
 A Grok child is **headless**. Codex will not show its TUI. While it runs, both you and the parent can see **which agent, which task, status, and the log**.
 
-Parent agent: MCP. First call: `rig_session` with explicit semantic role, `compact=true`, and `terminal_limit=10`. REQUIRED flow: `rig_session` → `rig_queue_claim` when draining → `rig_job_launch` → `rig_queue_spawned` when claimed → `rig_job_wait` → `rig_job_message` / allow / deny → `rig_job_requirements` / `rig_job_check` / `rig_job_accept`. Instant: `rig_jobs`, `rig_job_show`, `rig_job_log`, `rig_job_launch`, `rig_job_allow`, `rig_job_deny`, `rig_job_cancel`, `rig_job_message`, `rig_memory`, `rig_memory_add`, `rig_pick`, `rig_status`, `rig_job_start`, `rig_job_finish`, `rig_job_record`, `rig_queue_add`, `rig_queue_list`, `rig_queue_cancel`, `rig_queue_claim`, `rig_queue_spawned`. `rig_job_launch` takes repo/id/case/role/worker/model/effort/access/files/brief plus owner credentials and review provenance. Shell `run-worker.sh` is human/internal fallback, not the agent default. CLI/TUI remain human use and MCP recovery. No separate native subagents without scoped MCP. Normal observable wrapper work uses one blocking `rig_job_wait` with **no timeout**; after implement+verify ok, pass `ids` to wait wrapper review+seed together. Native agents use host-native wait/interrupt and authenticated completion. If supported, MCP progress shows the child `doing` line. A dropped or failed wait permits **one** bounded `rig job wait ID --timeout 0` snapshot; inspect/reconcile its result instead of blindly re-waiting. Explicit cancellation never starts a fallback wait, re-pick, or automatic queue drain.
+Parent agent: MCP. First call: `rig_session` with explicit semantic role, `compact=true`, and `terminal_limit=10`. REQUIRED flow: `rig_session` → `rig_queue_claim` when draining → `rig_job_launch` or `rig_workflow_create` / `rig_workflow_advance` → `rig_queue_spawned` when claimed → `rig_job_wait` / `rig_workflow_wait` → `rig_job_message` / allow / deny / `rig_job_coordination_reply` → `rig_job_requirements` / `rig_job_check` / `rig_job_accept`. Instant: `rig_jobs`, `rig_job_show`, `rig_job_log`, `rig_job_launch`, `rig_job_allow`, `rig_job_deny`, `rig_job_cancel`, `rig_job_message`, `rig_memory`, `rig_memory_add`, `rig_pick`, `rig_status`, `rig_job_start`, `rig_job_finish`, `rig_job_record`, `rig_queue_add`, `rig_queue_list`, `rig_queue_cancel`, `rig_queue_claim`, `rig_queue_spawned`, `rig_workflow_create`, `rig_workflows`, `rig_workflow_show`, `rig_workflow_advance`, `rig_workflow_wait`, `rig_workflow_extend`, `rig_workflow_resolve`, `rig_workflow_approve`, `rig_workflow_cancel`, `rig_workflow_report`, `rig_job_coordination_reply`. `rig_job_launch` takes repo/id/case/role/worker/model/effort/access/files/brief plus owner credentials and review provenance. Shell `run-worker.sh` is human/internal fallback, not the agent default. CLI/TUI remain human use and MCP recovery. No separate native subagents without scoped MCP. Normal observable wrapper work uses one blocking `rig_job_wait` with **no timeout**; adaptive workflows use `rig_workflow_wait` (wakes COORDINATION and ASK). After implement+verify ok, pass `ids` to wait wrapper review+seed together when file AND resource disjoint. Native agents use host-native wait/interrupt and authenticated completion. If supported, MCP progress shows the child `doing` line. A dropped or failed wait permits **one** bounded `rig job wait ID --timeout 0` snapshot; inspect/reconcile its result instead of blindly re-waiting. Explicit cancellation never starts a fallback wait, re-pick, or automatic queue drain.
 
 Human terminal (not the parent agent):
 
@@ -724,7 +770,7 @@ rig queue cancel <id>
 
 `--timeout SECS` is an optional cap, not the default. Omit timeout to block. `0` snapshots once. Exit 124 only if still running when a cap hits.
 
-TUI controls: Tab switches Jobs/Queue; `j`/`k` or arrows select. The Queue tab shows pending text and known capacity/ownership blockers; it does not infer file scope from task text. `e` opens the Unicode editor, Enter commits, Esc cancels the draft, and arrows/Home/End/Delete edit. Bracketed paste treats embedded newlines as spaces and is capped at 2,000 characters. A failed save retains the draft for retry. `x` requests cancellation for the selected job or queue item; repeated requests for the same target are suppressed while pending. `y`/`n` answer the selected job's ASK, `l` toggles its in-board activity log, and PgUp/PgDn scroll activity. `r` refreshes; `q` closes the board without stopping work. Snapshot collection and actions run in the background; a slow or failed refresh leaves the last snapshot visible with its age/error.
+TUI controls: Tab switches Jobs/Queue/Workflows; `j`/`k` or arrows select. The Queue tab shows pending text and known capacity/ownership blockers; it does not infer file scope from task text. The Workflows tab shows workflow id, status, accepted/required, running, ASK, blocker, next parent action, and title. No estimated progress, savings, or ETA. `e` opens the Unicode editor, Enter commits, Esc cancels the draft, and arrows/Home/End/Delete edit. Bracketed paste treats embedded newlines as spaces and is capped at 2,000 characters. A failed save retains the draft for retry. `x` requests cancellation for the selected job or queue item; repeated requests for the same target are suppressed while pending. `y`/`n` answer the selected job's ASK, `l` toggles its in-board activity log, and PgUp/PgDn scroll activity. `r` refreshes; `q` closes the board without stopping work. Snapshot collection and actions run in the background; a slow or failed refresh leaves the last snapshot visible with its age/error.
 
 In Grok, Codex, OpenCode, OMP, Pi, or agy type `/rig` or `/queue`. `/queue` parks a line in `.rig/queue/` and does **not** spawn.
 
@@ -751,7 +797,8 @@ Memory is local only. Parent: MCP `rig_memory_add`. Do not edit the file. Human 
 - `.rig/MEMORY.md` — durable bullets, about 120 lines. No transcripts. `add` drops duplicates and caps the file.
 - `.rig/STATE.md` — overwritten each run (last job / worker / status / summary).
 - `.rig/jobs/` — gitignored. Each job records the parent `thread` when known. Durable files: `launcher.log` (prechild), `stdout.log`, `activity.json`, `meta.json`, `result.json`, `inbox.json`, ask/reply, evidence, owner-credentials. Detached wrapper survives parent/MCP shutdown. `rig prune` drops jobs older than 7 days and keeps the last 20. Successful jobs delete `stdout.log` only after decoded activity is saved in `activity.json` (`rig job log` still works). If the log cannot be decoded, the raw log is kept. Fail/timeout logs stay for debug. Never read Cursor `state.vscdb` or other vendor sqlite to learn a Rig job — use `rig job log` / MCP.
-- Child MCP: when `RIG_JOB_ID` is set, Rig MCP is job-scoped. Children MUST call `rig_job_inbox` first (handshake connected/time/protocol 1). No success without it; fail exact `child MCP handshake missing` while preserving evidence and ownership. Permission bootstrap does not count as handshake. Legacy/unknown jobs are not retroactively failed. Restricted tools: inbox/doing/note/ask/own show/project memory. It cannot pick, wait, spawn, queue, or allow. Do not run the `rig` CLI as a child. Parent MCP stays the orchestrator. MCP `rig_job_message` leaves one inbox note; the child pulls `rig_job_inbox` **once per turn** (empty is fine). Inbox is not ASK and does not wake wait. Durable job files include `launcher.log` (prechild), `stdout.log`, `activity.json`, `meta.json`, `result.json`, inbox/ask/reply, evidence. Detached wrapper survives parent/MCP shutdown. `stdout.log` prunes only after successful decoded activity; failures retain it. Cursor is temporarily excluded even when binary/flag are on (no safe scoped MCP); do not install Rig into `~/.cursor/mcp.json`. Other CLIs need available configured MCP and a runtime handshake.
+- Child MCP: when `RIG_JOB_ID` is set, Rig MCP is job-scoped. Children MUST call `rig_job_inbox` first (handshake connected/time/protocol 1). No success without it; fail exact `child MCP handshake missing` while preserving evidence and ownership. Permission bootstrap does not count as handshake. Legacy/unknown jobs are not retroactively failed. Restricted tools: inbox/doing/note/ask/own show/project memory/`rig_job_coordination_request`. Children never spawn or message children. It cannot pick, wait, spawn, queue, or allow. Do not run the `rig` CLI as a child. Parent MCP stays the orchestrator and uses `rig_workflow_advance` / `rig_workflow_wait`. MCP `rig_job_message` leaves one inbox note; the child pulls `rig_job_inbox` **once per turn** (empty is fine). Inbox is not ASK and does not wake wait. Durable job files include `launcher.log` (prechild), `stdout.log`, `activity.json`, `meta.json`, `result.json`, inbox/ask/reply, evidence. Detached wrapper survives parent/MCP shutdown. `stdout.log` prunes only after successful decoded activity; failures retain it. Cursor is temporarily excluded even when binary/flag are on (no safe scoped MCP); do not install Rig into `~/.cursor/mcp.json`. Other CLIs need available configured MCP and a runtime handshake.
+- `.rig/workflows/` — gitignored. Each id has `spec.json`, `state.json`, `events/`, and `owner-credentials.json` (mode 0600).
 - `.rig/queue/` — gitignored user work queue. MCP `rig_queue_add` / `/queue` parks text and does not spawn. On a free turn the parent claims a **disjoint subset by id** via `rig_queue_claim` (list shows occupied files; skip overlap and try the next id; omit id only if one pending), prepares brief TEXT, MCP `rig_job_launch` (tool creates brief.md), `rig_queue_spawned`, then MCP `rig_job_wait` on observable wrapper IDs or host-native wait with authenticated completion. Cap `[queue].max_running` (default 3 reserved/running/ASK). Claims and spawned acknowledgements require the matching attempt credentials. Mid-wait enqueue: MCP `rig_queue_add`.
 - `.rig/reservations/` — retained ownership records; never delete them to clear a blocked job.
 - `.rig/thread` — gitignored HUD thread cache, never initiating-owner authentication.
@@ -855,7 +902,7 @@ The parent picks **kind**. Pick maps kind to worker, model, and effort. Do not a
 
 Routing/session: `rig session --role KIND --case TEXT --compact --terminal-limit 10 --json`, `rig pick KIND --case TEXT --json`. Review adds `--review-mode independent --writer-job-id ID`; explicit actual parent metadata uses `--parent-model` / `--parent-effort`.
 
-Lifecycle: `rig job start|finish|record|close|reconcile`; verification: `rig job requirements|check|accept`. The examples above show ownership arguments. Read-only watch remains `rig jobs [--json] [--thread [ID]]`, `rig job show|log ID`, `rig tui`. Wait/ASK: `rig job wait ID...`, `rig job allow ID`, `rig job deny ID --reason TEXT`, `rig job cancel ID`. Steering: `rig job message ID --text TEXT`.
+Lifecycle: `rig job start|finish|record|close|reconcile`; verification: `rig job requirements|check|accept`. The examples above show ownership arguments. Read-only watch remains `rig jobs [--json] [--thread [ID]]`, `rig job show|log ID`, `rig tui`. Wait/ASK: `rig job wait ID...`, `rig job allow ID`, `rig job deny ID --reason TEXT`, `rig job cancel ID`. Steering: `rig job message ID --text TEXT`. Workflows: `rig workflows [--json]`; `rig workflow create [--file PATH] [--json]`; `rig workflow show|advance|wait|extend|resolve|approve|cancel|report <id>`.
 
 Terminal companion: `rig setup --shell-ui`, `rig ui enable|disable|sessions`, `rig ui attach ID`, and `rig uninstall [--dry-run] [--repo PATH]`.
 

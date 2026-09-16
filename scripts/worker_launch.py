@@ -25,9 +25,15 @@ LAUNCH_KEYS = frozenset({
     "id", "case", "role", "worker", "model", "effort", "access", "files", "brief",
     "queue_id", "reservation_id", "attempt_id", "owner_token", "owner_session",
     "writer_job_id", "writer_snapshot_id", "writer_cli", "writer_model",
-    "writer_provider", "review_mode", "live", "routing", "assessment",
+    "writer_provider", "writer_job_ids", "writer_snapshot_ids", "writer_providers",
+    "review_mode", "live", "routing", "assessment", "resources",
+    "workflow_id", "workflow_node_id", "workflow_spec_hash", "workflow_attempt",
+    "allow_read_overlap_reservations",
 })
-OBJECT_LAUNCH_KEYS = frozenset({"files", "routing", "assessment"})
+OBJECT_LAUNCH_KEYS = frozenset({
+    "files", "routing", "assessment", "resources", "writer_job_ids",
+    "writer_snapshot_ids", "writer_providers", "allow_read_overlap_reservations",
+})
 WRAPPER_ENV = (
     "PATH", "HOME", "USER", "LANG", "LC_ALL", "LC_CTYPE", "TZ", "TMPDIR",
     "RIG_HOME", "RIG_PARENT", "RIG_SKIP_MODEL_CATALOG", "RIG_SKIP_UPDATE_CHECK",
@@ -79,8 +85,16 @@ def _files(files) -> list[str]:
     return files
 
 
+def _string_list(value, name: str):
+    if value in (None, ""):
+        return None
+    if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
+        raise LaunchError(f"{name} must be an array of strings")
+    return value
+
+
 def _access(role: str, access: str) -> str:
-    value = (access or "").strip() or ("read" if role.lower() in {"review", "reviewer", "explore", "explorer"} else "write")
+    value = (access or "").strip() or ("read" if role.lower() in {"review", "reviewer", "explore", "explorer", "verify"} else "write")
     if value not in {"read", "write"}:
         raise LaunchError("access must be read|write")
     return value
@@ -128,11 +142,6 @@ def _fail_job(job_dir: Path, job_id: str, worker: str, role: str, summary: str, 
         kind="wrapper", executor_kind="wrapper", execution_mode="not_started",
         reservation=record, capture_evidence=False, **{k: v for k, v in fields.items() if k in {"model", "effort", "files", "writer_job_id", "writer_snapshot_id"}},
     )
-    result = job_dir / "result.json"
-    meta = rig_jobs._read_meta_dict(job_dir)
-    tmp = result.with_name(result.name + ".tmp")
-    tmp.write_text(json.dumps(meta, indent=2) + "\n")
-    tmp.replace(result)
 
 
 def _result_status(job_dir: Path) -> str:
@@ -180,6 +189,8 @@ def launch(repo, **kwargs) -> dict:
     unknown = sorted(set(kwargs) - LAUNCH_KEYS)
     if unknown:
         raise LaunchError(f"unknown launch argument: {unknown[0]}")
+    if "workflow_attempt" in kwargs and kwargs["workflow_attempt"] not in (None, "") and not isinstance(kwargs["workflow_attempt"], str):
+        kwargs["workflow_attempt"] = str(kwargs["workflow_attempt"])
     for key in STRING_LAUNCH_KEYS:
         if key in kwargs:
             _require_string(kwargs.get(key), key)
@@ -218,6 +229,9 @@ def launch(repo, **kwargs) -> dict:
             writer_cli=_require_string(kwargs.get("writer_cli"), "writer_cli"),
             writer_model=_require_string(kwargs.get("writer_model"), "writer_model"),
             writer_provider=_require_string(kwargs.get("writer_provider"), "writer_provider"),
+            writer_job_ids=kwargs.get("writer_job_ids"),
+            writer_snapshot_ids=kwargs.get("writer_snapshot_ids"),
+            writer_providers=kwargs.get("writer_providers"),
             review_mode=_require_string(kwargs.get("review_mode"), "review_mode").strip() or "standalone",
             repo=repo, assessment=assessment_obj,
         )
@@ -289,11 +303,29 @@ def launch(repo, **kwargs) -> dict:
     writer_cli = _require_string(kwargs.get("writer_cli"), "writer_cli")
     writer_model = _require_string(kwargs.get("writer_model"), "writer_model")
     writer_provider = _require_string(kwargs.get("writer_provider"), "writer_provider")
-    if review_mode == "independent" or writer_job_id or role.lower() in {"review", "reviewer"}:
+    writer_job_ids = _string_list(kwargs.get("writer_job_ids"), "writer_job_ids")
+    writer_snapshot_ids = _string_list(kwargs.get("writer_snapshot_ids"), "writer_snapshot_ids")
+    writer_providers = _string_list(kwargs.get("writer_providers"), "writer_providers")
+    resources = kwargs.get("resources")
+    try:
+        resources = admission.canonical_resources(resources)
+    except admission.AdmissionError as error:
+        raise LaunchError(str(error)) from error
+    workflow_id = _require_string(kwargs.get("workflow_id"), "workflow_id")
+    workflow_node_id = _require_string(kwargs.get("workflow_node_id"), "workflow_node_id")
+    workflow_spec_hash = _require_string(kwargs.get("workflow_spec_hash"), "workflow_spec_hash")
+    workflow_attempt = kwargs.get("workflow_attempt") or 0
+    allow_read = kwargs.get("allow_read_overlap_reservations")
+    role_kind = rig_route.classify(role, "")
+    if writer_job_id and (writer_job_ids is None or writer_job_id not in writer_job_ids):
+        writer_job_ids = [writer_job_id, *(writer_job_ids or [])]
+    if role_kind == "review":
         try:
             context, problem = rig_route._writer_context(
                 writer_job_id=writer_job_id, writer_cli=writer_cli, writer_model=writer_model,
                 writer_provider=writer_provider, review_mode=review_mode, repo=repo,
+                writer_job_ids=writer_job_ids, writer_snapshot_ids=writer_snapshot_ids,
+                writer_providers=writer_providers,
             )
         except ValueError as error:
             raise LaunchError(str(error)) from error
@@ -306,6 +338,12 @@ def launch(repo, **kwargs) -> dict:
         writer_cli = writer_cli or context.get("writer_cli") or ""
         writer_model = writer_model or context.get("writer_model") or ""
         writer_provider = writer_provider or context.get("writer_provider") or ""
+        if context.get("writer_job_ids"):
+            writer_job_ids = context["writer_job_ids"]
+        if context.get("writer_snapshot_ids"):
+            writer_snapshot_ids = context["writer_snapshot_ids"]
+        if context.get("writer_providers"):
+            writer_providers = context["writer_providers"]
     wrapper = installed_wrapper()
     owner_session = _require_string(kwargs.get("owner_session"), "owner_session").strip()
     if not owner_session:
@@ -344,8 +382,13 @@ def launch(repo, **kwargs) -> dict:
                 repo, job_id=job_id, worker=worker, role=role, model=model, files=listed,
                 access=access, owner=owner, owner_session=owner_session,
                 queue_id=queue_id, reservation_id=reservation_id, attempt_id=attempt_id,
-                owner_token=owner_token, writer_job_id=writer_job_id,
-                writer_snapshot_id=writer_snapshot_id,
+                owner_token=owner_token, writer_job_id=writer_job_id if role_kind == "review" else "",
+                writer_snapshot_id=writer_snapshot_id if role_kind == "review" else "",
+                writer_job_ids=writer_job_ids,
+                writer_snapshot_ids=writer_snapshot_ids, writer_providers=writer_providers,
+                resources=resources, workflow_id=workflow_id, workflow_node_id=workflow_node_id,
+                workflow_spec_hash=workflow_spec_hash, workflow_attempt=workflow_attempt,
+                allow_read_overlap_reservations=allow_read,
             )
         except admission.AdmissionError as error:
             raise LaunchError(str(error)) from error
@@ -362,7 +405,11 @@ def launch(repo, **kwargs) -> dict:
                 kind="wrapper", thread=rig_jobs.current_thread(repo), files=listed,
                 model=model, effort=effort, executor_kind="wrapper", execution_mode="live",
                 writer_job_id=writer_job_id, writer_snapshot_id=writer_snapshot_id,
-                reservation=record, capture_evidence=False,
+                writer_job_ids=writer_job_ids, writer_snapshot_ids=writer_snapshot_ids,
+                writer_providers=writer_providers, reservation=record, capture_evidence=False,
+                resources=record.get("resources"), workflow_id=workflow_id,
+                workflow_node_id=workflow_node_id, workflow_spec_hash=workflow_spec_hash,
+                workflow_attempt=workflow_attempt,
             )
             routing_policy.write_sidecar(job_dir, record["attempt_id"], routing_obj)
             child_mcp.mark_unknown(job_dir)
@@ -384,6 +431,10 @@ def launch(repo, **kwargs) -> dict:
             "RIG_EFFORT": effort,
             "RIG_ACCESS": access,
             "RIG_JOB_FILES_JSON": json.dumps(listed),
+            "RIG_WORKFLOW_ID": workflow_id,
+            "RIG_WORKFLOW_NODE_ID": workflow_node_id,
+            "RIG_WORKFLOW_SPEC_HASH": workflow_spec_hash,
+            "RIG_WORKFLOW_ATTEMPT": str(workflow_attempt or ""),
             "RIG_QUEUE_ID": record.get("queue_id") or "",
             "RIG_RESERVATION_ID": record["reservation_id"],
             "RIG_ATTEMPT_ID": record["attempt_id"],
@@ -401,6 +452,9 @@ def launch(repo, **kwargs) -> dict:
             "RIG_REPO": str(repo),
         }
         extra = {key: value for key, value in extra.items() if value != ""}
+        extra["RIG_JOB_RESOURCES_JSON"] = json.dumps(
+            record.get("resources") if isinstance(record.get("resources"), list) else []
+        )
         env = _wrapper_env(extra)
         log = open(launcher_log, "ab")
         try:

@@ -162,13 +162,154 @@ class ProtocolDocumentation(unittest.TestCase):
         sources = [ROOT / "README.md", ROOT / "docs" / "usage.md"]
         sources.extend(ROOT / "skills" / name / "SKILL.md" for name in ("delegate-harness", "rig-jobs", "rig-queue"))
         known = {tool["name"] for tool in [*rig_mcp.TOOLS, *rig_mcp.CHILD_TOOLS]}
-        pattern = re.compile(r"\brig_(?:job_[a-z_]+|queue_[a-z_]+|session|pick|status|jobs|memory(?:_add)?)\b")
+        pattern = re.compile(
+            r"\brig_(?:job_[a-z_]+|queue_[a-z_]+|workflow_[a-z_]+|workflows|session|pick|status|jobs|memory(?:_add)?)\b"
+        )
         for source in sources:
             with self.subTest(path=source.relative_to(ROOT)):
                 mentioned = set(pattern.findall(source.read_text()))
                 self.assertFalse(mentioned - known, mentioned - known)
         protocol = (ROOT / "bin" / "rig").read_text().split("<!-- rig:start -->", 1)[1].split("<!-- rig:end -->", 1)[0]
         self.assertFalse(set(pattern.findall(protocol)) - known)
+
+    def test_delegate_harness_copies_are_byte_consistent(self):
+        left = (ROOT / "skills" / "delegate-harness" / "SKILL.md").read_bytes()
+        right = (ROOT / ".agents" / "skills" / "delegate-harness" / "SKILL.md").read_bytes()
+        self.assertEqual(left, right)
+
+    def test_generated_parent_protocol_matches_agents_workflow_contract(self):
+        agents = (ROOT / "AGENTS.md").read_text().split(
+            "<!-- rig:start -->", 1)[1].split("<!-- rig:end -->", 1)[0]
+        generated = (ROOT / "bin" / "rig").read_text().split(
+            "<!-- rig:start -->", 1)[1].split("<!-- rig:end -->", 1)[0]
+        self.assertEqual(agents, generated)
+        for phrase in (
+            "stay|explore|mini|bulk|implement|hard|review|verify",
+            "rig_workflow_create",
+            "rig_workflow_advance",
+            "rig_workflow_wait",
+            "rig_job_coordination_reply",
+            "rig_job_coordination_request",
+            "file AND resource",
+            "[orchestration]",
+            "final-verify",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, generated)
+
+    def test_mcp_pick_and_session_describe_verify_role(self):
+        tools = {tool["name"]: tool for tool in rig_mcp.TOOLS}
+        for name in ("rig_pick", "rig_session"):
+            role = tools[name]["inputSchema"]["properties"]["role"]
+            with self.subTest(tool=name):
+                self.assertIn("verify", role["enum"])
+                self.assertIn("verify", role["description"])
+
+    def test_workflow_credential_gitignore_entries(self):
+        needed = (
+            ".rig/queue/",
+            ".rig/workflows/",
+            ".rig/workflows/*/owner-credentials.json",
+        )
+        for path in (ROOT / ".gitignore", ROOT / "templates" / "gitignore-fragment"):
+            text = path.read_text()
+            for line in needed:
+                with self.subTest(path=str(path.relative_to(ROOT)), line=line):
+                    self.assertIn(line, text)
+
+    def test_adaptive_workflow_contracts_are_documented(self):
+        managed = {
+            "README.md": (ROOT / "README.md").read_text(),
+            "docs/usage.md": (ROOT / "docs" / "usage.md").read_text(),
+            "docs/rig-flow.md": (ROOT / "docs" / "rig-flow.md").read_text(),
+            "docs/smart-routing.md": (ROOT / "docs" / "smart-routing.md").read_text(),
+            "docs/release-notes.md": (ROOT / "docs" / "release-notes.md").read_text(),
+            "AGENTS.md": (ROOT / "AGENTS.md").read_text(),
+            "skills/delegate-harness/SKILL.md": (ROOT / "skills" / "delegate-harness" / "SKILL.md").read_text(),
+        }
+        managed["generated parent protocol"] = (ROOT / "bin" / "rig").read_text().split(
+            "<!-- rig:start -->", 1)[1].split("<!-- rig:end -->", 1)[0]
+        core_names = (
+            "README.md", "docs/usage.md", "AGENTS.md",
+            "skills/delegate-harness/SKILL.md", "generated parent protocol",
+        )
+        core_phrases = (
+            ".rig/workflows/",
+            "owner-credentials.json",
+            "0600",
+            "[orchestration]",
+            "adaptive",
+            "single",
+            "max_nodes",
+            "Children never spawn",
+            "file AND resource",
+            "independent review unavailable",
+            "rig_workflow_advance",
+            "rig_workflow_wait",
+        )
+        for name in core_names:
+            source = managed[name]
+            lowered = source.lower()
+            for phrase in core_phrases:
+                with self.subTest(source=name, phrase=phrase):
+                    self.assertIn(phrase.lower(), lowered)
+            with self.subTest(source=name, check="no estimates"):
+                self.assertRegex(source.lower(), r"no estimated progress, savings, or eta|no eta")
+                self.assertNotRegex(source.lower(), r"estimated (eta|time remaining|savings of)")
+                self.assertNotIn("F8 Workflows", source)
+
+        usage = managed["docs/usage.md"]
+        for phrase in (
+            "rig_workflow_create",
+            "rig_workflows",
+            "rig_workflow_show",
+            "rig_workflow_extend",
+            "rig_workflow_resolve",
+            "rig_workflow_approve",
+            "rig_workflow_cancel",
+            "rig_workflow_report",
+            "rig_job_coordination_reply",
+            "rig_job_coordination_request",
+            "accepted/required",
+            "next parent action",
+            "planned",
+            "cancel-requested",
+            "final-verify",
+            "never deletes data",
+            "Tab Jobs/Queue/Workflows",
+            "Queue and worker caps remain authoritative",
+        ):
+            with self.subTest(usage_phrase=phrase):
+                self.assertIn(phrase.lower(), usage.lower())
+
+        for name in ("docs/rig-flow.md", "docs/smart-routing.md", "docs/release-notes.md"):
+            source = managed[name]
+            with self.subTest(source=name, check="orchestration"):
+                self.assertIn("[orchestration]", source)
+                self.assertIn("single", source)
+                self.assertNotIn("F8 Workflows", source)
+                self.assertNotRegex(source.lower(), r"estimated (eta|time remaining|savings of)")
+
+        release = managed["docs/release-notes.md"]
+        self.assertIn("never deletes data", release)
+        self.assertIn("confirm stopped", release)
+
+        journal = (ROOT / "docs" / "journals" / "260913-wait-cancel-responsiveness.md").read_text()
+        self.assertRegex(journal.lower(), r"combined.{0,80}rollout|rollout.{0,80}combined")
+        journal_l = journal.lower()
+        self.assertRegex(
+            journal_l,
+            r"(pending.{0,120}(installed smoke|final smoke|combined rollout))"
+            r"|((installed smoke|final smoke|combined rollout).{0,120}pending)",
+        )
+        self.assertRegex(
+            journal_l,
+            r"(does not claim|still outstanding|still pending).{0,100}"
+            r"(final installed-smoke|combined-rollout|installed-rollout|installed smoke|combined rollout)",
+        )
+        # No affirmative completion claims (space-separated forms).
+        self.assertNotRegex(journal_l, r"installed smoke (passed|complete|done|verified)")
+        self.assertNotRegex(journal_l, r"combined rollout (passed|complete|done|verified)")
 
 
 if __name__ == "__main__":

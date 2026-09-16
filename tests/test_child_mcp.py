@@ -154,6 +154,57 @@ class ChildMcpReadiness(unittest.TestCase):
         }))
         self.assertEqual(child_mcp.require_success(job_dir), child_mcp.MISSING_REASON)
         self.assertEqual(child_mcp.require_success(job_dir), "child MCP handshake missing")
+        stamped = child_mcp.mark_unknown(job_dir)
+        self.assertEqual(stamped.get("child_mcp_status"), child_mcp.UNKNOWN)
+        self.assertNotEqual(stamped.get("child_mcp_status"), child_mcp.CONNECTED)
+        incomplete = self.home / "jobs" / "stub"
+        incomplete.mkdir(parents=True)
+        (incomplete / "meta.json").write_text(json.dumps({"job_id": "stub"}))
+        self.assertEqual(child_mcp.mark_unknown(incomplete), {"job_id": "stub"})
+        self.assertIsNone(json.loads((incomplete / "meta.json").read_text()).get("child_mcp_status"))
+
+
+class ChildMcpHandshakeLock(unittest.TestCase):
+    def test_mark_unknown_does_not_downgrade_concurrent_connected(self):
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp).resolve()
+            (repo / ".git").mkdir()
+            (repo / ".rig").mkdir()
+            (repo / ".rig" / "harness.toml").write_text('parent = "codex"\n[workers]\ngrok = true\n')
+            job_dir = repo / ".rig" / "jobs" / "race"
+            job_dir.mkdir(parents=True)
+            (job_dir / "meta.json").write_text(json.dumps({
+                "job_id": "race", "worker": "grok", "status": "running",
+            }))
+            barrier = threading.Barrier(2)
+            errors = []
+
+            def unknown():
+                barrier.wait(timeout=5)
+                try:
+                    child_mcp.mark_unknown(job_dir)
+                except Exception as error:
+                    errors.append(error)
+
+            def handshake():
+                barrier.wait(timeout=5)
+                try:
+                    child_mcp.record_handshake(job_dir)
+                except Exception as error:
+                    errors.append(error)
+
+            threads = [threading.Thread(target=unknown), threading.Thread(target=handshake)]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join()
+            self.assertEqual(errors, [])
+            meta = json.loads((job_dir / "meta.json").read_text())
+            self.assertEqual(meta["child_mcp_status"], child_mcp.CONNECTED)
+            self.assertEqual(int(meta["child_mcp_protocol"]), child_mcp.PROTOCOL)
+            self.assertTrue(child_mcp.handshake_connected(job_dir))
+            again = child_mcp.mark_unknown(job_dir)
+            self.assertEqual(again["child_mcp_status"], child_mcp.CONNECTED)
 
 
 class ChildMcpJsonRpc(unittest.TestCase):

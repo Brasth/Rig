@@ -39,24 +39,28 @@ MODELS = {
     ("codex", "bulk"): ("gpt-5.6-luna", "low"),
     ("codex", "implement"): ("gpt-5.6-luna", "low"),
     ("codex", "hard"): ("gpt-5.6-terra", "medium"),
+    ("codex", "verify"): ("gpt-5.6-luna", "low"),
     ("codex", "review"): ("gpt-5.6-terra", "high"),
     ("grok", "explore"): ("grok-4.5", "low"),
     ("grok", "mini"): ("grok-4.5", "low"),
     ("grok", "bulk"): ("grok-4.5", "low"),
     ("grok", "implement"): ("grok-4.6", "high"),
     ("grok", "hard"): ("grok-4.6", "high"),
+    ("grok", "verify"): ("grok-4.6", "high"),
     ("grok", "review"): ("grok-4.6", "high"),
     ("claude", "explore"): ("claude-haiku-4-5-20251001", "low"),
     ("claude", "mini"): ("claude-haiku-4-5-20251001", "low"),
     ("claude", "bulk"): ("claude-haiku-4-5-20251001", "low"),
     ("claude", "implement"): ("claude-sonnet-5", "medium"),
     ("claude", "hard"): ("claude-opus-5", "high"),
+    ("claude", "verify"): ("claude-sonnet-5", "medium"),
     ("claude", "review"): ("claude-opus-5", "high"),
     ("cursor", "explore"): ("composer-2.5-fast", ""),
     ("cursor", "mini"): ("composer-2.5-fast", ""),
     ("cursor", "bulk"): ("composer-2.5-fast", ""),
     ("cursor", "implement"): ("composer-2.5", ""),
     ("cursor", "hard"): ("cursor-grok-4.6-high", ""),
+    ("cursor", "verify"): ("composer-2.5", ""),
     ("cursor", "review"): ("claude-opus-5-thinking-high", ""),
     # OpenCode effort is --variant (minimal/high/max). OMP/Pi --thinking. agy --effort.
     ("opencode", "explore"): ("openai/gpt-5.4-mini", "minimal"),
@@ -64,24 +68,28 @@ MODELS = {
     ("opencode", "bulk"): ("openai/gpt-5.4-mini", "minimal"),
     ("opencode", "implement"): ("openai/gpt-5.6-luna", "high"),
     ("opencode", "hard"): ("openai/gpt-5.6-terra", "max"),
+    ("opencode", "verify"): ("openai/gpt-5.6-luna", "high"),
     ("opencode", "review"): ("openai/gpt-5.6-terra", "max"),
     ("omp", "explore"): ("grok-4.5", "low"),
     ("omp", "mini"): ("grok-4.5", "low"),
     ("omp", "bulk"): ("grok-4.5", "low"),
     ("omp", "implement"): ("grok-4.6", "high"),
     ("omp", "hard"): ("grok-4.6", "high"),
+    ("omp", "verify"): ("grok-4.6", "high"),
     ("omp", "review"): ("claude-opus-5", "high"),
     ("pi", "explore"): ("grok-4.5", "low"),
     ("pi", "mini"): ("grok-4.5", "low"),
     ("pi", "bulk"): ("grok-4.5", "low"),
     ("pi", "implement"): ("grok-4.6", "high"),
     ("pi", "hard"): ("grok-4.6", "high"),
+    ("pi", "verify"): ("grok-4.6", "high"),
     ("pi", "review"): ("claude-opus-5", "high"),
     ("agy", "explore"): ("gemini-3.8-flash-low", "low"),
     ("agy", "mini"): ("gemini-3.8-flash-low", "low"),
     ("agy", "bulk"): ("gemini-3.8-flash-low", "low"),
     ("agy", "implement"): ("gemini-3.8-flash-high", "high"),
     ("agy", "hard"): ("gemini-3.1-pro-high", "high"),
+    ("agy", "verify"): ("gemini-3.8-flash-high", "high"),
     ("agy", "review"): ("gemini-3.1-pro-high", "high"),
     # Devin is child-only. Exact SWE-2 selectors; never swe aliases, SWE-1.x, Fusion, or defaults.
     ("devin", "explore"): ("swe-2-medium", "medium"),
@@ -89,6 +97,7 @@ MODELS = {
     ("devin", "bulk"): ("swe-2-medium", "medium"),
     ("devin", "implement"): ("swe-2-high", "high"),
     ("devin", "hard"): ("swe-2-max", "max"),
+    ("devin", "verify"): ("swe-2-high", "high"),
     ("devin", "review"): ("swe-2-max", "max"),
 }
 
@@ -139,6 +148,7 @@ DEVIN_ROLE_MODELS = {
     "implement": "swe-2-high",
     "hard": "swe-2-max",
     "review": "swe-2-max",
+    "verify": "swe-2-high",
 }
 
 KEYWORDS = (
@@ -220,6 +230,7 @@ EXPLICIT_KIND = {
     "implement-hard": "hard",
     "review": "review",
     "reviewer": "review",
+    "verify": "verify",
     "implement": "implement",
 }
 
@@ -275,6 +286,7 @@ def _writer_context(
     writer_provider: str = "", review_mode: str = "standalone", repo: Path | None = None,
     jobs_snapshot: list[dict] | None = None,
     hash_cache: dict | None = None,
+    writer_job_ids=None, writer_snapshot_ids=None, writer_providers=None,
 ) -> tuple[dict, str]:
     """Resolve actual writer identity and its current parent acceptance."""
     if review_mode not in {"standalone", "independent"}:
@@ -343,18 +355,63 @@ def _writer_context(
     if not provider:
         provider = derived or supplied_provider
         provider_source = "model" if derived else "explicit" if supplied_provider else "unknown"
+    extra_ids = [str(item).strip() for item in (writer_job_ids or []) if str(item).strip()]
+    extra_snaps = [str(item).strip() for item in (writer_snapshot_ids or []) if str(item).strip()]
+    extra_providers = [str(item).strip().lower() for item in (writer_providers or []) if str(item).strip()]
+    supplied_snaps = list(extra_snaps)
+    supplied_providers = list(extra_providers)
+    if job_id and job_id not in extra_ids:
+        extra_ids = [job_id, *extra_ids]
+    if snapshot_id and snapshot_id not in extra_snaps:
+        extra_snaps = [snapshot_id, *extra_snaps]
+    if provider and provider not in extra_providers:
+        extra_providers = [provider, *extra_providers]
+    extras_failed = ""
+    if review_mode == "independent":
+        resolved = {job_id} if job_id else set()
+        recorded_providers = {provider} if provider else set()
+        recorded_snaps = {snapshot_id} if snapshot_id else set()
+        for extra_id in extra_ids:
+            if extra_id in resolved:
+                continue
+            resolved.add(extra_id)
+            nested, nested_reason = _writer_context(
+                writer_job_id=extra_id, review_mode=review_mode, repo=repo,
+                jobs_snapshot=jobs_snapshot, hash_cache=hash_cache,
+            )
+            nested_provider = str(nested.get("writer_provider") or "")
+            nested_snap = str(nested.get("writer_snapshot_id") or "")
+            if nested_provider:
+                recorded_providers.add(nested_provider)
+                if nested_provider not in extra_providers:
+                    extra_providers.append(nested_provider)
+            if nested_snap:
+                recorded_snaps.add(nested_snap)
+                if nested_snap not in extra_snaps:
+                    extra_snaps.append(nested_snap)
+            if nested_reason and not extras_failed:
+                extras_failed = nested_reason
+        for item in supplied_providers:
+            if recorded_providers and item not in recorded_providers:
+                raise ValueError("supplied writer provider conflicts with recorded actual provider")
+        for item in supplied_snaps:
+            if recorded_snaps and item not in recorded_snaps:
+                raise ValueError("supplied writer snapshot conflicts with recorded actual snapshot")
     context = {
         "writer_job_id": job_id, "writer_snapshot_id": snapshot_id,
         "writer_cli": cli, "writer_model": model, "writer_provider": provider,
         "writer_provider_source": provider_source or "unknown", "review_mode": review_mode,
+        "writer_job_ids": extra_ids, "writer_snapshot_ids": extra_snaps, "writer_providers": extra_providers,
     }
     reason = ""
     if review_mode == "independent":
-        if not job_id:
+        if not job_id and not extra_ids:
             reason = "independent review requires writer_job_id and a current parent-accepted snapshot"
-        elif not snapshot_id:
+        elif extras_failed:
+            reason = extras_failed
+        elif not snapshot_id and not extra_snaps:
             reason = f"independent review requires a current parent-accepted writer snapshot: {acceptance_reason}"
-        elif not provider:
+        elif not extra_providers:
             reason = "independent review requires a known actual writer provider"
     return context, reason
 
@@ -364,12 +421,15 @@ def _review_model(model: str, context: dict) -> tuple[str, str]:
     banned = assert_child_model(model)
     if banned:
         return "unavailable", banned
-    provider, writer = provider_for(model), context["writer_provider"]
-    if writer and provider == writer:
-        return "unavailable", f"reviewer provider {provider} matches writer provider {writer}"
+    provider = provider_for(model)
+    writers = [item for item in (context.get("writer_providers") or [context.get("writer_provider")]) if item]
+    if writers and provider in writers:
+        return "unavailable", f"reviewer provider {provider} matches writer provider {provider}"
     if context["review_mode"] == "independent" and not provider:
         return "unavailable", "independent review requires a known reviewer model provider"
-    return ("confirmed" if writer and provider else "unknown"), ""
+    if context["review_mode"] == "independent" and writers and provider and provider in writers:
+        return "unavailable", f"reviewer provider {provider} matches writer provider {provider}"
+    return ("confirmed" if writers and provider else "unknown"), ""
 
 
 def model_for(worker: str, kind: str) -> tuple[str, str]:
@@ -409,7 +469,7 @@ def choose_worker(
     skip_native = bool(live) and (live in blocked or "native" in blocked)
     if kind == "stay":
         return live, "stay"
-    if kind == "explore":
+    if kind in {"explore", "verify"}:
         # Read-only: MCP-capable wrapper if available, else parent stays (no native child).
         for worker in ("grok", "claude") + LAST_RESORT:
             if worker in avail:
@@ -496,6 +556,9 @@ def pick(
     writer_cli: str = "",
     writer_model: str = "",
     writer_provider: str = "",
+    writer_job_ids=None,
+    writer_snapshot_ids=None,
+    writer_providers=None,
     review_mode: str = "standalone",
     repo: Path | None = None,
     jobs_snapshot: list[dict] | None = None,
@@ -526,6 +589,8 @@ def pick(
             writer_provider=writer_provider, review_mode=review_mode, repo=repo,
             jobs_snapshot=jobs_snapshot, hash_cache=hash_cache, assessment=assessed,
             policy_mode="smart",
+            writer_job_ids=writer_job_ids, writer_snapshot_ids=writer_snapshot_ids,
+            writer_providers=writer_providers,
         )
         if explain:
             choice["_explain"] = True
@@ -540,6 +605,8 @@ def pick(
             writer_provider=writer_provider, review_mode=review_mode, repo=repo,
             jobs_snapshot=jobs_snapshot,
             hash_cache=hash_cache,
+            writer_job_ids=writer_job_ids, writer_snapshot_ids=writer_snapshot_ids,
+            writer_providers=writer_providers,
         )
         failures = []
         remaining = [w for w in effective if w != live]
@@ -586,9 +653,9 @@ def pick(
     actual_model = (parent_model or "").strip()
     actual_effort = (parent_effort or "").strip() if actual_model else ""
     if spawn == "stay":
-        if kind == "explore":
+        if kind in {"explore", "verify"}:
             stay_reason = (
-                "explore: no MCP-capable child; parent stays read-only. "
+                f"{kind}: no MCP-capable child; parent stays read-only. "
                 "no native child."
             )
         else:

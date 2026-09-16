@@ -16,9 +16,13 @@ import jobs as rig_jobs  # noqa: E402
 import work_queue as rig_queue  # noqa: E402
 from tui_editor import Draft, InputDecoder  # noqa: E402
 from tui_runtime import BoardRuntime, visible_jobs as _visible_jobs  # noqa: E402
-from tui_view import _add, _detail_lines, _elide, _room, _viewport, render  # noqa: E402,F401
+from tui_view import (  # noqa: E402,F401
+    _TABS, _add, _detail_lines, _elide, _listing_id, _next_tab, _room, _viewport,
+    _workflow_detail_lines, render,
+)
+from ui_snapshot import collect_workflows  # noqa: E402
 
-HELP = "Tab Jobs/Queue  j/k select  e enqueue  y/n answer  x cancel  l log  r refresh  q quit"
+HELP = "Tab Jobs/Queue/Workflows  j/k select  e enqueue  y/n answer  x cancel  l log  r refresh  q quit"
 
 
 def _snapshot_status(runtime):
@@ -43,8 +47,8 @@ def _paint(stdscr, repo: Path, *, runtime=None) -> None:
     stdscr.timeout(25)
     stdscr.scrollok(False)
     tab = "Jobs"
-    selected = {"Jobs": 0, "Queue": 0}
-    offsets = {"Jobs": 0, "Queue": 0}
+    selected = {name: 0 for name in _TABS}
+    offsets = {name: 0 for name in _TABS}
     follow, log_off, log_mode = True, 0, False
     footer = HELP
     draft, decoder = Draft(), InputDecoder()
@@ -55,13 +59,20 @@ def _paint(stdscr, repo: Path, *, runtime=None) -> None:
         sys.stdout.write("\x1b[?2004h")
         sys.stdout.flush()
 
-    def listing(name):
-        return runtime.snapshot.jobs if name == "Jobs" else runtime.snapshot.pending
+    def listing(name, workflows=()):
+        if name == "Jobs":
+            return runtime.snapshot.jobs
+        if name == "Queue":
+            return runtime.snapshot.pending
+        return list(workflows or ())
 
     try:
         while True:
-            identities = {name: ((listing(name)[selected[name]].get("job_id") if name == "Jobs" else
-                                 listing(name)[selected[name]].get("id")) if listing(name) else None)
+            board_workflows = getattr(runtime.snapshot, "workflows", None)
+            if board_workflows is None:
+                board_workflows = collect_workflows(repo)
+            identities = {name: (_listing_id(name, listing(name, board_workflows)[selected[name]])
+                                 if listing(name, board_workflows) else None)
                           for name in selected}
             revision = runtime.revision
             for result in runtime.poll():
@@ -86,10 +97,11 @@ def _paint(stdscr, repo: Path, *, runtime=None) -> None:
                     footer = str(result.value or "Action completed")
             if runtime.revision != revision:
                 for name in selected:
-                    key = "job_id" if name == "Jobs" else "id"
-                    selected[name] = next((i for i, row in enumerate(listing(name)) if row.get(key) == identities[name]),
-                                          min(selected[name], max(0, len(listing(name)) - 1)))
-                for row in listing("Jobs"):
+                    rows = listing(name, board_workflows)
+                    selected[name] = next((i for i, row in enumerate(rows)
+                                           if _listing_id(name, row) == identities[name]),
+                                          min(selected[name], max(0, len(rows) - 1)))
+                for row in listing("Jobs", board_workflows):
                     if (row.get("reservation") or {}).get("stopped") or row.get("cancellation_state") == "stopped":
                         requested.discard(f"cancel:Jobs:{row['job_id']}")
             h, w = stdscr.getmaxyx()
@@ -98,7 +110,7 @@ def _paint(stdscr, repo: Path, *, runtime=None) -> None:
             curses.curs_set(1 if draft.active else 0)
             offsets[tab] = render(stdscr, repo, runtime.snapshot, tab=tab, selected=selected[tab], offset=offsets[tab],
                                   follow=follow, log_off=log_off, footer=footer, snapshot_status=_snapshot_status(runtime),
-                                  requested=requested, draft=draft, log_mode=log_mode)
+                                  requested=requested, draft=draft, log_mode=log_mode, workflows=board_workflows)
             try:
                 key = stdscr.get_wch()
                 incoming = decoder.feed(key)
@@ -136,7 +148,7 @@ def _paint(stdscr, repo: Path, *, runtime=None) -> None:
                     return
                 if key == "\x1b" or pasted_outside_editor:
                     continue
-                rows = listing(tab)
+                rows = listing(tab, board_workflows)
                 row = rows[selected[tab]] if rows else None
                 if key in ("j", curses.KEY_DOWN):
                     selected[tab] = min(selected[tab] + 1, max(0, len(rows) - 1))
@@ -147,7 +159,8 @@ def _paint(stdscr, repo: Path, *, runtime=None) -> None:
                     follow = True
                     runtime.refresh()
                 elif key in ("\t", curses.KEY_BTAB):
-                    tab = "Queue" if tab == "Jobs" else "Jobs"
+                    step = -1 if key == curses.KEY_BTAB else 1
+                    tab = _TABS[(_TABS.index(tab) + step) % len(_TABS)]
                 elif key == "r":
                     runtime.refresh()
                 elif key == "e":
@@ -159,7 +172,7 @@ def _paint(stdscr, repo: Path, *, runtime=None) -> None:
                     action_key = f"answer:{row['job_id']}"
                     accepted = runtime.submit(action_key, lambda row=row, behavior=behavior: rig_jobs.answer_pending(row, behavior))
                     footer = f"{behavior} requested {row['job_id']}" if accepted else "Action already pending or busy"
-                elif key == "x" and row:
+                elif key == "x" and row and tab != "Workflows":
                     jid = str(row.get("job_id") if tab == "Jobs" else row.get("id"))
                     if tab == "Jobs" and ((row.get("reservation") or {}).get("stopped") or
                                            (row.get("effective") in {"ok", "fail", "timeout"} and not row.get("cancellation_state"))):

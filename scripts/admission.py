@@ -393,6 +393,75 @@ def canonical_files(repo, files):
     return declared, sorted(canonical)
 
 
+_RESOURCE_NAME = re.compile(r"^[A-Za-z][A-Za-z0-9._:-]{0,63}$")
+_SECRETISH = re.compile(
+    r"(?:secret|password|passwd|token|apikey|api[_-]?key|bearer|private[_-]?key|"
+    r"sk-[A-Za-z0-9]|ghp_|github_pat_|xox[baprs]-)",
+    re.IGNORECASE,
+)
+_HEXISH = re.compile(r"^[0-9a-f]{32,}$", re.IGNORECASE)
+
+
+def canonical_resources(raw):
+    """Opaque resource names with read|write. Missing resources stay valid. Never secrets."""
+    if raw in (None, "", []):
+        return []
+    if not isinstance(raw, list):
+        raise AdmissionError("resources must be an array of {name, access}")
+    seen, out = set(), []
+    for item in raw:
+        if isinstance(item, str):
+            name, access = item, "read"
+        elif isinstance(item, dict):
+            name = str(item.get("name") or "").strip()
+            access = str(item.get("access") or "read").strip()
+            extra = set(item) - {"name", "access"}
+            if extra:
+                raise AdmissionError(f"resource has unknown field {sorted(extra)[0]}")
+        else:
+            raise AdmissionError("resource must be a name or {name, access}")
+        if not name or not _RESOURCE_NAME.fullmatch(name):
+            raise AdmissionError("resource name must be an opaque identifier")
+        if _SECRETISH.search(name) or _HEXISH.fullmatch(name) or " " in name:
+            raise AdmissionError("resource names must not contain secret values")
+        if access not in {"read", "write"}:
+            raise AdmissionError("resource access must be read|write")
+        key = (name, access)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append({"name": name, "access": access})
+    out.sort(key=lambda row: (row["name"], row["access"]))
+    return out
+
+
+def resources_conflict(left, right):
+    held = {}
+    for item in left or []:
+        if not isinstance(item, dict):
+            continue
+        name, access = item.get("name"), item.get("access")
+        if not name:
+            continue
+        if access == "write" or held.get(name) != "write":
+            held[name] = access or "read"
+    for item in right or []:
+        if not isinstance(item, dict):
+            continue
+        name = item.get("name")
+        other = held.get(name)
+        if name and other and (other == "write" or item.get("access") == "write"):
+            return name
+    return None
+
+
+def _legacy_resources(raw):
+    try:
+        return canonical_resources(raw)
+    except AdmissionError:
+        return []
+
+
 def _records(root):
     return [_read(path, required=True) for path in sorted((root / ".rig" / "reservations").glob("*.json"))]
 
@@ -419,11 +488,15 @@ def _queue_update(root, record, status):
         raise AdmissionError("queue belongs to another attempt")
     # A cancelled job must never turn into an implicit queue retry, including
     # cancellation before its launch barrier was opened.
+    workflow_bound = bool(item.get("workflow_id"))
     completed = record.get("stopped") and record.get("execution_status") in {"ok", "fail", "timeout"}
-    if not completed and record.get("job_id") and _cancel_requested(root, record):
+    if not workflow_bound and not completed and record.get("job_id") and _cancel_requested(root, record):
         item["status"] = "cancelled"
     # Cancellation preserves intent even when a late executor completes.
-    if item.get("status") != "cancelled" and not (item.get("status") == "done" and status in {"claimed", "spawned"}):
+    # Workflow-bound items are claimed on create, spawned on first node, and
+    # done only after workflow verification — never pending from a node job.
+    allow_status = not (workflow_bound and status in {"done", "pending"})
+    if allow_status and item.get("status") != "cancelled" and not (item.get("status") == "done" and status in {"claimed", "spawned"}):
         item["status"] = status
     item.update(reservation_id=record["reservation_id"], attempt_id=record["attempt_id"],
                 files=record["declared_files"], access=record["access"], worker=record["worker"])
@@ -458,20 +531,27 @@ def _accounting(root, skip_reservation="", skip_queue=""):
         if jid in bound_jobs or job.get("status") not in {"running", "ask"} and not cancelled_owner:
             continue
         _, files = canonical_files(root, job.get("files") or [])
-        access = job.get("access") or ("read" if job.get("role") in {"explore", "explorer", "review", "reviewer"} else "write")
+        access = job.get("access") or ("read" if job.get("role") in {"explore", "explorer", "review", "reviewer", "verify"} else "write")
         rows.append({"job_id": jid, "worker": job.get("worker", ""), "access": access,
-                     "files": files, "scope_unknown": not files, "slot_held": True, "legacy": True})
+                     "files": files, "scope_unknown": not files, "slot_held": True, "legacy": True,
+                     "resources": _legacy_resources(job.get("resources")),
+                     "reservation_id": job.get("reservation_id", "")})
     for path in (root / ".rig" / "queue").glob("*.json"):
         item = _read(path, required=True)
         qid = path.stem
         if qid in bound_queues or qid == skip_queue or item.get("status") not in {"claimed", "spawned"}:
+            continue
+        if item.get("workflow_id"):
+            # Workflow-bound queue is claimed/spawned by the workflow, not a competing job scope.
             continue
         if item.get("job_id") in bound_jobs:
             continue
         _, files = canonical_files(root, item.get("files") or [])
         rows.append({"queue_id": qid, "job_id": item.get("job_id", ""), "worker": item.get("worker", ""),
                      "access": item.get("access") or "write", "files": files,
-                     "scope_unknown": not files, "slot_held": True, "legacy": True})
+                     "scope_unknown": not files, "slot_held": True, "legacy": True,
+                     "resources": _legacy_resources(item.get("resources")),
+                     "reservation_id": item.get("reservation_id", "")})
     # Legacy spawned queue plus its live metadata is also one execution.
     seen, result = set(), []
     for row in rows:
@@ -504,7 +584,8 @@ def _validate(root, worker, role, model, access, owner, *, allow_unknown_worker=
             raise AdmissionError(problem)
 
 
-def _capacity(root, rows, worker, access, files, *, reserve_slot=True):
+def _capacity(root, rows, worker, access, files, *, reserve_slot=True, resources=None,
+              allow_read_overlap_reservations=None):
     cfg = harness.parse_harness(harness.harness_path(root))["queue"]
     slots = [row for row in rows if row.get("slot_held")]
     cap = max(1, int(cfg.get("max_running", 3)))
@@ -516,15 +597,25 @@ def _capacity(root, rows, worker, access, files, *, reserve_slot=True):
         count = sum(1 for row in slots if row.get("worker") in {"", name})
         if reserve_slot and limit and count >= limit:
             raise AdmissionError(f"{name} live {count}/{limit} (max_per_worker)")
+    allowed = set(allow_read_overlap_reservations or [])
+    held_resources = canonical_resources(resources)
     for row in rows:
+        identity = row.get("job_id") or row.get("queue_id") or row.get("reservation_id")
+        allowed_read = access == "read" and row.get("reservation_id") in allowed
         if access == "read" and row.get("access") == "read":
+            conflict = resources_conflict(held_resources, row.get("resources") or [])
+            if conflict:
+                raise AdmissionError(f"resource overlap: {conflict} ({identity})")
             continue
-        unknown = not files or row.get("scope_unknown") or not row.get("files")
-        overlap = set(files) & set(row.get("files", []))
-        if unknown or overlap:
-            identity = row.get("job_id") or row.get("queue_id") or row.get("reservation_id")
-            reason = "no listed files; exclusive scope" if unknown else "files overlap: " + ", ".join(sorted(overlap))
-            raise AdmissionError(f"{reason} ({identity})")
+        if not allowed_read:
+            unknown = not files or row.get("scope_unknown") or not row.get("files")
+            overlap = set(files) & set(row.get("files", []))
+            if unknown or overlap:
+                reason = "no listed files; exclusive scope" if unknown else "files overlap: " + ", ".join(sorted(overlap))
+                raise AdmissionError(f"{reason} ({identity})")
+        conflict = resources_conflict(held_resources, row.get("resources") or [])
+        if conflict:
+            raise AdmissionError(f"resource overlap: {conflict} ({identity})")
 
 
 def _ensure_idle(record):
@@ -589,27 +680,48 @@ def _retain_failed_review(root, record, reason):
 
 
 def _new_record(*, actor, job_id, queue_id, worker, role, model, access, canonical, declared,
-                source=None, writer_job_id="", writer_snapshot_id=""):
+                source=None, writer_job_id="", writer_snapshot_id="", resources=None,
+                workflow_id="", workflow_node_id="", workflow_spec_hash="", workflow_attempt=0,
+                writer_job_ids=None, writer_snapshot_ids=None, writer_providers=None):
     actor = _bind_initiating_identity(actor)
-    return {"version": 1, "reservation_id": source["reservation_id"] if source else uuid.uuid4().hex,
+    record = {"version": 1, "reservation_id": source["reservation_id"] if source else uuid.uuid4().hex,
             "attempt_id": uuid.uuid4().hex, "owner_token": secrets.token_hex(16), "owner": actor,
             "job_id": job_id, "queue_id": queue_id, "writer_job_id": writer_job_id,
             "writer_snapshot_id": writer_snapshot_id, "worker": worker, "role": role, "model": model,
             "access": access, "files": canonical, "declared_files": declared,
+            "resources": canonical_resources(resources),
             "scope_unknown": not canonical, "stage": "reserved", "slot_held": True,
             "created_at": _now(), "release_reason": "", "launch_started": False,
             "claim_consumed": bool(job_id) and not bool(queue_id), "stopped": False, "needs_reconciliation": False,
             "history": list(source.get("history", [])) + [_public(source)] if source else []}
+    if workflow_id:
+        try:
+            attempt = int(workflow_attempt or 0)
+        except (TypeError, ValueError):
+            attempt = 0
+        record.update(workflow_id=workflow_id, workflow_node_id=workflow_node_id,
+                      workflow_spec_hash=workflow_spec_hash, workflow_attempt=attempt)
+    if writer_job_ids:
+        record["writer_job_ids"] = list(writer_job_ids)
+    if writer_snapshot_ids:
+        record["writer_snapshot_ids"] = list(writer_snapshot_ids)
+    if writer_providers:
+        record["writer_providers"] = list(writer_providers)
+    return record
 
 
 def reserve(repo, *, job_id="", worker="", role="worker", model="", files=None,
             access="write", owner=None, owner_session="", queue_id="", reservation_id="",
-            attempt_id="", owner_token="", writer_job_id="", writer_snapshot_id="", dry_run=False):
+            attempt_id="", owner_token="", writer_job_id="", writer_snapshot_id="", dry_run=False,
+            resources=None, workflow_id="", workflow_node_id="", workflow_spec_hash="",
+            workflow_attempt=0, allow_read_overlap_reservations=None,
+            writer_job_ids=None, writer_snapshot_ids=None, writer_providers=None):
     root = _root(repo)
     _id(job_id, "job id", optional=bool(queue_id))
     _id(queue_id, "queue id", optional=True)
     actor = _owner(owner, owner_session)
     declared, canonical = canonical_files(root, files)
+    held_resources = canonical_resources(resources)
     with transaction(root):
         if not dry_run:
             _reconcile_dead(root)
@@ -658,20 +770,35 @@ def reserve(repo, *, job_id="", worker="", role="worker", model="", files=None,
         if queue and source is None and queue.get("status") != "pending":
             raise AdmissionError("queue claim requires matching current attempt credentials; reconcile legacy claims")
         rows = _accounting(root, source["reservation_id"] if source else "", queue_id if source else "")
-        _capacity(root, rows, worker, access, canonical)
+        _capacity(root, rows, worker, access, canonical, resources=held_resources,
+                  allow_read_overlap_reservations=allow_read_overlap_reservations)
         if dry_run:
             return {"job_id": job_id, "stage": "dry_run", "slot_held": False, "access": access,
-                    "files": canonical, "declared_files": declared, "owner": actor, "dry_run": True}
+                    "files": canonical, "declared_files": declared, "owner": actor, "dry_run": True,
+                    "resources": held_resources}
         if source and not writer_job_id:
             record = source
             previous_ident = (source.get("owner") or {}).get("initiating_identity") or ""
             keep = previous_ident if _same_actor(source["owner"], actor) else ""
             record.update(job_id=job_id, worker=worker, role=role, model=model,
                           owner=_bind_initiating_identity(actor, existing=keep), claim_consumed=bool(job_id))
+            if held_resources and not record.get("resources"):
+                record["resources"] = held_resources
+            if workflow_id:
+                try:
+                    attempt = int(workflow_attempt or 0)
+                except (TypeError, ValueError):
+                    attempt = 0
+                record.update(workflow_id=workflow_id, workflow_node_id=workflow_node_id,
+                              workflow_spec_hash=workflow_spec_hash, workflow_attempt=attempt)
         else:
             record = _new_record(actor=actor, job_id=job_id, queue_id=queue_id, worker=worker, role=role,
                                  model=model, access=access, canonical=canonical, declared=declared,
-                                 source=source, writer_job_id=writer_job_id, writer_snapshot_id=writer_snapshot_id)
+                                 source=source, writer_job_id=writer_job_id, writer_snapshot_id=writer_snapshot_id,
+                                 resources=held_resources, workflow_id=workflow_id,
+                                 workflow_node_id=workflow_node_id, workflow_spec_hash=workflow_spec_hash,
+                                 workflow_attempt=workflow_attempt, writer_job_ids=writer_job_ids,
+                                 writer_snapshot_ids=writer_snapshot_ids, writer_providers=writer_providers)
         record["pending_operation"] = "bind_queue" if queue_id else "register_job"
         _save(root, record)
         if queue_id:

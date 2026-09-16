@@ -1,5 +1,24 @@
 # Release Notes
 
+## Adaptive Workflows (combined wait-cancel rollout)
+
+Parent-owned DAG orchestration is locally parent-verified. Documented contracts:
+
+- Durable `.rig/workflows/<id>/` holds `spec.json`, `state.json`, `events/`, and `owner-credentials.json` (mode 0600).
+- `[orchestration]` mode is `adaptive` (default) or `single`; `max_nodes` is 12. Queue and worker caps remain authoritative.
+- Parent MCP: `rig_workflow_create`, `rig_workflows`, `rig_workflow_show`, `rig_workflow_advance`, `rig_workflow_wait`, `rig_workflow_extend`, `rig_workflow_resolve`, `rig_workflow_approve`, `rig_workflow_cancel`, `rig_workflow_report`, `rig_job_coordination_reply`. Child after handshake may `rig_job_coordination_request`. CLI: `rig workflows`; `rig workflow create|show|advance|wait|extend|resolve|approve|cancel|report`.
+- `verify` is parent/final integration; `review` is independent post-write review. Independent review unavailable stays explicit. Children never spawn or message children. Parent owns the graph, briefs, and acceptance and uses workflow advance/wait.
+- Review+seed and parallel writers require file AND resource disjointness. Overlapping writer scopes are rejected, not sequenced.
+- UI fields: workflow id, status, accepted/required, running, ASK, blocker, next parent action, title. No estimated progress, savings, or ETA.
+
+### Combined rollout with wait-cancel
+
+Stop new admissions, finish or cancel existing work, confirm stopped, accept or close scopes, preserve data (queue text, credentials, workflow spec/state/events, reservations), update every launcher and managed protocol, then fully restart all parent/MCP sessions. Mixed-version admission writers are unsupported.
+
+### Rollback
+
+Set `[orchestration] mode = "single"`. Rollback never deletes data.
+
 ## Native-Child Model Provenance (2026-09-15)
 
 Accepted fix for native-child model provenance on admission and the job board.

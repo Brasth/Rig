@@ -47,6 +47,7 @@ ROLE_DEFAULTS = {
     "implement": ("medium", "medium", "medium"),
     "hard": ("high", "medium", "high"),
     "review": ("high", "medium", "medium"),
+    "verify": ("medium", "medium", "medium"),
 }
 CODES = (
     "selected",
@@ -200,6 +201,8 @@ def required_tier(kind: str, assessment: dict) -> str:
     dims = (assessment.get("complexity"), assessment.get("risk"), assessment.get("uncertainty"))
     if any(item == "high" for item in dims):
         return "strong"
+    if kind == "verify":
+        return "standard"
     if any(item == "medium" for item in dims):
         return "standard"
     return "fast"
@@ -321,6 +324,9 @@ def smart_pick(
     writer_cli: str = "",
     writer_model: str = "",
     writer_provider: str = "",
+    writer_job_ids=None,
+    writer_snapshot_ids=None,
+    writer_providers=None,
     review_mode: str = "standalone",
     repo: Path | None = None,
     jobs_snapshot: list[dict] | None = None,
@@ -354,6 +360,8 @@ def smart_pick(
             writer_job_id=writer_job_id, writer_cli=writer_cli, writer_model=writer_model,
             writer_provider=writer_provider, review_mode=review_mode, repo=repo,
             jobs_snapshot=jobs_snapshot, hash_cache=hash_cache,
+            writer_job_ids=writer_job_ids, writer_snapshot_ids=writer_snapshot_ids,
+            writer_providers=writer_providers,
         )
 
     def base(**kwargs):
@@ -514,16 +522,18 @@ def smart_pick(
             routing,
         )
 
-    if kind == "explore":
+    if kind in {"explore", "verify"}:
         routing["execution_strategy"] = "stay"
-        routing["parent_fit_limitations"] = "no eligible explore child; parent stays read-only; no native child"
+        routing["parent_fit_limitations"] = (
+            f"no eligible {kind} child; parent stays read-only; no native child"
+        )
         if not actual_model:
             routing["parent_fit_limitations"] += "; parent model/effort unverified"
         return _finish_choice(
             base(
                 worker=live, spawn="stay", model=actual_model, effort=actual_effort,
                 executor_kind="parent", model_source="observed" if actual_model else "unknown",
-                reason="explore: no MCP-capable child; parent stays read-only. no native child.",
+                reason=f"{kind}: no MCP-capable child; parent stays read-only. no native child.",
             ),
             routing,
         )

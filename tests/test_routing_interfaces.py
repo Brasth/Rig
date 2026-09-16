@@ -78,6 +78,29 @@ class RoutingInterfaces(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("low|medium|high", result.stderr)
 
+    def test_verify_pick_is_read_only_standard(self):
+        pick = self.cli("pick", "verify", "--case", "check results", "--json")
+        self.assertEqual(pick.returncode, 0, pick.stderr)
+        body = json.loads(pick.stdout)
+        self.assertEqual(body["kind"], "verify")
+        self.assertEqual(body["routing"]["required_tier"], "standard")
+        self.assertEqual(body["spawn"], "run-worker")
+        self.assertFalse(body.get("parent_writes"))
+        high = self.cli(
+            "pick", "verify", "--case", "check results", "--risk", "high",
+            "--complexity", "low", "--uncertainty", "low", "--json",
+        )
+        self.assertEqual(high.returncode, 0, high.stderr)
+        high_body = json.loads(high.stdout)
+        self.assertEqual(high_body["kind"], "verify")
+        self.assertEqual(high_body["routing"]["required_tier"], "strong")
+        self.assertFalse(high_body.get("parent_writes"))
+        review = self.cli("pick", "review", "--case", "review the writer diff", "--json")
+        self.assertEqual(review.returncode, 0, review.stderr)
+        review_body = json.loads(review.stdout)
+        self.assertEqual(review_body["kind"], "review")
+        self.assertEqual(review_body["routing"]["required_tier"], "strong")
+
     def test_explain_legacy_and_report(self):
         for command in ("pick", "session"):
             result = self.cli(command, "implement", "--case", "scoped task", "--explain")

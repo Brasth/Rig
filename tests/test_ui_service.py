@@ -12,6 +12,56 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 from ui_actions import Actions
 from ui_notices import Notices, status_line
 from ui_service import Service
+from ui_snapshot import MAX_UI_WORKFLOWS, Collector, collect_workflows, public_workflow_row
+
+
+def write_workflow(repo, workflow_id, *, status="running", nodes=None, node_state=None,
+                   failure=None, parent_action=None, owner_token="", coordination=None,
+                   title="", cancel_requested=False):
+    folder = Path(repo) / ".rig" / "workflows" / workflow_id
+    folder.mkdir(parents=True, exist_ok=True)
+    nodes = nodes or [{"id": "n1", "role": "implement", "files": ["a.py"], "required": True, "depends_on": []}]
+    node_state = node_state or {node["id"]: {"status": "pending", "accepted": False} for node in nodes}
+    spec = {
+        "version": 1, "workflow_id": workflow_id, "title": title or workflow_id,
+        "case": title or workflow_id, "nodes": nodes, "spec_hash": "hash-" + workflow_id,
+        "created_at": "2026-01-01T00:00:00+00:00",
+    }
+    state = {
+        "version": 1, "workflow_id": workflow_id, "status": status, "nodes": node_state,
+        "updated_at": "2026-01-02T00:00:00+00:00", "parent_action": parent_action,
+        "failure": failure, "coordination": coordination or [],
+        "cancel_requested": cancel_requested or status == "cancel-requested",
+    }
+    if owner_token:
+        state["owner_token"] = owner_token
+        (folder / "owner-credentials.json").write_text(json.dumps({
+            "workflow_id": workflow_id, "owner_token": owner_token,
+        }))
+    (folder / "spec.json").write_text(json.dumps(spec))
+    (folder / "state.json").write_text(json.dumps(state))
+    return folder
+
+
+def active_nodes(accepted=1, running=1, ask=0, pending=1):
+    nodes, state, index = [], {}, 1
+    for _ in range(accepted):
+        nid = f"a{index}"; index += 1
+        nodes.append({"id": nid, "role": "implement", "files": [f"{nid}.py"], "required": True, "depends_on": []})
+        state[nid] = {"status": "accepted", "accepted": True}
+    for _ in range(running):
+        nid = f"r{index}"; index += 1
+        nodes.append({"id": nid, "role": "mini", "files": [f"{nid}.py"], "required": True, "depends_on": []})
+        state[nid] = {"status": "running", "accepted": False}
+    for _ in range(ask):
+        nid = f"k{index}"; index += 1
+        nodes.append({"id": nid, "role": "hard", "files": [f"{nid}.py"], "required": True, "depends_on": []})
+        state[nid] = {"status": "ask", "accepted": False, "job_id": "ask-job"}
+    for _ in range(pending):
+        nid = f"p{index}"; index += 1
+        nodes.append({"id": nid, "role": "verify", "files": [f"{nid}.py"], "required": True, "depends_on": []})
+        state[nid] = {"status": "pending", "accepted": False}
+    return nodes, state
 
 
 class NoticeTests(unittest.TestCase):
@@ -68,6 +118,140 @@ class NoticeTests(unittest.TestCase):
         self.assertNotIn("\x1b", line)
         self.assertNotIn("\n", line)
         self.assertIn("2 updates", line)
+
+    def test_workflow_attention_and_blocker_notices_without_tokens(self):
+        secret = "cafebabedeadbeefcafebabedeadbeef"
+        self.notices.update({"jobs": [], "pending": [], "workflows": []})
+        row = public_workflow_row({
+            "workflow_id": "wf-attention", "status": "attention", "accepted": 1, "required": 3,
+            "running": 0, "ask": 1, "blocker": "parent acceptance required",
+            "next_parent_action": {"kind": "allow_or_deny", "node_id": "k1", "owner_token": secret},
+            "owner_token": secret,
+        })
+        self.assertNotIn(secret, json.dumps(row))
+        self.notices.update({"jobs": [], "pending": [], "workflows": [row]})
+        self.assertEqual(len(self.notices.items), 1)
+        self.assertTrue(self.notices.items[0]["attention"])
+        self.assertIn("wf-attention", self.notices.items[0]["text"])
+        self.assertNotIn(secret, self.notices.items[0]["text"])
+        blocked = public_workflow_row({
+            "workflow_id": "wf-blocked", "status": "blocked", "accepted": 0, "required": 1,
+            "running": 0, "ask": 0, "blocker": "unresolved failure on n1",
+            "next_parent_action": {"kind": "resolve", "node_id": "n1"},
+        })
+        self.notices.update({"jobs": [], "pending": [], "workflows": [row, blocked]})
+        texts = [item["text"] for item in self.notices.items]
+        self.assertTrue(any("blocked" in text and "wf-blocked" in text for text in texts))
+        self.assertNotIn(secret, json.dumps(self.notices.items))
+
+    def test_status_line_names_active_and_attention_workflows(self):
+        snap = {
+            "jobs": [self.job("working")], "pending": [],
+            "workflows": [
+                {"workflow_id": "wf-run", "status": "running", "accepted": 1, "required": 2,
+                 "running": 1, "ask": 0, "blocker": "", "next_parent_action": {"kind": "advance"}},
+                {"workflow_id": "wf-block", "status": "blocked", "accepted": 0, "required": 1,
+                 "running": 0, "ask": 0, "blocker": "unresolved failure on n1",
+                 "next_parent_action": {"kind": "resolve", "node_id": "n1"}},
+            ],
+        }
+        line = status_line(snap, now=100)
+        self.assertIn("2 wf", line)
+        self.assertIn("wf!1", line)
+        self.assertIn("wf-block", line)
+        self.assertNotIn("%", line)
+        self.assertNotIn("ETA", line)
+        self.assertNotIn("savings", line)
+
+
+class WorkflowSnapshotTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.repo = Path(self.temp.name)
+        (self.repo / ".git").mkdir()
+        (self.repo / ".rig").mkdir()
+
+    def test_no_workflow_snapshot_keeps_jobs_and_empty_collection(self):
+        folder = self.repo / ".rig" / "jobs" / "job-one"
+        folder.mkdir(parents=True)
+        (folder / "meta.json").write_text(json.dumps({
+            "job_id": "job-one", "worker": "claude", "status": "ok", "task": "plain job",
+        }))
+        snap = Collector(self.repo).collect()
+        self.assertIsNone(snap["error"])
+        self.assertEqual(snap["workflows"], [])
+        self.assertEqual(len(snap["jobs"]), 1)
+        self.assertEqual(snap["jobs"][0]["job_id"], "job-one")
+
+    def test_one_active_workflow_is_factual(self):
+        nodes, state = active_nodes(accepted=1, running=1, ask=0, pending=1)
+        write_workflow(self.repo, "wf-active", status="running", nodes=nodes, node_state=state,
+                       title="ship it")
+        snap = Collector(self.repo).collect()
+        self.assertEqual(len(snap["workflows"]), 1)
+        row = snap["workflows"][0]
+        self.assertEqual(row["workflow_id"], "wf-active")
+        self.assertEqual((row["accepted"], row["required"], row["running"], row["ask"]), (1, 3, 1, 0))
+        self.assertEqual(row["next_parent_action"]["kind"], "advance")
+        blob = json.dumps(row)
+        self.assertNotIn("percent", blob.lower())
+        self.assertNotIn("eta", blob.lower())
+        self.assertNotIn("savings", blob.lower())
+
+    def test_blocked_and_attention_workflows_surface_blocker_and_action(self):
+        nodes, state = active_nodes(accepted=1, running=0, ask=1, pending=1)
+        write_workflow(self.repo, "wf-ask", status="attention", nodes=nodes, node_state=state)
+        failed = [{"id": "n1", "role": "implement", "files": ["a.py"], "required": True, "depends_on": []}]
+        write_workflow(self.repo, "wf-fail", status="blocked", nodes=failed,
+                       node_state={"n1": {"status": "failed", "accepted": False}},
+                       failure={"node_id": "n1", "reason": "node failed"})
+        rows = {row["workflow_id"]: row for row in Collector(self.repo).collect()["workflows"]}
+        self.assertEqual(rows["wf-ask"]["ask"], 1)
+        self.assertEqual(rows["wf-ask"]["next_parent_action"]["kind"], "allow_or_deny")
+        self.assertEqual(rows["wf-fail"]["blocker"], "unresolved failure on n1")
+        self.assertEqual(rows["wf-fail"]["next_parent_action"]["kind"], "resolve")
+        self.assertEqual(set(rows), {"wf-ask", "wf-fail"})
+
+    def test_multiple_active_workflows_and_malformed_legacy_are_tolerated(self):
+        for index in range(3):
+            nodes, state = active_nodes(accepted=0, running=1, ask=0, pending=0)
+            write_workflow(self.repo, f"wf-live-{index}", status="running", nodes=nodes, node_state=state)
+        bad = self.repo / ".rig" / "workflows" / "legacy-bad"
+        bad.mkdir(parents=True)
+        (bad / "spec.json").write_text("{")
+        (bad / "state.json").write_text("not-json")
+        missing = self.repo / ".rig" / "workflows" / "legacy-partial"
+        missing.mkdir()
+        (missing / "spec.json").write_text(json.dumps({"workflow_id": "legacy-partial", "nodes": []}))
+        snap = Collector(self.repo).collect()
+        self.assertIsNone(snap["error"])
+        ids = [row["workflow_id"] for row in snap["workflows"]]
+        self.assertEqual(sorted(ids), ["wf-live-0", "wf-live-1", "wf-live-2"])
+        self.assertNotIn("legacy-bad", ids)
+        self.assertNotIn("legacy-partial", ids)
+
+    def test_owner_tokens_are_scrubbed_from_snapshot(self):
+        secret = "aabbccddeeff00112233445566778899"
+        nodes, state = active_nodes(accepted=0, running=0, ask=0, pending=1)
+        write_workflow(self.repo, "wf-secret", status="planned", nodes=nodes, node_state=state,
+                       owner_token=secret, parent_action={"kind": "advance", "owner_token": secret})
+        snap = Collector(self.repo).collect()
+        blob = json.dumps(snap)
+        self.assertNotIn(secret, blob)
+        self.assertNotIn("owner_token", blob)
+        self.assertEqual(snap["workflows"][0]["next_parent_action"]["kind"], "advance")
+
+    def test_snapshot_bounds_workflow_collection(self):
+        for index in range(MAX_UI_WORKFLOWS + 8):
+            status = "blocked" if index < 3 else "running"
+            nodes, state = active_nodes(accepted=0, running=int(status == "running"), ask=0, pending=1)
+            write_workflow(self.repo, f"wf-{index:02d}", status=status, nodes=nodes, node_state=state,
+                           failure={"node_id": "a1", "reason": "node failed"} if status == "blocked" else None)
+        rows = collect_workflows(self.repo)
+        self.assertEqual(len(rows), MAX_UI_WORKFLOWS)
+        self.assertEqual(sum(row["status"] == "blocked" for row in rows), 3)
+        self.assertTrue(all(row["status"] == "blocked" for row in rows[:3]))
 
 
 class ActionTests(unittest.TestCase):

@@ -7,6 +7,9 @@ import textwrap
 import unicodedata
 
 import jobs as rig_jobs
+from ui_snapshot import _ACTIVE_STATUSES, _ATTENTION_STATUSES, format_parent_action, scrub_secrets
+
+_TABS = ("Jobs", "Queue", "Workflows")
 
 
 def _cell_width(char):
@@ -68,6 +71,37 @@ def _viewport(selected: int, count: int, rows: int, offset: int) -> tuple[int, i
     return max(0, offset), min(count, max(0, offset) + rows)
 
 
+def _next_tab(tab: str) -> str:
+    try:
+        return _TABS[(_TABS.index(tab) + 1) % len(_TABS)]
+    except ValueError:
+        return "Queue"
+
+
+def _listing_id(tab: str, row: dict):
+    if tab == "Jobs":
+        return row.get("job_id")
+    if tab == "Queue":
+        return row.get("id")
+    return row.get("workflow_id")
+
+
+def _workflow_detail_lines(row: dict) -> list[str]:
+    row = scrub_secrets(row if isinstance(row, dict) else {})
+    action = row.get("next_parent_action")
+    detail = [
+        str(row.get("workflow_id") or "unknown"),
+        f"status {row.get('status') or 'unknown'}",
+        f"accepted/required {row.get('accepted', 0)}/{row.get('required', 0)}",
+        f"running {row.get('running', 0)}  ask {row.get('ask', 0)}",
+        f"blocker {row.get('blocker') or 'none'}",
+        f"next parent action {format_parent_action(action)}",
+    ]
+    if row.get("title"):
+        detail.append(f"title  {row['title']}")
+    return detail
+
+
 def _detail_lines(job: dict) -> list[str]:
     state = job.get("display_state") or rig_jobs.job_display_state(job)
     detail = [str(job.get("job_id") or "unknown"), f"status {state}"]
@@ -99,41 +133,63 @@ def _detail_lines(job: dict) -> list[str]:
 
 
 def _color(status):
-    if status in {"working", "verified"}:
+    if status in {"working", "verified", "running"}:
         return curses.color_pair(1) | curses.A_BOLD
     if status == "failed":
         return curses.color_pair(2)
-    if status in {"needs-input", "reserved", "verifying", "cancelled", "stop-requested", "stop-unconfirmed", "native-cancel-required"}:
+    if status in {"needs-input", "reserved", "verifying", "cancelled", "stop-requested", "stop-unconfirmed",
+                  "native-cancel-required", "attention", "blocked", "cancel-requested"}:
         return curses.color_pair(3)
     return curses.A_NORMAL
 
 
+def _snapshot_workflows(snapshot, workflows=None):
+    if workflows is not None:
+        return workflows
+    return list(getattr(snapshot, "workflows", None) or [])
+
+
 def render(stdscr, repo, snapshot, *, tab, selected, offset, follow, log_off,
-           footer, snapshot_status, requested, draft, log_mode=False):
+           footer, snapshot_status, requested, draft, log_mode=False, workflows=None):
     h, w = stdscr.getmaxyx()
     stdscr.erase()
-    listing = snapshot.jobs if tab == "Jobs" else snapshot.pending
+    workflows = _snapshot_workflows(snapshot, workflows)
+    if tab == "Jobs":
+        listing = snapshot.jobs
+    elif tab == "Queue":
+        listing = snapshot.pending
+    else:
+        listing = workflows
     running = sum(row.get("effective") == "running" for row in snapshot.jobs)
     asking = sum(row.get("effective") == "ask" for row in snapshot.jobs)
     reserved = sum(row.get("effective") == "reserved" for row in snapshot.jobs)
+    wf_active = sum(row.get("status") in _ACTIVE_STATUSES for row in workflows)
+    wf_attention = sum(row.get("status") in _ATTENTION_STATUSES for row in workflows)
     title = (f" Rig  {asking} ask / {running} working / {reserved} reserved / {len(snapshot.jobs)} jobs  "
-             f"queue {len(snapshot.pending)}  live {snapshot.slots}/{snapshot.cap}   {repo}")
+             f"queue {len(snapshot.pending)}  live {snapshot.slots}/{snapshot.cap}")
+    if workflows:
+        title += f"  wf {wf_active} active / {wf_attention} attention"
+    title += f"   {repo}"
     _add(stdscr, 0, 0, title, curses.A_REVERSE, width=w)
     if h < 8 or w < 40:
         _add(stdscr, 1, 0, "terminal too small", width=w)
     else:
         left_w = min(44, max(22, w // 3))
         offset, stop = _viewport(selected, len(listing), h - 3, offset)
-        label = f"{tab} {offset + 1 if listing else 0}-{stop}/{len(listing)}  Tab: {'Queue' if tab == 'Jobs' else 'Jobs'}"
+        label = f"{tab} {offset + 1 if listing else 0}-{stop}/{len(listing)}  Tab: {_next_tab(tab)}"
         _add(stdscr, 1, 0, label, width=left_w)
         for index in range(offset, stop):
             row = listing[index]
-            jid = row.get("job_id") if tab == "Jobs" else row.get("id")
+            jid = _listing_id(tab, row)
             state = row.get("cancellation_state") or row.get("display_state") or row.get("status") or "unknown"
-            if f"cancel:{tab}:{jid}" in requested and state != "stopped":
+            if tab != "Workflows" and f"cancel:{tab}:{jid}" in requested and state != "stopped":
                 state = row.get("cancellation_state") or "stop-requested"
             id_width = min(16, max(8, left_w // 3))
-            label = f"{'●' if state == 'working' else '○'} {_elide(str(jid), id_width):<{id_width}} {state}"
+            mark = "●" if state in {"working", "running", "attention"} else "○"
+            extra = ""
+            if tab == "Workflows":
+                extra = f" {row.get('accepted', 0)}/{row.get('required', 0)}"
+            label = f"{mark} {_elide(str(jid), id_width):<{id_width}} {state}{extra}"
             _add(stdscr, index - offset + 2, 0, label,
                  _color(state) | (curses.A_REVERSE if index == selected else 0), width=left_w)
         rx, rw = left_w + 1, w - left_w - 1
@@ -141,7 +197,9 @@ def render(stdscr, repo, snapshot, *, tab, selected, offset, follow, log_off,
         for y in range(2, h - 1):
             _add(stdscr, y, rx - 1, "│", curses.color_pair(4), width=1)
         row = listing[selected] if listing else None
-        if row and tab == "Jobs":
+        if row and tab == "Workflows":
+            detail = _workflow_detail_lines(row)
+        elif row and tab == "Jobs":
             detail = [str(row["job_id"]), "Activity log (l returns)"] if log_mode else _detail_lines(row) + [""]
             cancel_state = row.get("cancellation_state")
             if f"cancel:Jobs:{row['job_id']}" in requested:
@@ -157,7 +215,9 @@ def render(stdscr, repo, snapshot, *, tab, selected, offset, follow, log_off,
                       f"priority {row.get('priority') or 0}", f"worker {row.get('worker') or 'parent chooses'}", ""]
             detail.extend(textwrap.wrap(str(row.get("text") or ""), max(1, rw)))
         else:
-            detail = ["No jobs in .rig/jobs" if tab == "Jobs" else "No pending queue items"]
+            empty = {"Jobs": "No jobs in .rig/jobs", "Queue": "No pending queue items",
+                     "Workflows": "No workflows in .rig/workflows"}
+            detail = [empty.get(tab, "No items")]
         for index, line in enumerate(detail[:max(0, h - 3)]):
             _add(stdscr, index + 2, rx, str(line), width=rw)
     if draft.active:

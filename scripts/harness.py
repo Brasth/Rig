@@ -25,6 +25,7 @@ def parse_harness(path: Path) -> dict:
         "workers": dict(_DEFAULT_WORKERS),
         "queue": {"max_running": 3, "max_per_worker": 0, "per_worker": {}},
         "routing": {"mode": "smart"},
+        "orchestration": {"mode": "adaptive", "max_nodes": 12},
     }
     if not path.is_file():
         return out
@@ -71,6 +72,15 @@ def parse_harness(path: Path) -> dict:
             out["queue"]["per_worker"][key] = max(0, n)
         elif section == "routing" and key == "mode":
             out["routing"]["mode"] = val.strip().strip('"').lower()
+        elif section == "orchestration" and key == "mode":
+            mode = val.strip().strip('"').lower()
+            out["orchestration"]["mode"] = mode if mode in {"adaptive", "single"} else "adaptive"
+        elif section == "orchestration" and key == "max_nodes":
+            try:
+                n = int(val.strip().strip('"'))
+            except (TypeError, ValueError):
+                n = 12
+            out["orchestration"]["max_nodes"] = max(1, n)
     return out
 
 

@@ -6,3 +6,12 @@ __pycache__/
 
 
 plans/
+
+.rig/jobs/
+
+.rig/thread
+
+.rig/queue/
+
+.rig/workflows/
+.rig/workflows/*/owner-credentials.json

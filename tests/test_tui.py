@@ -132,9 +132,14 @@ class BoardProjection(unittest.TestCase):
         return {**job, "display_state": "working", "display_reason": "", "display_action": "",
                 "verification_summary": {"state": "pending"}, "independence": "unknown"}
 
-    def paint(self, screen, snapshots, times=None):
-        runtime = ScriptedRuntime([Snapshot(jobs=[self.project(row) for row in rows], captured_at=1)
-                                   for rows in snapshots])
+    def paint(self, screen, snapshots, times=None, workflows=None):
+        snaps = []
+        for rows in snapshots:
+            snap = Snapshot(jobs=[self.project(row) for row in rows], captured_at=1)
+            if workflows is not None:
+                object.__setattr__(snap, "workflows", workflows)
+            snaps.append(snap)
+        runtime = ScriptedRuntime(snaps)
         with ExitStack() as stack:
             for name in ("curs_set", "use_default_colors", "init_pair", "noecho", "set_escdelay"):
                 stack.enter_context(mock.patch.object(rig_tui.curses, name))
@@ -231,6 +236,72 @@ class BoardProjection(unittest.TestCase):
         job = rig_tui.rig_jobs.project_job({**self.job(1), "effective": "ask", "ask": {"preview": "permission"}})
         detail = rig_tui._detail_lines(job)
         self.assertEqual(detail[2:4], ["rig job allow job-001", "rig job deny job-001"])
+
+    def _workflow(self, workflow_id, **fields):
+        row = {"workflow_id": workflow_id, "status": "running", "accepted": 1, "required": 3,
+               "running": 1, "ask": 0, "blocker": "", "next_parent_action": {"kind": "advance"},
+               "title": workflow_id}
+        row.update(fields)
+        return row
+
+    def test_no_workflow_keeps_jobs_visible_and_empty_detail(self):
+        screen = BoardScr(["\t", "\t", "q"])
+        self.paint(screen, [[self.job(1)]], workflows=[])
+        first = "\n".join(call[2] for call in screen.frames[0])
+        title = next(call[2] for call in screen.frames[0] if call[0] == 0)
+        self.assertIn("job-001", first)
+        self.assertNotIn("wf ", title)
+        workflow_tab = "\n".join(call[2] for call in screen.frames[2])
+        self.assertIn("No workflows in .rig/workflows", workflow_tab)
+
+    def test_one_active_workflow_summary_and_selected_detail(self):
+        workflow = self._workflow("wf-active", title="ship feature")
+        screen = BoardScr(["\t", "\t", "q"], h=16, w=120)
+        self.paint(screen, [[self.job(1)]], workflows=[workflow])
+        header = "\n".join(call[2] for call in screen.frames[0])
+        self.assertIn("job-001", header)
+        self.assertIn("wf 1 active / 0 attention", header)
+        selected = "\n".join(call[2] for call in screen.frames[2])
+        self.assertIn("wf-active", selected)
+        self.assertIn("accepted/required 1/3", selected)
+        self.assertIn("running 1  ask 0", selected)
+        self.assertIn("next parent action advance", selected)
+        self.assertNotIn("%", selected)
+        self.assertNotIn("ETA", selected)
+        self.assertNotIn("savings", selected)
+
+    def test_blocked_and_multiple_workflows_select_detail(self):
+        workflows = [
+            self._workflow("wf-block", status="blocked", accepted=0, required=1, running=0,
+                           blocker="unresolved failure on n1",
+                           next_parent_action={"kind": "resolve", "node_id": "n1"}),
+            self._workflow("wf-ask", status="attention", accepted=1, required=3, running=0, ask=1,
+                           blocker="parent acceptance required",
+                           next_parent_action={"kind": "allow_or_deny", "node_id": "k1", "job_id": "ask-job"}),
+            self._workflow("wf-run"),
+        ]
+        screen = BoardScr(["\t", "\t", "j", "q"], h=18, w=120)
+        self.paint(screen, [[self.job(1)]], workflows=workflows)
+        header = "\n".join(call[2] for call in screen.frames[0])
+        self.assertIn("wf 3 active / 2 attention", header)
+        self.assertIn("job-001", header)
+        first = "\n".join(call[2] for call in screen.frames[2])
+        self.assertIn("wf-block", first)
+        self.assertIn("unresolved failure on n1", first)
+        self.assertIn("next parent action resolve node_id n1", first)
+        second = "\n".join(call[2] for call in screen.frames[3])
+        self.assertIn("wf-ask", second)
+        self.assertIn("allow_or_deny", second)
+        self.assertIn("ask 1", second)
+
+    def test_workflow_tab_does_not_invent_mutation_actions(self):
+        workflow = self._workflow("wf-active")
+        screen = BoardScr(["\t", "\t", "y", "n", "x", "q"], h=16, w=120)
+        self.paint(screen, [[self.job(1)]], workflows=[workflow])
+        body = "\n".join(call[2] for call in screen.frames[2])
+        self.assertIn("wf-active", body)
+        self.assertNotIn("press y", body.lower())
+        self.assertNotIn("owner_token", body)
 
 
 if __name__ == "__main__":

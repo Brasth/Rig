@@ -76,7 +76,12 @@ class AdmissionTests(unittest.TestCase):
         (self.repo / ".git").mkdir()
         (self.repo / ".rig").mkdir()
         self.configure()
-        self.env = mock.patch.dict(os.environ, {"RIG_OWNER_SESSION": "admission-tests"})
+        self.env = mock.patch.dict(os.environ, {
+            "RIG_OWNER_SESSION": "admission-tests",
+            "RIG_JOB_ID": "",
+            "RIG_JOB_DIR": "",
+            "RIG_OWNER_TOKEN": "",
+        })
         self.env.start()
         self.owner = _owner()
 
@@ -224,6 +229,36 @@ class AdmissionTests(unittest.TestCase):
         self.reserve("disjoint", files=["b.py"])
         with self.assertRaisesRegex(admission.AdmissionError, "overlap"):
             self.reserve("read-disjoint", files=["b.py"], access="read")
+
+    def test_allowed_read_overlap_still_enforces_resource_conflicts(self):
+        writer = self.reserve(
+            "writer", files=["a.py"],
+            resources=[{"name": "db.main", "access": "write"}],
+        )
+        rows = admission._accounting(self.repo)
+        allowed = [writer["reservation_id"]]
+        admission._capacity(
+            self.repo, rows, "grok", "read", ["a.py"], resources=[],
+            allow_read_overlap_reservations=allowed,
+        )
+        with self.assertRaisesRegex(admission.AdmissionError, "resource overlap"):
+            admission._capacity(
+                self.repo, rows, "grok", "read", ["a.py"],
+                resources=[{"name": "db.main", "access": "read"}],
+                allow_read_overlap_reservations=allowed,
+            )
+        with self.assertRaisesRegex(admission.AdmissionError, "resource overlap"):
+            admission._capacity(
+                self.repo, rows, "grok", "write", ["b.py"],
+                resources=[{"name": "db.main", "access": "write"}],
+                allow_read_overlap_reservations=allowed,
+            )
+        with self.assertRaisesRegex(admission.AdmissionError, "overlap"):
+            admission._capacity(
+                self.repo, rows, "grok", "write", ["a.py"],
+                resources=[],
+                allow_read_overlap_reservations=allowed,
+            )
 
     def test_unknown_scope_is_exclusive_parent_writer(self):
         lease = self.reserve(files=[], role="parent")

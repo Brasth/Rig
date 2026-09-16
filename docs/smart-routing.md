@@ -11,8 +11,9 @@ Smart is the default for `rig pick`, `rig session`, and their MCP equivalents, i
 | hard | high / medium / high | strong |
 | review | high / medium / medium | strong |
 | stay | not assessed | live parent; no catalog discovery |
+| verify | parent/final integration | read-only; not independent review |
 
-Any high dimension requires strong; otherwise any medium requires standard; otherwise fast. Hard and review cannot be downgraded below strong. Explicit role wins over task-text inference. Missing dimensions use role defaults and are listed in `assessment.defaulted`. High risk recommends independent review but does not add a new completion gate.
+Any high dimension requires strong; otherwise any medium requires standard; otherwise fast. Hard and review cannot be downgraded below strong. Explicit role wins over task-text inference. Missing dimensions use role defaults and are listed in `assessment.defaulted`. High risk recommends independent review but does not add a new completion gate. Independent review unavailable stays explicit. `verify` is parent/final integration; `review` is independent post-write review. Review+seed requires file AND resource disjointness.
 
 In smart mode, an optional cost-aware lane can skip wrapper/catalog lookup. It is off by default. When `.rig/routing.json` schema 2 sets `execution.direct_parent_low_risk: true`, pick returns native parent writes only for **mini** or **implement** with complexity, risk, and uncertainty all **low**, and only when the live parent is an eligible tracked native parent (codex, grok, opencode, omp, pi, or agy) that is not excluded. That pick is additive provenance `execution_strategy=direct-parent` with `spawn=native`, `parent_writes=true`, `executor_kind=parent`. Catalog confirmation is not consulted on that lane.
 
@@ -66,7 +67,7 @@ Opt in to low-risk parent writes before catalog lookup:
 }
 ```
 
-Unmentioned preferences append in default order. Existing profile IDs can override `worker`, `selector`, `aliases`, `roles`, `tiers`, `effort`, `supported_efforts`, `provider`, and `catalog_required`. New IDs require worker, selector, roles, tiers, effort and provider. supported_efforts defaults to the selected effort, catalog_required defaults by worker, and aliases are optional. Effort must appear in supported_efforts. Roles are explore/mini/bulk/implement/hard/review; tiers fast/standard/strong. Providers are openai/anthropic/xai/google/cursor/cognition and must agree with recognizable model families. Config never enables workers or permits banned models. Invalid config fails smart picks and `rig doctor` instead of silently using legacy.
+Unmentioned preferences append in default order. Existing profile IDs can override `worker`, `selector`, `aliases`, `roles`, `tiers`, `effort`, `supported_efforts`, `provider`, and `catalog_required`. New IDs require worker, selector, roles, tiers, effort and provider. supported_efforts defaults to the selected effort, catalog_required defaults by worker, and aliases are optional. Effort must appear in supported_efforts. Roles are explore/mini/bulk/implement/hard/review/verify; tiers fast/standard/strong. Providers are openai/anthropic/xai/google/cursor/cognition and must agree with recognizable model families. Config never enables workers or permits banned models. Invalid config fails smart picks and `rig doctor` instead of silently using legacy.
 
 ## Catalog confirmation
 
@@ -91,4 +92,6 @@ mode = "legacy"
 
 Legacy restores the previous ladder and catalog resolver; `--policy-mode legacy` is a per-pick diagnostic override. To keep smart routing but disable the cost-aware lane, set `execution.direct_parent_low_risk` to `false` or omit it (schema 1 remains valid). Launching smart metadata against changed current policy is rejected; re-pick after configuration changes.
 
-For runtime upgrades or rollback: stop new admissions, finish or explicitly cancel existing work, confirm termination, and close/reconcile held scopes. Preserve pending queue text, credentials, worker flags, caps, memory, and custom overrides. Update all launchers and managed protocols, then fully restart parent/MCP sessions before admitting work. Mixed-version admission writers are unsupported. A tested checkout is not an installed or live-runtime-accepted upgrade.
+Orchestration is separate from routing: `[orchestration] mode = "adaptive"` (default) or `"single"`; `max_nodes` is 12. Queue and worker caps remain authoritative. Adaptive decomposes eligible work into a DAG; `single` keeps one-job behavior. Children never spawn or message children. No estimated progress, savings, or ETA.
+
+For runtime upgrades or rollback: stop new admissions, finish or cancel existing work, confirm stopped, accept or close scopes, preserve data, update all launchers and managed protocols, then fully restart parent/MCP sessions before admitting work. Mixed-version admission writers are unsupported. Adaptive-workflow rollback sets `[orchestration] mode = "single"` and never deletes data. A tested checkout is not an installed or live-runtime-accepted upgrade.

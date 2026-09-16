@@ -6,7 +6,7 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import catalog  # noqa: E402
@@ -92,9 +92,40 @@ class Assessment(unittest.TestCase):
         self.assertEqual(policy.required_tier("explore", high), "strong")
         self.assertEqual(policy.required_tier("hard", low), "strong")
         self.assertEqual(policy.required_tier("review", low), "strong")
+        verify = policy.normalize_assessment("verify")
+        self.assertEqual((verify["complexity"], verify["risk"], verify["uncertainty"]), ("medium", "medium", "medium"))
+        self.assertEqual(policy.required_tier("verify", verify), "standard")
+        verify_high = policy.normalize_assessment("verify", {"risk": "high"})
+        self.assertEqual(policy.required_tier("verify", verify_high), "strong")
 
 
 class SmartSelection(unittest.TestCase):
+    def test_verify_default_is_standard_and_high_risk_is_strong(self):
+        choice = smart_pick("codex", ["grok", "claude"], "verify", "check the patch")
+        self.assertEqual(choice["kind"], "verify")
+        self.assertEqual(choice["spawn"], "run-worker")
+        self.assertEqual(choice["routing"]["required_tier"], "standard")
+        self.assertEqual(choice["worker"], "grok")
+        strong = smart_pick(
+            "codex", ["grok", "claude"], "verify", "check the patch",
+            complexity="low", risk="high", uncertainty="low",
+        )
+        self.assertEqual(strong["routing"]["required_tier"], "strong")
+        self.assertEqual(strong["worker"], "claude")
+        same_provider = smart_pick(
+            "codex", ["grok", "claude"], "verify", "check the patch",
+            writer_cli="grok", writer_model="grok-4.6", writer_provider="xai",
+            writer_job_ids=["writer-a"], writer_providers=["xai"],
+            review_mode="independent",
+        )
+        self.assertEqual(same_provider["kind"], "verify")
+        self.assertEqual(same_provider["worker"], "grok")
+        self.assertEqual(same_provider["spawn"], "run-worker")
+        self.assertFalse(same_provider.get("parent_writes"))
+        stayed = smart_pick("codex", [], "verify", "check the patch")
+        self.assertEqual(stayed["spawn"], "stay")
+        self.assertFalse(stayed.get("parent_writes"))
+
     def test_low_implement_uses_fast_grok(self):
         choice = smart_pick(
             "codex", ["grok", "claude"], "implement", "add a header",
@@ -231,6 +262,22 @@ class SmartSelection(unittest.TestCase):
             smart_pick("codex", ["grok"], "implement", "add a header", review_mode="weird")
         with self.assertRaises(ValueError):
             route.pick("codex", ["grok"], "implement", "add a header", policy_mode="legacy", review_mode="weird")
+        multi = smart_pick(
+            "codex", ["claude", "grok"], "review", "review both diffs",
+            writer_cli="cursor", writer_model="claude-sonnet-5",
+            writer_job_ids=["writer-a", "writer-b"],
+            writer_snapshot_ids=["snap-a", "snap-b"],
+            writer_providers=["anthropic"],
+        )
+        self.assertEqual(multi["writer_cli"], "cursor")
+        self.assertEqual(multi["writer_job_id"], "")
+        self.assertEqual(multi["writer_job_ids"], ["writer-a", "writer-b"])
+        self.assertEqual(multi["writer_snapshot_ids"], ["snap-a", "snap-b"])
+        self.assertIn("anthropic", multi["writer_providers"])
+        review = smart_pick("codex", ["claude", "grok"], "review", "review the writer diff")
+        self.assertEqual(review["kind"], "review")
+        self.assertEqual(review["routing"]["required_tier"], "strong")
+        self.assertNotEqual(review["routing"]["required_tier"], policy.required_tier("verify", policy.normalize_assessment("verify")))
 
     def test_permutation_stability(self):
         first = smart_pick("codex", ["agy", "claude", "grok", "codex"], "implement", "add a header")
@@ -238,6 +285,91 @@ class SmartSelection(unittest.TestCase):
         self.assertEqual(first["worker"], second["worker"])
         self.assertEqual(first["model"], second["model"])
         self.assertEqual(first["routing"]["selected_profile"]["id"], second["routing"]["selected_profile"]["id"])
+
+
+class IndependentWriterContext(unittest.TestCase):
+    def _writer(self, job_id, worker, model):
+        return {
+            "job_id": job_id, "worker": worker, "status": "ok", "role": "implement",
+            "model": model, "model_source": "selected", "model_inferred": False,
+        }
+
+    def test_omitted_singular_resolves_additive_id_and_rejects_spoof(self):
+        writer = self._writer("writer-a", "claude", "claude-sonnet-5")
+        assessment = Mock(return_value={
+            "state": "verified", "acceptance": "accepted", "snapshot_id": "snap-a",
+        })
+        with patch("verification.assessment", assessment):
+            with self.assertRaisesRegex(ValueError, "conflicts"):
+                smart_pick(
+                    "codex", ["claude", "grok"], "review", "review the writer diff",
+                    review_mode="independent", jobs_snapshot=[writer],
+                    writer_job_ids=["writer-a"], writer_providers=["xai"],
+                    writer_snapshot_ids=["spoof-snap"],
+                )
+            context, reason = route._writer_context(
+                review_mode="independent", jobs_snapshot=[writer],
+                writer_job_ids=["writer-a"], writer_providers=["anthropic"],
+                writer_snapshot_ids=["snap-a"],
+            )
+        self.assertEqual(reason, "")
+        self.assertEqual(context["writer_job_id"], "")
+        self.assertEqual(context["writer_job_ids"], ["writer-a"])
+        self.assertEqual(context["writer_providers"], ["anthropic"])
+        self.assertEqual(context["writer_snapshot_ids"], ["snap-a"])
+        assessment.return_value = {"state": "pending", "acceptance": "", "reason": "content_changed"}
+        with patch("verification.assessment", assessment):
+            blocked = smart_pick(
+                "codex", ["grok"], "review", "review the writer diff",
+                review_mode="independent", jobs_snapshot=[writer],
+                writer_job_ids=["writer-a"],
+            )
+        self.assertEqual(blocked["spawn"], "none")
+        self.assertIn("content_changed", blocked["reason"])
+
+    def test_singular_plus_duplicate_first_id_does_not_double_resolve(self):
+        writer = self._writer("writer-a", "claude", "claude-sonnet-5")
+        assessment = Mock(return_value={
+            "state": "verified", "acceptance": "accepted", "snapshot_id": "snap-a",
+        })
+        with patch("verification.assessment", assessment):
+            context, reason = route._writer_context(
+                writer_job_id="writer-a", writer_job_ids=["writer-a"],
+                review_mode="independent", jobs_snapshot=[writer],
+            )
+        self.assertEqual(reason, "")
+        self.assertEqual(context["writer_job_id"], "writer-a")
+        self.assertEqual(context["writer_job_ids"], ["writer-a"])
+        self.assertEqual(context["writer_snapshot_id"], "snap-a")
+        self.assertEqual(context["writer_provider"], "anthropic")
+        self.assertEqual(assessment.call_count, 1)
+
+    def test_multiple_additive_ids_all_resolve(self):
+        writers = [
+            self._writer("writer-a", "claude", "claude-sonnet-5"),
+            self._writer("writer-b", "grok", "grok-4.6"),
+        ]
+
+        def assess(_root, job, **_kwargs):
+            snaps = {"writer-a": "snap-a", "writer-b": "snap-b"}
+            return {
+                "state": "verified", "acceptance": "accepted",
+                "snapshot_id": snaps[str(job.get("job_id") or job.get("id"))],
+            }
+
+        with patch("verification.assessment", side_effect=assess) as assessment:
+            context, reason = route._writer_context(
+                review_mode="independent", writer_job_ids=["writer-a", "writer-b"],
+                writer_snapshot_ids=["snap-a", "snap-b"],
+                writer_providers=["anthropic", "xai"],
+                jobs_snapshot=writers,
+            )
+        self.assertEqual(reason, "")
+        self.assertEqual(context["writer_job_id"], "")
+        self.assertEqual(context["writer_job_ids"], ["writer-a", "writer-b"])
+        self.assertEqual(context["writer_snapshot_ids"], ["snap-a", "snap-b"])
+        self.assertEqual(context["writer_providers"], ["anthropic", "xai"])
+        self.assertEqual(assessment.call_count, 2)
 
 
 class ConfigValidation(unittest.TestCase):
@@ -524,6 +656,11 @@ class SchemaAndDirectParent(unittest.TestCase):
             )
             self.assertEqual(legacy["spawn"], "run-worker")
             self.assertEqual(legacy["routing"]["execution_strategy"], "wrapper")
+            verify = smart_pick("codex", ["grok"], "verify", "check results", **low)
+            self.assertEqual(verify["spawn"], "run-worker")
+            self.assertEqual(verify["kind"], "verify")
+            self.assertEqual(verify["routing"]["required_tier"], "standard")
+            self.assertFalse(verify.get("parent_writes"))
 
     def test_parent_fallback_strategy_distinct_from_direct(self):
         with tempfile.TemporaryDirectory() as temp:

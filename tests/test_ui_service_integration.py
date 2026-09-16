@@ -91,3 +91,47 @@ class ObserverIntegrationTests(unittest.TestCase):
                 break
             time.sleep(.1)
         self.assertNotIn('dead', read(self.repo / '.rig/ui/sessions.json', {}))
+
+    def test_observer_snapshot_includes_fixture_workflows_without_tokens(self):
+        secret = 'aa11bb22cc33dd44ee55ff6677889900'
+        folder = self.repo / '.rig' / 'workflows' / 'wf-live'
+        folder.mkdir(parents=True)
+        nodes = [
+            {'id': 'a1', 'role': 'implement', 'files': ['a1.py'], 'required': True, 'depends_on': []},
+            {'id': 'r2', 'role': 'mini', 'files': ['r2.py'], 'required': True, 'depends_on': []},
+            {'id': 'p3', 'role': 'verify', 'files': ['p3.py'], 'required': True, 'depends_on': []},
+        ]
+        state = {
+            'a1': {'status': 'accepted', 'accepted': True},
+            'r2': {'status': 'running', 'accepted': False},
+            'p3': {'status': 'pending', 'accepted': False},
+        }
+        (folder / 'spec.json').write_text(json.dumps({
+            'version': 1, 'workflow_id': 'wf-live', 'title': 'wf-live', 'nodes': nodes,
+            'spec_hash': 'hash-wf-live',
+        }))
+        (folder / 'state.json').write_text(json.dumps({
+            'version': 1, 'workflow_id': 'wf-live', 'status': 'running', 'nodes': state,
+            'updated_at': '2026-01-02T00:00:00+00:00',
+            'parent_action': {'kind': 'advance', 'owner_token': secret},
+            'owner_token': secret,
+        }))
+        (folder / 'owner-credentials.json').write_text(json.dumps({'owner_token': secret}))
+        deadline = time.monotonic() + 3
+        snap = {}
+        while time.monotonic() < deadline:
+            snap = request(self.endpoint, {'op': 'snapshot'})
+            if snap.get('workflows'):
+                break
+            time.sleep(0.05)
+        self.assertTrue(snap.get('workflows'), snap)
+        row = snap['workflows'][0]
+        self.assertEqual(row['workflow_id'], 'wf-live')
+        self.assertEqual((row['accepted'], row['required'], row['running'], row['ask']), (1, 3, 1, 0))
+        self.assertEqual(row['next_parent_action']['kind'], 'advance')
+        self.assertIn('jobs', snap)
+        self.assertIn('pending', snap)
+        self.assertIn('status_line', snap)
+        blob = json.dumps(snap)
+        self.assertNotIn(secret, blob)
+        self.assertNotIn('owner_token', blob)

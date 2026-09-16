@@ -9,6 +9,7 @@ import signal
 import sys
 import time
 import threading
+import uuid
 import cancellation
 from collections.abc import Callable
 from datetime import datetime, timezone
@@ -21,6 +22,7 @@ if str(HERE) not in sys.path:
 import ask as rig_ask  # noqa: E402
 import harness as rig_harness  # noqa: E402
 import inbox as rig_inbox  # noqa: E402
+import job_metadata  # noqa: E402
 
 PREAMBLE_MARKERS = (
     "you are a worker, not the orchestrator",
@@ -499,29 +501,29 @@ def _resolve_token_usage(
 def persist_token_usage(job_dir: Path, *, supplied=None) -> dict | None:
     """Write optional token_usage onto meta/result. Unknown stays omitted, never zero."""
     job_dir = Path(job_dir)
-    meta = _read_meta_dict(job_dir)
+    snapshot = _read_meta_dict(job_dir)
     usage = _resolve_token_usage(
         job_dir,
-        executor_kind=str(meta.get("executor_kind") or ""),
-        status=str(meta.get("status") or ""),
+        executor_kind=str(snapshot.get("executor_kind") or ""),
+        status=str(snapshot.get("status") or ""),
         supplied=supplied,
-        previous=meta.get("token_usage"),
+        previous=snapshot.get("token_usage"),
     )
     if not usage:
         return None
-    if meta.get("token_usage") != usage:
-        patch_meta(job_dir, token_usage=usage)
+    with job_metadata.metadata_lock(job_dir):
+        if not (job_dir / "meta.json").is_file():
+            return usage
+        meta = job_metadata.read_json_object(job_dir / "meta.json")
+        if meta.get("token_usage") != usage:
+            meta["token_usage"] = usage
+            job_metadata.write_json_atomic(job_dir / "meta.json", meta)
         result_path = job_dir / "result.json"
         if result_path.is_file():
-            try:
-                result = json.loads(result_path.read_text(encoding="utf-8"))
-            except (OSError, json.JSONDecodeError, UnicodeError):
-                result = None
-            if isinstance(result, dict):
+            result = job_metadata.read_json_object(result_path)
+            if result.get("token_usage") != usage:
                 result["token_usage"] = usage
-                tmp = result_path.with_name(result_path.name + ".tmp")
-                tmp.write_text(json.dumps(result, indent=2) + "\n")
-                tmp.replace(result_path)
+                job_metadata.write_json_atomic(result_path, result)
     return usage
 
 
@@ -540,19 +542,13 @@ def persist_activity(job_dir: Path, source: str = "stdout") -> list[str]:
 
 def patch_meta(job_dir: Path, **fields) -> dict:
     job_dir = Path(job_dir)
-    job_dir.mkdir(parents=True, exist_ok=True)
-    obj = _read_meta_dict(job_dir)
-    if not obj.get("job_id"):
-        obj["job_id"] = job_dir.name
-    for key, val in fields.items():
-        if val is None:
-            continue
-        obj[key] = val
-    path = job_dir / "meta.json"
-    tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(json.dumps(obj, indent=2) + "\n")
-    tmp.replace(path)
-    return obj
+
+    def mutate(obj: dict) -> dict:
+        if not obj.get("job_id"):
+            obj["job_id"] = job_dir.name
+        return job_metadata.merge_record(obj, fields)
+
+    return job_metadata.update_meta(job_dir, mutate, create=True)
 
 
 def set_doing(job_dir: Path, text: str) -> str:
@@ -683,14 +679,17 @@ def project_job(job: dict, repo: Path | None = None, *, refresh: bool = False, c
     row["display_action"] = action
     # Provider provenance describes independence, never whether findings passed.
     independence = "unknown"
-    if row.get("writer_job_id"):
+    if row.get("writer_job_id") or row.get("writer_job_ids"):
         import route
 
         actual = row.get("model_source") in {"selected", "observed"} and not row.get("model_inferred")
         provider = route.provider_for(row.get("model") or "") if actual else ""
+        writers = [item for item in (row.get("writer_providers") or []) if item]
         writer_provider = row.get("writer_provider") or ""
-        if provider and writer_provider:
-            independence = "confirmed" if provider != writer_provider else "unavailable"
+        if writer_provider and writer_provider not in writers:
+            writers = [writer_provider, *writers]
+        if provider and writers:
+            independence = "confirmed" if provider not in writers else "unavailable"
         elif row.get("independence") == "unavailable":
             independence = "unavailable"
     row["independence"] = independence
@@ -813,6 +812,20 @@ def load_job(job_path: Path, *, include_activity: bool = True) -> dict | None:
         "writer_job_id": str(obj.get("writer_job_id") or ""),
         "writer_snapshot_id": str(obj.get("writer_snapshot_id") or ""),
         "writer_provider": str(obj.get("writer_provider") or ""),
+        "writer_job_ids": [
+            x for x in (obj.get("writer_job_ids") or []) if isinstance(x, str) and x
+        ] if isinstance(obj.get("writer_job_ids"), list) else [],
+        "writer_snapshot_ids": [
+            x for x in (obj.get("writer_snapshot_ids") or []) if isinstance(x, str) and x
+        ] if isinstance(obj.get("writer_snapshot_ids"), list) else [],
+        "writer_providers": [
+            x for x in (obj.get("writer_providers") or []) if isinstance(x, str) and x
+        ] if isinstance(obj.get("writer_providers"), list) else [],
+        "workflow_id": str(obj.get("workflow_id") or ""),
+        "workflow_node_id": str(obj.get("workflow_node_id") or ""),
+        "workflow_spec_hash": str(obj.get("workflow_spec_hash") or ""),
+        "workflow_attempt": _coerce_exit_code(obj.get("workflow_attempt")) or 0,
+        "resources": obj.get("resources") if isinstance(obj.get("resources"), list) else [],
         "independence": str(obj.get("independence") or "unknown"),
         "provider": str(obj.get("provider") or ""),
         "provider_source": str(obj.get("provider_source") or "unknown"),
@@ -1425,18 +1438,14 @@ def format_elapsed(seconds: int) -> str:
 
 def new_job_id() -> str:
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    return f"{stamp}-{os.getpid()}"
+    return f"{stamp}-{os.getpid()}-{uuid.uuid4().hex}"
 
 
 def _read_meta_dict(job_dir: Path) -> dict:
-    path = job_dir / "meta.json"
-    if not path.is_file():
-        return {}
     try:
-        obj = json.loads(path.read_text())
-    except (OSError, json.JSONDecodeError):
+        return job_metadata.read_meta(job_dir, missing_ok=True)
+    except job_metadata.MetadataError:
         return {}
-    return obj if isinstance(obj, dict) else {}
 
 
 def write_state(repo: Path, job: str, worker: str, status: str, summary: str) -> None:
@@ -1472,12 +1481,22 @@ def write_job_files(
     execution_mode: str = "",
     writer_job_id: str = "",
     writer_snapshot_id: str = "",
+    writer_job_ids: list | None = None,
+    writer_snapshot_ids: list | None = None,
+    writer_providers: list | None = None,
     reservation: dict | None = None,
     capture_evidence: bool = True,
     legacy_cancel_requested: bool | None = None,
     token_usage=None,
+    resources=None,
+    workflow_id: str = "",
+    workflow_node_id: str = "",
+    workflow_spec_hash: str = "",
+    workflow_attempt: int = 0,
 ) -> None:
-    old = _read_meta_dict(job_dir)
+    passed_workflow = bool(workflow_id)
+    passed_resources = resources is not None
+    old = job_metadata.read_meta(job_dir, missing_ok=True)
     executor_kind = executor_kind or str(old.get("executor_kind") or "")
     if worker == "parent" or role == "parent":
         executor_kind = "parent"
@@ -1547,6 +1566,43 @@ def write_job_files(
         "writer_job_id": writer_job_id or str(old.get("writer_job_id") or ""),
         "writer_snapshot_id": writer_snapshot_id or str(old.get("writer_snapshot_id") or ""),
     }
+    if reservation:
+        writer_job_ids = writer_job_ids or reservation.get("writer_job_ids")
+        writer_snapshot_ids = writer_snapshot_ids or reservation.get("writer_snapshot_ids")
+        writer_providers = writer_providers or reservation.get("writer_providers")
+        workflow_id = workflow_id or str(reservation.get("workflow_id") or "")
+        workflow_node_id = workflow_node_id or str(reservation.get("workflow_node_id") or "")
+        workflow_spec_hash = workflow_spec_hash or str(reservation.get("workflow_spec_hash") or "")
+        if not workflow_attempt:
+            workflow_attempt = reservation.get("workflow_attempt") or 0
+        if resources is None and "resources" in reservation:
+            resources = reservation.get("resources")
+    writer_ids = list(writer_job_ids or old.get("writer_job_ids") or [])
+    writer_snaps = list(writer_snapshot_ids or old.get("writer_snapshot_ids") or [])
+    writer_provs = list(writer_providers or old.get("writer_providers") or [])
+    if obj["writer_job_id"] and obj["writer_job_id"] not in writer_ids:
+        writer_ids = [obj["writer_job_id"], *writer_ids]
+    if obj["writer_snapshot_id"] and obj["writer_snapshot_id"] not in writer_snaps:
+        writer_snaps = [obj["writer_snapshot_id"], *writer_snaps]
+    if old.get("writer_provider") and old.get("writer_provider") not in writer_provs:
+        writer_provs = [old.get("writer_provider"), *writer_provs]
+    if writer_ids:
+        obj["writer_job_ids"] = writer_ids
+    if writer_snaps:
+        obj["writer_snapshot_ids"] = writer_snaps
+    if writer_provs:
+        obj["writer_providers"] = writer_provs
+    workflow_id = workflow_id or str(old.get("workflow_id") or "")
+    if workflow_id:
+        obj["workflow_id"] = workflow_id
+        obj["workflow_node_id"] = workflow_node_id or str(old.get("workflow_node_id") or "")
+        obj["workflow_spec_hash"] = workflow_spec_hash or str(old.get("workflow_spec_hash") or "")
+        try:
+            obj["workflow_attempt"] = int(workflow_attempt or old.get("workflow_attempt") or 0)
+        except (TypeError, ValueError):
+            obj["workflow_attempt"] = int(old.get("workflow_attempt") or 0)
+    if resources is not None or old.get("resources"):
+        obj["resources"] = resources if resources is not None else old.get("resources")
     for key in ("thread", "session_id", "pid", "open", "watch", "kind", "model", "effort", "doing", "writer_provider", "independence"):
         if not obj.get(key) and old.get(key) not in (None, ""):
             obj[key] = old[key]
@@ -1609,12 +1665,18 @@ def write_job_files(
     )
     if usage:
         obj["token_usage"] = usage
-    blob = json.dumps(obj, indent=2) + "\n"
-    for name in ("meta.json", "result.json"):
-        path = job_dir / name
-        tmp = path.with_name(path.name + ".tmp")
-        tmp.write_text(blob)
-        tmp.replace(path)
+
+    def commit(latest):
+        merged = job_metadata.merge_record(latest, obj)
+        return job_metadata.preserve_live_fields(
+            latest,
+            merged,
+            restore_doing=True,
+            restore_workflow=not passed_workflow,
+            restore_resources=not passed_resources,
+        )
+
+    job_metadata.update_records(job_dir, commit, names=("meta.json", "result.json"), create=True)
 
 
 def _require_harness(repo: Path) -> None:
@@ -1729,6 +1791,9 @@ def start_job(
     files: list | None = None,
     writer_job_id: str = "",
     writer_snapshot_id: str = "",
+    writer_job_ids=None,
+    writer_snapshot_ids=None,
+    writer_providers=None,
     access: str = "",
     reservation_id: str = "",
     attempt_id: str = "",
@@ -1739,6 +1804,12 @@ def start_job(
     return_details: bool = False,
     routing=None,
     assessment=None,
+    resources=None,
+    workflow_id: str = "",
+    workflow_node_id: str = "",
+    workflow_spec_hash: str = "",
+    workflow_attempt: int = 0,
+    allow_read_overlap_reservations=None,
 ) -> str | dict:
     """Write a running job. Does not launch a worker. Returns the job id."""
     _require_harness(repo)
@@ -1759,7 +1830,7 @@ def start_job(
     import route
     import routing_policy
     # Aliases such as explorer must receive the same default access as explore.
-    access = access or ("read" if role == "research" or route.classify(role, "") in {"review", "explore"} else "write")
+    access = access or ("read" if role == "research" or route.classify(role, "") in {"review", "explore", "verify"} else "write")
     # Resolve models before taking the admission lock. Parent models are observed,
     # while child selections still honor model bans and effective worker policy.
     if routing not in (None, "") and not isinstance(routing, dict):
@@ -1798,12 +1869,23 @@ def start_job(
     owner = admission.caller_owner(kind, owner_session=owner_session, native_agent_id=native_agent_id)
     owner["parent_cli"] = live
     now = iso_now()
+    role_kind = route.classify(role, "")
+    review_handoff = role_kind == "review"
+    writer_ids = list(writer_job_ids or [])
+    if writer_job_id and writer_job_id not in writer_ids:
+        writer_ids = [writer_job_id, *writer_ids]
     with admission.transaction(repo):
         lease = admission.reserve(
             repo, job_id=job_id, worker=worker, role=role, model=model, files=listed, access=access,
             owner=owner, owner_session=owner_session, queue_id=queue_id,
             reservation_id=reservation_id, attempt_id=attempt_id, owner_token=owner_token,
-            writer_job_id=writer_job_id, writer_snapshot_id=writer_snapshot_id,
+            writer_job_id=writer_job_id if review_handoff else "",
+            writer_snapshot_id=writer_snapshot_id if review_handoff else "",
+            writer_job_ids=writer_ids or None, writer_snapshot_ids=writer_snapshot_ids,
+            writer_providers=writer_providers, resources=resources,
+            workflow_id=workflow_id, workflow_node_id=workflow_node_id,
+            workflow_spec_hash=workflow_spec_hash, workflow_attempt=workflow_attempt,
+            allow_read_overlap_reservations=allow_read_overlap_reservations,
         )
         credentials = admission.credentials(lease)
         listed = lease.get("declared_files", listed)
@@ -1813,7 +1895,10 @@ def start_job(
                             thread=_job_thread(repo), files=listed, model=model, effort=effort,
                             executor_kind=kind, execution_mode="parent" if kind == "parent" else "native",
                             writer_job_id=writer_job_id, writer_snapshot_id=writer_snapshot_id,
-                            reservation=lease)
+                            writer_job_ids=writer_ids or writer_job_ids, writer_snapshot_ids=writer_snapshot_ids,
+                            writer_providers=writer_providers, reservation=lease, resources=lease.get("resources"),
+                            workflow_id=workflow_id, workflow_node_id=workflow_node_id,
+                            workflow_spec_hash=workflow_spec_hash, workflow_attempt=workflow_attempt)
             routing_policy.write_sidecar(job_dir, lease["attempt_id"], routing_obj)
             lease = admission.activate(repo, **credentials, job_id=job_id, worker=worker, files=listed,
                                        access=access, owner=owner, owner_session=owner_session,

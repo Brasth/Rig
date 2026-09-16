@@ -152,9 +152,10 @@ class CompatibilityContracts(unittest.TestCase):
         self.assertEqual(self.fixture.counts["load_job_calls"], 3)
 
     def test_disabled_missing_and_live_parent_boundaries(self):
-        self.assertEqual(harness.effective_workers(self.repo, "opencode"), ["omp", "pi", "agy"])
+        # Fixture enables catalog workers (opencode/omp/pi/agy/devin) with binaries and MCP.
+        self.assertEqual(harness.effective_workers(self.repo, "opencode"), ["omp", "pi", "agy", "devin"])
         (self.fixture.bins / "omp").unlink()
-        self.assertEqual(harness.effective_workers(self.repo, "opencode"), ["pi", "agy"])
+        self.assertEqual(harness.effective_workers(self.repo, "opencode"), ["pi", "agy", "devin"])
         with self.assertRaisesRegex(SystemExit, "off in harness"):
             harness.assert_spawn_allowed(self.repo, "grok", live="codex")
         choice = route.pick("codex", [], "implement", "Fix the fixture", catalogs={})
@@ -174,8 +175,8 @@ class CompatibilityContracts(unittest.TestCase):
         folder = seed_job(self.repo, "own-job", "running")
         with patch.dict(os.environ, {"RIG_JOB_ID": "own-job", "RIG_JOB_DIR": str(folder)}):
             names = {tool["name"] for tool in rig_mcp.listed_tools()}
-            self.assertEqual(names, {"rig_job_doing", "rig_job_note", "rig_job_ask",
-                                     "permission_prompt", "rig_job_inbox", "rig_job_show", "rig_memory"})
+            self.assertEqual(names, set(rig_mcp.CHILD_TOOL_ORDER))
+            self.assertIn("rig_job_coordination_request", names)
             for name in ("rig_session", "rig_pick", "rig_job_wait", "rig_queue_claim",
                          "rig_job_start", "rig_job_allow", "rig_job_deny"):
                 result = rig_mcp.call_tool(name, {"repo": str(self.repo), "case": "Fix"})

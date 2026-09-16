@@ -10,6 +10,7 @@ import sys
 import tempfile
 import time
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest import mock
 
@@ -444,6 +445,110 @@ class WorkerLaunchTests(unittest.TestCase):
             )
         self.assertFalse((self.repo / ".rig" / "jobs" / "direct-parent").exists())
         self.assertEqual(self._held(), [])
+
+    def _wrapper_env(self, job_id):
+        env_path = self.repo / ".rig" / "jobs" / job_id / "wrapper-env.json"
+        for _ in range(50):
+            if env_path.is_file():
+                break
+            time.sleep(0.05)
+        return json.loads(env_path.read_text())
+
+    def test_resources_json_is_canonical_and_legacy_empty(self):
+        empty = self._launch("res-empty", files=["a.py"])
+        empty_env = self._wrapper_env("res-empty")
+        self.assertEqual(json.loads(empty_env["RIG_JOB_RESOURCES_JSON"]), [])
+        self.assertEqual(empty["job_id"], "res-empty")
+        claimed = self._launch(
+            "res-claim", files=["b.py"],
+            resources=[{"name": "db.primary", "access": "write"}],
+            workflow_id="wf1", workflow_node_id="n1",
+            workflow_spec_hash="abc", workflow_attempt=2,
+        )
+        claimed_env = self._wrapper_env("res-claim")
+        self.assertEqual(
+            json.loads(claimed_env["RIG_JOB_RESOURCES_JSON"]),
+            [{"name": "db.primary", "access": "write"}],
+        )
+        self.assertEqual(claimed_env.get("RIG_WORKFLOW_ID"), "wf1")
+        self.assertEqual(claimed_env.get("RIG_WORKFLOW_NODE_ID"), "n1")
+        self.assertEqual(claimed_env.get("RIG_WORKFLOW_SPEC_HASH"), "abc")
+        self.assertEqual(claimed_env.get("RIG_WORKFLOW_ATTEMPT"), "2")
+        meta = json.loads((self.repo / ".rig" / "jobs" / "res-claim" / "meta.json").read_text())
+        self.assertEqual(meta["resources"], [{"name": "db.primary", "access": "write"}])
+        self.assertEqual(meta["workflow_id"], "wf1")
+        self.assertEqual(claimed["job_id"], "res-claim")
+
+    def test_verify_launch_keeps_writer_provenance_without_review_gate(self):
+        result = self._launch(
+            "verify-node", role="verify", access="read", files=["a.py"],
+            writer_job_id="writer-a", writer_job_ids=["writer-b"],
+            writer_providers=["xai"],
+        )
+        meta = json.loads((self.repo / ".rig" / "jobs" / "verify-node" / "meta.json").read_text())
+        self.assertEqual(meta["role"], "verify")
+        self.assertEqual(meta["access"], "read")
+        self.assertEqual(meta["writer_job_id"], "writer-a")
+        self.assertIn("writer-b", meta["writer_job_ids"])
+        lease = admission.get_reservation(self.repo, result["reservation_id"])
+        self.assertFalse(lease.get("writer_job_id"))
+        self.assertIn("writer-a", lease.get("writer_job_ids") or [])
+
+    def test_omitted_empty_ids_admit_three_disjoint_nodes_same_frozen_second(self):
+        (self.repo / "c.py").write_text("c\n")
+        (self.repo / "d.py").write_text("d\n")
+        frozen = datetime(2026, 9, 16, 12, 0, 0, tzinfo=timezone.utc)
+        pid = os.getpid()
+        prefix = frozen.strftime("%Y%m%dT%H%M%SZ") + f"-{pid}-"
+
+        class FrozenDateTime(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return frozen if tz is None else frozen.astimezone(tz)
+
+        def admit(files, **kwargs):
+            result = worker_launch.launch(
+                self.repo,
+                brief="do the listed files",
+                worker="grok",
+                role="implement",
+                model="grok-4.6",
+                effort="high",
+                files=files,
+                owner_session="launch-tests",
+                **kwargs,
+            )
+            self.pids.append(result["wrapper_pid"])
+            return result
+
+        with mock.patch("jobs.datetime", FrozenDateTime):
+            omitted = admit(["a.py"])
+            empty = admit(["b.py"], id="")
+            spaced = admit(["c.py"], id="  ")
+            with self.assertRaisesRegex(
+                worker_launch.LaunchError, "job id already belongs|existing job id"
+            ):
+                worker_launch.launch(
+                    self.repo, id=omitted["job_id"], brief="again", worker="grok",
+                    role="implement", model="grok-4.6", effort="high", files=["d.py"],
+                    owner_session="launch-tests",
+                )
+            with self.assertRaisesRegex(worker_launch.LaunchError, r"live\+reserved 3/3"):
+                admit(["d.py"], id="")
+
+        ids = [omitted["job_id"], empty["job_id"], spaced["job_id"]]
+        reservations = [
+            omitted["reservation_id"], empty["reservation_id"], spaced["reservation_id"],
+        ]
+        self.assertEqual(len(set(ids)), 3)
+        self.assertEqual(len(set(reservations)), 3)
+        for job_id in ids:
+            self.assertTrue(job_id.startswith(prefix), job_id)
+            self.assertTrue(jobs.JOB_ID_RE.fullmatch(job_id))
+            self.assertTrue((self.repo / ".rig" / "jobs" / job_id / "meta.json").is_file())
+        self.assertEqual(len(self._held()), 3)
+        job_dirs = {path.name for path in (self.repo / ".rig" / "jobs").iterdir() if path.is_dir()}
+        self.assertEqual(job_dirs, set(ids))
 
 
 if __name__ == "__main__":

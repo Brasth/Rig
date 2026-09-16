@@ -123,5 +123,39 @@ class HudAndHashBudget(unittest.TestCase):
             self.assertIn("completed-unverified", jobs.wait_job(self.repo, job["job_id"])[1])
 
 
+class WorkflowHudDisplay(unittest.TestCase):
+    def test_display_fields_are_factual_without_estimates(self):
+        from tui_view import _workflow_detail_lines
+        from ui_snapshot import format_parent_action, public_workflow_row, scrub_secrets
+        secret = "0123456789abcdef0123456789abcdef"
+        row = public_workflow_row({
+            "workflow_id": "wf-display", "status": "attention", "accepted": 2, "required": 4,
+            "running": 0, "ask": 1, "blocker": "parent acceptance required",
+            "next_parent_action": {"kind": "allow_or_deny", "node_id": "n2", "job_id": "job-1",
+                                   "owner_token": secret},
+            "owner_token": secret, "percent": 50, "eta": "3m", "estimated_savings": "2h",
+        })
+        self.assertEqual(row["workflow_id"], "wf-display")
+        self.assertEqual((row["accepted"], row["required"], row["running"], row["ask"]), (2, 4, 0, 1))
+        self.assertEqual(row["blocker"], "parent acceptance required")
+        self.assertEqual(format_parent_action(row["next_parent_action"]),
+                         "allow_or_deny node_id n2 job_id job-1")
+        blob = json.dumps(row)
+        self.assertNotIn(secret, blob)
+        self.assertNotIn("owner_token", blob)
+        self.assertNotIn("percent", blob)
+        self.assertNotIn("eta", blob)
+        self.assertNotIn("savings", blob)
+        detail = "\n".join(_workflow_detail_lines(row))
+        self.assertIn("wf-display", detail)
+        self.assertIn("accepted/required 2/4", detail)
+        self.assertIn("running 0  ask 1", detail)
+        self.assertIn("blocker parent acceptance required", detail)
+        self.assertIn("next parent action allow_or_deny", detail)
+        self.assertNotIn("%", detail)
+        self.assertNotIn("ETA", detail)
+        self.assertEqual(scrub_secrets({"owner_token": secret, "ok": 1}), {"ok": 1})
+
+
 if __name__ == "__main__":
     unittest.main()
