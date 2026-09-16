@@ -11,6 +11,7 @@ import threading
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
@@ -41,6 +42,10 @@ def _run_rig(repo: Path, *args: str) -> subprocess.CompletedProcess:
 
 class CancelJob(unittest.TestCase):
     def setUp(self):
+        # Parent MCP/cancel paths must not inherit a nested worker's job identity.
+        self.env = mock.patch.dict(os.environ, {"RIG_JOB_ID": "", "RIG_JOB_DIR": "", "RIG_OWNER_TOKEN": ""})
+        self.env.start()
+        self.addCleanup(self.env.stop)
         self.td = tempfile.TemporaryDirectory()
         self.repo = Path(self.td.name)
         (self.repo / ".git").mkdir()
@@ -206,6 +211,13 @@ class CancelJob(unittest.TestCase):
         grok.chmod(0o755)
         brief = self.d / "brief.md"
         env = os.environ.copy()
+        keep = {
+            "RIG_HOME", "RIG_PARENT", "RIG_LIVE", "RIG_TIMEOUT",
+            "RIG_SKIP_MODEL_CATALOG", "RIG_ROLE", "RIG_SKIP_UPDATE_CHECK",
+        }
+        for key in list(env):
+            if key.startswith("RIG_") and key not in keep:
+                env.pop(key, None)
         env.update(
             {
                 "PATH": f"{bins}:/usr/bin:/bin",

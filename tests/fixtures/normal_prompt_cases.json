@@ -39,6 +39,7 @@
   {"id":"explicit-implement","role":"implement","case":"Review a tiny documentation change","expected_kind":"implement","access":"write","category":"explicit"},
   {"id":"explicit-hard","role":"hard","case":"Documentation only: tiny typo","expected_kind":"hard","access":"write","category":"explicit"},
   {"id":"explicit-review","role":"review","case":"Bulk fix the implementation","expected_kind":"review","access":"read","category":"explicit"},
+  {"id":"explicit-verify","role":"verify","case":"Bulk fix the implementation","expected_kind":"verify","access":"read","category":"explicit"},
   {"id":"parent-queue","role":"stay","case":"/queue fix the sidebar after this job","expected_kind":"stay","access":"read","category":"queue"},
   {"id":"computer-use","role":"","case":"Use computer-use on the live desktop","expected_kind":"stay","access":"read","category":"interactive"},
   {"id":"chrome-profile","role":"","case":"Inspect my chrome-profile","expected_kind":"stay","access":"read","category":"interactive"}

@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""stdio MCP server: pick/status/jobs/wait/allow/memory for the parent agent.
+"""stdio MCP server: pick/status/jobs/wait/allow/memory/workflow for the parent agent.
 
 When RIG_JOB_ID (or RIG_JOB_DIR) is set, this is the child surface: inbox/doing/note/ask
-plus own show and project memory. Parent tools stay hidden. First Rig operation is inbox.
+plus own show, project memory, and coordination request. Parent workflow tools stay hidden.
+First Rig operation is inbox.
 """
 from __future__ import annotations
 
@@ -28,8 +29,10 @@ import route as rig_route  # noqa: E402
 import verification as rig_verification  # noqa: E402
 import worker_launch as rig_launch  # noqa: E402
 import child_mcp as rig_child_mcp  # noqa: E402
+import workflow as rig_workflow  # noqa: E402
+import coordination as rig_coordination  # noqa: E402
 
-PICK_ROLES = ("explore", "mini", "bulk", "implement", "hard", "review", "stay")
+PICK_ROLES = ("explore", "mini", "bulk", "implement", "hard", "review", "verify", "stay")
 JOB_WORKERS = ("grok", "codex", "claude", "cursor", "opencode", "omp", "pi", "agy", "devin", "parent")
 JOB_RECORD_STATUSES = ("ok", "fail", "timeout")
 JOB_FINISH_STATUSES = ("ok", "fail", "timeout", "cancelled")
@@ -38,6 +41,9 @@ REVIEW_PROPERTIES = {
     "writer_cli": {"type": "string"},
     "writer_model": {"type": "string"},
     "writer_provider": {"type": "string"},
+    "writer_job_ids": {"type": "array", "items": {"type": "string"}},
+    "writer_snapshot_ids": {"type": "array", "items": {"type": "string"}},
+    "writer_providers": {"type": "array", "items": {"type": "string"}},
     "review_mode": {"type": "string", "enum": ["standalone", "independent"], "default": "standalone"},
 }
 ASSESSMENT_LEVELS = ["low", "medium", "high"]
@@ -287,7 +293,7 @@ TOOLS = [
                     "enum": list(PICK_ROLES),
                     "description": (
                         "Optional pick kind. Omit to classify from case. "
-                        "Pass stay|explore|mini|bulk|implement|hard|review "
+                        "Pass stay|explore|mini|bulk|implement|hard|review|verify "
                         "when the parent already knows the kind."
                     ),
                 },
@@ -431,7 +437,11 @@ TOOLS = [
                 "role": {
                     "type": "string",
                     "enum": list(PICK_ROLES),
-                    "description": "Optional pick kind. Omit to classify from case.",
+                    "description": (
+                        "Optional pick kind. Omit to classify from case. "
+                        "Pass stay|explore|mini|bulk|implement|hard|review|verify "
+                        "when the parent already knows the kind."
+                    ),
                 },
                 "exclude": {
                     "type": "string",
@@ -751,6 +761,37 @@ TOOLS.extend([
          "rationale": {"type": "string"},
      }, "required": ["id", "confirmed_stopped", "rationale"]}},
 ])
+_WORKFLOW_ID = {"id": {"type": "string", "description": "Workflow id."}, "repo": {"type": "string"}}
+_WORKFLOW_OWNER = {"owner_token": {"type": "string"}, "owner_session": {"type": "string"}}
+TOOLS.extend([
+    {"name": "rig_workflow_create", "description": "Parent-only. Create a repository-local adaptive workflow DAG. Accepts a spec object. Never prints owner tokens in text; structuredContent includes credentials_path.",
+     "inputSchema": {"type": "object", "properties": {
+         "repo": {"type": "string"}, "spec": {"type": "object"}, "queue_id": {"type": "string"},
+         "owner_session": {"type": "string"},
+     }, "required": ["spec"]}},
+    {"name": "rig_workflows", "description": "Parent-only. List workflows with accepted/required counts, running/ASK counts, blocker, and next parent action. No ETA.",
+     "inputSchema": {"type": "object", "properties": {"repo": {"type": "string"}, "include_terminal": {"type": "boolean"}}}},
+    {"name": "rig_workflow_show", "description": "Parent-only. Show one workflow spec, node state, coordination, and next parent action. Sanitizes owner tokens.",
+     "inputSchema": {"type": "object", "properties": {**_WORKFLOW_ID}, "required": ["id"]}},
+    {"name": "rig_workflow_advance", "description": "Parent-only. Refresh then launch ready workflow nodes up to capacity. Refuses any repo ASK. Stops on cancel, unresolved failure, or coordination. parent_writes returns one registered parent action and launches no siblings that turn.",
+     "inputSchema": {"type": "object", "properties": {**_WORKFLOW_ID, **_WORKFLOW_OWNER}, "required": ["id"]}},
+    {"name": "rig_workflow_wait", "description": "Parent-only. Wait on a workflow. Wakes COORDINATION and ASK. Shows sibling node status. Do not pass timeout unless you must cap the wait.",
+     "inputSchema": {"type": "object", "properties": {**_WORKFLOW_ID, "timeout": {"type": "number"}}}},
+    {"name": "rig_workflow_extend", "description": "Parent-only. Append-only workflow extension. Cannot alter launched nodes or contracts. No extension after final verify launches.",
+     "inputSchema": {"type": "object", "properties": {**_WORKFLOW_ID, **_WORKFLOW_OWNER, "nodes": {"type": "array", "items": {"type": "object"}}}, "required": ["id", "nodes"]}},
+    {"name": "rig_workflow_resolve", "description": "Parent-only. Resolve a failed node: identical stopped/released retry, skip with rationale, or final failure. Required nodes cannot be silently waived. Accepted nodes cannot retry.",
+     "inputSchema": {"type": "object", "properties": {**_WORKFLOW_ID, **_WORKFLOW_OWNER, "node_id": {"type": "string"}, "action": {"type": "string", "enum": ["retry", "skip", "fail"]}, "rationale": {"type": "string"}}, "required": ["id", "node_id"]}},
+    {"name": "rig_workflow_approve", "description": "Parent-only. Approve a gated side-effect node. Bound to workflow+node+owner session+current spec hash; invalidated by spec change.",
+     "inputSchema": {"type": "object", "properties": {**_WORKFLOW_ID, **_WORKFLOW_OWNER, "node_id": {"type": "string"}, "rationale": {"type": "string"}}, "required": ["id", "node_id", "rationale"]}},
+    {"name": "rig_workflow_cancel", "description": "Parent-only. Freeze advancement, request cancellation only for active workflow attempts, cancel unstarted nodes. Unrelated jobs and queues stay. Confirmed-stop semantics unchanged.",
+     "inputSchema": {"type": "object", "properties": {**_WORKFLOW_ID, **_WORKFLOW_OWNER, "rationale": {"type": "string"}}, "required": ["id"]}},
+    {"name": "rig_workflow_report", "description": "Parent-only read-only report: observed wall time, node time, max concurrency, outcomes, acceptance. No estimated savings or ranking.",
+     "inputSchema": {"type": "object", "properties": {**_WORKFLOW_ID}, "required": ["id"]}},
+    {"name": "rig_job_coordination_reply", "description": "Parent-only. Reply to or stop a child coordination request. Coordination never expands files, resources, effects, or frozen contracts.",
+     "inputSchema": {"type": "object", "properties": {**_WORKFLOW_ID, **_WORKFLOW_OWNER, "request_id": {"type": "string"}, "decision": {"type": "string", "enum": ["reply", "stop"]}, "text": {"type": "string"}}, "required": ["id", "request_id"]}},
+    {"name": "rig_job_coordination_request", "description": "Child only after inbox handshake. Request parent coordination: dependency, contract, or scope. Never expands files, resources, effects, or frozen contracts.",
+     "inputSchema": {"type": "object", "properties": {"kind": {"type": "string", "enum": ["dependency", "contract", "scope"]}, "text": {"type": "string"}, "payload": {"type": "object"}}, "required": ["kind", "text"]}},
+])
 for _tool in TOOLS:
     _properties = _tool["inputSchema"]["properties"]
     if _tool["name"] in {"rig_job_start", "rig_job_launch", "rig_job_finish", "rig_job_requirements", "rig_job_check", "rig_job_accept", "rig_job_reconcile", "rig_job_recover_cancelled", "rig_queue_unclaim", "rig_queue_spawned"}:
@@ -798,6 +839,17 @@ TOOL_ORDER = (
     "rig_queue_claim",
     "rig_queue_unclaim",
     "rig_queue_spawned",
+    "rig_workflow_create",
+    "rig_workflows",
+    "rig_workflow_show",
+    "rig_workflow_advance",
+    "rig_workflow_wait",
+    "rig_workflow_extend",
+    "rig_workflow_resolve",
+    "rig_workflow_approve",
+    "rig_workflow_cancel",
+    "rig_workflow_report",
+    "rig_job_coordination_reply",
 )
 CHILD_TOOL_ORDER = (
     "rig_job_doing",
@@ -807,6 +859,7 @@ CHILD_TOOL_ORDER = (
     "rig_job_inbox",
     "rig_job_show",
     "rig_memory",
+    "rig_job_coordination_request",
 )
 PARENT_TOOL_NAMES = frozenset(TOOL_ORDER)
 CHILD_TOOL_NAMES = frozenset(CHILD_TOOL_ORDER)
@@ -887,6 +940,18 @@ def _optional_string(args: dict, name: str) -> str:
     return value
 
 
+def _workflow_owner_args(args: dict) -> dict:
+    return {
+        "owner_token": _optional_string(args, "owner_token"),
+        "owner_session": _optional_string(args, "owner_session"),
+    }
+
+
+def _workflow_response(obj, *, include_secrets=False) -> dict:
+    safe = rig_workflow.public_payload(obj)
+    return {**_ok(json.dumps(safe, indent=2, default=str)), "structuredContent": obj if include_secrets else safe}
+
+
 def _ownership_args(args: dict) -> dict:
     return {key: _optional_string(args, key) for key in _OWNERSHIP_PROPERTIES}
 
@@ -899,10 +964,18 @@ def _execution_args(args: dict) -> dict:
 
 
 def _review_args(args: dict) -> dict:
-    values = {name: _optional_string(args, name) for name in REVIEW_PROPERTIES if name != "review_mode"}
+    skip = {"review_mode", "writer_job_ids", "writer_snapshot_ids", "writer_providers"}
+    values = {name: _optional_string(args, name) for name in REVIEW_PROPERTIES if name not in skip}
     values["review_mode"] = args.get("review_mode", "standalone")
     if values["review_mode"] not in {"standalone", "independent"}:
         raise ValueError("review_mode must be standalone|independent")
+    for name in ("writer_job_ids", "writer_snapshot_ids", "writer_providers"):
+        raw = args.get(name)
+        if raw in (None, ""):
+            continue
+        if not isinstance(raw, list) or any(not isinstance(item, str) for item in raw):
+            raise ValueError(f"{name} must be an array of strings")
+        values[name] = raw
     return values
 
 
@@ -1014,7 +1087,7 @@ def format_session(
     pick_err = ""
     choice: dict = {}
     if role_n and role_n not in PICK_ROLES:
-        pick_err = "rig_pick: role must be explore|mini|bulk|implement|hard|review|stay"
+        pick_err = "rig_pick: role must be " + "|".join(PICK_ROLES)
     else:
         choice = rig_route.pick(
             live, effective, role_n, case or "", exclude=exclude,
@@ -1027,6 +1100,12 @@ def format_session(
         )
         choice = {key: value for key, value in choice.items() if not str(key).startswith("_")}
     shown = _compact_rows(listing, terminal_limit, repo=repo, cache=hash_cache) if compact else listing
+    import workflow_state as rig_wf
+    workflow_rows = rig_wf.list_workflows(repo, include_terminal=True)
+    if compact:
+        active_wf = [row for row in workflow_rows if row.get("status") in rig_wf.ACTIVE]
+        terminal_wf = [row for row in workflow_rows if row.get("status") not in rig_wf.ACTIVE]
+        workflow_rows = active_wf + terminal_wf[:terminal_limit]
     history = {
         "total": len(listing),
         "shown": len(shown),
@@ -1037,6 +1116,7 @@ def format_session(
         payload = {
             "memory": mem,
             "jobs": shown,
+            "workflows": workflow_rows,
             "status": status,
             "pick": choice if not pick_err else {"error": pick_err},
         }
@@ -1053,6 +1133,7 @@ def format_session(
             }
         return json.dumps(payload, indent=2, default=str)
     jobs_text = rig_jobs.format_table(shown, repo, jobs_snapshot=listing)
+    wf_text = rig_workflow.format_list(workflow_rows)
     if compact:
         jobs_text += (
             f"\nhistory: {history['shown']} shown / {history['total']} valid jobs; "
@@ -1063,6 +1144,8 @@ def format_session(
         mem.strip() or "(empty)",
         "# jobs",
         jobs_text,
+        "# workflows",
+        wf_text,
         "# status",
         status.strip() or "(empty)",
         "# pick",
@@ -1306,7 +1389,7 @@ def call_tool(name: str, args: dict, on_tick=None, *, wait_paths: list[Path] | N
             role = str(args.get("role") or "").strip()
             if role and role not in PICK_ROLES:
                 return _err(
-                    "rig_pick: role must be explore|mini|bulk|implement|hard|review|stay"
+                    "rig_pick: role must be explore|mini|bulk|implement|hard|review|verify|stay"
                 )
             case = str(args.get("case") or "")
             live = rig_harness.live_parent()
@@ -1324,7 +1407,7 @@ def call_tool(name: str, args: dict, on_tick=None, *, wait_paths: list[Path] | N
             role = str(args.get("role") or "").strip()
             if role and role not in PICK_ROLES:
                 return _err(
-                    "rig_session: role must be explore|mini|bulk|implement|hard|review|stay"
+                    "rig_session: role must be explore|mini|bulk|implement|hard|review|verify|stay"
                 )
             case = str(args.get("case") or "")
             if not case.strip():
@@ -1476,6 +1559,126 @@ def call_tool(name: str, args: dict, on_tick=None, *, wait_paths: list[Path] | N
                     **_execution_args(args),
                 )
             )
+        if name == "rig_workflow_create":
+            spec = args.get("spec")
+            if not isinstance(spec, dict):
+                return _err("spec must be an object")
+            result = rig_workflow.create(
+                repo, spec, owner_session=_optional_string(args, "owner_session"),
+                queue_id=_optional_string(args, "queue_id"),
+            )
+            return _workflow_response(result, include_secrets=True)
+        if name == "rig_workflows":
+            include = args.get("include_terminal")
+            if include is None:
+                include = True
+            elif type(include) is not bool:
+                return _err("include_terminal must be a boolean")
+            rows = rig_workflow.listing(repo, include_terminal=include)
+            safe = rig_workflow.public_payload(rows)
+            return {**_ok(rig_workflow.format_list(rows)), "structuredContent": {"workflows": safe}}
+        if name == "rig_workflow_show":
+            wid = _optional_string(args, "id").strip()
+            if not wid:
+                return _err("rig_workflow_show needs id")
+            return _workflow_response(rig_workflow.show(repo, wid))
+        if name == "rig_workflow_advance":
+            wid = _optional_string(args, "id").strip()
+            if not wid:
+                return _err("rig_workflow_advance needs id")
+            return _workflow_response(rig_workflow.advance(repo, wid, **_workflow_owner_args(args)))
+        if name == "rig_workflow_wait":
+            wid = _optional_string(args, "id").strip()
+            if not wid:
+                return _err("rig_workflow_wait needs id")
+            timeout = args.get("timeout")
+            if timeout is None:
+                timeout_s = None
+            else:
+                try:
+                    timeout_s = float(timeout)
+                except (TypeError, ValueError):
+                    return _err("timeout must be a number")
+            code, text = rig_workflow.wait(
+                repo, wid, timeout_s, on_tick=on_tick, cancel_event=cancel_event,
+            )
+            if code == 1:
+                return _err(text)
+            return _ok(text)
+        if name == "rig_workflow_extend":
+            wid = _optional_string(args, "id").strip()
+            nodes = args.get("nodes")
+            if not wid:
+                return _err("rig_workflow_extend needs id")
+            if not isinstance(nodes, list) or not nodes:
+                return _err("nodes must be a nonempty array of objects")
+            return _workflow_response(
+                rig_workflow.extend(repo, wid, nodes, **_workflow_owner_args(args)),
+            )
+        if name == "rig_workflow_resolve":
+            wid = _optional_string(args, "id").strip()
+            node_id = _optional_string(args, "node_id").strip()
+            if not wid or not node_id:
+                return _err("rig_workflow_resolve needs id and node_id")
+            action = args.get("action", "retry")
+            if action not in {"retry", "skip", "fail"}:
+                return _err("action must be retry|skip|fail")
+            return _workflow_response(rig_workflow.resolve(
+                repo, wid, node_id, action=action,
+                rationale=_optional_string(args, "rationale"),
+                **_workflow_owner_args(args),
+            ))
+        if name == "rig_workflow_approve":
+            wid = _optional_string(args, "id").strip()
+            node_id = _optional_string(args, "node_id").strip()
+            rationale = _optional_string(args, "rationale")
+            if not wid or not node_id:
+                return _err("rig_workflow_approve needs id and node_id")
+            if not rationale.strip():
+                return _err("rig_workflow_approve needs rationale")
+            return _workflow_response(rig_workflow.approve(
+                repo, wid, node_id, rationale=rationale, **_workflow_owner_args(args),
+            ))
+        if name == "rig_workflow_cancel":
+            wid = _optional_string(args, "id").strip()
+            if not wid:
+                return _err("rig_workflow_cancel needs id")
+            return _workflow_response(rig_workflow.cancel(
+                repo, wid, rationale=_optional_string(args, "rationale") or "parent",
+                **_workflow_owner_args(args),
+            ))
+        if name == "rig_workflow_report":
+            wid = _optional_string(args, "id").strip()
+            if not wid:
+                return _err("rig_workflow_report needs id")
+            return _workflow_response(rig_workflow.report(repo, wid))
+        if name == "rig_job_coordination_reply":
+            wid = _optional_string(args, "id").strip()
+            request_id = _optional_string(args, "request_id").strip()
+            if not wid or not request_id:
+                return _err("rig_job_coordination_reply needs id and request_id")
+            decision = args.get("decision") or "reply"
+            if decision not in {"reply", "stop"}:
+                return _err("decision must be reply|stop")
+            return _workflow_response(rig_coordination.reply(
+                repo, wid, request_id, decision=decision,
+                text=_optional_string(args, "text"),
+                **_workflow_owner_args(args),
+            ))
+        if name == "rig_job_coordination_request":
+            kind = _optional_string(args, "kind").strip()
+            text = _optional_string(args, "text").strip()
+            if kind not in rig_coordination.KINDS:
+                return _err("kind must be dependency|contract|scope")
+            if not text:
+                return _err("rig_job_coordination_request needs text")
+            payload = args.get("payload")
+            if payload is None:
+                payload = {}
+            elif not isinstance(payload, dict):
+                return _err("payload must be an object")
+            result = rig_coordination.request(repo, child_job_id(), kind, text, payload)
+            return _workflow_response(result)
         if name == "rig_job_launch":
             extra = sorted(set(args) - LAUNCH_ARG_NAMES)
             if extra:

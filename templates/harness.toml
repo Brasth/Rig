@@ -9,6 +9,11 @@ parent = "codex"
 # Smart is also the default when this section is omitted. Legacy restores the old ladder.
 mode = "smart"
 
+[orchestration]
+# Adaptive decomposes eligible work into a DAG (max 12 nodes). single keeps one-job behavior.
+mode = "adaptive"
+max_nodes = 12
+
 [workers]
 codex = false
 grok = true

@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Job-scoped child MCP config and the required inbox handshake."""
+"""Job-scoped child MCP config and the required inbox handshake.
+
+After inbox, children may call doing/note/ask/own show/memory and
+rig_job_coordination_request. Parent workflow tools stay hidden.
+"""
 from __future__ import annotations
 
 import json
@@ -13,6 +17,7 @@ HERE = Path(__file__).resolve().parent
 if str(HERE) not in sys.path:
     sys.path.insert(0, str(HERE))
 
+import job_metadata  # noqa: E402
 import jobs as rig_jobs  # noqa: E402
 
 PROTOCOL = 1
@@ -41,6 +46,7 @@ DEVIN_LIVE = frozenset(
 )
 BOOTSTRAP_TOOLS = frozenset({"rig_job_inbox", "permission_prompt"})
 HANDSHAKE_TOOL = "rig_job_inbox"
+CHILD_COORDINATION_TOOL = "rig_job_coordination_request"
 
 
 def iso_now() -> str:
@@ -585,15 +591,21 @@ def record_handshake(job_dir: Path) -> dict:
 
 def mark_unknown(job_dir: Path) -> dict:
     """Stamp unknown onto an existing complete job record. Never create a stub."""
-    meta = rig_jobs._read_meta_dict(Path(job_dir))
-    if meta.get("child_mcp_status"):
+
+    def mutate(meta: dict) -> dict:
+        if meta.get("child_mcp_status"):
+            return meta
+        if not meta.get("job_id") or not meta.get("worker") or not meta.get("status"):
+            return meta
+        meta["child_mcp_status"] = UNKNOWN
+        meta["child_mcp_protocol"] = PROTOCOL
         return meta
-    if not meta.get("job_id") or not meta.get("worker") or not meta.get("status"):
-        return meta
-    return rig_jobs.patch_meta(Path(job_dir), child_mcp_status=UNKNOWN, child_mcp_protocol=PROTOCOL)
+
+    return job_metadata.update_meta(Path(job_dir), mutate, create=False)
 
 
 def require_inbox(job_dir: Path, name: str) -> str | None:
+    """Block non-bootstrap child tools, including coordination request, until inbox handshake."""
     if name in BOOTSTRAP_TOOLS:
         return None
     if handshake_connected(job_dir):

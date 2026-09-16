@@ -474,6 +474,50 @@ class ParentVerification(unittest.TestCase):
         self.assertEqual(self.reservation()["stage"], "verifying")
         self.assertEqual(self.close()["stage"], "released")
 
+    def test_resources_held_through_verification_review_and_close(self):
+        self.close()
+        owner = admission.caller_owner("parent", owner_session=self.owner_session)
+        reservation = admission.reserve(
+            self.repo, job_id="held-res", worker="parent", role="implement",
+            files=["subject.txt"], access="write", owner=owner,
+            resources=[{"name": "vm.build", "access": "write"}],
+        )
+        self.auth = {**admission.credentials(reservation), "owner_session": self.owner_session}
+        admission.activate(self.repo, job_id="held-res", worker="parent", files=["subject.txt"],
+                           access="write", **self.auth)
+        self.job = self.repo / ".rig" / "jobs" / "held-res"
+        self.job.mkdir(parents=True, exist_ok=True)
+        self.meta = {"job_id": "held-res", "worker": "parent", "role": "implement", "files": ["subject.txt"],
+                     "status": "running", "execution_mode": "parent", "dir": str(self.job),
+                     "access": "write", "ownership_established": True, "owner": reservation["owner"],
+                     "reservation_id": reservation["reservation_id"], "attempt_id": reservation["attempt_id"],
+                     "resources": reservation["resources"]}
+        self.write_meta()
+        self.finish()
+        held = self.reservation()
+        self.assertTrue(held["stopped"])
+        self.assertFalse(held["slot_held"])
+        self.assertEqual(held["resources"], [{"name": "vm.build", "access": "write"}])
+        with self.assertRaisesRegex(admission.AdmissionError, "resource overlap"):
+            admission.reserve(self.repo, job_id="next-res", worker="parent", files=["other.txt"],
+                              resources=[{"name": "vm.build", "access": "write"}],
+                              owner_session=self.owner_session)
+        self.requirements([], ["Manual criterion"])
+        self.accept(next="review")
+        self.assertEqual(self.reservation()["stage"], "verifying")
+        self.assertFalse(self.reservation()["slot_held"])
+        with self.assertRaisesRegex(admission.AdmissionError, "resource overlap"):
+            admission.reserve(self.repo, job_id="during-review", worker="parent", files=["other.txt"],
+                              resources=[{"name": "vm.build", "access": "write"}],
+                              owner_session=self.owner_session)
+        self.close()
+        follow = admission.reserve(
+            self.repo, job_id="after-close", worker="parent", files=["other.txt"],
+            resources=[{"name": "vm.build", "access": "write"}],
+            owner_session=self.owner_session,
+        )
+        self.assertEqual(follow["resources"], [{"name": "vm.build", "access": "write"}])
+
     def test_retrospective_and_unreserved_metadata_cannot_inherit_acceptance(self):
         self.requirements([], ["Manual criterion"])
         self.accept(next="review")

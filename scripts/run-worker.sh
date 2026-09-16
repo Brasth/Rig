@@ -113,15 +113,25 @@ files, wrapper_pid, credential_path, execution_mode, provenance, value = (
     json.loads(sys.argv[8]), int(sys.argv[9]), sys.argv[10], sys.argv[11], json.loads(sys.argv[12]), sys.argv[13]
 )
 owner = admission.caller_owner("wrapper", owner_pid=wrapper_pid, owner_session=os.environ.get("RIG_OWNER_SESSION", ""))
-access = os.environ.get("RIG_ACCESS") or ("read" if role.lower() in {"review", "reviewer", "explore", "explorer"} else "write")
+access = os.environ.get("RIG_ACCESS") or ("read" if role.lower() in {"review", "reviewer", "explore", "explorer", "verify"} else "write")
 try:
     if operation == "reserve":
         supplied = {key: os.environ.get("RIG_" + key.upper(), "") for key in ("reservation_id", "attempt_id", "owner_token")}
+        if not all(supplied.values()):
+            supplied = {}
+        resources = []
+        raw_resources = os.environ.get("RIG_JOB_RESOURCES_JSON") or ""
+        if raw_resources:
+            resources = json.loads(raw_resources)
         with admission.transaction(repo):
             record = admission.reserve(
                 repo, job_id=job_id, worker=worker, role=role, model=model, files=files, access=access, owner=owner,
                 queue_id=os.environ.get("RIG_QUEUE_ID", ""), writer_job_id=provenance.get("writer_job_id", ""),
-                writer_snapshot_id=provenance.get("writer_snapshot_id", ""), dry_run=execution_mode == "dry_run", **supplied,
+                writer_snapshot_id=provenance.get("writer_snapshot_id", ""), dry_run=execution_mode == "dry_run",
+                resources=resources, workflow_id=os.environ.get("RIG_WORKFLOW_ID", ""),
+                workflow_node_id=os.environ.get("RIG_WORKFLOW_NODE_ID", ""),
+                workflow_spec_hash=os.environ.get("RIG_WORKFLOW_SPEC_HASH", ""),
+                workflow_attempt=os.environ.get("RIG_WORKFLOW_ATTEMPT") or 0, **supplied,
             )
             if execution_mode == "dry_run":
                 # Register the fresh ID while preview and registration share the lock.
@@ -130,12 +140,8 @@ try:
                 path.parent.mkdir(parents=True, exist_ok=True)
                 preview = {"job_id": job_id, "preview_id": record["preview_id"], "execution_mode": "dry_run",
                            "executor_kind": "wrapper", "status": "reserved", "ownership_established": False}
-                temporary = path.with_name("meta.json.tmp")
-                with temporary.open("w") as stream:
-                    json.dump(preview, stream)
-                    stream.flush()
-                    os.fsync(stream.fileno())
-                temporary.replace(path)
+                import job_metadata
+                job_metadata.write_json_atomic(path, preview)
         keys = ("reservation_id", "attempt_id", "job_id", "queue_id", "access", "owner", "scope_unknown", "preview_id")
         result = {key: record[key] for key in keys if key in record}
         result["protected_files"] = record.get("files", [])
@@ -196,7 +202,27 @@ stop_child() {
   admission_call terminate "${LAUNCH_READY:-}" >/dev/null || true
 }
 
+wait_for_child_exit() {
+  [[ -z "${CHILD:-}" ]] && return 0
+  local i
+  for i in {1..50}; do
+    if ! kill -0 "$CHILD" 2>/dev/null; then
+      wait "$CHILD" 2>/dev/null || true
+      return 0
+    fi
+    sleep 0.1
+  done
+  # Last-resort: the isolated child pid only, never the wrapper's process group.
+  kill -KILL "$CHILD" 2>/dev/null || true
+  wait "$CHILD" 2>/dev/null || true
+}
+
 cancel_requested() {
+  # Cheap existence check so the wait loop can poll cancel.json without a Python
+  # process every tick. Confirm identity with cancellation.requested when present.
+  if [[ ! -f "$JOB_DIR/cancel.json" ]] && ! compgen -G "$JOB_DIR/cancellation/*.json" >/dev/null; then
+    return 1
+  fi
   python3 - "$ADMISSION_PY" "$JOB_DIR" "$OWNER_CREDENTIALS" <<'PY_CANCEL'
 import json, pathlib, sys
 sys.path.insert(0, str(pathlib.Path(sys.argv[1]).parent))
@@ -235,6 +261,7 @@ wrapper_cleanup() {
   if [[ -n "$OWNER_CREDENTIALS" && ( "$ADMISSION_FINISHED" != "1" || "$LAUNCH_COMMITTED" != "1" ) ]]; then
     if [[ -n "${CHILD:-}" ]]; then
       stop_child
+      wait_for_child_exit
     fi
     if [[ "$LAUNCH_COMMITTED" == "1" ]]; then
       local outcome="fail" summary="wrapper interrupted before recording completion"
@@ -328,20 +355,11 @@ write_json() {
   RESULT_BIN="$BIN" \
   RESULT_STATE="$RESULT_STATE" \
   python3 - <<'PY'
-import contextlib, json, os, pathlib, sys
+import json, os, pathlib, sys
 from datetime import datetime
 files = json.loads(os.environ.get("RESULT_FILES_JSON", "[]"))
-keep = ("thread", "session_id", "pid", "open", "watch", "kind", "doing", "files")
-old = {}
 mpath = pathlib.Path(os.environ["RESULT_META"])
-if mpath.is_file():
-    try:
-        loaded = json.loads(mpath.read_text())
-        if isinstance(loaded, dict):
-            old = loaded
-    except Exception:
-        old = {}
-obj = {
+overlay = {
     "job_id": os.environ["RESULT_JOB_ID"],
     "worker": os.environ["RESULT_WORKER"],
     "role": os.environ["RESULT_ROLE"],
@@ -360,41 +378,62 @@ obj = {
     "model_inferred": False,
     "parent_writes": False,
 }
-obj.update(json.loads(os.environ.get("RESULT_PROVENANCE", "{}")))
-obj.update({key: value for key, value in json.loads(os.environ["RESULT_ADMISSION"]).items() if key != "credentials_path"})
+overlay.update(json.loads(os.environ.get("RESULT_PROVENANCE", "{}")))
+overlay.update({key: value for key, value in json.loads(os.environ["RESULT_ADMISSION"]).items() if key != "credentials_path"})
 if os.environ.get("RESULT_EVIDENCE_ERROR"):
-    obj["evidence_error"] = os.environ["RESULT_EVIDENCE_ERROR"]
-for key in keep:
-    if not obj.get(key) and old.get(key) not in (None, ""):
-        obj[key] = old[key]
+    overlay["evidence_error"] = os.environ["RESULT_EVIDENCE_ERROR"]
 thread = os.environ.get("RESULT_THREAD", "")
 if thread:
-    obj["thread"] = thread
+    overlay["thread"] = thread
+for key, env_key in (
+    ("workflow_id", "RIG_WORKFLOW_ID"),
+    ("workflow_node_id", "RIG_WORKFLOW_NODE_ID"),
+    ("workflow_spec_hash", "RIG_WORKFLOW_SPEC_HASH"),
+):
+    value = os.environ.get(env_key, "")
+    if value:
+        overlay[key] = value
+attempt = os.environ.get("RIG_WORKFLOW_ATTEMPT", "")
+if attempt:
+    try:
+        overlay["workflow_attempt"] = int(attempt)
+    except ValueError:
+        pass
+raw_resources = os.environ.get("RIG_JOB_RESOURCES_JSON") or ""
+if raw_resources:
+    overlay["resources"] = json.loads(raw_resources)
 started = os.environ.get("RESULT_STARTED") or ""
 ended = os.environ.get("RESULT_ENDED") or ""
 if started and ended:
     try:
         start_dt = datetime.strptime(started, "%Y-%m-%dT%H:%M:%SZ")
         end_dt = datetime.strptime(ended, "%Y-%m-%dT%H:%M:%SZ")
-        obj["elapsed_s"] = max(0, int((end_dt - start_dt).total_seconds()))
+        overlay["elapsed_s"] = max(0, int((end_dt - start_dt).total_seconds()))
     except ValueError:
         pass
 sys.path.insert(0, str(pathlib.Path(os.environ["RESULT_ADMISSION_SCRIPT"]).parent))
 import admission
+import job_metadata
 import token_usage as rig_tokens
-usage = rig_tokens.usage_from_job_dir(mpath.parent) or rig_tokens.load_token_usage(old.get("token_usage"))
-if usage:
-    obj["token_usage"] = usage
+log_usage = rig_tokens.usage_from_job_dir(mpath.parent)
 credential_path = os.environ["RESULT_CREDENTIALS"]
 repo = pathlib.Path(os.environ["RESULT_REPO"])
 with admission.transaction(repo):
+    try:
+        old = job_metadata.read_meta(mpath.parent, missing_ok=True)
+    except job_metadata.MetadataError as error:
+        raise SystemExit(f"run-worker: {error}")
     if credential_path:
         credentials = admission.credentials(json.loads(pathlib.Path(credential_path).read_text()))
         owner = admission.caller_owner("wrapper", owner_pid=int(os.environ["RESULT_WRAPPER_PID"]),
                                        owner_session=os.environ.get("RIG_OWNER_SESSION", ""))
         authoritative = admission.assert_owned(repo, **credentials, owner=owner)
-    elif json.loads(mpath.read_text()).get("preview_id") != obj.get("preview_id") or not obj.get("preview_id"):
+    elif old.get("preview_id") != overlay.get("preview_id") or not overlay.get("preview_id"):
         raise SystemExit("run-worker: dry-run execution ID changed before result registration")
+    obj = job_metadata.merge_record(old, overlay)
+    usage = log_usage or rig_tokens.load_token_usage(old.get("token_usage"))
+    if usage:
+        obj["token_usage"] = usage
     import cancellation
     confirmed = authoritative.get("execution_status") if credential_path and authoritative.get("stopped") else ""
     if confirmed in {"ok", "fail", "timeout", "cancelled"}:
@@ -408,23 +447,19 @@ with admission.transaction(repo):
     if credential_path and os.environ["RESULT_ACTIVATED"] == "1":
         completion = admission.finish(repo, **credentials, status=obj["status"], owner=owner, completion={"kind": "wrapper"})
     if completion is not None and not completion.get("stopped"):
+        # Confirmed-stop is required for every terminal result, including cancel.
         obj.update(status="running", exit_code=0, ended_at="",
                    summary="execution stop unconfirmed; ownership remains held")
         obj.pop("elapsed_s", None)
         print("run-worker: child liveness needs reconciliation; ownership remains held", file=sys.stderr)
+    job_metadata.preserve_live_fields(old, obj, restore_doing=True, restore_workflow=True,
+                                      restore_resources=True)
     path = pathlib.Path(os.environ["RESULT_OUT"])
-    tmp = path.with_name(path.name + ".tmp")
-    with tmp.open("w") as stream:
-        stream.write(json.dumps(obj, indent=2) + "\n")
-        stream.flush()
-        os.fsync(stream.fileno())
-    tmp.replace(path)
+    job_metadata.write_json_atomic(path, obj)
     meta = dict(obj)
     meta["repo"] = os.environ.get("RESULT_REPO", "")
     meta["bin"] = os.environ.get("RESULT_BIN", "")
-    mtmp = mpath.with_name(mpath.name + ".tmp")
-    mtmp.write_text(json.dumps(meta, indent=2) + "\n")
-    mtmp.replace(mpath)
+    job_metadata.write_json_atomic(mpath, meta)
     state = pathlib.Path(os.environ["RESULT_STATE"])
     state.parent.mkdir(parents=True, exist_ok=True)
     state.write_text(
@@ -445,17 +480,9 @@ write_meta() {
   local status="$1"
   META_OUT="$JOB_DIR/meta.json"
   python3 - "$META_OUT" "$JOB_ID" "$WORKER" "$ROLE" "$status" "$STARTED" "$REPO" "$BIN" "${CHILD:-}" "${SESSION_ID:-}" "$JOB_DIR" "${MODEL:-}" "${EFFORT:-}" "${PARENT_THREAD:-}" "$EXECUTION_MODE" "${PROVENANCE_JSON:-\{\}}" "$JOB_FILES_JSON" "$ADMISSION_META_JSON" "$OWNER_CREDENTIALS" "$ADMISSION_PY" "$$" <<'PY'
-import contextlib, json, os, pathlib, sys
+import json, os, pathlib, sys
 path = pathlib.Path(sys.argv[1])
-old = {}
-if path.is_file():
-    try:
-        loaded = json.loads(path.read_text())
-        if isinstance(loaded, dict):
-            old = loaded
-    except Exception:
-        old = {}
-obj = {
+overlay = {
     "job_id": sys.argv[2],
     "worker": sys.argv[3],
     "role": sys.argv[4],
@@ -469,29 +496,48 @@ obj = {
     "model_inferred": False,
     "parent_writes": False,
 }
-obj.update(json.loads(sys.argv[16]))
-obj.update({key: value for key, value in json.loads(sys.argv[18]).items() if key != "credentials_path"})
+overlay.update(json.loads(sys.argv[16]))
+overlay.update({key: value for key, value in json.loads(sys.argv[18]).items() if key != "credentials_path"})
 pid, session_id, job_dir = sys.argv[9], sys.argv[10], sys.argv[11]
 model, effort, thread = sys.argv[12], sys.argv[13], sys.argv[14]
 if pid:
-    obj["pid"] = int(pid)
+    overlay["pid"] = int(pid)
 if session_id:
-    obj["session_id"] = session_id
-    obj["open"] = f"grok -r {session_id}"
+    overlay["session_id"] = session_id
+    overlay["open"] = f"grok -r {session_id}"
 if model:
-    obj["model"] = model
+    overlay["model"] = model
 if effort:
-    obj["effort"] = effort
+    overlay["effort"] = effort
 if thread:
-    obj["thread"] = thread
-obj["files"] = json.loads(sys.argv[17])
-obj["watch"] = f"tail -f {job_dir}/stdout.log"
-for key, val in old.items():
-    if key not in obj and val not in (None, ""):
-        obj[key] = val
+    overlay["thread"] = thread
+overlay["files"] = json.loads(sys.argv[17])
+overlay["watch"] = f"tail -f {job_dir}/stdout.log"
+for key, env_key in (
+    ("workflow_id", "RIG_WORKFLOW_ID"),
+    ("workflow_node_id", "RIG_WORKFLOW_NODE_ID"),
+    ("workflow_spec_hash", "RIG_WORKFLOW_SPEC_HASH"),
+):
+    value = os.environ.get(env_key, "")
+    if value:
+        overlay[key] = value
+attempt = os.environ.get("RIG_WORKFLOW_ATTEMPT", "")
+if attempt:
+    try:
+        overlay["workflow_attempt"] = int(attempt)
+    except ValueError:
+        pass
+raw_resources = os.environ.get("RIG_JOB_RESOURCES_JSON") or ""
+if raw_resources:
+    overlay["resources"] = json.loads(raw_resources)
 sys.path.insert(0, str(pathlib.Path(sys.argv[20]).parent))
 import admission
+import job_metadata
 with admission.transaction(sys.argv[7]):
+    try:
+        old = job_metadata.read_meta(path.parent, missing_ok=True)
+    except job_metadata.MetadataError as error:
+        raise SystemExit(f"run-worker: {error}")
     if sys.argv[19]:
         credentials = admission.credentials(json.loads(pathlib.Path(sys.argv[19]).read_text()))
         owner = admission.caller_owner("wrapper", owner_pid=int(sys.argv[21]), owner_session=os.environ.get("RIG_OWNER_SESSION", ""))
@@ -499,14 +545,12 @@ with admission.transaction(sys.argv[7]):
         import cancellation
         if cancellation.requested(path.parent, attempt_id=credentials["attempt_id"], reservation_id=credentials["reservation_id"]):
             raise SystemExit("run-worker: cancelled before launch registration")
-    elif json.loads(path.read_text()).get("preview_id") != obj.get("preview_id") or not obj.get("preview_id"):
+    elif old.get("preview_id") != overlay.get("preview_id") or not overlay.get("preview_id"):
         raise SystemExit("run-worker: dry-run execution ID changed before metadata registration")
-    tmp = path.with_name(path.name + ".tmp")
-    with tmp.open("w") as stream:
-        stream.write(json.dumps(obj, indent=2) + "\n")
-        stream.flush()
-        os.fsync(stream.fileno())
-    tmp.replace(path)
+    obj = job_metadata.merge_record(old, overlay)
+    job_metadata.preserve_live_fields(old, obj, restore_doing=True, restore_workflow=True,
+                                      restore_resources=True)
+    job_metadata.write_json_atomic(path, obj)
 PY
 }
 
@@ -890,24 +934,31 @@ write_watch
 admission_call commit >/dev/null || refuse "could not commit the launch barrier"
 LAUNCH_COMMITTED=1
 set +e
-ELAPSED=0
 TIMED_OUT=0
 CANCELLED=0
 ASK_NOTIFIED=0
 IN_ASK=0
+WAIT_ANCHOR=$SECONDS
+LAST_OBSERVE=$SECONDS
 while kill -0 "$CHILD" 2>/dev/null; do
   if cancel_requested; then
     CANCELLED=1
     stop_child
+    wait_for_child_exit
     break
   fi
-  if ! admission_call observe >/dev/null; then
-    echo "run-worker: could not observe child ownership; stopping execution" >&2
-    stop_child
-    break
+  if (( SECONDS - LAST_OBSERVE >= 1 )); then
+    LAST_OBSERVE=$SECONDS
+    if ! admission_call observe >/dev/null; then
+      echo "run-worker: could not observe child ownership; stopping execution" >&2
+      stop_child
+      wait_for_child_exit
+      break
+    fi
   fi
   if [[ -f "$JOB_DIR/ask.json" && ! -f "$JOB_DIR/ask-reply.json" ]]; then
     IN_ASK=1
+    WAIT_ANCHOR=$SECONDS
     if [[ "$ASK_NOTIFIED" -eq 0 ]]; then
       echo "run-worker: ASK — parent must answer: rig job allow $JOB_ID" >&2
       echo "run-worker: do not kill this job; do not spawn another worker" >&2
@@ -917,18 +968,18 @@ while kill -0 "$CHILD" 2>/dev/null; do
     if [[ "$IN_ASK" -eq 1 ]]; then
       # Parent answered. Restart the work clock so a slow allow cannot
       # immediately timeout a job that already used most of RIG_TIMEOUT.
-      ELAPSED=0
+      WAIT_ANCHOR=$SECONDS
       IN_ASK=0
     fi
     ASK_NOTIFIED=0
-    if [[ "$ELAPSED" -ge "$TIMEOUT_SECS" ]]; then
+    if (( SECONDS - WAIT_ANCHOR >= TIMEOUT_SECS )); then
       TIMED_OUT=1
       stop_child
+      wait_for_child_exit
       break
     fi
-    ELAPSED=$((ELAPSED + 1))
   fi
-  sleep 1
+  sleep 0.1
 done
 CHILD_RC=130
 if ! kill -0 "$CHILD" 2>/dev/null; then

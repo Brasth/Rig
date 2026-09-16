@@ -264,6 +264,7 @@ class QueueFiles(unittest.TestCase):
                 role="implement",
                 job_id="q-spawn",
                 summary="add tests",
+                files=["tests/test_queue.py"],
                 queue_id=item["id"],
                 **credentials,
             )
@@ -389,6 +390,66 @@ class QueueFiles(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertIn("QUEUE", proc.stdout)
         self.assertIn("listed item", proc.stdout)
+
+    def test_orchestration_defaults_adaptive_and_single_compat(self):
+        parsed = harness.parse_harness(self.repo / ".rig" / "harness.toml")
+        self.assertEqual(parsed["orchestration"], {"mode": "adaptive", "max_nodes": 12})
+        missing = harness.parse_harness(self.repo / "no-such-harness.toml")
+        self.assertEqual(missing["orchestration"]["mode"], "adaptive")
+        self.assertEqual(missing["orchestration"]["max_nodes"], 12)
+        _write_harness(
+            self.repo,
+            'parent = "codex"\n[workers]\ngrok = true\n[orchestration]\nmode = "single"\nmax_nodes = 4\n',
+        )
+        single = harness.parse_harness(self.repo / ".rig" / "harness.toml")
+        self.assertEqual(single["orchestration"], {"mode": "single", "max_nodes": 4})
+        _write_harness(
+            self.repo,
+            'parent = "codex"\n[workers]\ngrok = true\n[orchestration]\nmode = "weird"\nmax_nodes = 0\n',
+        )
+        fallback = harness.parse_harness(self.repo / ".rig" / "harness.toml")
+        self.assertEqual(fallback["orchestration"]["mode"], "adaptive")
+        self.assertEqual(fallback["orchestration"]["max_nodes"], 1)
+        template = (ROOT / "templates" / "harness.toml").read_text()
+        self.assertIn('mode = "adaptive"', template)
+        self.assertIn("max_nodes = 12", template)
+
+    def test_verify_is_not_a_writer_and_workflow_queue_lifecycle(self):
+        self.assertFalse(rig_queue.is_writer("verify"))
+        self.assertTrue(rig_queue.is_writer("implement"))
+        item = rig_queue.add_item(self.repo, "parked workflow")
+        claimed = rig_queue.bind_workflow_queue(
+            self.repo, item["id"], "claimed", workflow_id="wf-lifecycle",
+        )
+        self.assertEqual(claimed["status"], "claimed")
+        self.assertEqual(claimed["workflow_id"], "wf-lifecycle")
+        with self.assertRaisesRegex(rig_queue.QueueError, "never pending"):
+            rig_queue.bind_workflow_queue(
+                self.repo, item["id"], "pending", workflow_id="wf-lifecycle",
+            )
+        spawned = rig_queue.bind_workflow_queue(
+            self.repo, item["id"], "spawned", workflow_id="wf-lifecycle",
+        )
+        self.assertEqual(spawned["status"], "spawned")
+        with self.assertRaisesRegex(rig_queue.QueueError, "only after verification"):
+            rig_queue.bind_workflow_queue(
+                self.repo, item["id"], "done", workflow_id="wf-lifecycle",
+            )
+        still = rig_queue.load_item(self.repo, item["id"])
+        self.assertEqual(still["status"], "spawned")
+        done = rig_queue.bind_workflow_queue(
+            self.repo, item["id"], "done", workflow_id="wf-lifecycle", verified=True,
+        )
+        self.assertEqual(done["status"], "done")
+        other = rig_queue.add_item(self.repo, "cancel me")
+        rig_queue.bind_workflow_queue(self.repo, other["id"], "claimed", workflow_id="wf-cancel")
+        rig_queue.bind_workflow_queue(self.repo, other["id"], "spawned", workflow_id="wf-cancel")
+        cancelled = rig_queue.bind_workflow_queue(
+            self.repo, other["id"], "cancelled", workflow_id="wf-cancel",
+        )
+        self.assertEqual(cancelled["status"], "cancelled")
+        via_cancel = rig_queue.cancel_item(self.repo, other["id"])
+        self.assertEqual(via_cancel["status"], "cancelled")
 
 
 if __name__ == "__main__":

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-ROLES = ("explore", "mini", "bulk", "implement", "hard", "review")
+ROLES = ("explore", "mini", "bulk", "implement", "hard", "review", "verify")
 TIERS = ("fast", "standard", "strong")
 PREF_KEYS = ("fast", "standard", "strong", "review")
 WRITER_ROLES = ("mini", "bulk", "implement", "hard")
@@ -13,13 +13,13 @@ STRONG_REVIEW_WORKERS = ("claude", "grok", "opencode", "omp", "pi", "agy", "code
 CATALOG_WORKERS = frozenset({"opencode", "omp", "pi", "agy", "devin"})
 KNOWN_PROVIDERS = frozenset({"openai", "anthropic", "xai", "google", "cursor", "cognition"})
 DEVIN_FAST_ROLES = ("explore", "mini", "bulk")
-DEVIN_IMPLEMENT_ROLES = ("implement",)
+DEVIN_IMPLEMENT_ROLES = ("implement", "verify")
 DEVIN_STRONG_ROLES = ("hard", "review")
 CHEAP_ROLES = ("explore", "mini", "bulk", "implement")
 WRITE_ROLES = ("mini", "bulk", "implement", "hard", "review")
-STANDARD_ROLES = ("explore", "mini", "bulk", "implement")
-STRONG_ROLES = ("explore", "mini", "bulk", "implement", "hard", "review")
-STRONG_NO_REVIEW = ("explore", "mini", "bulk", "implement", "hard")
+STANDARD_ROLES = ("explore", "mini", "bulk", "implement", "verify")
+STRONG_ROLES = ("explore", "mini", "bulk", "implement", "hard", "review", "verify")
+STRONG_NO_REVIEW = ("explore", "mini", "bulk", "implement", "hard", "verify")
 
 
 @dataclass(frozen=True)

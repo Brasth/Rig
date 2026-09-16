@@ -9,6 +9,7 @@ Rig coordinates local coding agents from the CLI you already use. You describe w
 - [Overall flow](#overall-flow)
 - [Install](#install) · [Per project](#per-project) · [Configure](#configure)
 - [Smart routing](#smart-routing)
+- [Adaptive workflows](#adaptive-workflows)
 - [Everyday prompts and queue](#everyday-prompts-and-queue)
 - [Optional terminal companion](#optional-terminal-companion) · [Watch](#watch)
 - [Verification and cancellation](#verification-and-cancellation)
@@ -64,7 +65,7 @@ source ~/.zshrc
 
 You need one parent CLI: Codex, Grok, OpenCode, OMP, Pi, or agy. Optional worker binaries: `grok`, `claude`, `cursor-agent`, `codex`, `opencode`, `omp`, `pi`, `agy`, `devin`.
 
-Before updating an active repository: stop new admissions, finish or cancel existing work, confirm termination, close or reconcile held reservations, then update launchers and fully restart all parent/MCP sessions. Mixed old/new admission writers are unsupported. See [safe upgrade](docs/usage.md#safe-upgrade-and-rollback).
+Before updating an active repository: stop new admissions, finish or cancel existing work, confirm stopped, accept or close scopes, preserve data, update every launcher and managed protocol, then fully restart all parent/MCP sessions. Mixed old/new admission writers are unsupported. Adaptive-workflow rollback sets `[orchestration] mode = "single"` and never deletes data. See [safe upgrade](docs/usage.md#safe-upgrade-and-rollback).
 
 ## Per project
 
@@ -110,7 +111,7 @@ devin = false
 - Parent **model** is that CLI’s model. Worker models come from `rig pick`. Picking never switches the live parent model.
 - A worker is **effective** only when: flag true, binary on PATH, not the live parent, and job-scoped MCP ready. **Cursor remains excluded** until safe scoped MCP exists.
 - Claude Code and Cursor are never the parent. Grok Bot.app and Cursor.app are GUIs, not spawnable workers. Cursor worker binary is `cursor-agent`.
-- Rollback ladder: `[routing] mode = "legacy"` in harness (smart is default when mode is omitted).
+- Rollback ladder: `[routing] mode = "legacy"` in harness (smart is default when mode is omitted). Orchestration: `[orchestration] mode = "adaptive"` (default) or `"single"`; `max_nodes = 12`. Queue and worker caps remain authoritative.
 
 ## Smart routing
 
@@ -161,7 +162,19 @@ rig pick mini --case "Small but unfamiliar configuration change" \
 rig routing report --days 30 --json
 ```
 
-Full profiles, catalog rules, MCP fields, and rollback: [smart routing](docs/smart-routing.md).
+Full profiles, catalog rules, MCP fields, and rollback: [smart routing](docs/smart-routing.md). Independent review unavailable stays explicit.
+
+## Adaptive workflows
+
+When `[orchestration] mode = "adaptive"`, the parent decomposes eligible work into a DAG (at most `max_nodes` 12) and owns the graph, briefs, and acceptance. `single` keeps one-job behavior. Queue and worker caps remain authoritative. Children never spawn or message children; the parent uses `rig_workflow_advance` / `rig_workflow_wait`.
+
+Durable files: `.rig/workflows/<id>/spec.json`, `state.json`, `events/`, `owner-credentials.json` (mode 0600). Statuses: `planned`, `running`, `attention`, `blocked`, `completed-unverified`, `verified`, `failed`, `cancel-requested`, `cancelled`. Workflow `verified` only after required nodes (and final `verify` when present) have current parent acceptance.
+
+`verify` is parent/final integration (including automatic `final-verify`). `review` is independent post-write review; independent review unavailable stays explicit. Review+seed and parallel writers require file AND resource disjointness. Overlapping writer scopes are rejected, not sequenced. No estimated progress, savings, or ETA.
+
+Parent MCP: `rig_workflow_create`, `rig_workflows`, `rig_workflow_show`, `rig_workflow_advance`, `rig_workflow_wait`, `rig_workflow_extend`, `rig_workflow_resolve`, `rig_workflow_approve`, `rig_workflow_cancel`, `rig_workflow_report`, `rig_job_coordination_reply`. CLI: `rig workflows`; `rig workflow create|show|advance|wait|extend|resolve|approve|cancel|report`.
+
+`rig tui` Tab Jobs/Queue/Workflows shows workflow id, status, accepted/required, running, ASK, blocker, next parent action, and title. Combined rollout with wait-cancel: stop new admissions, finish or cancel, confirm stopped, accept or close scopes, preserve data, update every launcher and protocol, then fully restart. Rollback sets `[orchestration] mode = "single"` and never deletes data. Details: [Usage — adaptive workflows](docs/usage.md#adaptive-workflows).
 
 ## Everyday prompts and queue
 
@@ -172,7 +185,7 @@ Full profiles, catalog rules, MCP fields, and rollback: [smart routing](docs/sma
 | `/queue fix the sidebar after this job` | Park only. Does **not** spawn or interrupt the running child. |
 | `Review the diff I staged` | Standalone review; independence stays unknown unless writer provenance supports it. |
 
-**Queue:** F9 (companion), supported `/queue` hooks, `rig tui` key `e`, and `rig queue add` all **park** work. Nothing in the queue daemon-launches workers. On a free parent turn the parent claims by **id**, names files, prepares brief TEXT, then MCP `rig_job_launch`. Cap is `[queue].max_running` (default 3 reserved/running/ASK). HUD refresh never spawns. Longer why and drain steps: [Usage — queue](docs/usage.md#how-the-queue-works).
+**Queue:** F9 (companion), supported `/queue` hooks, `rig tui` key `e`, and `rig queue add` all **park** work. Nothing in the queue daemon-launches workers. On a free parent turn the parent claims by **id**, names files, prepares brief TEXT, then MCP `rig_job_launch`. Cap is `[queue].max_running` (default 3 reserved/running/ASK). Queue and worker caps remain authoritative when adaptive workflows run. HUD refresh never spawns. Longer why and drain steps: [Usage — queue](docs/usage.md#how-the-queue-works).
 
 ```bash
 rig queue add "Add regression tests for routing"
@@ -213,9 +226,9 @@ Bash and zsh supported. `rig ui disable` / `rig ui enable`, `rig ui sessions`, `
 
 Jobs and MEMORY are this repo, not the chat. A new thread still sees `.rig/jobs`.
 
-In `rig tui`: Tab switches Jobs/Queue; `e` queue editor; `x` cancel selected; `l` activity; `q` exits without stopping jobs.
+In `rig tui`: Tab switches Jobs/Queue/Workflows; `e` queue editor; `x` cancel selected; `l` activity; `q` exits without stopping jobs. Workflow rows show id, status, accepted/required, running, ASK, blocker, next parent action, and title. No estimated progress, savings, or ETA.
 
-Parent orchestration is MCP (`rig_session`, `rig_job_launch`, `rig_job_wait`, allow/deny, requirements/check/accept). Shell `run-worker.sh` is human/internal fallback. Claude `ask` → allow/deny; never kill that job because it asked.
+Parent orchestration is MCP (`rig_session`, `rig_job_launch`, `rig_workflow_create` / `rig_workflow_advance` / `rig_workflow_wait`, allow/deny, requirements/check/accept). Shell `run-worker.sh` is human/internal fallback. Claude `ask` → allow/deny; never kill that job because it asked. Children never spawn or message children.
 
 **Diagram preview:** `rig diagram PATH [--ascii] [--popup] [--output PATH]` — local Mermaid to terminal text. Requires Node.js. [diagram preview](docs/diagram-preview.md).
 

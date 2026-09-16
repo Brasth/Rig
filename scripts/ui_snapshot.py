@@ -12,12 +12,172 @@ import change_evidence
 import jobs
 import work_queue
 
+MAX_UI_WORKFLOWS = 32
+_SECRET_KEYS = frozenset({"owner_token", "token", "credentials", "credentials_path"})
+_WORKFLOW_LOCK = threading.Lock()
+_WORKFLOW_CACHE = {}
+_ATTENTION_STATUSES = frozenset({"attention", "blocked", "cancel-requested"})
+_ACTIVE_STATUSES = frozenset({
+    "planned", "running", "attention", "blocked", "completed-unverified",
+    "failed", "cancel-requested",
+})
+
 
 def _stamp(path):
     try:
         value = path.stat()
         return value.st_dev, value.st_ino, value.st_mtime_ns, value.st_ctime_ns, value.st_size
     except FileNotFoundError:
+        return None
+
+
+def _secret_key(name):
+    text = str(name or "").lower()
+    return text in _SECRET_KEYS or text.endswith("_token") or "secret" in text or "credential" in text
+
+
+def scrub_secrets(value):
+    """Drop owner tokens and credential fields from UI payloads."""
+    if isinstance(value, dict):
+        return {key: scrub_secrets(item) for key, item in value.items() if not _secret_key(key)}
+    if isinstance(value, list):
+        return [scrub_secrets(item) for item in value]
+    if isinstance(value, str) and "owner_token" in value.lower():
+        return "[redacted]"
+    return value
+
+
+def format_parent_action(action):
+    if not action:
+        return "none"
+    if not isinstance(action, dict):
+        return str(action)
+    action = scrub_secrets(action)
+    kind = str(action.get("kind") or "").strip()
+    if not kind:
+        return "none"
+    parts = [kind]
+    for key in ("node_id", "job_id", "request_id", "reason"):
+        item = action.get(key)
+        if item not in (None, ""):
+            parts.append(f"{key} {item}")
+    return " ".join(parts)
+
+
+def public_workflow_row(row):
+    """Factual workflow display: id, counts, blocker, next parent action. No ETA."""
+    row = scrub_secrets(row if isinstance(row, dict) else {})
+    counts = row.get("counts") if isinstance(row.get("counts"), dict) else {}
+    action = row.get("next_parent_action")
+    if action and not isinstance(action, dict):
+        action = {"kind": str(action)}
+    elif isinstance(action, dict):
+        action = scrub_secrets(action) or None
+    else:
+        action = None
+
+    def _count(*keys):
+        for key in keys:
+            if key in row and row.get(key) not in (None, ""):
+                try:
+                    return int(row.get(key) or 0)
+                except (TypeError, ValueError):
+                    return 0
+            if key in counts and counts.get(key) not in (None, ""):
+                try:
+                    return int(counts.get(key) or 0)
+                except (TypeError, ValueError):
+                    return 0
+        return 0
+
+    return {
+        "workflow_id": str(row.get("workflow_id") or ""),
+        "status": str(row.get("status") or "planned"),
+        "accepted": _count("accepted"),
+        "required": _count("required"),
+        "running": _count("running"),
+        "ask": _count("ask"),
+        "blocker": str(row.get("blocker") or ""),
+        "next_parent_action": action,
+        "title": str(row.get("title") or ""),
+        "updated_at": str(row.get("updated_at") or ""),
+    }
+
+
+def bound_workflows(rows, *, limit=MAX_UI_WORKFLOWS):
+    attention, active, rest = [], [], []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        status = row.get("status")
+        if status in _ATTENTION_STATUSES:
+            attention.append(row)
+        elif status in _ACTIVE_STATUSES:
+            active.append(row)
+        else:
+            rest.append(row)
+    return (attention + active + rest)[:max(0, int(limit or 0))]
+
+
+def _workflow_stamp(root):
+    folder = Path(root) / ".rig" / "workflows"
+    if not folder.is_dir():
+        return None
+    stamps = [_stamp(folder)]
+    try:
+        for path in sorted(folder.iterdir()):
+            if path.is_dir():
+                stamps.append((path.name, _stamp(path / "spec.json"), _stamp(path / "state.json")))
+    except OSError:
+        return None
+    return tuple(stamps)
+
+
+def collect_workflows(repo, *, limit=MAX_UI_WORKFLOWS):
+    """Read-only bounded workflow summaries. Missing or malformed data is skipped."""
+    try:
+        root = Path(repo).resolve()
+    except OSError:
+        return []
+    folder = root / ".rig" / "workflows"
+    if not folder.is_dir():
+        return []
+    stamp = _workflow_stamp(root)
+    cache_key = str(root)
+    with _WORKFLOW_LOCK:
+        cached = _WORKFLOW_CACHE.get(cache_key)
+        if cached and cached[0] == stamp:
+            return copy.deepcopy(cached[1])[:max(0, int(limit or 0))]
+    try:
+        import workflow_state as wf
+        rows = wf.list_workflows(root, include_terminal=True)
+    except (OSError, ValueError, TypeError):
+        rows = []
+    public = []
+    for row in rows:
+        try:
+            item = public_workflow_row(row)
+        except (TypeError, ValueError):
+            continue
+        if item.get("workflow_id"):
+            public.append(item)
+    public = bound_workflows(public, limit=limit)
+    with _WORKFLOW_LOCK:
+        _WORKFLOW_CACHE[cache_key] = stamp, copy.deepcopy(public)
+    return public
+
+
+def workflow_detail(repo, workflow_id):
+    """Selected workflow detail from the public reader. Never mutates state."""
+    try:
+        import workflow_state as wf
+        spec, state = wf.load_pair(repo, workflow_id)
+        if spec is None or state is None:
+            return None
+        payload = public_workflow_row(wf.public_record(spec, state))
+        payload["case"] = str((spec or {}).get("case") or "")
+        return payload
+    except (OSError, ValueError, TypeError):
         return None
 
 
@@ -188,12 +348,17 @@ class Collector:
                 if stamp != self._cap_stamp:
                     self._cap, self._cap_stamp = work_queue.max_running(self.repo), stamp
                 self._initialized = True
+                try:
+                    workflows = collect_workflows(self.repo)
+                except (OSError, ValueError, TypeError):
+                    workflows = []
                 return {"version": 1, "repo": str(self.repo), "jobs": rows, "pending": pending,
                         "slots": self._slots(rows, records, queue), "cap": self._cap,
-                        "captured_at": jobs.iso_now(), "error": None}
+                        "workflows": workflows, "captured_at": jobs.iso_now(), "error": None}
             except (OSError, ValueError, TypeError) as error:
                 return {"version": 1, "repo": str(self.repo), "jobs": [], "pending": [],
-                        "slots": None, "cap": self._cap, "captured_at": jobs.iso_now(), "error": str(error)}
+                        "slots": None, "cap": self._cap, "workflows": [],
+                        "captured_at": jobs.iso_now(), "error": str(error)}
 
     def details(self, job_id):
         """Decode only the selected job and explicitly validate its acceptance."""

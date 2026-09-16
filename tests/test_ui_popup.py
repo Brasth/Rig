@@ -36,6 +36,29 @@ class PopupDraftTests(unittest.TestCase):
         self.assertIn('Held files: app.py', lines)
         self.assertNotIn('directory_identity', lines)
 
+    def test_workflow_details_and_rows_redact_tokens(self):
+        from ui_popup_view import detail_lines, row_text
+        secret = 'feedfacefeedfacefeedfacefeedface'
+        item = {
+            'workflow_id': 'wf-pop', 'status': 'blocked', 'accepted': 0, 'required': 2,
+            'running': 0, 'ask': 0, 'blocker': 'unresolved failure on n1',
+            'next_parent_action': {'kind': 'resolve', 'node_id': 'n1', 'owner_token': secret},
+            'owner_token': secret, 'title': 'blocked work',
+        }
+        lines = '\n'.join(detail_lines(item))
+        self.assertIn('wf-pop', lines)
+        self.assertIn('Accepted/required: 0/2', lines)
+        self.assertIn('Running: 0  ASK: 0', lines)
+        self.assertIn('Blocker: unresolved failure on n1', lines)
+        self.assertIn('Next parent action: resolve node_id n1', lines)
+        self.assertNotIn(secret, lines)
+        self.assertNotIn('owner_token', lines)
+        self.assertNotIn('%', lines)
+        row = row_text(item, 'workflows')
+        self.assertIn('wf-pop', row)
+        self.assertIn('0/2', row)
+        self.assertNotIn(secret, row)
+
     def test_client_setup_and_snapshot_do_not_block_stop_lane(self):
         import threading
         import time

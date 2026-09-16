@@ -485,5 +485,51 @@ class InitAgentsWait(unittest.TestCase):
         self.assertIn("rig job wait <id1> <id2>", skill)
 
 
+class WaitDoesNotRelease(unittest.TestCase):
+    def setUp(self):
+        self.td = tempfile.TemporaryDirectory()
+        self.repo = Path(self.td.name).resolve()
+        (self.repo / ".git").mkdir()
+        (self.repo / ".rig").mkdir()
+        (self.repo / "held.py").write_text("x\n")
+        (self.repo / ".rig" / "harness.toml").write_text(
+            'parent = "codex"\n[workers]\ngrok = true\ncodex = true\n'
+        )
+        os.environ.pop("RIG_JOB_ID", None)
+        os.environ.pop("RIG_JOB_DIR", None)
+
+    def tearDown(self):
+        self.td.cleanup()
+
+    def test_wait_on_stopped_job_does_not_release_held_resources(self):
+        import admission
+
+        details = jobs.start_job(
+            self.repo, worker="codex", role="implement", live="codex",
+            executor_kind="parent", files=["held.py"],
+            resources=[{"name": "vm.build", "access": "write"}],
+            owner_session="wait-held", return_details=True,
+        )
+        jobs.finish_job(
+            self.repo, details["job_id"], status="ok", summary="done",
+            completion={"kind": "parent_task", "completed": True},
+            owner_session="wait-held",
+            **admission.credentials(details),
+        )
+        code, text = jobs.wait_job(self.repo, details["job_id"], timeout=0)
+        self.assertEqual(code, 0, text)
+        reservation = admission.get_reservation(self.repo, details["reservation_id"])
+        self.assertTrue(reservation["stopped"])
+        self.assertFalse(reservation["slot_held"])
+        self.assertNotEqual(reservation["stage"], "released")
+        self.assertEqual(reservation["resources"], [{"name": "vm.build", "access": "write"}])
+        with self.assertRaisesRegex(admission.AdmissionError, "resource overlap"):
+            admission.reserve(
+                self.repo, job_id="next-held", worker="parent", files=["other.py"],
+                resources=[{"name": "vm.build", "access": "write"}],
+                owner_session="wait-held",
+            )
+
+
 if __name__ == "__main__":
     unittest.main()

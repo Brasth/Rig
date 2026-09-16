@@ -64,6 +64,19 @@ EXISTING_TOOLS = (
     "rig_job_recover_cancelled",
     "rig_job_recover_parent_write",
 )
+WORKFLOW_TOOLS = (
+    "rig_workflow_create",
+    "rig_workflows",
+    "rig_workflow_show",
+    "rig_workflow_advance",
+    "rig_workflow_wait",
+    "rig_workflow_extend",
+    "rig_workflow_resolve",
+    "rig_workflow_approve",
+    "rig_workflow_cancel",
+    "rig_workflow_report",
+    "rig_job_coordination_reply",
+)
 CHILD_TOOLS = (
     "rig_job_doing",
     "rig_job_note",
@@ -72,6 +85,7 @@ CHILD_TOOLS = (
     "rig_job_inbox",
     "rig_job_show",
     "rig_memory",
+    "rig_job_coordination_request",
 )
 
 
@@ -174,10 +188,11 @@ class McpDispatch(unittest.TestCase):
 
     def test_tools_list_includes_dispatch(self):
         names = [t["name"] for t in rig_mcp.TOOLS]
-        for name in DISPATCH_TOOLS + EXISTING_TOOLS:
+        for name in DISPATCH_TOOLS + EXISTING_TOOLS + WORKFLOW_TOOLS:
             self.assertIn(name, names)
         self.assertEqual(names[0], "rig_session")
         self.assertNotIn("rig_spawn", names)
+        self.assertNotIn("rig_job_coordination_request", names)
         self.assertFalse(any("run-worker" in n or n.endswith("_spawn") for n in names))
 
         proc = _mcp_ndjson(
@@ -202,8 +217,11 @@ class McpDispatch(unittest.TestCase):
         for name in DISPATCH_TOOLS:
             self.assertIn(name, listed_names)
         self.assertIn("rig_job_message", listed_names)
+        self.assertIn("rig_workflow_create", listed_names)
+        self.assertIn("rig_job_coordination_reply", listed_names)
         self.assertNotIn("rig_job_doing", listed_names)
         self.assertNotIn("permission_prompt", listed_names)
+        self.assertNotIn("rig_job_coordination_request", listed_names)
 
     def test_live_parent_honors_rig_parent(self):
         os.environ["RIG_PARENT"] = "grok"
@@ -436,6 +454,9 @@ class McpDispatch(unittest.TestCase):
             self.assertNotIn("rig_job_message", names)
             self.assertNotIn("rig_queue_add", names)
             self.assertNotIn("rig_queue_claim", names)
+            self.assertIn("rig_job_coordination_request", names)
+            for name in WORKFLOW_TOOLS:
+                self.assertNotIn(name, names)
             blocked = rig_mcp.call_tool("rig_pick", {"case": "x", "repo": str(self.repo)})
             self.assertTrue(blocked.get("isError"))
             recover = rig_mcp.call_tool(
@@ -644,7 +665,7 @@ class McpDispatch(unittest.TestCase):
                             self.assertEqual(payload["status"]["jobs"], 4)
                             self.assertEqual(payload["history"]["invalid_directories"], 2)
                         else:
-                            self.assertEqual(set(payload), {"memory", "jobs", "status", "pick"})
+                            self.assertEqual(set(payload), {"memory", "jobs", "workflows", "status", "pick"})
                             self.assertIsInstance(payload["memory"], str)
                             self.assertIsInstance(payload["status"], str)
                             self.assertIsInstance(payload["pick"], dict)
@@ -860,6 +881,212 @@ class McpDispatch(unittest.TestCase):
         choice = json.loads(self._text(out))
         self.assertEqual(choice["spawn"], "none")
         self.assertFalse(choice["parent_writes"])
+
+    def _workflow_spec(self, nodes=None, **extra):
+        (self.repo / "a.py").write_text("a\n")
+        (self.repo / "b.py").write_text("b\n")
+        return {
+            "title": "wf",
+            "case": "implement a.py",
+            "nodes": nodes or [{"id": "w1", "role": "implement", "files": ["a.py"]}],
+            **extra,
+        }
+
+    def _create_workflow(self, **extra):
+        out = rig_mcp.call_tool(
+            "rig_workflow_create",
+            {"repo": str(self.repo), "spec": self._workflow_spec(**extra), "owner_session": "mcp-wf"},
+        )
+        self.assertNotIn("isError", out, self._text(out))
+        return out
+
+    def test_workflow_parent_tools_create_list_show_report_omit_token_text(self):
+        created = self._create_workflow()
+        text = self._text(created)
+        payload = json.loads(text)
+        lease = created["structuredContent"]
+        token = lease["owner_token"]
+        self.assertNotIn(token, text)
+        self.assertNotIn("owner_token", payload)
+        self.assertEqual(payload["credentials_path"], lease["credentials_path"])
+        self.assertTrue(Path(lease["credentials_path"]).is_file())
+        listed = rig_mcp.call_tool("rig_workflows", {"repo": str(self.repo)})
+        self.assertNotIn("isError", listed)
+        self.assertIn(lease["workflow_id"], self._text(listed))
+        self.assertNotIn(token, self._text(listed))
+        shown = rig_mcp.call_tool("rig_workflow_show", {"repo": str(self.repo), "id": lease["workflow_id"]})
+        self.assertNotIn("isError", shown)
+        self.assertNotIn(token, self._text(shown))
+        shown_obj = json.loads(self._text(shown))
+        self.assertIn("events", shown_obj)
+        reported = rig_mcp.call_tool("rig_workflow_report", {"repo": str(self.repo), "id": lease["workflow_id"]})
+        self.assertNotIn("isError", reported)
+        self.assertIn("wall_time_s", self._text(reported))
+        self.assertNotIn(token, self._text(reported))
+        waited = rig_mcp.call_tool(
+            "rig_workflow_wait", {"repo": str(self.repo), "id": lease["workflow_id"], "timeout": 0},
+        )
+        self.assertNotIn("isError", waited)
+        cancelled = rig_mcp.call_tool(
+            "rig_workflow_cancel",
+            {"repo": str(self.repo), "id": lease["workflow_id"], "owner_token": token,
+             "owner_session": "mcp-wf", "rationale": "done"},
+        )
+        self.assertNotIn("isError", cancelled, self._text(cancelled))
+        self.assertNotIn(token, self._text(cancelled))
+
+    def test_workflow_auth_forwarding_and_schema_errors(self):
+        created = self._create_workflow()
+        lease = created["structuredContent"]
+        wid = lease["workflow_id"]
+        denied = rig_mcp.call_tool(
+            "rig_workflow_extend",
+            {"repo": str(self.repo), "id": wid, "nodes": [{"id": "extra", "role": "review", "files": ["b.py"]}]},
+        )
+        self.assertTrue(denied.get("isError"))
+        self.assertIn("credentials", self._text(denied).lower())
+        extended = rig_mcp.call_tool(
+            "rig_workflow_extend",
+            {"repo": str(self.repo), "id": wid, "owner_token": lease["owner_token"],
+             "owner_session": "mcp-wf",
+             "nodes": [{"id": "extra", "role": "review", "files": ["b.py"], "depends_on": ["w1"]}]},
+        )
+        self.assertNotIn("isError", extended, self._text(extended))
+        self.assertIn("extra", self._text(extended))
+        missing = rig_mcp.call_tool("rig_workflow_create", {"repo": str(self.repo), "spec": []})
+        self.assertTrue(missing.get("isError"))
+        self.assertIn("object", self._text(missing))
+        no_id = rig_mcp.call_tool("rig_workflow_show", {"repo": str(self.repo)})
+        self.assertTrue(no_id.get("isError"))
+        parent_child = rig_mcp.call_tool(
+            "rig_job_coordination_request",
+            {"kind": "scope", "text": "nope", "repo": str(self.repo)},
+        )
+        self.assertTrue(parent_child.get("isError"))
+        self.assertIn("not a parent tool", self._text(parent_child))
+
+    def test_workflow_approve_resolve_and_advance_forward_owner(self):
+        created = self._create_workflow(nodes=[
+            {"id": "w1", "role": "implement", "files": ["a.py"], "effects": "production"},
+        ])
+        lease = created["structuredContent"]
+        wid, token = lease["workflow_id"], lease["owner_token"]
+        approved = rig_mcp.call_tool(
+            "rig_workflow_approve",
+            {"repo": str(self.repo), "id": wid, "node_id": "w1", "rationale": "allow prod",
+             "owner_token": token, "owner_session": "mcp-wf"},
+        )
+        self.assertNotIn("isError", approved, self._text(approved))
+        launches = []
+
+        def pick(repo, node, spec, state, exclude=""):
+            return {"worker": "grok", "spawn": "run-worker", "parent_writes": False,
+                    "model": "grok-4.6", "effort": "high", "routing": {}}
+
+        def launch(repo, *, node, spec, state, choice, **kwargs):
+            job_id = f"job-{node['id']}"
+            folder = Path(repo) / ".rig" / "jobs" / job_id
+            folder.mkdir(parents=True, exist_ok=True)
+            (folder / "meta.json").write_text(json.dumps({
+                "job_id": job_id, "status": "running", "role": node["role"], "files": node.get("files") or [],
+                "worker": "grok", "reservation_id": "res", "attempt_id": "att",
+            }))
+            launches.append(node["id"])
+            return {"kind": "wrapper", "job": {"job_id": job_id, "reservation_id": "res", "attempt_id": "att"},
+                    "workflow_attempt": 1}
+
+        with mock.patch("workflow_scheduler._default_launch", launch), mock.patch("workflow_scheduler._pick_node", pick):
+            advanced = rig_mcp.call_tool(
+                "rig_workflow_advance",
+                {"repo": str(self.repo), "id": wid, "owner_token": token, "owner_session": "mcp-wf"},
+            )
+        self.assertNotIn("isError", advanced, self._text(advanced))
+        self.assertEqual(launches, ["w1"])
+        import workflow_state as wf
+        spec, state = wf.load_pair(self.repo, wid, required=True)
+        state["nodes"]["w1"].update(status="failed", ran=True, launched=True, job_id="")
+        state["failure"] = {"node_id": "w1", "reason": "boom"}
+        wf.save_state(self.repo, state)
+        resolved = rig_mcp.call_tool(
+            "rig_workflow_resolve",
+            {"repo": str(self.repo), "id": wid, "node_id": "w1", "action": "retry",
+             "owner_token": token, "owner_session": "mcp-wf"},
+        )
+        self.assertNotIn("isError", resolved, self._text(resolved))
+        self.assertIn("pending", self._text(resolved))
+
+    def test_child_coordination_after_handshake_hides_parent_workflow_tools(self):
+        created = self._create_workflow()
+        lease = created["structuredContent"]
+        job_id = "child-coord"
+        job_dir = self.repo / ".rig" / "jobs" / job_id
+        job_dir.mkdir(parents=True)
+        (job_dir / "meta.json").write_text(json.dumps({
+            "job_id": job_id, "worker": "grok", "role": "implement", "status": "running",
+            "workflow_id": lease["workflow_id"], "workflow_node_id": "w1",
+        }))
+        os.environ["RIG_JOB_ID"] = job_id
+        os.environ["RIG_JOB_DIR"] = str(job_dir)
+        os.environ["RIG_REPO"] = str(self.repo)
+        try:
+            blocked = rig_mcp.call_tool(
+                "rig_job_coordination_request",
+                {"kind": "scope", "text": "need a decision"},
+            )
+            self.assertTrue(blocked.get("isError"))
+            self.assertIn("rig_job_inbox", self._text(blocked))
+            hidden = rig_mcp.call_tool(
+                "rig_workflow_create",
+                {"spec": self._workflow_spec(), "repo": str(self.repo)},
+            )
+            self.assertTrue(hidden.get("isError"))
+            self.assertIn("not a child tool", self._text(hidden))
+            inbox0 = rig_mcp.call_tool("rig_job_inbox", {})
+            self.assertNotIn("isError", inbox0)
+            expanded = rig_mcp.call_tool(
+                "rig_job_coordination_request",
+                {"kind": "scope", "text": "add files", "payload": {"files": ["b.py"]}},
+            )
+            self.assertTrue(expanded.get("isError"))
+            self.assertIn("never expands", self._text(expanded))
+            asked = rig_mcp.call_tool(
+                "rig_job_coordination_request",
+                {"kind": "dependency", "text": "need review first", "payload": {"note": "order"}},
+            )
+            self.assertNotIn("isError", asked, self._text(asked))
+            request_id = asked["structuredContent"]["request"]["id"]
+            self.assertNotIn(lease["owner_token"], self._text(asked))
+        finally:
+            os.environ.pop("RIG_JOB_ID", None)
+            os.environ.pop("RIG_JOB_DIR", None)
+            os.environ.pop("RIG_REPO", None)
+        replied = rig_mcp.call_tool(
+            "rig_job_coordination_reply",
+            {"repo": str(self.repo), "id": lease["workflow_id"], "request_id": request_id,
+             "decision": "reply", "text": "proceed", "owner_token": lease["owner_token"],
+             "owner_session": "mcp-wf"},
+        )
+        self.assertNotIn("isError", replied, self._text(replied))
+        waited = rig_mcp.call_tool(
+            "rig_workflow_wait", {"repo": str(self.repo), "id": lease["workflow_id"], "timeout": 0},
+        )
+        self.assertNotIn("isError", waited)
+        os.environ["RIG_JOB_ID"] = job_id
+        os.environ["RIG_JOB_DIR"] = str(job_dir)
+        os.environ["RIG_REPO"] = str(self.repo)
+        try:
+            inbox0 = rig_mcp.call_tool("rig_job_inbox", {})
+            self.assertNotIn("isError", inbox0)
+            child_reply = rig_mcp.call_tool(
+                "rig_job_coordination_reply",
+                {"id": lease["workflow_id"], "request_id": request_id, "text": "nope"},
+            )
+            self.assertTrue(child_reply.get("isError"))
+            self.assertIn("not a child tool", self._text(child_reply))
+        finally:
+            os.environ.pop("RIG_JOB_ID", None)
+            os.environ.pop("RIG_JOB_DIR", None)
+            os.environ.pop("RIG_REPO", None)
 
 
 if __name__ == "__main__":

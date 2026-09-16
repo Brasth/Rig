@@ -11,7 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 RIG = ROOT / "bin" / "rig"
 
 
-def run_rig(repo: Path, *args: str, env: dict | None = None) -> subprocess.CompletedProcess:
+def run_rig(repo: Path, *args: str, env: dict | None = None, stdin: str | None = None) -> subprocess.CompletedProcess:
     merged = os.environ.copy()
     merged["RIG_HOME"] = str(ROOT)
     # CLI behavior fixtures use the checkout as a read-only runtime.
@@ -28,6 +28,7 @@ def run_rig(repo: Path, *args: str, env: dict | None = None) -> subprocess.Compl
         text=True,
         capture_output=True,
         check=False,
+        input=stdin,
     )
 
 
@@ -137,7 +138,7 @@ class CliMemoryAndThread(unittest.TestCase):
         default = run_rig(self.repo, *common, "--json", env=env)
         self.assertEqual(default.returncode, 0, default.stderr)
         full = json.loads(default.stdout)
-        self.assertEqual(set(full), {"memory", "jobs", "status", "pick"})
+        self.assertEqual(set(full), {"memory", "jobs", "workflows", "status", "pick"})
         self.assertIsInstance(full["status"], str)
         for limit in (0, 10, 100):
             compact = run_rig(self.repo, *common, "--compact", "--terminal-limit", str(limit), "--json", env=env)
@@ -196,24 +197,49 @@ class CliMemoryAndThread(unittest.TestCase):
         again = run_rig(self.repo, "queue", "list")
         self.assertIn("0 pending", again.stdout)
 
-    def test_init_appends_queue_gitignore_and_keeps_max_running(self):
+    def _template_ignore_entries(self):
+        return [line for line in (ROOT / "templates" / "gitignore-fragment").read_text().splitlines() if line]
+
+    def test_init_applies_template_gitignore_and_keeps_max_running(self):
         gi = self.repo / ".gitignore"
-        gi.write_text(".rig/\n")
+        gi.write_text(".rig/\nkeep-unrelated/\n")
         harness = self.repo / ".rig" / "harness.toml"
         original = harness.read_text()
         self.assertIn("max_running", original)
         proc = run_rig(self.repo, "init")
         self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertIn(".rig/queue/", gi.read_text())
+        text = gi.read_text()
+        gi_lines = text.splitlines()
+        self.assertIn(".rig/", gi_lines)
+        self.assertEqual(gi_lines.count("keep-unrelated/"), 1)
+        for line in self._template_ignore_entries():
+            self.assertEqual(gi_lines.count(line), 1)
+        self.assertIn(".rig/queue/", gi_lines)
         self.assertIn("max_running = 3", harness.read_text())
         harness.write_text('parent = "codex"\n\n[workers]\ngrok = true\n\n[queue]\nmax_running = 1\n')
         again = run_rig(self.repo, "init")
         self.assertEqual(again.returncode, 0, again.stderr)
         self.assertIn("max_running = 1", harness.read_text())
         self.assertNotIn("max_running = 3", harness.read_text())
+        again_lines = gi.read_text().splitlines()
+        self.assertIn(".rig/", again_lines)
+        self.assertEqual(again_lines.count("keep-unrelated/"), 1)
+        for line in self._template_ignore_entries():
+            self.assertEqual(again_lines.count(line), 1)
         skill = self.repo / ".agents" / "skills" / "rig-queue" / "SKILL.md"
         self.assertTrue(skill.is_file())
         self.assertIn("Does not spawn", skill.read_text())
+
+    def test_init_creates_gitignore_from_template_when_missing(self):
+        gi = self.repo / ".gitignore"
+        if gi.exists():
+            gi.unlink()
+        proc = run_rig(self.repo, "init")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertTrue(gi.is_file())
+        gi_lines = gi.read_text().splitlines()
+        for line in self._template_ignore_entries():
+            self.assertEqual(gi_lines.count(line), 1)
 
     def test_prune_persists_activity_then_drops_ok_log(self):
         job_dir = self.repo / ".rig" / "jobs" / "prune-ok"
@@ -593,7 +619,18 @@ class InitPresence(unittest.TestCase):
         self.assertIn("rig pick implement --case", text)
         self.assertIn("slash-command catalog", text)
         self.assertNotIn("omit --model unless RIG_MODEL is set", text)
-        self.assertNotIn("'", text.split("<!-- rig:start -->", 1)[1].split("<!-- rig:end -->", 1)[0])
+        start = text.split("<!-- rig:start -->", 1)[1].split("<!-- rig:end -->", 1)[0]
+        self.assertNotIn("'", start)
+        self.assertIn("stay|explore|mini|bulk|implement|hard|review|verify", start)
+        self.assertIn("rig_workflow_wait", start)
+        self.assertIn("rig_workflow_advance", start)
+        self.assertIn("rig_job_coordination_reply", start)
+        self.assertIn("rig_job_coordination_request", start)
+        self.assertIn("file AND resource", start)
+        self.assertIn("[orchestration]", start)
+        source_skill = (ROOT / "skills" / "delegate-harness" / "SKILL.md").read_bytes()
+        copied = (self.repo / ".agents" / "skills" / "delegate-harness" / "SKILL.md").read_bytes()
+        self.assertEqual(source_skill, copied)
 
     def test_session_and_pick_exclude(self):
         sess = run_rig(
@@ -880,6 +917,100 @@ class InitPresence(unittest.TestCase):
         self.assertEqual(doc.returncode, 0, doc.stderr)
         self.assertNotIn("profile=", doc.stdout)
         self.assertNotRegex(doc.stdout, r"(?m)^\s*profile:")
+
+
+class CliWorkflow(unittest.TestCase):
+    def setUp(self):
+        self.td = tempfile.TemporaryDirectory()
+        self.repo = Path(self.td.name)
+        (self.repo / ".git").mkdir()
+        proc = run_rig(self.repo, "init")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        (self.repo / "a.py").write_text("a\n")
+        (self.repo / "b.py").write_text("b\n")
+
+    def tearDown(self):
+        self.td.cleanup()
+
+    def _spec(self, nodes=None):
+        return {
+            "title": "cli-wf",
+            "case": "implement a.py",
+            "nodes": nodes or [{"id": "w1", "role": "implement", "files": ["a.py"]}],
+        }
+
+    def test_help_lists_workflow_commands(self):
+        help_out = run_rig(self.repo, "-h")
+        self.assertEqual(help_out.returncode, 2)
+        self.assertIn("workflows", help_out.stdout)
+        self.assertIn("workflow create", help_out.stdout)
+        self.assertIn("workflow show|advance|wait|extend|resolve|approve|cancel|report", help_out.stdout)
+        self.assertIn("explore|mini|bulk|implement|hard|review|verify|stay", help_out.stdout)
+
+    def test_pick_help_lists_verify_role(self):
+        pick_help = run_rig(self.repo, "pick", "--help")
+        self.assertEqual(pick_help.returncode, 2)
+        self.assertIn("explore|mini|bulk|implement|hard|review|verify|stay", pick_help.stderr)
+
+    def test_workflows_create_file_stdin_show_report_cancel_omit_token(self):
+        spec_path = self.repo / "wf.json"
+        spec_path.write_text(json.dumps(self._spec()))
+        created = run_rig(self.repo, "workflow", "create", "--file", str(spec_path), "--json")
+        self.assertEqual(created.returncode, 0, created.stderr + created.stdout)
+        payload = json.loads(created.stdout)
+        creds = json.loads(Path(payload["credentials_path"]).read_text())
+        token = creds["owner_token"]
+        self.assertNotIn("owner_token", payload)
+        self.assertNotIn(token, created.stdout)
+        self.assertNotIn(token, created.stderr)
+        listed = run_rig(self.repo, "workflows")
+        self.assertEqual(listed.returncode, 0, listed.stderr)
+        self.assertIn(payload["workflow_id"], listed.stdout)
+        self.assertNotIn(token, listed.stdout)
+        shown = run_rig(self.repo, "workflow", "show", payload["workflow_id"], "--json")
+        self.assertEqual(shown.returncode, 0, shown.stderr)
+        self.assertNotIn(token, shown.stdout)
+        waited = run_rig(self.repo, "workflow", "wait", payload["workflow_id"], "--timeout", "0")
+        self.assertIn(waited.returncode, {0, 1, 2, 124, 130}, waited.stderr + waited.stdout)
+        reported = run_rig(self.repo, "workflow", "report", payload["workflow_id"])
+        self.assertEqual(reported.returncode, 0, reported.stderr)
+        self.assertIn("wall_time_s", reported.stdout)
+        cancelled = run_rig(
+            self.repo, "workflow", "cancel", payload["workflow_id"], "--json",
+            env={"RIG_OWNER_TOKEN": token, "RIG_OWNER_SESSION": creds.get("session_id") or ""},
+        )
+        self.assertEqual(cancelled.returncode, 0, cancelled.stderr + cancelled.stdout)
+        self.assertNotIn(token, cancelled.stdout)
+        stdin_create = run_rig(
+            self.repo, "workflow", "create", "--json",
+            stdin=json.dumps(self._spec([{"id": "w2", "role": "mini", "files": ["b.py"]}])),
+        )
+        self.assertEqual(stdin_create.returncode, 0, stdin_create.stderr + stdin_create.stdout)
+        stdin_payload = json.loads(stdin_create.stdout)
+        self.assertIn("credentials_path", stdin_payload)
+        self.assertNotIn("owner_token", stdin_payload)
+        json_list = run_rig(self.repo, "workflows", "--json")
+        self.assertEqual(json_list.returncode, 0, json_list.stderr)
+        rows = json.loads(json_list.stdout)
+        self.assertTrue(any(row["workflow_id"] == stdin_payload["workflow_id"] for row in rows))
+
+    def test_workflow_extend_and_missing_id(self):
+        spec_path = self.repo / "wf.json"
+        spec_path.write_text(json.dumps(self._spec()))
+        created = run_rig(self.repo, "workflow", "create", "--file", str(spec_path), "--json")
+        payload = json.loads(created.stdout)
+        creds = json.loads(Path(payload["credentials_path"]).read_text())
+        nodes = json.dumps([{"id": "extra", "role": "review", "files": ["b.py"], "depends_on": ["w1"]}])
+        extended = run_rig(
+            self.repo, "workflow", "extend", payload["workflow_id"], "--nodes-json", nodes, "--json",
+            env={"RIG_OWNER_TOKEN": creds["owner_token"]},
+        )
+        self.assertEqual(extended.returncode, 0, extended.stderr + extended.stdout)
+        self.assertIn("extra", extended.stdout)
+        self.assertNotIn(creds["owner_token"], extended.stdout)
+        missing = run_rig(self.repo, "workflow", "show")
+        self.assertEqual(missing.returncode, 1)
+        self.assertIn("workflow id", missing.stderr)
 
 
 if __name__ == "__main__":
