@@ -31,7 +31,7 @@ Configure the preferred parent and workers in `.rig/harness.toml` (preferred). T
 ## Navigation
 
 - [Overall flow](#overall-flow)
-- [Install](#install) · [Per project](#per-project) · [Configure](#configure)
+- [Install](#install) · [Per project](#per-project) · [Configure](#configure) · [FAQ](#faq)
 - [Smart routing](#smart-routing)
 - [Adaptive workflows](#adaptive-workflows) · [How an adaptive workflow moves](#how-an-adaptive-workflow-moves)
 - [Everyday prompts and queue](#everyday-prompts-and-queue)
@@ -140,6 +140,38 @@ rig workers grok=on claude=on
 - A worker is **effective** only when: flag true, binary on PATH, not the live parent, and job-scoped MCP ready. **Cursor remains excluded** until safe scoped MCP exists.
 - Claude Code and Cursor are never the parent. Grok Bot.app and Cursor.app are GUIs, not spawnable workers. Cursor worker binary is `cursor-agent`.
 - Rollback ladder: `[routing] mode = "legacy"` in harness (smart is default when mode is omitted). Orchestration: `[orchestration] mode = "adaptive"` (default) or `"single"`; `max_nodes = 12`. Queue and worker caps remain authoritative.
+
+## FAQ
+
+### Why not just use Claude Code subagents or Agent Teams?
+
+If you only work inside Claude Code, start there. Subagents and Agent Teams are good when one vendor owns the whole loop.
+
+Rig is for a different shape: you already bounce between CLIs (Codex, Grok, Claude, OpenCode, …), you want the **parent** to scope files and write a brief, a **worker** to run that brief over MCP, and the **parent** to verify with real checks. Done means verified, not the worker’s exit code.
+
+If one agent in one thread is enough, you do not need this.
+
+### How is Rig different from git worktrees?
+
+Worktrees give each agent its own checkout so they do not stomp the same files live. That solves collisions. It does not decide acceptance, and it does not catch two “green” branches that disagree on a shared contract.
+
+Rig’s default is parent-owned file scopes and an explicit brief. Parallel workers only run when scopes (and resources) do not overlap. The parent alone marks the workflow verified after its own checks. You can still use worktrees; Rig is the harness between agents, not a replacement for git.
+
+### Install looks heavy. What’s the minimum path?
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Brasth/Rig/main/install.sh | bash
+cd your-repo
+rig init
+rig doctor
+```
+
+Then edit `.rig/harness.toml`: set `parent`, enable only workers you actually have, leave `[orchestration] mode = "adaptive"` unless you want single-job.
+
+Fully quit the parent once after install, open a new thread in that repo, and type a normal prompt. Everyday work is not `rig run`.
+
+Demo (1 min): https://youtu.be/KuhHMH--oGk  
+Repo: https://github.com/Brasth/Rig
 
 ## Smart routing
 
