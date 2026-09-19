@@ -52,6 +52,22 @@ class ProtocolDocumentation(unittest.TestCase):
                 self.assertNotIn("Host-dropped wait still bash-waits once", source)
                 self.assertNotIn("host drops the tool, bash `rig job wait` once (no `--timeout`)", source)
 
+    def test_orphan_wrapper_stop_and_unconfirmed_wait_are_documented(self):
+        sources = {
+            "docs/usage.md": (ROOT / "docs" / "usage.md").read_text(),
+            "docs/rig-flow.md": (ROOT / "docs" / "rig-flow.md").read_text(),
+            "AGENTS.md": (ROOT / "AGENTS.md").read_text(),
+            "skills/delegate-harness/SKILL.md": (ROOT / "skills" / "delegate-harness" / "SKILL.md").read_text(),
+            "managed skill": (ROOT / ".agents" / "skills" / "delegate-harness" / "SKILL.md").read_text(),
+            "skills/rig-jobs/SKILL.md": (ROOT / "skills" / "rig-jobs" / "SKILL.md").read_text(),
+        }
+        for name, source in sources.items():
+            with self.subTest(source=name):
+                self.assertIn("orphans", source)
+                self.assertIn("in-tree", source)
+                self.assertIn("unconfirmed", source)
+                self.assertIn("stop-unconfirmed", source)
+
     def test_queue_receipts_and_durable_credentials_are_documented(self):
         sources = self.protocol_sources()
         sources.pop("README.md")

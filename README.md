@@ -228,7 +228,7 @@ Full profiles, catalog rules, MCP fields, and rollback: [smart routing](docs/sma
 
 Adaptive workflows are the default way Rig splits work you should not babysit. The parent owns the graph: it briefs disjoint workers in parallel when scopes do not overlap, then only marks the workflow verified after its own checks. Children never spawn children, so parallelism stays under the parent instead of a pile of nested agents.
 
-When `[orchestration] mode = "adaptive"`, the parent decomposes eligible work into a DAG (at most `max_nodes` 12) and owns the graph, briefs, and acceptance. `single` keeps one-job behavior. Queue and worker caps remain authoritative. Children never spawn or message children; the parent uses `rig_workflow_advance` / `rig_workflow_wait`.
+When `[orchestration] mode = "adaptive"`, the parent decomposes eligible work into a DAG (at most `max_nodes` 12) and owns the graph, briefs, and acceptance. `single` keeps one-job behavior. Queue and worker caps remain authoritative. Children never spawn or message children; the parent uses `rig_workflow_advance` / `rig_workflow_wait`. Wrapper stop requires the isolated worker and in-tree descendants; reparented leftovers are orphans and do not hold the slot. `rig_workflow_wait` returns on unconfirmed/attention — inspect `next_parent_action`.
 
 ### How an adaptive workflow moves
 

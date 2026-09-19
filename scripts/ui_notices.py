@@ -31,7 +31,7 @@ def milestone(job):
         return f"Stopped: {title}", False
     if cancel in {"stop-unconfirmed", "native-cancel-required"}:
         return f"{title}: " + ("owning host must interrupt" if cancel == "native-cancel-required" else "stop requested; unconfirmed"), True
-    if state == "needs-input":
+    if state == "needs-input" or job.get("effective") == "unconfirmed":
         return f"{title}: {clean_text(job.get('display_reason') or 'needs attention', 70)}", True
     if state == "failed":
         return f"{title}: {clean_text(job.get('display_reason') or 'execution failed', 70)}", True

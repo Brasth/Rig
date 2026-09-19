@@ -559,6 +559,24 @@ class WorkflowScheduler(unittest.TestCase):
         queued = json.loads((self.repo / ".rig" / "queue" / f"{item['id']}.json").read_text())
         self.assertEqual(queued["status"], "spawned")
 
+    def test_wait_returns_immediately_on_unconfirmed_node(self):
+        created = self.create([{"id": "w1", "role": "implement", "files": ["a.py"]}])
+        spec, state = wf.load_pair(self.repo, created["workflow_id"], required=True)
+        job_id = "job-wait-unconfirmed"
+        folder = self.repo / ".rig" / "jobs" / job_id
+        folder.mkdir(parents=True)
+        (folder / "meta.json").write_text(json.dumps({
+            "job_id": job_id, "status": "unconfirmed", "role": "implement", "files": ["a.py"],
+        }) + "\n")
+        state["nodes"]["w1"].update(job_id=job_id, launched=True, ran=True, status="running")
+        wf.save_state(self.repo, state)
+        start = __import__("time").monotonic()
+        code, text = sched.wait_workflow(self.repo, created["workflow_id"], timeout=2)
+        self.assertLess(__import__("time").monotonic() - start, 1.0)
+        self.assertEqual(code, 0, text)
+        self.assertIn("unconfirmed", text)
+        self.assertIn("reconcile", text)
+
 
 if __name__ == "__main__":
     unittest.main()

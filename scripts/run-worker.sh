@@ -448,7 +448,8 @@ with admission.transaction(repo):
         completion = admission.finish(repo, **credentials, status=obj["status"], owner=owner, completion={"kind": "wrapper"})
     if completion is not None and not completion.get("stopped"):
         # Confirmed-stop is required for every terminal result, including cancel.
-        obj.update(status="running", exit_code=0, ended_at="",
+        # Do not launder this back to running: workflow wait treats running as live.
+        obj.update(status="unconfirmed", exit_code=0, ended_at="",
                    summary="execution stop unconfirmed; ownership remains held")
         obj.pop("elapsed_s", None)
         print("run-worker: child liveness needs reconciliation; ownership remains held", file=sys.stderr)

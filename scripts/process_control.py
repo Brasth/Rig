@@ -55,8 +55,16 @@ def terminate(process, timeout=5.0, grace=1.0):
                 "reason": "child identity unavailable"}
     known = {(item.get("pid"), item.get("start_id")): dict(item)
              for item in [process, *process.get("descendants", [])] if item.get("pid")}
-    group = process.get("pgid") if process.get("pgid") == process.get("pid") else None
+    root_alive = admission._process_state(process) == "alive"
+    # Expand the isolated group only while the session leader is still alive.
+    group = process.get("pgid") if process.get("pgid") == process.get("pid") and root_alive else None
     complete = _inventory(known, group, deadline)
+    classified = admission._classify_tree(process, [item for item in known.values() if item.get("pid") != process.get("pid")])
+    complete = complete and classified.get("complete") is True
+    # Never chase reparented leftovers. In-tree children still receive TERM/KILL.
+    orphan_pids = {item.get("pid") for item in classified.get("orphans") or [] if item.get("pid")}
+    known = {key: item for key, item in known.items()
+             if item.get("pid") == process.get("pid") or item.get("pid") not in orphan_pids}
 
     def send(sig):
         # The root goes last so descendants have a chance to exit and be reaped.

@@ -915,6 +915,87 @@ class AdmissionTests(unittest.TestCase):
         admission.release(self.repo, **admission.credentials(lease), owner=owner,
                           rationale="parent explicitly closed task")
 
+    def test_dead_isolated_root_with_live_orphan_is_stopped(self):
+        owner = _owner("wrapper")
+        lease = self.reserve(owner=owner)
+        ready = self.repo / "leader-ready"
+        leftover = self.repo / "orphan-ready"
+        code = (
+            "import os, pathlib, sys, time\n"
+            "os.setsid()\n"
+            "child = os.fork()\n"
+            "if child == 0:\n"
+            "    pathlib.Path(sys.argv[2]).write_text(str(os.getpid()))\n"
+            "    while True:\n"
+            "        time.sleep(0.1)\n"
+            "pathlib.Path(sys.argv[1]).write_text(str(os.getpid()))\n"
+            "while True:\n"
+            "    time.sleep(0.1)\n"
+        )
+        proc = subprocess.Popen([sys.executable, "-c", code, str(ready), str(leftover)])
+        leftover_pid = None
+        try:
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline and not (ready.exists() and leftover.exists()):
+                time.sleep(0.02)
+            self.assertTrue(ready.exists() and leftover.exists(), proc.poll())
+            leftover_pid = int(leftover.read_text())
+            identity = admission.process_identity(proc.pid)
+            self.assertEqual(identity.get("pgid"), proc.pid)
+            self.activate(lease, owner=owner, process=identity)
+            admission.observe_process(self.repo, **admission.credentials(lease), owner=owner)
+            os.kill(proc.pid, signal.SIGKILL)
+            proc.wait(timeout=2)
+            os.kill(leftover_pid, 0)
+            result = self.finish(lease, owner=owner)
+            self.assertTrue(result["stopped"], result)
+            self.assertFalse(result["slot_held"], result)
+            self.assertFalse(result.get("needs_reconciliation"), result)
+            os.kill(leftover_pid, 0)
+            orphans = (result.get("process") or {}).get("orphans") or []
+            self.assertTrue(any(item.get("pid") == leftover_pid for item in orphans), orphans)
+        finally:
+            for pid in [leftover_pid, proc.pid]:
+                if pid:
+                    try:
+                        os.kill(pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+            proc.wait(timeout=2)
+
+    def test_live_in_tree_child_blocks_wrapper_stop(self):
+        owner = _owner("wrapper")
+        lease = self.reserve(owner=owner)
+        ready = self.repo / "live-ready"
+        code = (
+            "import os, pathlib, sys, time\n"
+            "os.setsid()\n"
+            "if os.fork() == 0:\n"
+            "    while True:\n"
+            "        time.sleep(0.1)\n"
+            "pathlib.Path(sys.argv[1]).write_text(str(os.getpid()))\n"
+            "while True:\n"
+            "    time.sleep(0.1)\n"
+        )
+        proc = subprocess.Popen([sys.executable, "-c", code, str(ready)])
+        try:
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline and not ready.exists():
+                time.sleep(0.02)
+            self.assertTrue(ready.exists(), proc.poll())
+            self.activate(lease, owner=owner, process=admission.process_identity(proc.pid))
+            admission.observe_process(self.repo, **admission.credentials(lease), owner=owner)
+            result = self.finish(lease, owner=owner)
+            self.assertFalse(result["stopped"], result)
+            self.assertTrue(result["slot_held"], result)
+            self.assertTrue(result.get("needs_reconciliation"), result)
+        finally:
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            proc.wait(timeout=2)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -17,10 +17,13 @@ class DisplayPrecedence(unittest.TestCase):
         accepted = {"state": "verified", "acceptance": "accepted", "freshness": "current"}
         for effective, expected in (("ask", "needs-input"), ("cancelled", "cancelled"),
                                     ("fail", "failed"), ("timeout", "failed"), ("stale", "failed"),
+                                    ("unconfirmed", "needs-input"),
                                     ("running", "working"), ("reserved", "reserved"), ("ok", "verified")):
             with self.subTest(effective=effective):
                 self.assertEqual(jobs.job_display_state({"effective": effective}, verification=accepted), expected)
         self.assertEqual(jobs.job_display_state({"effective": "ok"}, {"needs_reconciliation": True}, accepted), "needs-input")
+        self.assertEqual(jobs.job_display_state({"effective": "unconfirmed"}, verification=accepted), "needs-input")
+        self.assertEqual(jobs.job_display_state({"effective": "stale"}, {"needs_reconciliation": True}, accepted), "needs-input")
 
     def test_held_scope_alone_does_not_claim_verification_is_running(self):
         held = {"stage": "verifying", "stopped": True}

@@ -1030,16 +1030,95 @@ def _refuse_cancelled(root, record):
             raise AdmissionError("queue cancellation was requested; launch refused")
 
 
+def _process_table(timeout=1.0):
+    """Return (pid, ppid, pgid, stat) rows, or None when the table is unavailable."""
+    try:
+        table = subprocess.run(
+            ["ps", "-axo", "pid=,ppid=,pgid=,stat="],
+            capture_output=True, text=True, check=False, timeout=max(0.001, timeout),
+        )
+        if table.returncode:
+            return None
+        rows = []
+        for line in table.stdout.splitlines():
+            fields = line.split()
+            if len(fields) < 4:
+                continue
+            try:
+                rows.append((int(fields[0]), int(fields[1]), int(fields[2]), fields[3]))
+            except ValueError:
+                continue
+        return rows
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        return None
+
+
+def _classify_tree(process, descendants=None, rows=None):
+    """Split live processes into the current parent tree versus reparented orphans.
+
+    Classification uses the current process table, not stored roles. A dead
+    isolated root has no live tree; leftover pids are orphans even if they kept
+    the old pgid. Unknown identities block stop.
+    """
+    descendants = list(descendants or [])
+    result = {"in_tree": [], "orphans": [], "root_state": "unknown", "unknown": False, "complete": False}
+    if not process or not process.get("pid"):
+        return result
+    result["root_state"] = _process_state(process)
+    if rows is None:
+        rows = _process_table()
+    if rows is None:
+        return result
+    result["complete"] = True
+    zombies = {pid for pid, _ppid, _pgid, stat in rows if str(stat).startswith("Z")}
+    live_tree = set()
+    if result["root_state"] == "alive" and process["pid"] not in zombies:
+        live_tree.add(process["pid"])
+        changed = True
+        while changed:
+            changed = False
+            for pid, ppid, _pgid, stat in rows:
+                if pid in live_tree or pid in zombies or str(stat).startswith("Z"):
+                    continue
+                if ppid in live_tree:
+                    live_tree.add(pid)
+                    changed = True
+    recorded = []
+    for item in descendants:
+        if not item.get("pid") or item.get("pid") == process.get("pid"):
+            continue
+        state = _process_state(item)
+        if state == "unknown":
+            result["unknown"] = True
+            continue
+        if state != "alive":
+            continue
+        current = process_identity(item["pid"])
+        if item.get("start_id") and current.get("start_id") and current.get("start_id") != item.get("start_id"):
+            continue
+        recorded.append(dict(item))
+    in_tree, orphans = [], []
+    for item in recorded:
+        if item["pid"] in live_tree:
+            in_tree.append(item)
+        else:
+            orphans.append(item)
+    if result["root_state"] == "unknown":
+        result["unknown"] = True
+    result["in_tree"] = in_tree
+    result["orphans"] = orphans
+    return result
+
+
 def observe_process(repo, *, reservation_id, attempt_id, owner_token, owner=None, owner_session=""):
     """Remember observable descendants before they can outlive/reparent away."""
     root = _root(repo)
     record, _ = _auth(root, reservation_id, attempt_id, owner_token, owner, owner_session)
     process = record.get("process") or {}
-    descendants, complete = [], False
+    descendants, complete, rows = [], False, None
     try:
-        table = subprocess.run(["ps", "-axo", "pid=,ppid=,pgid="], capture_output=True, text=True, check=False, timeout=1.0)
-        if table.returncode == 0:
-            rows = [tuple(map(int, row.split())) for row in table.stdout.splitlines() if row.strip()]
+        rows = _process_table()
+        if rows is not None:
             selected = set()
             group_owned = False
             for item in [process, *process.get("descendants", [])]:
@@ -1054,7 +1133,8 @@ def observe_process(repo, *, reservation_id, attempt_id, owner_token, owner=None
             changed = True
             while changed:
                 before = len(selected)
-                selected.update(pid for pid, ppid, pgid in rows if ppid in selected or (group_owned and pgid == process.get("pgid")))
+                selected.update(pid for pid, ppid, pgid, _stat in rows
+                                if ppid in selected or (group_owned and pgid == process.get("pgid")))
                 changed = before != len(selected)
             descendants = [process_identity(pid) for pid in selected if pid and pid != process.get("pid")]
             complete = True
@@ -1066,7 +1146,12 @@ def observe_process(repo, *, reservation_id, attempt_id, owner_token, owner=None
             raise AdmissionError("primary process changed during observation")
         known = {(item.get("pid"), item.get("start_id")): item for item in current.get("process", {}).get("descendants", [])}
         known.update({(item.get("pid"), item.get("start_id")): item for item in descendants})
-        current.setdefault("process", {}).update(descendants=list(known.values()), observation_complete=complete)
+        classified = _classify_tree(current.get("process") or process, list(known.values()), rows=rows)
+        current.setdefault("process", {}).update(
+            descendants=list(known.values()),
+            observation_complete=complete,
+            orphans=classified.get("orphans") or [],
+        )
         _save(root, current)
         return _public(current)
 
@@ -1077,24 +1162,18 @@ def _external_stopped(record):
         return False, "child identity unavailable"
     if process.get("observation_complete") is False:
         return False, "descendant observation is unavailable"
-    for identity in [process, *process.get("descendants", [])]:
-        if _process_state(identity) != "dead":
-            return False, "child or observed descendant is alive or unknown"
     pgid = process.get("pgid")
     # Only an isolated child's group is meaningful; never treat the parent's
     # shared group as a complete descendant inventory.
     if pgid != process.get("pid"):
         return False, "child process group is not isolated"
-    try:
-        rows = subprocess.run(["ps", "-axo", "pid=,pgid=,stat="], capture_output=True, text=True, check=False, timeout=1.0)
-        if rows.returncode:
-            return False, "process group liveness unavailable"
-        for row in rows.stdout.splitlines():
-            fields = row.split()
-            if len(fields) >= 3 and int(fields[1]) == pgid and not fields[2].startswith("Z"):
-                return False, "child process group remains alive"
-    except (OSError, ValueError, subprocess.TimeoutExpired):
+    classified = _classify_tree(process, process.get("descendants") or [])
+    if not classified.get("complete"):
         return False, "process group liveness unavailable"
+    if classified.get("unknown") or classified.get("root_state") != "dead":
+        return False, "child or observed descendant is alive or unknown"
+    if classified.get("in_tree"):
+        return False, "child or observed descendant is alive or unknown"
     return True, ""
 
 
@@ -1131,6 +1210,13 @@ def finish(repo, *, reservation_id, attempt_id, owner_token, status, owner=None,
                 _save(root, record)
             return _public(record)
         _ensure_idle(record)
+        process = record.get("process") or {}
+        if process.get("pid"):
+            classified = _classify_tree(process, process.get("descendants") or [])
+            if classified.get("complete"):
+                process = dict(process)
+                process["orphans"] = classified.get("orphans") or []
+                record["process"] = process
         stopped, reason = _stopped(record, completion)
         if completion and completion.get("kind") == "native_child" and stopped:
             if completion.get("outcome") != status:

@@ -49,13 +49,14 @@ flowchart TD
     child --> wait[rig_workflow_wait]
     wait -->|ASK or COORDINATION| parentAct[Parent allow/deny/reply]
     parentAct --> wait
+    wait -->|unconfirmed| reconcile[Parent reconcile or re-finish]
     wait -->|node stopped| accept[Parent verify or accept]
     accept --> next{More ready nodes?}
     next -->|yes| advance
     next -->|required accepted| verified[Workflow verified]
 ```
 
-Reservations prevent conflicting work from being admitted. The default cap is three reserved/running/ASK executions. A stopped execution frees its slot, but its files remain protected through verification or explicit close. See [protected writes and acceptance](usage.md#protected-writes-and-parent-acceptance) and [adaptive workflows](usage.md#adaptive-workflows).
+Reservations prevent conflicting work from being admitted. The default cap is three reserved/running/ASK executions. A stopped execution frees its slot, but its files remain protected through verification or explicit close. Wrapper stop requires the isolated worker and in-tree descendants. Reparented leftovers are orphans; they do not block stop or hold the slot, and must not be killed on success. Unconfirmed stop is not `running`; `rig_workflow_wait` returns on attention so the parent can inspect `next_parent_action`. See [protected writes and acceptance](usage.md#protected-writes-and-parent-acceptance) and [adaptive workflows](usage.md#adaptive-workflows).
 
 `rig_job_launch` public text includes the issued `credentials_path` plus non-secret identifiers (`job_id`, `reservation_id`, `attempt_id`, `wrapper_pid`, `status`). It never prints `owner_token`. Parent ownership tools (`close`, `accept`, checks, finish, and the same family) accept that path instead of a raw reservation/attempt/token triple. The server resolves only the canonical `.rig/jobs/<id>/owner-credentials.json` in this repository after it is a regular, non-symlink mode 0600 file, valid JSON, bound to that job/reservation/attempt, and matched to the active reservation. Direct raw credential callers keep working.
 

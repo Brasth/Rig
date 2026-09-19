@@ -30,8 +30,8 @@ READ_ROLES = frozenset({"verify", "review"})
 EFFECTS = frozenset({"none", "local", "external", "production", "destructive"})
 GATED_EFFECTS = frozenset({"external", "production", "destructive"})
 NODE_STATES = frozenset({
-    "pending", "ready", "launching", "running", "ask", "completed-unverified",
-    "accepted", "failed", "skipped", "cancelled", "blocked",
+    "pending", "ready", "launching", "running", "ask", "unconfirmed",
+    "completed-unverified", "accepted", "failed", "skipped", "cancelled", "blocked",
 })
 _ID = admission._ID
 DEFAULT_MAX_NODES = 12
@@ -525,6 +525,10 @@ def summary_blocker(spec, state):
     pending = [item for item in (state.get("coordination") or []) if item.get("status") == "pending"]
     if pending:
         return f"coordination {pending[0].get('kind') or 'request'}"
+    for node in spec.get("nodes") or []:
+        row = (state.get("nodes") or {}).get(node["id"]) or {}
+        if row.get("status") == "unconfirmed":
+            return str(row.get("blocker") or "execution stop unconfirmed")
     action = state.get("parent_action") or {}
     if action.get("kind"):
         return str(action.get("reason") or action.get("kind"))
@@ -564,6 +568,10 @@ def next_parent_action(spec, state):
     asking = [nid for nid, row in (state.get("nodes") or {}).items() if row.get("status") == "ask"]
     if asking:
         return {"kind": "allow_or_deny", "node_id": asking[0], "job_id": (state["nodes"][asking[0]] or {}).get("job_id")}
+    unconfirmed = [nid for nid, row in (state.get("nodes") or {}).items() if row.get("status") == "unconfirmed"]
+    if unconfirmed:
+        row = state["nodes"][unconfirmed[0]] or {}
+        return {"kind": "reconcile", "node_id": unconfirmed[0], "job_id": row.get("job_id")}
     gated = [
         node["id"] for node in spec.get("nodes") or []
         if node.get("effects") in GATED_EFFECTS
@@ -948,6 +956,32 @@ def _job_row(root, job_id):
     return admission._read(path)
 
 
+_TERMINAL_EXECUTION = frozenset({"ok", "fail", "timeout", "cancelled"})
+
+
+def _job_execution_status(root, meta):
+    """Admission stop/outcome is authoritative over stale running metadata."""
+    status = str((meta or {}).get("status") or "")
+    rid = str((meta or {}).get("reservation_id") or "")
+    reservation = admission.get_reservation(root, rid) if rid else None
+    if reservation and reservation.get("job_id") == (meta or {}).get("job_id"):
+        execution = reservation.get("execution_status")
+        if reservation.get("stopped") and execution in _TERMINAL_EXECUTION:
+            return execution, reservation
+        process = reservation.get("process") or {}
+        if status == "unconfirmed":
+            return "unconfirmed", reservation
+        if (not reservation.get("stopped") and process
+                and admission._process_state(process) == "dead"):
+            return "unconfirmed", reservation
+        if not reservation.get("stopped") and reservation.get("needs_reconciliation") and status == "running":
+            if process and admission._process_state(process) != "alive":
+                return "unconfirmed", reservation
+    if status == "unconfirmed":
+        return "unconfirmed", reservation
+    return status, reservation
+
+
 def refresh_locked(root, spec, state):
     """Update node/workflow status from jobs, reservations, verification, queue."""
     asking = False
@@ -960,7 +994,7 @@ def refresh_locked(root, spec, state):
         if meta:
             if row.get("status") == "skipped":
                 continue
-            status = str(meta.get("status") or "")
+            status, _reservation = _job_execution_status(root, meta)
             effective = status
             already_accepted = bool(row.get("accepted"))
             if status == "running":
@@ -993,6 +1027,12 @@ def refresh_locked(root, spec, state):
                 row["ran"] = True
                 running += 1
                 live += 1
+            elif status == "unconfirmed":
+                row["status"] = "unconfirmed"
+                row["ran"] = True
+                row["blocker"] = str((_reservation or {}).get("reconciliation_reason") or "").strip() or (
+                    "execution stop unconfirmed"
+                )
             elif status == "ok":
                 accepted, snap = _job_acceptance(root, job_id, node.get("files") or [])
                 reject_reason = "" if accepted else _job_rejection_reason(root, job_id)
@@ -1030,7 +1070,7 @@ def refresh_locked(root, spec, state):
     finals_ok = (not final_nodes) or all((state["nodes"].get(node["id"]) or {}).get("accepted") for node in final_nodes)
     any_failed = any((state["nodes"].get(node["id"]) or {}).get("status") == "failed" for node in required)
     all_done = all((state["nodes"].get(node["id"]) or {}).get("status") in {
-        "accepted", "completed-unverified", "skipped", "cancelled", "failed",
+        "accepted", "completed-unverified", "skipped", "cancelled", "failed", "unconfirmed",
     } for node in spec.get("nodes") or [])
     live_busy = running > 0 or live > 0 or asking
     if any_failed and not (unresolved or {}).get("node_id"):
@@ -1057,7 +1097,9 @@ def refresh_locked(root, spec, state):
         state["status"] = "blocked"
     elif pending_coord:
         state["status"] = "blocked"
-    elif asking or state.get("parent_action"):
+    elif asking or state.get("parent_action") or any(
+            (state["nodes"].get(node["id"]) or {}).get("status") == "unconfirmed"
+            for node in spec.get("nodes") or []):
         state["status"] = "attention"
     elif all_required_accepted and finals_ok and not live_busy:
         state["status"] = "verified"
@@ -1086,7 +1128,7 @@ def node_ready(spec, state, node):
     row = (state.get("nodes") or {}).get(node["id"]) or {}
     if row.get("status") in {
         "accepted", "skipped", "cancelled", "launching", "running", "ask",
-        "completed-unverified", "failed",
+        "completed-unverified", "failed", "unconfirmed",
     }:
         return False
     if row.get("launched") and row.get("ran"):

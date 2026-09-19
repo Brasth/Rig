@@ -969,12 +969,14 @@ def job_display_state(job: dict, reservation: dict | None = None, verification: 
         return "needs-input"
     if effective == "ask":
         return "needs-input"
+    if effective == "unconfirmed":
+        return "needs-input"
     if effective == "cancelled":
         return "cancelled"
-    if effective in {"fail", "timeout", "stale"} or verification.get("state") == "failed" or verification.get("acceptance") == "rejected":
-        return "failed"
     if reservation.get("needs_reconciliation"):
         return "needs-input"
+    if effective in {"fail", "timeout", "stale"} or verification.get("state") == "failed" or verification.get("acceptance") == "rejected":
+        return "failed"
     if verification.get("state") == "verifying" and verification.get("active_check"):
         return "verifying"
     if effective == "running":
@@ -994,6 +996,16 @@ def project_job(job: dict, repo: Path | None = None, *, refresh: bool = False, c
     import verification
 
     row = dict(job)
+    reservation = row.get("reservation") or {}
+    execution_status = reservation.get("execution_status")
+    if reservation.get("stopped") and execution_status in {"ok", "fail", "timeout", "cancelled"}:
+        row["effective"] = execution_status
+    elif (row.get("effective") in {"running", "stale", "unconfirmed"}
+          and not reservation.get("stopped")
+          and (row.get("effective") == "unconfirmed" or row.get("status") == "unconfirmed"
+               or reservation.get("needs_reconciliation"))):
+        if row.get("effective") != "ask":
+            row["effective"] = "unconfirmed"
     row["cancellation_state"] = cancellation.state(row)
     if row["cancellation_state"] and row.get("effective") not in cancellation.TERMINAL:
         row["effective"] = "cancel_requested"
@@ -1019,7 +1031,7 @@ def project_job(job: dict, repo: Path | None = None, *, refresh: bool = False, c
         pending = row.get("ask") or {}
         reason = pending.get("preview") or pending.get("tool_name") or "Permission required"
         action = f"rig job allow {jid} | rig job deny {jid}"
-    elif reservation.get("needs_reconciliation"):
+    elif row.get("effective") == "unconfirmed" or reservation.get("needs_reconciliation"):
         reason = reservation.get("reconciliation_reason") or "Owner or process state needs reconciliation"
         if row.get("effective") == "cancelled" and held and not reservation.get("stopped"):
             reason = "stopping; files held — " + str(reason)
@@ -1097,7 +1109,9 @@ def load_job(job_path: Path, *, include_activity: bool = True) -> dict | None:
     alive = pid_alive(pid_i)
     effective = status
     pending_ask = rig_ask.load_ask(job_path) if status == "running" else None
-    if status == "running" and pid_i and not alive:
+    if status == "unconfirmed":
+        effective = "unconfirmed"
+    elif status == "running" and pid_i and not alive:
         effective = "stale"
     elif pending_ask and (alive or not pid_i):
         effective = "ask"

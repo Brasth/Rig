@@ -113,7 +113,7 @@ class ProcessControlTests(unittest.TestCase):
                     self.assertTrue(record["slot_held"])
                     for name in ("meta.json", "result.json"):
                         published = json.loads((folder / name).read_text())
-                        self.assertEqual(published["status"], "running")
+                        self.assertEqual(published["status"], "unconfirmed")
                         self.assertEqual(published["exit_code"], 0)
                         self.assertEqual(published["ended_at"], "")
                         self.assertNotIn("elapsed_s", published)
@@ -171,6 +171,48 @@ while True: time.sleep(0.1)
                     if pid:
                         try: os.kill(pid, signal.SIGKILL)
                         except ProcessLookupError: pass
+                proc.wait(timeout=2)
+
+    def test_terminate_does_not_kill_reparented_orphan(self):
+        ready = None
+        leftover = None
+        with tempfile.TemporaryDirectory() as directory:
+            ready = Path(directory) / "ready"
+            leftover = Path(directory) / "leftover"
+            code = (
+                "import os, pathlib, sys, time\n"
+                "os.setsid()\n"
+                "child = os.fork()\n"
+                "if child == 0:\n"
+                "    pathlib.Path(sys.argv[2]).write_text(str(os.getpid()))\n"
+                "    while True:\n"
+                "        time.sleep(0.1)\n"
+                "pathlib.Path(sys.argv[1]).write_text(str(os.getpid()))\n"
+                "while True:\n"
+                "    time.sleep(0.1)\n"
+            )
+            proc = subprocess.Popen([sys.executable, "-c", code, str(ready), str(leftover)])
+            orphan = None
+            try:
+                deadline = time.monotonic() + 5
+                while time.monotonic() < deadline and not (ready.exists() and leftover.exists()):
+                    time.sleep(0.02)
+                self.assertTrue(ready.exists() and leftover.exists(), proc.poll())
+                orphan = int(leftover.read_text())
+                identity = admission.process_identity(proc.pid)
+                identity["descendants"] = [admission.process_identity(orphan)]
+                os.kill(proc.pid, signal.SIGKILL)
+                proc.wait(timeout=2)
+                result = process_control.terminate(identity, timeout=2, grace=0.1)
+                self.assertTrue(result["stopped"], result)
+                self.assertEqual(admission._process_state({"pid": orphan, "start_id": identity["descendants"][0]["start_id"]}), "alive")
+            finally:
+                for pid in [orphan, proc.pid]:
+                    if pid:
+                        try:
+                            os.kill(pid, signal.SIGKILL)
+                        except ProcessLookupError:
+                            pass
                 proc.wait(timeout=2)
 
 

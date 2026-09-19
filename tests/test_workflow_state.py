@@ -334,6 +334,26 @@ class WorkflowState(unittest.TestCase):
         queued = json.loads((self.repo / ".rig" / "queue" / f"{item['id']}.json").read_text())
         self.assertEqual(queued["status"], "cancelled")
 
+    def test_unconfirmed_job_is_attention_not_running(self):
+        created = self.create([{"id": "w1", "role": "implement", "files": ["a.py"]}])
+        spec, state = wf.load_pair(self.repo, created["workflow_id"], required=True)
+        job_id = "job-unconfirmed"
+        folder = self.repo / ".rig" / "jobs" / job_id
+        folder.mkdir(parents=True)
+        (folder / "meta.json").write_text(json.dumps({
+            "job_id": job_id, "status": "unconfirmed", "role": "implement", "files": ["a.py"],
+        }) + "\n")
+        state["nodes"]["w1"].update(job_id=job_id, launched=True, ran=True, status="running")
+        wf.refresh_locked(self.repo, spec, state)
+        self.assertEqual(state["nodes"]["w1"]["status"], "unconfirmed")
+        self.assertEqual(state["status"], "attention")
+        self.assertNotEqual(state["status"], "running")
+        self.assertIsNone(state.get("failure") or None)
+        action = wf.next_parent_action(spec, state)
+        self.assertEqual(action.get("kind"), "reconcile")
+        self.assertEqual(action.get("node_id"), "w1")
+        self.assertFalse(wf.node_ready(spec, state, spec["nodes"][0]))
+
 
 if __name__ == "__main__":
     unittest.main()

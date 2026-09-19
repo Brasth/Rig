@@ -14,7 +14,7 @@ _SPLIT_MIN_WIDTH = 72
 _ASK_STATES = frozenset({"needs-input"})
 _JOB_ATTENTION_STATES = frozenset({
     "attention", "blocked", "stop-requested", "stop-unconfirmed",
-    "native-cancel-required", "cancel-requested",
+    "native-cancel-required", "cancel-requested", "unconfirmed", "needs-input",
 })
 _JOB_ACTIVE_STATES = frozenset({"working", "running", "reserved", "verifying"})
 _JOB_ACTIVE_EFFECTIVE = frozenset({"ask", "running", "reserved", "cancel_requested"})
@@ -30,6 +30,7 @@ _STATE_LABELS = {
     "stop-unconfirmed": "STOP",
     "native-cancel-required": "HOST",
     "cancel-requested": "STOP",
+    "unconfirmed": "ATTN",
     "failed": "FAIL",
     "cancelled": "CANC",
     "verified": "OK",
@@ -330,7 +331,7 @@ def _color(status):
     if status == "failed":
         return curses.color_pair(2)
     if status in {"needs-input", "reserved", "verifying", "cancelled", "stop-requested", "stop-unconfirmed",
-                  "native-cancel-required", "attention", "blocked", "cancel-requested"}:
+                  "native-cancel-required", "attention", "blocked", "cancel-requested", "unconfirmed"}:
         return curses.color_pair(3)
     return curses.A_NORMAL
 
