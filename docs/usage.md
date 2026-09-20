@@ -43,6 +43,7 @@ What that does:
 - No GitHub login. `curl` pipes `install.sh` into bash.
 - `install.sh` clones `https://github.com/Brasth/Rig.git` over HTTPS into a **temp** dir (needs `git`; if HTTPS clone fails and `gh` is logged in, it tries `gh repo clone`).
 - Attempts to install or upgrade tmux to **3.3+** using existing Homebrew (macOS), apt-get, or dnf (Linux); skips compatible tmux.
+- **Asks** whether to install Cua Driver for parent computer-use (default **No**). Piped `curl | bash` has no TTY and skips unless `RIG_INSTALL_CUA_DRIVER=1`. Decline is remembered in `~/.rig/cua-driver.json`. Missing Driver does not fail Rig. Skip this run with `RIG_SKIP_CUA_DRIVER=1`. After a yes, run `rig computer-use setup` in a repo to wire parent MCP.
 - Copies bin, scripts, skills, adapters, and templates into `~/.rig`.
 - Symlinks `~/.local/bin/rig` → `~/.rig/bin/rig`.
 - Runs `rig setup`.
@@ -57,7 +58,7 @@ Tmux package operations are noninteractive and time out after five minutes per o
 **`rig setup` writes:**
 
 - `~/.rig` (bin, scripts, skills, adapters, templates)
-- Skill links in `~/.agents/skills`, `~/.grok/skills`, `~/.codex/skills`, `~/.config/opencode/skill`, `~/.omp/agent/skills`, `~/.pi/agent/skills`, `~/.gemini/antigravity-cli/skills` (`delegate-harness`, `rig-jobs`, and `rig-queue`)
+- Skill links in `~/.agents/skills`, `~/.grok/skills`, `~/.codex/skills`, `~/.config/opencode/skill`, `~/.omp/agent/skills`, `~/.pi/agent/skills`, `~/.gemini/antigravity-cli/skills` (`delegate-harness`, `rig-jobs`, `rig-queue`, parent-only `computer-use`, `style-guide`, and `computer-test`)
 - Codex `~/.codex/hooks.json` UserPromptSubmit (parks `/queue` / `$queue` and **blocks** the model; trust once with `/hooks`) plus leftover `~/.codex/prompts/queue.md` (not a 0.154 slash). After `/plugins` install **Rig Queue**, setup drops the duplicate hooks.json entry. OpenCode park plugin `~/.config/opencode/plugins/rig-queue.js` and TUI HUD `tui.json` → `tui-plugins/rig-hud.tsx` (file path, not npm). OMP/Pi extensions `~/.<omp|pi>/agent/extensions/rig-queue.js` (`/queue` even while streaming; HUD under the editor).
 - Codex agent files under `~/.codex/agents` when they are Rig agents
 - Grok bottom status line (`[ui.status_line]` → `rig-statusline` with QUEUE; restart Grok once). agy `statusLine.command` in `~/.gemini/antigravity-cli/settings.json` (skip if you already have a custom line; `/statusline` if the row is hidden).
@@ -66,7 +67,29 @@ Tmux package operations are noninteractive and time out after five minutes per o
 - `mcpServers.rig` in `~/.omp/mcp.json`, `~/.pi/agent/mcp.json`, and `~/.gemini/config/mcp_config.json`
 - Codex sandbox writable roots so Grok/Claude/Cursor/OpenCode/OMP/Pi/agy children can write sessions (`[sandbox_workspace_write]`)
 
-Setup does **not** write project `mcp.json` / `opencode.json`. Setup does **not** add `pi-mcp-adapter` to Pi `settings.json`.
+Setup does **not** write project `mcp.json` / `opencode.json`. Setup does **not** add `pi-mcp-adapter` to Pi `settings.json`. `rig setup --cua-driver` / `--no-cua-driver` forwards to the Cua Driver installer. `rig computer-use setup` is the complete machine path (binary + parent MCP on an isolating parent CLI + Cua skill pack). It does **not** write `cua-driver` into a CLI that cannot isolate children (Grok print-mode, OpenCode, Pi); those parents use `cua-driver call`. It never writes Driver into worker CLI configs.
+
+## Computer-use (parent)
+
+Cua Driver is parent-only eyes and hands. Never a Rig worker. Never `[workers].cua`. Children never receive cua-driver or chrome-devtools MCP.
+
+Effective on = machine `~/.rig/cua-driver.json` `opt_in=true` **and** `cua-driver` on PATH **and** this repo `[computer-use] enabled=true`. Anything else: **chrome-devtools** only. Never Figma MCP or Playwright as the computer-use fallback. Never the Hermes `computer_use` skill.
+
+When Driver is effective, every legal parent (Grok, Codex, OpenCode, OMP, Pi, agy) uses Rig MCP `rig_cu_capture` → `rig_cu_act` (fresh `element_token`) → `rig_cu_confirm`, and `rig_cu_record` for session video. AX token first; px only after `degraded` / `escalate_px` on that snapshot. Named Chrome profile: parent `chrome-profile` open, then Driver existing-profile bind. Isolated profile is not the Figma path. Existing-profile grant is human (`cua-driver serve --grant existing-profile`); Rig never silent-grants. Figma MCP remains parent file/node, not a clicker. Put the returned `brief_block` in the worker brief. Do not spawn a clicker. Do not call raw cua-driver MCP or shell cua-driver for that loop.
+
+Real GUI tests (click the live UI, pass/fail, record `recording.mp4`) stay parent: `skills/computer-test/SKILL.md`. Desktop drive: `skills/computer-use/references/desktop-drive.md`. Logged-in Chrome: `logged-in-browser.md`. Video: `skills/computer-test/references/record-video.md` (`rig_cu_record` under `.rig/cu-evidence`). Never Playwright as computer-use.
+
+Recreating a Figma, canvas, or screenshot as UI is still parent vision + CU. Web: `skills/computer-use/references/figma-to-code.md`. Mobile/native: `figma-to-mobile.md`. Screenshot only: `screenshot-to-ui.md`. Follow `skills/computer-use/SKILL.md` and the matching reference: inventory every layer, record spacing and gap for every section and item (nested auto-layout padding/gap plus sibling space — not only the outer frame), record colours (every fill, text, stroke, effect) and typography (every text layer), download every image into the codebase assets folder (MCP/node export, then native Export, then high-zoom crop — never a generated/SVG/emoji stand-in; reuse `src/assets`, `public/`, or the repo’s existing folder), record inspect tokens, write the style-guide token config (`skills/style-guide/SKILL.md`) for colours, spacing, and typography as CSS variables, Sass maps, or Tailwind config (`theme.extend` / `@theme`) — follow the codebase’s own style-guide skill or rule when present; if a token config already exists, reuse it and do not create a new or custom file, then iterate until an HTML screenshot at the frame size matches the Figma frame screenshot. Put those files, the spacing / colour / type tables, and the token file in the worker brief.
+
+```bash
+rig computer-use              # machine + this-repo + MCP + effective
+rig computer-use setup        # install/upgrade binary, wire parent MCP if isolation exists
+rig computer-use on           # this repo [computer-use] enabled=true
+rig computer-use off          # this repo enabled=false; does not uninstall the binary
+rig computer-use doctor       # also folded into rig doctor
+```
+
+`rig init` writes `enabled = false`. Two repos on one machine can disagree. `on` with no binary writes the flag and warns; the parent still uses chrome-devtools until setup succeeds.
 
 Success print:
 
@@ -572,7 +595,7 @@ agy 1.2.0 has no `UserPromptSubmit`. `/queue` on a free turn can still park via 
 
 1. Open Codex, Grok, OpenCode, OMP, Pi, or agy in an initialized repo; use a new thread after setup/init. Type the normal request, not `rig run`.
 2. Parent chooses semantic `role` and calls `rig_session(role=..., compact=true, terminal_limit=10, case=...)`. Questions/plans stay local, including non-English requests with an explicit role. The omitted-role fallback is bounded English inference. Compact keeps all active/ASK/reserved jobs and ten recent terminal rows; full mode remains the public default.
-3. Parent checks the relevant files, names scope and acceptance, and follows the returned worker/model/effort. Gather only if the parent cannot name files after a short check. Vision, Figma, computer-use, and chrome-profile stay with the parent; put their artifacts and required skill file paths in the brief.
+3. Parent checks the relevant files, names scope and acceptance, and follows the returned worker/model/effort. Gather only if the parent cannot name files after a short check. Vision, Figma, computer-use, and chrome-profile stay with the parent; put their artifacts and required skill file paths in the brief. Parent may call Cua Driver only when `[computer-use] enabled=true` and `cua-driver` is on PATH, via Rig MCP `rig_cu_capture` / `rig_cu_act` / `rig_cu_confirm` / `rig_cu_record` (capture → act on a fresh element_token → recapture). AX token first; px only after `degraded` / `escalate_px` on that snapshot. Named Chrome profile: parent `chrome-profile` open, then Driver existing-profile bind. Isolated profile is not the Figma path. Existing-profile grant is human (`cua-driver serve --grant existing-profile`); Rig never silent-grants. Otherwise chrome-devtools. Never Figma MCP or Playwright as computer-use fallback. Figma MCP remains parent file/node. Never the Hermes `computer_use` skill. Children never receive cua-driver or chrome-devtools MCP. Children never receive chrome-profile or `rig_cu_*`.
 4. Register every native/parent write before edits. Wrapper dispatch reserves before execution; queued launches consume their exact claim credentials. A job ID does not authorize reuse. Read-only retrospective history may use `rig_job_record`; writes cannot gain protection afterwards.
 5. Wait once on observable wrapper IDs, without timeout. ASK: allow/deny that job, then wait the same IDs again. Native agents use the owning host's wait/interrupt and authenticated completion. A dropped wait permits one `rig job wait ID --timeout 0` snapshot, followed by inspection/reconciliation. Explicit cancellation records intent for attached attempts; never re-wait, re-pick, or drain automatically. Never replace a worker because it asks permission.
 6. After confirmed task termination, inspect scoped evidence, declare requirements, run deliberate checks/manual review, and accept or reject the current content. Report actual changed behavior, validation, and limitations. Execution `ok` alone is completed-unverified.

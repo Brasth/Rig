@@ -30,3 +30,8 @@ max_running = 3
 # max_per_worker = 2
 # [queue.workers]
 # grok = 2
+
+# Parent-only Cua Driver. Machine install is not this flag.
+# Effective on = ~/.rig/cua-driver.json opt_in + cua-driver on PATH + enabled=true.
+[computer-use]
+enabled = false

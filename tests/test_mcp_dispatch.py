@@ -460,6 +460,10 @@ class McpDispatch(unittest.TestCase):
             for name in CHILD_TOOLS:
                 self.assertIn(name, names)
             self.assertNotIn("rig_pick", names)
+            self.assertNotIn("rig_cu_capture", names)
+            self.assertNotIn("rig_cu_act", names)
+            self.assertNotIn("rig_cu_confirm", names)
+            self.assertNotIn("rig_cu_record", names)
             self.assertNotIn("rig_job_wait", names)
             self.assertNotIn("rig_job_cancel", names)
             self.assertNotIn("rig_job_recover_cancelled", names)
@@ -1116,6 +1120,118 @@ class McpDispatch(unittest.TestCase):
             os.environ.pop("RIG_JOB_ID", None)
             os.environ.pop("RIG_JOB_DIR", None)
             os.environ.pop("RIG_REPO", None)
+
+    def test_parent_cu_tools_hidden_when_not_effective(self):
+        os.environ["RIG_REPO"] = str(self.repo)
+        names = [t["name"] for t in rig_mcp.listed_tools()]
+        self.assertNotIn("rig_cu_capture", names)
+        self.assertNotIn("rig_cu_act", names)
+        self.assertNotIn("rig_cu_confirm", names)
+        self.assertNotIn("rig_cu_record", names)
+
+    def test_parent_cu_tools_listed_when_effective(self):
+        os.environ["RIG_REPO"] = str(self.repo)
+        with mock.patch("computer_use.tools_listed", return_value=True):
+            names = [t["name"] for t in rig_mcp.listed_tools()]
+        self.assertIn("rig_cu_capture", names)
+        self.assertIn("rig_cu_act", names)
+        self.assertIn("rig_cu_confirm", names)
+        self.assertIn("rig_cu_record", names)
+
+    def test_listed_tools_survives_cu_helper_crash(self):
+        os.environ["RIG_REPO"] = str(self.repo)
+        with mock.patch("computer_use.tools_listed", side_effect=AttributeError("harness")):
+            names = [t["name"] for t in rig_mcp.listed_tools()]
+        self.assertIn("rig_session", names)
+        self.assertNotIn("rig_cu_capture", names)
+        self.assertNotIn("rig_cu_act", names)
+        self.assertNotIn("rig_cu_confirm", names)
+        self.assertNotIn("rig_cu_record", names)
+
+    def test_child_cu_call_refused_for_grok_codex_devin(self):
+        for worker, job_id in (("grok", "child-grok-cu"), ("codex", "child-codex-cu"), ("devin", "child-devin-cu")):
+            job_dir = self.repo / ".rig" / "jobs" / job_id
+            job_dir.mkdir(parents=True, exist_ok=True)
+            (job_dir / "meta.json").write_text(json.dumps({
+                "job_id": job_id, "worker": worker, "role": "implement", "status": "running",
+            }))
+            os.environ["RIG_JOB_ID"] = job_id
+            os.environ["RIG_JOB_DIR"] = str(job_dir)
+            os.environ["RIG_REPO"] = str(self.repo)
+            try:
+                names = [t["name"] for t in rig_mcp.listed_tools()]
+                self.assertNotIn("rig_cu_capture", names, worker)
+                self.assertNotIn("rig_cu_record", names, worker)
+                denied = rig_mcp.call_tool("rig_cu_capture", {"repo": str(self.repo)})
+                self.assertTrue(denied.get("isError"), worker)
+                self.assertIn("not a child tool", self._text(denied))
+            finally:
+                os.environ.pop("RIG_JOB_ID", None)
+                os.environ.pop("RIG_JOB_DIR", None)
+
+    def test_parent_cu_capture_returns_evidence(self):
+        os.environ["RIG_REPO"] = str(self.repo)
+        ev = {
+            "ok": True, "effective": True, "action": "capture", "snapshot_id": "drv-1",
+            "pid": 1, "window_id": 2, "addressed": {"element_token": "", "index": None, "label": ""},
+            "effect": "captured", "before_png": "", "after_png": "/tmp/a.png",
+            "elements": [{"index": 1, "role": "AXButton", "label": "1", "element_token": "tok-1"}],
+            "brief_block": "Child must not click.", "hint": "act only with a token",
+        }
+        with mock.patch("computer_use.cu_capture", return_value=ev) as capture:
+            out = rig_mcp.call_tool(
+                "rig_cu_capture",
+                {"repo": str(self.repo), "pid": 1, "window_id": 2, "bundle_id": "com.apple.calculator"},
+            )
+        self.assertNotIn("isError", out)
+        self.assertEqual(out["structuredContent"]["snapshot_id"], "drv-1")
+        self.assertIn("Child must not click", self._text(out))
+        capture.assert_called_once()
+        kwargs = capture.call_args.kwargs
+        self.assertEqual(kwargs.get("bundle_id"), "com.apple.calculator")
+        self.assertEqual(kwargs.get("pid"), 1)
+        self.assertEqual(kwargs.get("profile_key"), "")
+        self.assertEqual(kwargs.get("url"), "")
+
+    def test_parent_cu_act_passes_xy(self):
+        os.environ["RIG_REPO"] = str(self.repo)
+        ev = {
+            "ok": True, "effective": True, "action": "click", "snapshot_id": "drv-1",
+            "pid": 1, "window_id": 2,
+            "addressed": {"kind": "px", "element_token": "", "index": None, "label": "", "ref": "", "x": 10, "y": 20},
+            "effect": "unverifiable", "before_png": "", "after_png": "", "elements": [],
+            "brief_block": "Child must not click.", "hint": "",
+        }
+        with mock.patch("computer_use.cu_act", return_value=ev) as act:
+            out = rig_mcp.call_tool(
+                "rig_cu_act",
+                {"repo": str(self.repo), "snapshot_id": "drv-1", "action": "click", "x": 10, "y": 20},
+            )
+        self.assertNotIn("isError", out)
+        kwargs = act.call_args.kwargs
+        self.assertEqual(kwargs.get("x"), 10.0)
+        self.assertEqual(kwargs.get("y"), 20.0)
+        self.assertEqual(kwargs.get("element_token"), "")
+
+    def test_parent_cu_record_passes_action(self):
+        os.environ["RIG_REPO"] = str(self.repo)
+        ev = {
+            "ok": True, "effective": True, "action": "record_start",
+            "effect": "recorded", "recording_path": "/repo/.rig/cu-evidence/run/recording.mp4",
+            "output_dir": "/repo/.rig/cu-evidence/run", "brief_block": "Child must not click.",
+            "hint": "stop with rig_cu_record action=stop",
+        }
+        with mock.patch("computer_use.cu_record", return_value=ev) as record:
+            out = rig_mcp.call_tool(
+                "rig_cu_record",
+                {"repo": str(self.repo), "action": "start", "output_dir": ".rig/cu-evidence/run"},
+            )
+        self.assertNotIn("isError", out)
+        self.assertEqual(out["structuredContent"]["action"], "record_start")
+        kwargs = record.call_args.kwargs
+        self.assertEqual(kwargs.get("action"), "start")
+        self.assertEqual(kwargs.get("output_dir"), ".rig/cu-evidence/run")
+        self.assertIsNone(kwargs.get("record_video"))
 
     def _wrapper_job(self, job_id="wrap-stopped", files=None, stopped=False):
         files = ["a.py"] if files is None else list(files)

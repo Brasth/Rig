@@ -164,6 +164,56 @@ class ChildMcpReadiness(unittest.TestCase):
         self.assertIsNone(json.loads((incomplete / "meta.json").read_text()).get("child_mcp_status"))
 
 
+class ChildMcpIsolation(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.job_dir = Path(self.temp.name) / "job"
+        self.job_dir.mkdir()
+        self.repo = Path(self.temp.name) / "repo"
+        self.repo.mkdir()
+        self.job_id = "iso-job"
+
+    def test_payload_is_only_rig_servers(self):
+        payload = child_mcp.mcp_payload(self.job_dir, self.job_id, self.repo)
+        names = child_mcp.payload_server_names(payload)
+        self.assertEqual(set(names), {"rig", "rig-ask"})
+        blob = json.dumps(payload)
+        for banned in ("cua-driver", "chrome-devtools", "figma", "playwright"):
+            self.assertNotIn(banned, names)
+            self.assertNotIn(banned, blob)
+
+    def test_write_job_mcp_claude_is_strict(self):
+        spec = child_mcp.write_job_mcp(self.job_dir, self.job_id, self.repo, "claude")
+        self.assertIn("--mcp-config", spec["argv"])
+        self.assertIn("--strict-mcp-config", spec["argv"])
+        self.assertEqual(spec["isolation"], "strict-mcp-config")
+        payload = json.loads(Path(spec["path"]).read_text())
+        self.assertEqual(set(child_mcp.payload_server_names(payload)), {"rig", "rig-ask"})
+
+    def test_write_job_mcp_codex_ignores_user_config(self):
+        spec = child_mcp.write_job_mcp(self.job_dir, self.job_id, self.repo, "codex")
+        argv = spec["argv"]
+        self.assertIn("--ignore-user-config", argv)
+        joined = " ".join(argv)
+        self.assertIn("mcp_servers.rig.command=", joined)
+        self.assertNotIn("cua-driver", joined)
+        self.assertNotIn("chrome-devtools", joined)
+        self.assertEqual(spec["isolation"], "ignore-user-config")
+
+    def test_write_job_mcp_grok_does_not_pretend(self):
+        spec = child_mcp.write_job_mcp(self.job_dir, self.job_id, self.repo, "grok")
+        self.assertEqual(spec["argv"], [])
+        self.assertEqual(spec["isolation"], "none")
+        payload = json.loads(Path(spec["path"]).read_text())
+        self.assertEqual(set(child_mcp.payload_server_names(payload)), {"rig", "rig-ask"})
+
+    def test_write_job_mcp_omp_points_env_at_job_payload(self):
+        spec = child_mcp.write_job_mcp(self.job_dir, self.job_id, self.repo, "omp")
+        self.assertEqual(spec["env"].get("OMP_MCP"), spec["path"])
+        self.assertEqual(spec["isolation"], "OMP_MCP")
+
+
 class ChildMcpHandshakeLock(unittest.TestCase):
     def test_mark_unknown_does_not_downgrade_concurrent_connected(self):
         with tempfile.TemporaryDirectory() as temp:

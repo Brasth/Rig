@@ -47,6 +47,10 @@ DEVIN_LIVE = frozenset(
 BOOTSTRAP_TOOLS = frozenset({"rig_job_inbox", "permission_prompt"})
 HANDSHAKE_TOOL = "rig_job_inbox"
 CHILD_COORDINATION_TOOL = "rig_job_coordination_request"
+ALLOWED_JOB_MCP_SERVERS = frozenset({"rig", "rig-ask"})
+FORBIDDEN_MCP_SERVERS = frozenset({
+    "cua-driver", "chrome-devtools", "chrome_devtools", "playwright", "figma",
+})
 
 
 def iso_now() -> str:
@@ -359,23 +363,100 @@ def _server(job_dir: Path, job_id: str, repo: Path) -> dict:
     }
 
 
+def _toml_literal(value: str) -> str:
+    return '"' + str(value).replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def _toml_array(values: list[str]) -> str:
+    return "[" + ", ".join(_toml_literal(item) for item in values) + "]"
+
+
+def payload_server_names(payload: dict) -> list[str]:
+    servers = payload.get("mcpServers") if isinstance(payload, dict) else None
+    if not isinstance(servers, dict):
+        return []
+    return list(servers)
+
+
+def assert_job_mcp_payload(payload: dict) -> dict:
+    names = payload_server_names(payload)
+    extra = [name for name in names if name not in ALLOWED_JOB_MCP_SERVERS]
+    if extra:
+        raise RuntimeError("job MCP payload must only contain rig servers, not " + ", ".join(extra))
+    forbidden = sorted(set(names) & FORBIDDEN_MCP_SERVERS)
+    if forbidden:
+        raise RuntimeError("job MCP payload forbids " + ", ".join(forbidden))
+    return payload
+
+
 def mcp_payload(job_dir: Path, job_id: str, repo: Path) -> dict:
     server = _server(job_dir, job_id, repo)
-    return {"mcpServers": {"rig-ask": dict(server), "rig": dict(server)}}
+    return assert_job_mcp_payload({"mcpServers": {"rig-ask": dict(server), "rig": dict(server)}})
+
+
+def _codex_isolation_argv(server: dict) -> list[str]:
+    """Ignore ~/.codex/config.toml and inject only job-scoped mcp_servers.rig via -c."""
+    command = str(server.get("command") or "")
+    args = [str(item) for item in (server.get("args") or [])]
+    argv = [
+        "--ignore-user-config",
+        "-c", f"mcp_servers.rig.command={_toml_literal(command)}",
+        "-c", f"mcp_servers.rig.args={_toml_array(args)}",
+        "-c", "mcp_servers.rig.enabled=true",
+        "-c", "mcp_servers.rig.startup_timeout_sec=8",
+    ]
+    for key, value in (server.get("env") or {}).items():
+        if not key or any(ch not in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_" for ch in key):
+            continue
+        argv.extend(["-c", f"mcp_servers.rig.env.{key}={_toml_literal(str(value))}"])
+    return argv
 
 
 def write_job_mcp(job_dir: Path, job_id: str, repo: Path, worker: str) -> dict:
-    """Claude gets explicit --mcp-config. Devin uses repo .devin/mcp_config.local.json. Others inherit RIG_JOB_ID/RIG_JOB_DIR."""
+    """Job MCP is always rig/rig-ask only.
+
+    Isolation is only as strong as the CLI:
+    - claude: --mcp-config JOB/mcp.json --strict-mcp-config
+    - codex: --ignore-user-config plus -c mcp_servers.rig (not ~/.codex/config.toml)
+    - omp/agy: OMP_MCP / AGY_MCP point at the job mcp.json
+    - grok: print-mode has no --mcp-config; inherits ~/.grok/config.toml. Do not pretend.
+    - opencode: OPENCODE_CONFIG is the full app config, not an MCP-only overlay. Do not pretend.
+    - pi: PI_CODING_AGENT_DIR is the whole agent dir (auth/skills). Do not hijack it.
+    - cursor: excluded until a safe --mcp-config exists
+    - devin: repo .devin/mcp_config.local.json
+    """
     job_dir = Path(job_dir)
     job_dir.mkdir(parents=True, exist_ok=True)
     ready, reason = worker_mcp_ready(worker)
     path = job_dir / "mcp.json"
-    path.write_text(json.dumps(mcp_payload(job_dir, job_id, repo), indent=2) + "\n")
+    payload = mcp_payload(job_dir, job_id, repo)
+    path.write_text(json.dumps(payload, indent=2) + "\n")
     env = dict(job_env(job_dir, job_id, repo))
     argv: list[str] = []
-    if worker == "claude":
+    isolation = "none"
+    name = (worker or "").strip()
+    if name == "claude":
         argv = ["--mcp-config", str(path), "--strict-mcp-config"]
-    return {"ready": ready, "reason": reason, "path": str(path), "argv": argv, "env": env}
+        isolation = "strict-mcp-config"
+    elif name == "codex":
+        argv = _codex_isolation_argv(_server(job_dir, job_id, repo))
+        isolation = "ignore-user-config"
+    elif name == "omp":
+        env["OMP_MCP"] = str(path)
+        isolation = "OMP_MCP"
+    elif name == "agy":
+        env["AGY_MCP"] = str(path)
+        isolation = "AGY_MCP"
+    elif name == "devin":
+        isolation = "job-devin-mcp"
+    return {
+        "ready": ready,
+        "reason": reason,
+        "path": str(path),
+        "argv": argv,
+        "env": env,
+        "isolation": isolation,
+    }
 
 
 def devin_mcp_path(repo: Path) -> Path:
