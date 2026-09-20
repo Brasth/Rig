@@ -595,6 +595,7 @@ TOOLS = [
                 "brief": {"type": "string", "description": "Worker brief markdown."},
                 "queue_id": {"type": "string"},
                 "writer_job_id": {"type": "string"},
+                "continues_job_id": {"type": "string"},
                 "writer_snapshot_id": {"type": "string"},
                 "writer_cli": {"type": "string"},
                 "writer_model": {"type": "string"},
@@ -1070,6 +1071,7 @@ LAUNCH_ARG_NAMES = frozenset({
     "credentials_path",
     "writer_job_id", "writer_snapshot_id", "writer_cli", "writer_model",
     "writer_provider", "review_mode", "routing", "assessment",
+    "continues_job_id",
 })
 _LAUNCH_PUBLIC_KEYS = (
     "job_id", "worker", "role", "wrapper_pid", "status",
@@ -2016,6 +2018,7 @@ def call_tool(name: str, args: dict, on_tick=None, *, wait_paths: list[Path] | N
                     brief=_optional_string(args, "brief"),
                     queue_id=_optional_string(args, "queue_id"),
                     writer_job_id=_optional_string(args, "writer_job_id"),
+                    continues_job_id=_optional_string(args, "continues_job_id"),
                     writer_snapshot_id=_optional_string(args, "writer_snapshot_id"),
                     writer_cli=_optional_string(args, "writer_cli"),
                     writer_model=_optional_string(args, "writer_model"),

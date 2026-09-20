@@ -349,6 +349,7 @@ write_json() {
   RESULT_MODEL="${MODEL:-}" \
   RESULT_EFFORT="${EFFORT:-}" \
   RESULT_THREAD="${PARENT_THREAD:-}" \
+  RESULT_SESSION_ID="${SESSION_ID:-}" \
   RESULT_OUT="$RESULT_OUT" \
   RESULT_META="$RESULT_META" \
   RESULT_REPO="$REPO" \
@@ -385,6 +386,16 @@ if os.environ.get("RESULT_EVIDENCE_ERROR"):
 thread = os.environ.get("RESULT_THREAD", "")
 if thread:
     overlay["thread"] = thread
+session_id = os.environ.get("RESULT_SESSION_ID", "")
+if session_id:
+    overlay["session_id"] = session_id
+    if os.environ.get("RESULT_WORKER") == "grok":
+        overlay["open"] = f"grok -r {session_id}"
+    if os.environ.get("RESULT_WORKER") in {"grok", "claude", "codex", "opencode"}:
+        overlay["resumable"] = True
+continues_id = os.environ.get("RIG_CONTINUES_JOB_ID", "")
+if continues_id:
+    overlay["continues_job_id"] = continues_id
 for key, env_key in (
     ("workflow_id", "RIG_WORKFLOW_ID"),
     ("workflow_node_id", "RIG_WORKFLOW_NODE_ID"),
@@ -505,7 +516,13 @@ if pid:
     overlay["pid"] = int(pid)
 if session_id:
     overlay["session_id"] = session_id
-    overlay["open"] = f"grok -r {session_id}"
+    if sys.argv[3] == "grok":
+        overlay["open"] = f"grok -r {session_id}"
+    if sys.argv[3] in {"grok", "claude", "codex", "opencode"}:
+        overlay["resumable"] = True
+continues_id = os.environ.get("RIG_CONTINUES_JOB_ID", "")
+if continues_id:
+    overlay["continues_job_id"] = continues_id
 if model:
     overlay["model"] = model
 if effort:
@@ -598,6 +615,7 @@ launch_provenance() {
     --worker "$WORKER" \
     --writer-job-id "${RIG_WRITER_JOB_ID:-}" --writer-cli "${RIG_WRITER_CLI:-}" \
     --writer-model "${RIG_WRITER_MODEL:-}" --writer-provider "${RIG_WRITER_PROVIDER:-}" \
+    --continues-job-id "${RIG_CONTINUES_JOB_ID:-}" \
     --review-mode "${RIG_REVIEW_MODE:-standalone}"
 }
 PROVENANCE_JSON="$(launch_provenance)" || exit 1
@@ -648,6 +666,100 @@ print(json.loads(sys.argv[1]).get("review_brief") or sys.argv[2])
 PY
 )"
 fi
+CONTINUES_WORKER=""
+CONTINUES_SESSION=""
+CONTINUES_RESUMABLE=""
+if [[ -n "${RIG_CONTINUES_JOB_ID:-}" ]]; then
+  CONTINUES_META="$(python3 - "$REPO" "$JOB_DIR" "$BRIEF" "${RIG_CONTINUES_JOB_ID}" <<'PY'
+import json, pathlib, sys
+root, job_dir, brief = map(pathlib.Path, sys.argv[1:4])
+prior_id = sys.argv[4]
+prior_dir = root / ".rig" / "jobs" / prior_id
+meta = {}
+result = {}
+for name, dest in (("meta.json", "meta"), ("result.json", "result")):
+    path = prior_dir / name
+    try:
+        obj = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+        obj = {}
+    if not isinstance(obj, dict):
+        obj = {}
+    if name == "meta.json":
+        meta = obj
+    else:
+        result = obj
+status = str(meta.get("status") or result.get("status") or "")
+summary = str(meta.get("summary") or result.get("summary") or "")
+files_changed = result.get("files_changed")
+if not isinstance(files_changed, list):
+    files_changed = meta.get("files_changed") if isinstance(meta.get("files_changed"), list) else []
+session_id = str(meta.get("session_id") or result.get("session_id") or "")
+resumable = meta.get("resumable") is True or result.get("resumable") is True
+evidence = []
+for name in ("change-evidence.json", "result.json"):
+    path = prior_dir / name
+    if path.is_file():
+        evidence.append(str(path))
+context = {
+    "prior_job_id": prior_id,
+    "worker": str(meta.get("worker") or result.get("worker") or ""),
+    "status": status,
+    "summary": summary,
+    "files_changed": files_changed,
+    "evidence": evidence,
+}
+if session_id:
+    context["session_id"] = session_id
+if resumable:
+    context["resumable"] = True
+section = (
+    "\n\n## Previous worker context\n\n"
+    "This job continues a prior worker. The parent delta is in the brief body above. "
+    "Use the recorded job files as context; do not re-do unrelated work.\n\n"
+    "```json\n" + json.dumps(context, indent=2) + "\n```\n"
+)
+text = brief.read_bytes()
+if b"## Previous worker context" not in text:
+    brief.write_bytes(text + section.encode("utf-8"))
+print(json.dumps({
+    "worker": context["worker"],
+    "session_id": session_id,
+    "resumable": resumable,
+}))
+PY
+)" || CONTINUES_META="{}"
+  CONTINUES_WORKER="$(python3 - "$CONTINUES_META" <<'PY'
+import json, sys
+try:
+    print(json.loads(sys.argv[1]).get("worker") or "")
+except Exception:
+    print("")
+PY
+)"
+  CONTINUES_SESSION="$(python3 - "$CONTINUES_META" <<'PY'
+import json, sys
+try:
+    print(json.loads(sys.argv[1]).get("session_id") or "")
+except Exception:
+    print("")
+PY
+)"
+  CONTINUES_RESUMABLE="$(python3 - "$CONTINUES_META" <<'PY'
+import json, sys
+try:
+    print("true" if json.loads(sys.argv[1]).get("resumable") is True else "")
+except Exception:
+    print("")
+PY
+)"
+fi
+SHOULD_RESUME=0
+if [[ -n "${RIG_CONTINUES_JOB_ID:-}" && "$CONTINUES_RESUMABLE" == "true" && -n "$CONTINUES_SESSION" && "$CONTINUES_WORKER" == "$WORKER" ]]; then
+  case "$WORKER" in
+    grok|claude|codex|opencode) SHOULD_RESUME=1 ;;
+  esac
+fi
 BRIEF_TEXT="$(cat "$BRIEF")"
 CHILD_MCP_PREPARE="$(python3 "$CHILD_MCP_PY" prepare "$JOB_DIR" "$JOB_ID" "$REPO" "$WORKER")"
 CHILD_MCP_ARGV=()
@@ -685,17 +797,35 @@ SESSION_ID=""
 CMD=()
 case "$WORKER" in
   grok)
-    SESSION_ID="$(uuidgen | tr 'A-Z' 'a-z')"
-    CMD=(grok --no-auto-update --prompt-file "$BRIEF" --cwd "$REPO" --output-format streaming-json --session-id "$SESSION_ID" --always-approve --max-turns 40)
-    [[ -n "$MODEL" ]] && CMD+=(-m "$MODEL")
-    [[ -n "$EFFORT" ]] && CMD+=(--effort "$EFFORT")
+    if [[ "$SHOULD_RESUME" -eq 1 ]]; then
+      SESSION_ID="$CONTINUES_SESSION"
+      CMD=(grok --no-auto-update -r "$SESSION_ID" --cwd "$REPO" --output-format streaming-json --always-approve --max-turns 40)
+      [[ -n "$MODEL" ]] && CMD+=(-m "$MODEL")
+      [[ -n "$EFFORT" ]] && CMD+=(--effort "$EFFORT")
+      CMD+=("$BRIEF_TEXT")
+    else
+      SESSION_ID="$(uuidgen | tr 'A-Z' 'a-z')"
+      CMD=(grok --no-auto-update --prompt-file "$BRIEF" --cwd "$REPO" --output-format streaming-json --session-id "$SESSION_ID" --always-approve --max-turns 40)
+      [[ -n "$MODEL" ]] && CMD+=(-m "$MODEL")
+      [[ -n "$EFFORT" ]] && CMD+=(--effort "$EFFORT")
+    fi
     ;;
   codex)
-    CMD=(codex exec --json --ephemeral -s workspace-write -C "$REPO")
-    [[ -n "$MODEL" ]] && CMD+=(-m "$MODEL")
-    [[ -n "$EFFORT" ]] && CMD+=(-c "model_reasoning_effort=\"$EFFORT\"")
-    CMD+=("${CHILD_MCP_ARGV[@]}")
-    CMD+=("$BRIEF_TEXT")
+    if [[ "$SHOULD_RESUME" -eq 1 ]]; then
+      SESSION_ID="$CONTINUES_SESSION"
+      # -s/--sandbox and -C/--cd belong to `codex exec`, not `exec resume`.
+      CMD=(codex exec --json -s workspace-write -C "$REPO")
+      [[ -n "$MODEL" ]] && CMD+=(-m "$MODEL")
+      [[ -n "$EFFORT" ]] && CMD+=(-c "model_reasoning_effort=\"$EFFORT\"")
+      CMD+=("${CHILD_MCP_ARGV[@]}")
+      CMD+=(resume "$SESSION_ID" "$BRIEF_TEXT")
+    else
+      CMD=(codex exec --json -s workspace-write -C "$REPO")
+      [[ -n "$MODEL" ]] && CMD+=(-m "$MODEL")
+      [[ -n "$EFFORT" ]] && CMD+=(-c "model_reasoning_effort=\"$EFFORT\"")
+      CMD+=("${CHILD_MCP_ARGV[@]}")
+      CMD+=("$BRIEF_TEXT")
+    fi
     ;;
   claude)
     # Print-mode must stream. json buffers until exit, so Anthropic's
@@ -718,8 +848,11 @@ case "$WORKER" in
     CMD+=(
       --permission-prompt-tool mcp__rig-ask__permission_prompt
       --disable-slash-commands
-      --no-session-persistence
     )
+    if [[ "$SHOULD_RESUME" -eq 1 ]]; then
+      SESSION_ID="$CONTINUES_SESSION"
+      CMD+=(--resume "$SESSION_ID")
+    fi
     if [[ -f "$CLAUDE_WORKER_MD" ]]; then
       CMD+=(--append-system-prompt-file "$CLAUDE_WORKER_MD")
     fi
@@ -755,6 +888,11 @@ case "$WORKER" in
       --title "rig $JOB_ID"
       --auto
     )
+    if [[ "$SHOULD_RESUME" -eq 1 ]]; then
+      SESSION_ID="$CONTINUES_SESSION"
+      # --session continues that id; --continue is last-session and conflicts.
+      CMD+=(--session "$SESSION_ID")
+    fi
     [[ -n "$MODEL" ]] && CMD+=(-m "$MODEL")
     [[ -n "$EFFORT" ]] && CMD+=(--variant "$EFFORT")
     CMD+=("$BRIEF_TEXT")
@@ -1015,6 +1153,64 @@ set -e
 
 ENDED="$(iso_now)"
 complete_execution
+
+extract_session_id() {
+  local log="${1:-${LOG:-}}"
+  [[ -n "$log" && -f "$log" ]] || return 0
+  python3 - "$WORKER" "$log" <<'PY'
+import json, pathlib, sys
+worker, path = sys.argv[1], pathlib.Path(sys.argv[2])
+try:
+    raw = path.read_text(errors="replace")
+except OSError:
+    raise SystemExit(0)
+
+def take(value):
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return ""
+
+for line in raw.splitlines():
+    text = line.strip()
+    if not text.startswith("{"):
+        continue
+    try:
+        obj = json.loads(text)
+    except json.JSONDecodeError:
+        continue
+    if not isinstance(obj, dict):
+        continue
+    sid = ""
+    if worker == "claude":
+        sid = take(obj.get("session_id"))
+        if obj.get("type") == "system" and obj.get("subtype") == "init" and sid:
+            print(sid)
+            raise SystemExit(0)
+        if sid and obj.get("type") in {"system", "result"}:
+            print(sid)
+            raise SystemExit(0)
+    elif worker == "codex":
+        thread = obj.get("thread") if isinstance(obj.get("thread"), dict) else {}
+        sid = take(obj.get("thread_id")) or take(obj.get("session_id")) or take(thread.get("id")) or take(thread.get("thread_id"))
+        if sid:
+            print(sid)
+            raise SystemExit(0)
+    elif worker == "opencode":
+        props = obj.get("properties") if isinstance(obj.get("properties"), dict) else {}
+        sid = (
+            take(obj.get("sessionID")) or take(obj.get("sessionId")) or take(obj.get("session_id"))
+            or take(props.get("sessionID")) or take(props.get("sessionId")) or take(props.get("session_id"))
+        )
+        if sid:
+            print(sid)
+            raise SystemExit(0)
+print("")
+PY
+}
+
+if [[ -z "${SESSION_ID:-}" ]]; then
+  SESSION_ID="$(extract_session_id || true)"
+fi
 
 summary_from_log() {
   if command -v python3 >/dev/null 2>&1; then

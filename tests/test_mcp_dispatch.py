@@ -1467,6 +1467,29 @@ class McpDispatch(unittest.TestCase):
         self.assertIn("ok or unknown", self._text(rejected))
         self.assertNotIn(ok_lease["owner_token"], self._text(rejected))
 
+    def test_job_launch_accepts_continues_job_id_and_rejects_unknown(self):
+        self.assertIn("continues_job_id", rig_mcp.LAUNCH_ARG_NAMES)
+        tool = next(item for item in rig_mcp.TOOLS if item["name"] == "rig_job_launch")
+        self.assertIn("continues_job_id", tool["inputSchema"]["properties"])
+        public = {
+            "job_id": "next-ok", "worker": "grok", "role": "implement",
+            "wrapper_pid": 7, "status": "running", "reservation_id": "r1",
+            "attempt_id": "a1", "credentials_path": "/tmp/creds.json",
+        }
+        with mock.patch.object(rig_mcp.rig_launch, "launch", return_value=public) as launch:
+            out = rig_mcp.call_tool("rig_job_launch", {
+                "repo": str(self.repo), "brief": "delta only", "id": "next-ok",
+                "worker": "grok", "continues_job_id": "prior-ok",
+            })
+        self.assertFalse(out.get("isError"), out)
+        self.assertEqual(launch.call_args.kwargs["continues_job_id"], "prior-ok")
+        blocked = rig_mcp.call_tool("rig_job_launch", {
+            "repo": str(self.repo), "brief": "delta only", "continues_job_id": "prior-ok",
+            "command": "/bin/true",
+        })
+        self.assertTrue(blocked.get("isError"))
+        self.assertIn("unknown launch argument", self._text(blocked))
+
 
 if __name__ == "__main__":
     unittest.main()

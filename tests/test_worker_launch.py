@@ -636,6 +636,39 @@ class WorkerLaunchTests(unittest.TestCase):
         self.assertIn("active work", denied["content"][0]["text"])
         self.assertNotIn(token, denied["content"][0]["text"])
 
+    def _seed_terminal(self, job_id, status="ok"):
+        folder = self.repo / ".rig" / "jobs" / job_id
+        ended = "" if status == "running" else "2026-09-10T07:01:00Z"
+        jobs.write_job_files(
+            folder, job_id, "grok", "implement", status,
+            0 if status in {"ok", "running"} else 1,
+            "2026-09-10T07:00:00Z", ended, "done" if status != "running" else "",
+            kind="wrapper", executor_kind="wrapper", files=["a.py"],
+        )
+        return folder
+
+    def test_continues_job_id_requires_existing_terminal_job(self):
+        with self.assertRaisesRegex(worker_launch.LaunchError, "does not exist"):
+            worker_launch.launch(
+                self.repo, id="next-missing", brief="delta", worker="grok",
+                role="implement", model="grok-4.6", effort="high", files=["b.py"],
+                continues_job_id="missing-job", owner_session="launch-tests",
+            )
+        self._seed_terminal("prior-live", status="running")
+        with self.assertRaisesRegex(worker_launch.LaunchError, "not terminal"):
+            worker_launch.launch(
+                self.repo, id="next-live", brief="delta", worker="grok",
+                role="implement", model="grok-4.6", effort="high", files=["b.py"],
+                continues_job_id="prior-live", owner_session="launch-tests",
+            )
+        self._seed_terminal("prior-ok", status="ok")
+        launched = self._launch("next-ok", files=["b.py"], continues_job_id="prior-ok")
+        env = self._wrapper_env("next-ok")
+        self.assertEqual(env.get("RIG_CONTINUES_JOB_ID"), "prior-ok")
+        meta = json.loads((self.repo / ".rig" / "jobs" / "next-ok" / "meta.json").read_text())
+        self.assertEqual(meta.get("continues_job_id"), "prior-ok")
+        self.assertEqual(launched["job_id"], "next-ok")
+
 
 if __name__ == "__main__":
     unittest.main()

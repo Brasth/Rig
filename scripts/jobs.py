@@ -1197,6 +1197,7 @@ def load_job(job_path: Path, *, include_activity: bool = True) -> dict | None:
         "executor_kind": executor,
         "execution_mode": str(obj.get("execution_mode") or "unknown"),
         "writer_job_id": str(obj.get("writer_job_id") or ""),
+        "continues_job_id": str(obj.get("continues_job_id") or ""),
         "writer_snapshot_id": str(obj.get("writer_snapshot_id") or ""),
         "writer_provider": str(obj.get("writer_provider") or ""),
         "writer_job_ids": [
@@ -1491,10 +1492,14 @@ def format_wait_many(jobs: list[dict]) -> str:
     cache = {}
     for job in jobs:
         job = project_job(job, refresh=job.get("effective") == "ok", cache=cache)
-        rows.append(
+        line = (
             f"{job['display_state']:<20} {job.get('job_id')}  "
             f"{job.get('worker') or '?'}"
         )
+        tokens = format_tokens(job.get("token_usage"))
+        if tokens:
+            line += f"  {tokens}"
+        rows.append(line)
         rows.append(f"          {job['display_reason']}")
         if job.get("doing") and job.get("effective") == "running":
             rows.append(f"          doing  {job['doing']}")
@@ -1633,6 +1638,9 @@ def format_table(jobs: list[dict], repo: Path | None = None, *, jobs_snapshot=No
                 )
             if job.get("elapsed_s") is not None:
                 extras.append(f"          elapsed  {format_elapsed(int(job['elapsed_s']))}")
+            tokens = format_tokens(job.get("token_usage"))
+            if tokens:
+                extras.append(f"          tokens  {tokens}")
             if job.get("thread"):
                 extras.append(f"          thread {job['thread']}")
             if job["doing"]:
@@ -1737,6 +1745,8 @@ def format_show(job: dict, log_lines: int = 24) -> str:
         lines.append(f"pid     {job['pid']} ({'alive' if job['alive'] else 'dead'})")
     if job.get("thread"):
         lines.append(f"thread  {job['thread']}")
+    if job.get("continues_job_id"):
+        lines.append(f"continues {job['continues_job_id']}")
     if job["session_id"]:
         lines.append(f"session {job['session_id']}")
     if job["open"]:
@@ -1747,6 +1757,9 @@ def format_show(job: dict, log_lines: int = 24) -> str:
         lines.append(f"end     {job['ended_at']}")
     if job.get("elapsed_s") is not None:
         lines.append(f"elapsed  {format_elapsed(int(job['elapsed_s']))}")
+    tokens = format_tokens(job.get("token_usage"))
+    if tokens:
+        lines.append(f"tokens  {tokens}")
     if job["summary"] and job["effective"] != "running":
         lines.append(f"summary {_first_line(job['summary'], 200)}")
     lines.append(f"dir     {job['dir']}")
@@ -1828,6 +1841,36 @@ def format_elapsed(seconds: int) -> str:
     return f"{minutes}m{secs}s"
 
 
+def _compact_token_count(value: int) -> str:
+    n = int(value)
+    if n < 1000:
+        return str(n)
+    if n < 1_000_000:
+        text = f"{n / 1000:.1f}".rstrip("0").rstrip(".")
+        return f"{text}k"
+    text = f"{n / 1_000_000:.1f}".rstrip("0").rstrip(".")
+    return f"{text}m"
+
+
+def format_tokens(usage) -> str:
+    """Compact display of reported token_usage fields. Never synthesizes a total."""
+    loaded = _load_token_usage(usage)
+    if not loaded:
+        return ""
+    parts = []
+    for key, label in (
+        ("input", "in"),
+        ("output", "out"),
+        ("cached_input", "cached"),
+        ("reasoning", "reasoning"),
+        ("total", "total"),
+    ):
+        if key not in loaded:
+            continue
+        parts.append(f"{_compact_token_count(loaded[key])} {label}")
+    return " / ".join(parts)
+
+
 def new_job_id() -> str:
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     return f"{stamp}-{os.getpid()}-{uuid.uuid4().hex}"
@@ -1872,6 +1915,7 @@ def write_job_files(
     model_source: str = "",
     execution_mode: str = "",
     writer_job_id: str = "",
+    continues_job_id: str = "",
     writer_snapshot_id: str = "",
     writer_job_ids: list | None = None,
     writer_snapshot_ids: list | None = None,
@@ -1956,6 +2000,7 @@ def write_job_files(
         "model_inferred": inferred,
         "execution_mode": execution_mode,
         "writer_job_id": writer_job_id or str(old.get("writer_job_id") or ""),
+        "continues_job_id": continues_job_id or str(old.get("continues_job_id") or ""),
         "writer_snapshot_id": writer_snapshot_id or str(old.get("writer_snapshot_id") or ""),
     }
     if reservation:
@@ -1995,7 +2040,7 @@ def write_job_files(
             obj["workflow_attempt"] = int(old.get("workflow_attempt") or 0)
     if resources is not None or old.get("resources"):
         obj["resources"] = resources if resources is not None else old.get("resources")
-    for key in ("thread", "session_id", "pid", "open", "watch", "kind", "model", "effort", "doing", "writer_provider", "independence"):
+    for key in ("thread", "session_id", "pid", "open", "watch", "kind", "model", "effort", "doing", "writer_provider", "independence", "resumable"):
         if not obj.get(key) and old.get(key) not in (None, ""):
             obj[key] = old[key]
     listed = files
