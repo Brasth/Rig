@@ -44,6 +44,9 @@ _lock_map_guard = threading.Lock()
 _held = threading.local()
 _ID = re.compile(r"[A-Za-z0-9._-]+")
 _ACTIVE = {"reserved", "running", "verifying", "reviewing"}
+MAX_CONTINUATIONS = 3
+RESUME_WORKERS = frozenset({"grok", "claude", "codex", "opencode"})
+_CONTINUE_TERMINAL = frozenset({"ok", "fail", "timeout"})
 
 
 def _root(repo):
@@ -646,6 +649,8 @@ def _queue_update(root, record, status):
 
 def _accounting(root, skip_reservation="", skip_queue=""):
     records = _records(root)
+    # Continuation does not accept the predecessor's changes. Keep its complete
+    # scope protected until it is explicitly accepted or closed.
     held = [record for record in records if record.get("stage") != "released"]
     attempts = {(record.get("reservation_id"), record.get("attempt_id")): record for record in records}
     reconciled_legacy = {record.get("job_id") for record in records if record.get("legacy") and record.get("stopped")}
@@ -844,12 +849,214 @@ def _new_record(*, actor, job_id, queue_id, worker, role, model, access, canonic
     return record
 
 
+def continuation_resume_mode(predecessor, worker, *, executor_kind=""):
+    """native = compatible CLI/session resume; fresh = new invocation; fresh-fallback after a failed native start."""
+    meta = predecessor if isinstance(predecessor, dict) else {}
+    worker = str(worker or "")
+    same_worker = str(meta.get("worker") or "") == worker
+    session = str(meta.get("session_id") or "").strip()
+    resumable = meta.get("resumable") is True
+    if not (same_worker and session and resumable and worker in RESUME_WORKERS):
+        return "fresh"
+    pred_exec = str(meta.get("executor_kind") or "")
+    if executor_kind in {"native_child", "parent"} and pred_exec not in {"", "native_child", "parent"}:
+        return "fresh-fallback"
+    return "native"
+
+
+def _reservation_for_job(root, job_id):
+    matches = [record for record in _records(root) if record.get("job_id") == job_id]
+    live = [record for record in matches if record.get("stage") != "released"]
+    if live:
+        return live[-1]
+    return matches[-1] if matches else None
+
+
+def _continuation_status(root, meta, result, record):
+    if record:
+        if _cancel_requested(root, record):
+            return "cancelled"
+        if record.get("execution_status"):
+            return str(record.get("execution_status") or "")
+        if record.get("stopped") and record.get("stage") in {"verifying", "reviewing", "released"}:
+            return str((meta or {}).get("status") or (result or {}).get("status") or "ok")
+        if record.get("stage") and record.get("stage") != "released":
+            return str(record.get("stage") or "running")
+    return str((meta or {}).get("status") or (result or {}).get("status") or "")
+
+
+def _continuation_owner(meta, record):
+    if record and isinstance(record.get("owner"), dict):
+        return record["owner"]
+    owner = (meta or {}).get("owner")
+    if isinstance(owner, dict):
+        return owner
+    session = str((meta or {}).get("owner_session") or "")
+    return {"session_id": session} if session else {}
+
+
+def _walk_continuation_depth(root, job_id, meta, record):
+    stored_root = str((record or {}).get("continuation_root_id") or (meta or {}).get("continuation_root_id") or "")
+    stored_depth = (record or {}).get("continuation_depth")
+    if stored_depth is None:
+        stored_depth = (meta or {}).get("continuation_depth")
+    try:
+        depth = int(stored_depth) if stored_depth not in (None, "") else None
+    except (TypeError, ValueError):
+        depth = None
+    if stored_depth not in (None, "") and (type(stored_depth) is not int or stored_depth < 0):
+        raise AdmissionError("invalid continuation depth")
+    depth = 0
+    current = job_id
+    seen = set()
+    root_id = job_id
+    while current:
+        if current in seen:
+            raise AdmissionError("cyclic continuation lineage")
+        seen.add(current)
+        _id(current, "continuation ancestor")
+        folder = root / ".rig" / "jobs" / current
+        row = _read(folder / "meta.json") or {}
+        held = _reservation_for_job(root, current) or {}
+        if not row and not held:
+            raise AdmissionError("missing continuation ancestor")
+        parent = str(row.get("continues_job_id") or held.get("continues_job_id") or "")
+        if not parent:
+            root_id = current
+            break
+        depth += 1
+        root_id = parent
+        current = parent
+        if depth > MAX_CONTINUATIONS + 1:
+            raise AdmissionError("continuation cap reached; start a fresh job")
+    if stored_root and stored_root != root_id:
+        raise AdmissionError("inconsistent continuation root")
+    if stored_depth not in (None, "") and stored_depth != depth:
+        raise AdmissionError("inconsistent continuation depth")
+    return root_id, depth
+
+
+def _continuation_ancestors(root, job_id):
+    """Only this lineage may overlap held predecessor scopes."""
+    seen = set()
+    while job_id:
+        if job_id in seen:
+            raise AdmissionError("cyclic continuation lineage")
+        _id(job_id, "continuation ancestor")
+        seen.add(job_id)
+        record = _reservation_for_job(root, job_id) or {}
+        meta = _read(root / ".rig" / "jobs" / job_id / "meta.json") or {}
+        job_id = record.get("continues_job_id") or meta.get("continues_job_id") or ""
+    return seen
+
+
+def _validate_continuation(root, continues_job_id, *, worker, files, actor):
+    job_id = _id(continues_job_id, "continues_job_id")
+    folder = root / ".rig" / "jobs" / job_id
+    meta_path = folder / "meta.json"
+    result_path = folder / "result.json"
+    # A reservation can be terminal before the wrapper has flushed its job
+    # metadata. Resolve it first so an active predecessor gets the useful
+    # terminal-state error instead of an incorrect "does not exist" result.
+    record = _reservation_for_job(root, job_id)
+    if not folder.is_dir() and not meta_path.exists() and record is None:
+        raise AdmissionError(f"continues_job_id '{job_id}' does not exist")
+    meta = _read(meta_path) if meta_path.exists() else {}
+    result = _read(result_path) if result_path.exists() else {}
+    rid = str((meta or {}).get("reservation_id") or "")
+    if rid and (record is None or record.get("reservation_id") != rid):
+        try:
+            record = _read(_reservation_path(root, rid))
+        except AdmissionError:
+            pass
+    status = _continuation_status(root, meta or {}, result or {}, record)
+    if status == "cancelled" or (record and _cancel_requested(root, record)):
+        raise AdmissionError("cancelled predecessor cannot be continued")
+    if status not in _CONTINUE_TERMINAL:
+        raise AdmissionError(f"continues_job_id '{job_id}' is not terminal (status {status or 'unknown'})")
+    if not record or record.get("stopped") is not True or record.get("slot_held") or record.get("needs_reconciliation"):
+        raise AdmissionError("continuation requires confirmed stopped execution without reconciliation")
+    pred_worker = str((record or {}).get("worker") or (meta or {}).get("worker") or (result or {}).get("worker") or "")
+    if pred_worker and pred_worker != worker:
+        raise AdmissionError("continuation worker mismatch")
+    pred_owner = _continuation_owner(meta or {}, record)
+    if not _same_initiating_owner(pred_owner, actor) and not _same_actor(pred_owner, actor):
+        raise AdmissionError("continuation owner/session mismatch")
+    pred_declared = list((record or {}).get("declared_files") or (meta or {}).get("files") or [])
+    _, pred_canonical = canonical_files(root, pred_declared)
+    if (not pred_canonical and files) or (pred_canonical and (not files or set(files) - set(pred_canonical))):
+        raise AdmissionError("continuation file scope must be equal or narrower")
+    if record and record.get("superseded") and record.get("continued_by"):
+        other = _reservation_for_job(root, record.get("continued_by"))
+        if other and other.get("stage") != "released":
+            raise AdmissionError("predecessor already has a live continuation")
+    root_id, pred_depth = _walk_continuation_depth(root, job_id, meta or {}, record)
+    attempts = sum(1 for row in _records(root) if row.get("continuation_root_id") == root_id)
+    if pred_depth >= MAX_CONTINUATIONS or attempts >= MAX_CONTINUATIONS:
+        raise AdmissionError(
+            f"continuation cap reached (max {MAX_CONTINUATIONS}); start a fresh job"
+        )
+    return {
+        "continues_job_id": job_id,
+        "root_id": root_id or job_id,
+        "depth": pred_depth + 1,
+        "reservation_id": str((record or {}).get("reservation_id") or ""),
+        "predecessor_record": record,
+        "predecessor_meta": meta or {},
+    }
+
+
+def _apply_continuation(record, lineage):
+    if not lineage:
+        return record
+    record["continues_job_id"] = lineage["continues_job_id"]
+    record["continuation_root_id"] = lineage["root_id"]
+    record["continuation_depth"] = lineage["depth"]
+    if lineage.get("reservation_id"):
+        record["continues_reservation_id"] = lineage["reservation_id"]
+    return record
+
+
+def _handoff_continuation(root, predecessor, successor):
+    if not predecessor or predecessor.get("stage") == "released":
+        return
+    current = _read(_reservation_path(root, predecessor["reservation_id"]), required=True)
+    if current.get("stage") == "released":
+        return
+    current["superseded"] = True
+    current["continued_by"] = successor["job_id"]
+    current["continuation_status"] = "superseded"
+    history = list(current.get("history") or [])
+    history.append({"event": "continued", "continued_by": successor["job_id"], "at": _now()})
+    current["history"] = history
+    _save(root, current)
+
+
+def _restore_continuation_predecessor(root, successor):
+    rid = str(successor.get("continues_reservation_id") or "")
+    predecessor = _read(_reservation_path(root, rid)) if rid else None
+    if predecessor is None:
+        predecessor = _reservation_for_job(root, successor.get("continues_job_id"))
+    if not predecessor:
+        return
+    if predecessor.get("continued_by") != successor.get("job_id") or not predecessor.get("superseded"):
+        return
+    predecessor.pop("superseded", None)
+    predecessor.pop("continued_by", None)
+    predecessor.pop("continuation_status", None)
+    history = list(predecessor.get("history") or [])
+    history.append({"event": "continuation_reverted", "successor": successor.get("job_id"), "at": _now()})
+    predecessor["history"] = history
+    _save(root, predecessor)
+
+
 def reserve(repo, *, job_id="", worker="", role="worker", model="", files=None,
             access="write", owner=None, owner_session="", queue_id="", reservation_id="",
             attempt_id="", owner_token="", writer_job_id="", writer_snapshot_id="", dry_run=False,
             resources=None, workflow_id="", workflow_node_id="", workflow_spec_hash="",
             workflow_attempt=0, allow_read_overlap_reservations=None,
-            writer_job_ids=None, writer_snapshot_ids=None, writer_providers=None):
+            writer_job_ids=None, writer_snapshot_ids=None, writer_providers=None,
+            continues_job_id=""):
     root = _root(repo)
     _id(job_id, "job id", optional=bool(queue_id))
     _id(queue_id, "queue id", optional=True)
@@ -867,6 +1074,25 @@ def reserve(repo, *, job_id="", worker="", role="worker", model="", files=None,
             _ensure_idle(source)
             if source["stage"] == "released":
                 raise AdmissionError("released attempt cannot be launched again")
+        continues_job_id = str(continues_job_id or "").strip()
+        lineage = None
+        if continues_job_id and writer_job_id:
+            raise AdmissionError("continuation cannot combine with review handoff")
+        if continues_job_id:
+            if source and source.get("continues_job_id") not in {"", continues_job_id}:
+                raise AdmissionError("reservation continuation mismatch")
+            if source and source.get("continues_job_id") == continues_job_id:
+                lineage = {
+                    "continues_job_id": continues_job_id,
+                    "root_id": source.get("continuation_root_id") or continues_job_id,
+                    "depth": int(source.get("continuation_depth") or 0),
+                    "reservation_id": source.get("continues_reservation_id") or "",
+                    "predecessor_record": None,
+                }
+            else:
+                lineage = _validate_continuation(
+                    root, continues_job_id, worker=worker, files=canonical, actor=actor,
+                )
         if writer_job_id:
             source_writer = source.get("writer_job_id") if source and source.get("review_launch_failed") else (source or {}).get("job_id")
             if source is None or source_writer != writer_job_id or access != "read":
@@ -904,12 +1130,21 @@ def reserve(repo, *, job_id="", worker="", role="worker", model="", files=None,
         if queue and source is None and queue.get("status") != "pending":
             raise AdmissionError("queue claim requires matching current attempt credentials; reconcile legacy claims")
         rows = _accounting(root, source["reservation_id"] if source else "", queue_id if source else "")
+        if lineage and (lineage.get("reservation_id") or lineage.get("continues_job_id")):
+            ancestors = _continuation_ancestors(root, lineage["continues_job_id"])
+            rows = [
+                row for row in rows
+                if row.get("job_id") not in ancestors
+            ]
         _capacity(root, rows, worker, access, canonical, resources=held_resources,
                   allow_read_overlap_reservations=allow_read_overlap_reservations)
         if dry_run:
-            return {"job_id": job_id, "stage": "dry_run", "slot_held": False, "access": access,
-                    "files": canonical, "declared_files": declared, "owner": actor, "dry_run": True,
-                    "resources": held_resources}
+            preview = {"job_id": job_id, "stage": "dry_run", "slot_held": False, "access": access,
+                       "files": canonical, "declared_files": declared, "owner": actor, "dry_run": True,
+                       "resources": held_resources}
+            if lineage:
+                _apply_continuation(preview, lineage)
+            return preview
         if source and not writer_job_id:
             record = source
             previous_ident = (source.get("owner") or {}).get("initiating_identity") or ""
@@ -933,12 +1168,16 @@ def reserve(repo, *, job_id="", worker="", role="worker", model="", files=None,
                                  workflow_node_id=workflow_node_id, workflow_spec_hash=workflow_spec_hash,
                                  workflow_attempt=workflow_attempt, writer_job_ids=writer_job_ids,
                                  writer_snapshot_ids=writer_snapshot_ids, writer_providers=writer_providers)
+        if lineage:
+            _apply_continuation(record, lineage)
         record["pending_operation"] = "bind_queue" if queue_id else "register_job"
         _save(root, record)
         if queue_id:
             _queue_update(root, record, "claimed")
         record.pop("pending_operation", None)
         _save(root, record)
+        if lineage and lineage.get("predecessor_record") and not dry_run:
+            _handoff_continuation(root, lineage["predecessor_record"], record)
         return record
 
 
@@ -1269,6 +1508,8 @@ def release(repo, *, reservation_id, attempt_id, owner_token, rationale, owner=N
                 raise AdmissionError("cannot release execution: " + reason)
             if mode == "accepted_complete":
                 _accepted_complete(root, record, snapshot_id)
+        if mode == "launch_failed":
+            _restore_continuation_predecessor(root, record)
         record.update(stage="released", slot_held=False, stopped=True, release_reason=rationale.strip(),
                       needs_reconciliation=False, reconciliation_reason="")
         record["pending_operation"] = "return_pending" if mode == "launch_failed" else "queue_done"

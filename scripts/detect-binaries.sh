@@ -565,7 +565,8 @@ rig_upsert_marked_block() {
   local tmp orig rest action dir
   dir="$(dirname -- "$file")"
   mkdir -p "$dir" || return 1
-  block="${block%"${block##*[![:space:]]}"}"
+  # Avoid Bash 3.2's expensive nested glob over the whole managed protocol.
+  while [[ "$block" == *[[:space:]] ]]; do block="${block%?}"; done
   if [[ ! -f "$file" ]]; then
     printf '%s\n' "$block" > "$file" || return 1
     echo wrote
@@ -573,7 +574,7 @@ rig_upsert_marked_block() {
   fi
   orig="$(cat -- "$file" && printf x)" || return 1
   orig="${orig%x}"
-  if [[ -z "${orig//[$'\t\n\r ']/}" ]]; then
+  if [[ ! "$orig" =~ [^[:space:]] ]]; then
     printf '%s\n' "$block" > "$file" || return 1
     echo wrote
     return 0
@@ -592,16 +593,17 @@ rig_upsert_marked_block() {
     ' "$file" > "$tmp" || { rm -f "$tmp"; return 1; }
     rest="$(cat -- "$tmp" && printf x)" || { rm -f "$tmp"; return 1; }
     rest="${rest%x}"
-    rest="${rest#"${rest%%[![:space:]]*}"}"
-    rest="${rest%"${rest##*[![:space:]]}"}"
+    while [[ "$rest" == [[:space:]]* ]]; do rest="${rest#?}"; done
+    while [[ "$rest" == *[[:space:]] ]]; do rest="${rest%?}"; done
     if [[ "$orig" == "$start"* ]]; then
       action=updated
     else
       action=moved
     fi
   else
-    rest="${orig#"${orig%%[![:space:]]*}"}"
-    rest="${rest%"${rest##*[![:space:]]}"}"
+    rest="$orig"
+    while [[ "$rest" == [[:space:]]* ]]; do rest="${rest#?}"; done
+    while [[ "$rest" == *[[:space:]] ]]; do rest="${rest%?}"; done
     action=prepended
   fi
   rm -f "$tmp"

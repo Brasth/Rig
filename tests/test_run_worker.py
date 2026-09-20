@@ -23,6 +23,8 @@ _CLEAR_RIG = (
     "RIG_RESERVATION_ID", "RIG_ATTEMPT_ID", "RIG_OWNER_TOKEN", "RIG_OWNER_SESSION",
     "RIG_JOB_FILES", "RIG_JOB_FILES_JSON", "RIG_WRITER_JOB_ID", "RIG_WRITER_SNAPSHOT_ID",
     "RIG_WRITER_CLI", "RIG_WRITER_MODEL", "RIG_WRITER_PROVIDER", "RIG_REVIEW_MODE",
+    "RIG_CONTINUES_JOB_ID", "RIG_CONTINUATION_ROOT_ID", "RIG_CONTINUATION_DEPTH",
+    "RIG_CONTINUATION_MODE", "RIG_RESUME_FORCE_FAIL",
 )
 
 
@@ -74,7 +76,7 @@ class ClaudeWorkerArgv(unittest.TestCase):
         self.assertIn("--verbose", out)
         self.assertIn("acceptEdits", out)
         self.assertIn("Write", out)
-        self.assertIn("--no-session-persistence", out)
+        self.assertNotIn("--no-session-persistence", out)
         self.assertNotIn("--setting-sources=", out)
         self.assertIn("--permission-prompt-tool", out)
         self.assertIn("mcp__rig-ask__permission_prompt", out)
@@ -249,7 +251,7 @@ class CodexWorkerArgv(unittest.TestCase):
         self.assertIn("would run:", out, out)
         self.assertIn("codex exec", out)
         self.assertIn("--json", out)
-        self.assertIn("--ephemeral", out)
+        self.assertNotIn("--ephemeral", out)
         self.assertIn("-s workspace-write", out)
         self.assertIn("--ignore-user-config", out)
         self.assertIn("mcp_servers.rig.command=", out)
@@ -1133,6 +1135,120 @@ class WrapperAdmission(unittest.TestCase):
         self.assertEqual(evidence["scoped_changed_paths"], ["plain.txt"])
         self.assertFalse(self._lease(folder)["slot_held"])
         self.assertEqual(self._lease(folder)["stage"], "verifying")
+
+
+
+class ContinuationResumeArgv(unittest.TestCase):
+    def setUp(self):
+        self.td = tempfile.TemporaryDirectory()
+        self.repo = Path(self.td.name)
+        (self.repo / ".git").mkdir()
+        (self.repo / ".rig").mkdir()
+        (self.repo / "a.py").write_text("a\n")
+        (self.repo / ".rig" / "harness.toml").write_text(
+            'parent = "codex"\n\n[workers]\ncodex = true\ngrok = true\nclaude = true\n'
+        )
+        self.job_dir = self.repo / ".rig" / "jobs" / "next-ok"
+        self.job_dir.mkdir(parents=True)
+        self.brief = self.job_dir / "brief.md"
+        self.brief.write_text("You are a worker, not the orchestrator.\nDelta only.\n")
+
+    def tearDown(self):
+        self.td.cleanup()
+
+    def _seed_prior(self, *, status="ok", worker="grok", session="", resumable=False, **fields):
+        import admission
+        owner = admission.caller_owner("parent", owner_session="cont-tests")
+        lease = admission.reserve(
+            self.repo, job_id="prior-ok", worker=worker, role="implement",
+            model="grok-4.6", files=["a.py"], owner=owner,
+        )
+        folder = self.repo / ".rig" / "jobs" / "prior-ok"
+        folder.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "job_id": "prior-ok", "worker": worker, "status": status, "files": ["a.py"],
+            "reservation_id": lease["reservation_id"], "executor_kind": "wrapper",
+            "summary": "prior finished",
+        }
+        if session:
+            payload["session_id"] = session
+        if resumable:
+            payload["resumable"] = True
+        payload.update(fields)
+        (folder / "meta.json").write_text(json.dumps(payload))
+        (folder / "result.json").write_text(json.dumps({"status": status, **payload}))
+        record = admission._read(admission._reservation_path(self.repo, lease["reservation_id"]), required=True)
+        record.update(stopped=True, execution_status=status, stage="verifying", slot_held=False)
+        admission._save(self.repo, record)
+        return lease
+
+    def _env(self, **extra):
+        env = {
+            "RIG_PARENT": "codex",
+            "RIG_OWNER_SESSION": "cont-tests",
+            "RIG_CONTINUES_JOB_ID": "prior-ok",
+            "RIG_JOB_FILES_JSON": json.dumps(["a.py"]),
+            "RIG_MODEL": extra.pop("RIG_MODEL", "grok-4.6"),
+            "RIG_EFFORT": extra.pop("RIG_EFFORT", "high"),
+            "RIG_ROLE": "implement",
+        }
+        env.update(extra)
+        return env
+
+    def test_native_resume_uses_compatible_session(self):
+        self._seed_prior(session="sess-prior", resumable=True)
+        proc = run_worker(self.repo, "grok", "next-ok", str(self.brief), env=self._env())
+        out = proc.stdout + proc.stderr
+        self.assertIn(proc.returncode, (0, 127), out)
+        self.assertIn("would run:", out, out)
+        self.assertIn(" -r sess-prior ", out)
+        self.assertIn("## Previous worker context", self.brief.read_text())
+        meta = json.loads((self.job_dir / "meta.json").read_text())
+        self.assertEqual(meta.get("continues_job_id"), "prior-ok")
+        self.assertEqual(meta.get("continuation_mode"), "native")
+
+    def test_incompatible_session_starts_fresh_with_prior_context(self):
+        self._seed_prior(session="", resumable=False)
+        proc = run_worker(self.repo, "grok", "next-ok", str(self.brief), env=self._env())
+        out = proc.stdout + proc.stderr
+        self.assertIn(proc.returncode, (0, 127), out)
+        self.assertIn("would run:", out, out)
+        self.assertIn("--prompt-file", out)
+        self.assertNotIn(" -r ", out)
+        self.assertIn("## Previous worker context", self.brief.read_text())
+        meta = json.loads((self.job_dir / "meta.json").read_text())
+        self.assertEqual(meta.get("continuation_mode"), "fresh")
+
+    def test_cancelled_predecessor_is_refused(self):
+        self._seed_prior(status="cancelled")
+        proc = run_worker(self.repo, "grok", "next-ok", str(self.brief), env=self._env())
+        out = proc.stdout + proc.stderr
+        self.assertNotEqual(proc.returncode, 0, out)
+        self.assertIn("cancelled predecessor", out)
+
+    def test_live_resume_rejection_falls_back_through_admitted_wrapper(self):
+        self._seed_prior(session="missing-session", resumable=True)
+        home = self.repo / "test-home"
+        home.mkdir()
+        bins = self.repo / "test-bin"
+        bins.mkdir()
+        mcp_test_support.seed_installed_mcp(home)
+        fake = bins / "grok"
+        fake.write_text(
+            f"#!{sys.executable}\nimport sys\n"
+            "if '-r' in sys.argv:\n    print('Error: session not found: missing-session')\n    raise SystemExit(2)\n"
+            + mcp_test_support.inbox_handshake_prelude(ROOT)
+            + "print('FRESH_EXECUTED')\n"
+        )
+        fake.chmod(0o755)
+        result = run_worker(self.repo, "grok", "next-ok", str(self.brief), env=self._env(
+            RIG_LIVE="1", RIG_TIMEOUT="10", HOME=str(home), PATH=mcp_test_support.stub_path(bins)))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        meta = json.loads((self.job_dir / "result.json").read_text())
+        self.assertEqual(meta["continuation_mode"], "fresh-fallback")
+        self.assertEqual(meta["child_mcp_status"], "connected")
+        self.assertIn("session not found", (self.job_dir / "resume-attempt.log").read_text())
+        self.assertTrue((self.job_dir / "resume-fallback.json").exists())
 
 
 if __name__ == "__main__":

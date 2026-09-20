@@ -1198,6 +1198,9 @@ def load_job(job_path: Path, *, include_activity: bool = True) -> dict | None:
         "execution_mode": str(obj.get("execution_mode") or "unknown"),
         "writer_job_id": str(obj.get("writer_job_id") or ""),
         "continues_job_id": str(obj.get("continues_job_id") or ""),
+        "continuation_root_id": str(obj.get("continuation_root_id") or ""),
+        "continuation_depth": _coerce_exit_code(obj.get("continuation_depth")) or 0,
+        "continuation_mode": str(obj.get("continuation_mode") or ""),
         "writer_snapshot_id": str(obj.get("writer_snapshot_id") or ""),
         "writer_provider": str(obj.get("writer_provider") or ""),
         "writer_job_ids": [
@@ -1746,7 +1749,12 @@ def format_show(job: dict, log_lines: int = 24) -> str:
     if job.get("thread"):
         lines.append(f"thread  {job['thread']}")
     if job.get("continues_job_id"):
-        lines.append(f"continues {job['continues_job_id']}")
+        cont = f"continues {job['continues_job_id']}"
+        if job.get("continuation_depth"):
+            cont += f" depth {job['continuation_depth']}"
+        if job.get("continuation_mode"):
+            cont += f" mode {job['continuation_mode']}"
+        lines.append(cont)
     if job["session_id"]:
         lines.append(f"session {job['session_id']}")
     if job["open"]:
@@ -1916,6 +1924,9 @@ def write_job_files(
     execution_mode: str = "",
     writer_job_id: str = "",
     continues_job_id: str = "",
+    continuation_root_id: str = "",
+    continuation_depth: int = 0,
+    continuation_mode: str = "",
     writer_snapshot_id: str = "",
     writer_job_ids: list | None = None,
     writer_snapshot_ids: list | None = None,
@@ -2003,6 +2014,21 @@ def write_job_files(
         "continues_job_id": continues_job_id or str(old.get("continues_job_id") or ""),
         "writer_snapshot_id": writer_snapshot_id or str(old.get("writer_snapshot_id") or ""),
     }
+    if reservation:
+        continues_job_id = obj["continues_job_id"] or str(reservation.get("continues_job_id") or "")
+        obj["continues_job_id"] = continues_job_id
+        continuation_root_id = continuation_root_id or str(reservation.get("continuation_root_id") or "")
+        if not continuation_depth:
+            continuation_depth = reservation.get("continuation_depth") or 0
+        continuation_mode = continuation_mode or str(reservation.get("continuation_mode") or "")
+    if obj["continues_job_id"]:
+        obj["continuation_root_id"] = continuation_root_id or str(old.get("continuation_root_id") or "")
+        try:
+            obj["continuation_depth"] = int(continuation_depth or old.get("continuation_depth") or 0)
+        except (TypeError, ValueError):
+            obj["continuation_depth"] = int(old.get("continuation_depth") or 0)
+    if continuation_mode or old.get("continuation_mode"):
+        obj["continuation_mode"] = continuation_mode or str(old.get("continuation_mode") or "")
     if reservation:
         writer_job_ids = writer_job_ids or reservation.get("writer_job_ids")
         writer_snapshot_ids = writer_snapshot_ids or reservation.get("writer_snapshot_ids")
@@ -2234,6 +2260,7 @@ def start_job(
     executor_kind: str = "",
     files: list | None = None,
     writer_job_id: str = "",
+    continues_job_id: str = "",
     writer_snapshot_id: str = "",
     writer_job_ids=None,
     writer_snapshot_ids=None,
@@ -2330,15 +2357,27 @@ def start_job(
             workflow_id=workflow_id, workflow_node_id=workflow_node_id,
             workflow_spec_hash=workflow_spec_hash, workflow_attempt=workflow_attempt,
             allow_read_overlap_reservations=allow_read_overlap_reservations,
+            continues_job_id=continues_job_id,
         )
         credentials = admission.credentials(lease)
         listed = lease.get("declared_files", listed)
         activated = False
         try:
+            pred_meta = _read_meta_dict(_job_path(repo, continues_job_id)) if continues_job_id else {}
+            continuation_mode = ""
+            if continues_job_id:
+                continuation_mode = admission.continuation_resume_mode(
+                    pred_meta, worker, executor_kind=kind,
+                    force_fail=os.environ.get("RIG_RESUME_FORCE_FAIL") == "1",
+                )
             write_job_files(job_dir, job_id, worker, role, "running", 0, now, "", summary or "", "native",
                             thread=_job_thread(repo), files=listed, model=model, effort=effort,
                             executor_kind=kind, execution_mode="parent" if kind == "parent" else "native",
-                            writer_job_id=writer_job_id, writer_snapshot_id=writer_snapshot_id,
+                            writer_job_id=writer_job_id, continues_job_id=continues_job_id,
+                            continuation_root_id=str(lease.get("continuation_root_id") or ""),
+                            continuation_depth=int(lease.get("continuation_depth") or 0),
+                            continuation_mode=continuation_mode,
+                            writer_snapshot_id=writer_snapshot_id,
                             writer_job_ids=writer_ids or writer_job_ids, writer_snapshot_ids=writer_snapshot_ids,
                             writer_providers=writer_providers, reservation=lease, resources=lease.get("resources"),
                             workflow_id=workflow_id, workflow_node_id=workflow_node_id,
@@ -2828,6 +2867,7 @@ def main() -> int:
     parser.add_argument("--completion-json")
     parser.add_argument("--token-usage-json", default="")
     parser.add_argument("--writer-job-id", default="")
+    parser.add_argument("--continues-job-id", default="")
     parser.add_argument("--writer-snapshot-id", default="")
     parser.add_argument("--routing-json", default="")
     parser.add_argument("--assessment-json", default="")
@@ -2856,7 +2896,8 @@ def main() -> int:
                 assessment = json.loads(args.assessment_json) if args.assessment_json else None
                 result = start_job(repo, job_id=job_id or "", files=files, access=args.access,
                                    queue_id=args.queue_id, native_agent_id=args.native_agent_id,
-                                   writer_job_id=args.writer_job_id, writer_snapshot_id=args.writer_snapshot_id,
+                                   writer_job_id=args.writer_job_id, continues_job_id=args.continues_job_id,
+                                   writer_snapshot_id=args.writer_snapshot_id,
                                    routing=routing, assessment=assessment,
                                    return_details=True, **common, **ownership)
                 print(json.dumps(result) if args.json else result["job_id"])

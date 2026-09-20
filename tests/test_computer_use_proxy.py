@@ -61,6 +61,19 @@ class ComputerUseProxy(unittest.TestCase):
         runner.calls = calls
         return runner
 
+    def test_status_ready_and_setup_use_rig_proxy_without_raw_wiring(self):
+        self.assertTrue(computer_use.cu_status(self.repo)["effective"])
+        with mock.patch.object(computer_use.cua_install, "main"), \
+             mock.patch.object(computer_use, "wire_parent_mcp") as wire, \
+             mock.patch.object(computer_use, "install_skill_pack") as skills, \
+             mock.patch("builtins.print") as output:
+            computer_use.cmd_setup(self.repo)
+        wire.assert_not_called()
+        skills.assert_not_called()
+        text = "\n".join(str(call.args[0]) for call in output.call_args_list)
+        self.assertIn("rig_cu_status", text)
+        self.assertNotIn("use cua-driver call", text)
+
     def test_capture_returns_snapshot_tokens_and_screenshot(self):
         runner = self._runner({"get_window_state": _capture_payload()})
         ev = computer_use.cu_capture(self.repo, pid=844, window_id=10725, runner=runner)
@@ -618,6 +631,119 @@ class ComputerUseProxy(unittest.TestCase):
         ev = computer_use.cu_record(self.repo, action="start", runner=runner)
         self.assertEqual(ev["effect"], "hidden")
         self.assertEqual(runner.calls, [])
+
+    def test_capture_act_confirm_succeeds(self):
+        runner = self._runner({
+            "get_window_state": _capture_payload(),
+            "click": {"ok": True, "effect": "unverifiable", "screenshot_path": "/tmp/after.png"},
+        })
+        cap = computer_use.cu_capture(self.repo, pid=844, window_id=10725, runner=runner)
+        act = computer_use.cu_act(
+            self.repo, snapshot_id=cap["snapshot_id"], element_token="tok-1",
+            action="click", runner=runner,
+        )
+        confirmed = computer_use.cu_confirm(
+            self.repo, snapshot_id=cap["snapshot_id"], runner=runner,
+        )
+        self.assertTrue(act["ok"])
+        self.assertEqual(act["effect"], "unverifiable")
+        self.assertEqual(confirmed["action"], "confirm")
+        self.assertEqual(confirmed["effect"], "confirmed")
+        self.assertTrue(confirmed["ok"])
+        self.assertTrue(any(c[1][0] == "click" for c in runner.calls))
+        self.assertGreaterEqual(
+            len([c for c in runner.calls if c[1][0] == "get_window_state"]), 2,
+        )
+
+    def test_second_action_refuses_without_driver(self):
+        runner = self._runner({
+            "get_window_state": _capture_payload(),
+            "click": {"ok": True, "effect": "unverifiable"},
+        })
+        cap = computer_use.cu_capture(self.repo, runner=runner)
+        computer_use.cu_act(
+            self.repo, snapshot_id=cap["snapshot_id"], element_token="tok-1",
+            action="click", runner=runner,
+        )
+        clicks = [c for c in runner.calls if c[1][0] == "click"]
+        self.assertEqual(len(clicks), 1)
+        ev = computer_use.cu_act(
+            self.repo, snapshot_id=cap["snapshot_id"], element_token="tok-2",
+            action="click", runner=runner,
+        )
+        self.assertEqual(ev["effect"], "stale")
+        self.assertIn("capture_required", ev["hint"])
+        self.assertEqual(len([c for c in runner.calls if c[1][0] == "click"]), 1)
+
+    def test_confirm_before_action_refuses_without_driver(self):
+        runner = self._runner({"get_window_state": _capture_payload()})
+        cap = computer_use.cu_capture(self.repo, pid=844, window_id=10725, runner=runner)
+        calls = len(runner.calls)
+        ev = computer_use.cu_confirm(
+            self.repo, snapshot_id=cap["snapshot_id"], runner=runner,
+        )
+        self.assertEqual(ev["effect"], "stale")
+        self.assertIn("capture_required", ev["hint"])
+        self.assertEqual(len(runner.calls), calls)
+        self.assertFalse(ev["ok"])
+
+    def test_expired_capture_refuses_without_driver(self):
+        clock = {"t": 0.0}
+
+        def now():
+            return clock["t"]
+
+        runner = self._runner({"get_window_state": _capture_payload()})
+        with mock.patch.object(computer_use, "_now", side_effect=now):
+            cap = computer_use.cu_capture(
+                self.repo, pid=844, window_id=10725, runner=runner,
+            )
+            clock["t"] = 31.0
+            ev = computer_use.cu_act(
+                self.repo, snapshot_id=cap["snapshot_id"], element_token="tok-1",
+                action="click", runner=runner,
+            )
+        self.assertEqual(ev["effect"], "stale")
+        self.assertEqual(ev.get("snapshot_freshness"), "expired")
+        self.assertIn("expired", ev["hint"])
+        self.assertFalse(any(c[1][0] == "click" for c in runner.calls))
+
+    def _assert_invoked_failure_not_confirmable(self, driver_effect: str) -> None:
+        runner = self._runner({
+            "get_window_state": _capture_payload(),
+            "click": {"ok": False, "effect": driver_effect},
+        })
+        cap = computer_use.cu_capture(self.repo, pid=844, window_id=10725, runner=runner)
+        act = computer_use.cu_act(
+            self.repo, snapshot_id=cap["snapshot_id"], element_token="tok-1",
+            action="click", runner=runner,
+        )
+        self.assertEqual(act["effect"], driver_effect)
+        self.assertFalse(act["ok"])
+        self.assertNotEqual(act.get("snapshot_freshness"), "confirm_required")
+        self.assertEqual(len([c for c in runner.calls if c[1][0] == "click"]), 1)
+        calls = len(runner.calls)
+        confirmed = computer_use.cu_confirm(
+            self.repo, snapshot_id=cap["snapshot_id"], runner=runner,
+        )
+        self.assertEqual(confirmed["effect"], "stale")
+        self.assertNotEqual(confirmed["effect"], "confirmed")
+        self.assertFalse(confirmed["ok"])
+        self.assertIn("capture_required", confirmed["hint"])
+        self.assertEqual(len(runner.calls), calls)
+        ev = computer_use.cu_act(
+            self.repo, snapshot_id=cap["snapshot_id"], element_token="tok-2",
+            action="click", runner=runner,
+        )
+        self.assertEqual(ev["effect"], "stale")
+        self.assertIn("capture_required", ev["hint"])
+        self.assertEqual(len([c for c in runner.calls if c[1][0] == "click"]), 1)
+
+    def test_invoked_stale_cannot_be_confirmed_or_reused(self):
+        self._assert_invoked_failure_not_confirmable("stale")
+
+    def test_invoked_refused_cannot_be_confirmed_or_reused(self):
+        self._assert_invoked_failure_not_confirmable("refused")
 
 
 if __name__ == "__main__":

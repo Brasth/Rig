@@ -44,6 +44,59 @@ TERMINAL_STATUSES = frozenset({"ok", "fail", "timeout", "cancelled"})
 STRING_LAUNCH_KEYS = LAUNCH_KEYS - OBJECT_LAUNCH_KEYS
 
 
+def run_resume_command(command, fresh_command, job_dir, fresh_session=""):
+    """Run under the admitted supervisor; retry only a pre-work session error.
+
+    The supervisor retains its PID/group across both invocations. Cancellation
+    and wrapper process observation therefore cover the entire attempt.
+    """
+    folder = Path(job_dir)
+    log = folder / "resume-attempt.log"
+    with log.open("wb") as evidence:
+        child = subprocess.Popen(command, stdin=subprocess.DEVNULL,
+                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        while chunk := child.stdout.read1(65536):
+            evidence.write(chunk)
+            evidence.flush()
+            sys.stdout.buffer.write(chunk)
+            sys.stdout.buffer.flush()
+        child.stdout.close()
+        code = child.wait()
+    # A complete, narrow plain-text diagnostic is deliberate: arbitrary worker
+    # errors and structured activity must never replay a partially executed task.
+    raw = log.read_bytes() if log.stat().st_size <= 8192 else b""
+    text = raw.decode("utf-8", errors="replace").strip()
+    session_error = re.fullmatch(
+        r"(?:error:\s*)?(?:session (?:not found|does not exist)(?::[^\n]+)?|"
+        r"no (?:saved )?session found(?: (?:with|for)(?: id)? [^\n]+)?|"
+        r"(?:unknown|unrecognized|unexpected) (?:option|argument) ['\"]?"
+        r"(?:--resume|--session|-r)['\"]?)\.?", text, re.IGNORECASE)
+    rows = admission._process_table()
+    def still_exists(pid):
+        try:
+            os.kill(pid, 0)
+            return True
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True
+    # ps itself appears in its snapshot but has exited by the time it returns.
+    group_clear = rows is not None and not any(
+        pid != os.getpid() and pgid == os.getpgrp() and not stat.startswith("Z") and still_exists(pid)
+        for pid, _ppid, pgid, stat in rows)
+    cancelled = (folder / "cancel.json").exists() or any((folder / "cancellation").glob("*.json"))
+    if (code != 0 and session_error and group_clear and not cancelled
+            and not child_mcp.handshake_connected(folder)
+            and not (folder / "activity.json").exists()):
+        admission._write(folder / "resume-fallback.json", {
+            "continuation_mode": "fresh-fallback", "session_id": fresh_session,
+            "first_exit_code": code, "evidence": str(log),
+        })
+        print("run-worker: native resume rejected before work; starting one fresh invocation", flush=True)
+        os.execvp(fresh_command[0], fresh_command)
+    return code
+
+
 class LaunchError(ValueError):
     pass
 
@@ -105,6 +158,8 @@ def _require_continues_job(repo, continues_job_id: str) -> str:
         raise LaunchError(f"continues_job_id '{job_id}' does not exist")
     job = rig_jobs.project_job(job)
     effective = str(job.get("effective") or job.get("status") or "")
+    if effective == "cancelled":
+        raise LaunchError("cancelled predecessor cannot be continued")
     if effective not in TERMINAL_STATUSES:
         raise LaunchError(f"continues_job_id '{job_id}' is not terminal (status {effective})")
     return job_id
@@ -407,6 +462,7 @@ def launch(repo, **kwargs) -> dict:
                 resources=resources, workflow_id=workflow_id, workflow_node_id=workflow_node_id,
                 workflow_spec_hash=workflow_spec_hash, workflow_attempt=workflow_attempt,
                 allow_read_overlap_reservations=allow_read,
+                continues_job_id=continues_job_id,
             )
         except admission.AdmissionError as error:
             raise LaunchError(str(error)) from error
@@ -423,6 +479,8 @@ def launch(repo, **kwargs) -> dict:
                 kind="wrapper", thread=rig_jobs.current_thread(repo), files=listed,
                 model=model, effort=effort, executor_kind="wrapper", execution_mode="live",
                 writer_job_id=writer_job_id, continues_job_id=continues_job_id,
+                continuation_root_id=str(record.get("continuation_root_id") or ""),
+                continuation_depth=int(record.get("continuation_depth") or 0),
                 writer_snapshot_id=writer_snapshot_id,
                 writer_job_ids=writer_job_ids, writer_snapshot_ids=writer_snapshot_ids,
                 writer_providers=writer_providers, reservation=record, capture_evidence=False,
@@ -461,6 +519,8 @@ def launch(repo, **kwargs) -> dict:
             "RIG_OWNER_SESSION": owner_session,
             "RIG_WRITER_JOB_ID": writer_job_id,
             "RIG_CONTINUES_JOB_ID": continues_job_id,
+            "RIG_CONTINUATION_ROOT_ID": str(record.get("continuation_root_id") or ""),
+            "RIG_CONTINUATION_DEPTH": str(record.get("continuation_depth") or "") if continues_job_id else "",
             "RIG_WRITER_SNAPSHOT_ID": writer_snapshot_id,
             "RIG_WRITER_CLI": writer_cli,
             "RIG_WRITER_MODEL": writer_model,

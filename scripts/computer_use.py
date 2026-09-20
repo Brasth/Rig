@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """Parent-only Cua Driver CLI, doctor, and MCP wiring.
 
-Children never receive cua-driver MCP. Wire the live/preferred parent CLI only
-when that CLI can isolate job MCP from user config. Otherwise the parent uses
-`cua-driver call`.
+Children never receive computer-use tools. Every parent uses the Rig MCP
+proxy; raw cua-driver MCP configuration is not required.
 """
 from __future__ import annotations
 
@@ -182,40 +181,8 @@ def _json_entry(binary: str) -> dict:
 
 
 def wire_parent_mcp(cli: str, binary: str) -> str:
-    """Write cua-driver MCP for an isolating parent CLI only. Never worker configs."""
-    if not isolation_supported(cli):
-        return (
-            f"skip {cli} MCP write ({cli} cannot isolate children). "
-            "Parent uses: cua-driver call"
-        )
-    if not binary:
-        return "skip MCP write (cua-driver missing)"
-    path = mcp_config_path(cli)
-    if cli == "codex":
-        install_ui.ensure_cfg(path)
-        existed = mcp_wired(cli)
-        install_ui.set_key(path, f"mcp_servers.{SERVER}", "command", f'"{binary}"')
-        install_ui.set_key(path, f"mcp_servers.{SERVER}", "args", '["mcp"]')
-        install_ui.set_key(path, f"mcp_servers.{SERVER}", "enabled", "true")
-        install_ui.set_key(path, f"mcp_servers.{SERVER}", "startup_timeout_sec", "8")
-        if existed:
-            return f"keep {cli} mcp_servers.{SERVER} (refreshed)"
-        return f"set {cli} [mcp_servers.{SERVER}]  (fully quit {cli} to load tools)"
-    data, existed_file = install_ui.load_json_object(path)
-    created = not path.is_file()
-    if cli == "omp" or cli == "agy":
-        servers = data.get("mcpServers")
-        if not isinstance(servers, dict):
-            servers = {}
-            data["mcpServers"] = servers
-        existed = SERVER in servers
-        servers[SERVER] = _json_entry(binary)
-        install_ui.write_json(path, data)
-        if existed:
-            return f"keep {cli} mcpServers.{SERVER} (refreshed)"
-        extra = f" (created {path.name})" if created or not existed_file else ""
-        return f"set {cli} mcpServers.{SERVER}{extra}  (fully quit {cli} to load tools)"
-    return f"skip {cli} MCP write (no isolating config writer)"
+    """Compatibility entry point; parent access now goes through Rig MCP."""
+    return "Use Rig MCP rig_cu_status; raw cua-driver MCP wiring is not required."
 
 
 def install_skill_pack(binary: str) -> str:
@@ -280,10 +247,35 @@ def tools_listed(repo: Path, *, child: bool) -> bool:
     return (not child) and is_effective(repo)
 
 
+def cu_status(repo: Path) -> dict:
+    """Read-only diagnostics, available even when action tools are hidden."""
+    machine, binary, project = machine_state(), binary_path(), project_state(repo)
+    blockers = []
+    if machine != "on":
+        blockers.append("machine opt-in is " + machine + "; run rig computer-use setup")
+    if not binary:
+        blockers.append("cua-driver is missing; run rig computer-use setup")
+    if project != "true":
+        blockers.append("project is disabled; run rig computer-use on in this repository")
+    return {
+        "machine": machine, "binary": binary, "project": project,
+        "effective": not blockers, "blockers": blockers,
+        "transport": "Rig MCP rig_cu_capture/rig_cu_act/rig_cu_confirm/rig_cu_record",
+        "next_action": "Resolve blockers, then restart parent/MCP tool discovery" if blockers else
+                       "Use rig_cu_capture; if absent, restart parent/MCP tool discovery",
+        "existing_profile": EXISTING_PROFILE_HINT,
+        "note": "No install, opt-in, daemon or permission changes were made. Do not bypass Rig MCP.",
+    }
+
+
 _SNAPSHOTS: dict[str, dict] = {}
 _RECORDING: dict[str, str] = {}
 _SECRET_MARKERS = ("password", "passwd", "2fa", "totp", "otp", "cvv", "ssn", "secret")
 _ESCALATE = {"escalate_px", "escalate_foreground"}
+SNAPSHOT_TTL_SEC = 30.0
+PHASE_FRESH = "fresh"
+PHASE_CONFIRM = "confirm_required"
+PHASE_DONE = "done"
 CHROME_BUNDLE = "com.google.Chrome"
 BROWSER_SESSION = "rig-cu"
 EXISTING_PROFILE_HINT = "start CuaDriver with: cua-driver serve --grant existing-profile"
@@ -312,6 +304,10 @@ DRIVER_TOOLS = {
 def reset_snapshots() -> None:
     _SNAPSHOTS.clear()
     _RECORDING.clear()
+
+
+def _now() -> float:
+    return time.monotonic()
 
 
 def empty_evidence(**overrides) -> dict:
@@ -533,9 +529,77 @@ def _store_snapshot(
         "outline": str(meta.get("outline") or ""),
         "bind_selector": str(meta.get("bind_selector") or ""),
         "profile_key": str(meta.get("profile_key") or ""),
+        "phase": PHASE_FRESH,
+        "created_at": _now(),
     }
     _SNAPSHOTS[snapshot_id] = snap
     return snap
+
+
+def _reject_snapshot(action: str, snapshot_id: str, snap: dict | None, freshness: str, hint: str) -> dict:
+    snap = snap or {}
+    return empty_evidence(
+        ok=False,
+        effective=True,
+        action=action,
+        snapshot_id=snapshot_id,
+        pid=snap.get("pid") or 0,
+        window_id=snap.get("window_id") or 0,
+        before_png=snap.get("png") or "",
+        coord_space=snap.get("coord_space") or "",
+        effect="stale",
+        hint=hint,
+        snapshot_freshness=freshness,
+    )
+
+
+def _require_snapshot(snapshot_id: str, *, action: str, need_phase: str) -> tuple[dict | None, dict | None]:
+    """Return (snap, None) or (snap_or_none, reject_evidence). Never calls Driver."""
+    sid = str(snapshot_id or "").strip()
+    snap = _SNAPSHOTS.get(sid)
+    if not snap:
+        return None, _reject_snapshot(
+            action, snapshot_id, None, "unknown",
+            "capture_required: unknown snapshot",
+        )
+    created = float(snap.get("created_at") or 0)
+    if _now() - created > SNAPSHOT_TTL_SEC:
+        return snap, _reject_snapshot(
+            action, sid, snap, "expired",
+            "capture_required: snapshot expired",
+        )
+    phase = str(snap.get("phase") or PHASE_FRESH)
+    if phase != need_phase:
+        freshness = "consumed" if phase in {PHASE_CONFIRM, PHASE_DONE} else phase
+        return snap, _reject_snapshot(
+            action, sid, snap, freshness,
+            "capture_required: snapshot not usable for this step",
+        )
+    return snap, None
+
+
+def _mark_confirm_required(snap: dict) -> None:
+    snap["phase"] = PHASE_CONFIRM
+
+
+def _apply_invoked_effect(snap: dict, effect: str) -> str:
+    """After Driver ran. Confirm only real effects; consume stale/refused."""
+    if effect in _ESCALATE:
+        snap["escalate"] = effect
+        if effect == "escalate_px":
+            snap["px_allowed"] = True
+    if effect in {"stale", "refused"}:
+        snap["phase"] = PHASE_DONE
+        return "consumed"
+    _mark_confirm_required(snap)
+    return PHASE_CONFIRM
+
+
+def _act_effect(data: dict, default: str) -> str:
+    effect = _map_effect(data, default)
+    if effect == "confirmed":
+        return "unverifiable"
+    return effect
 
 
 def _png(data: dict, *keys: str, fallback: str = "") -> str:
@@ -975,6 +1039,7 @@ def _native_snapshot_result(
         pid=pid_n, window_id=win_n, effect="captured", after_png=png,
         elements=elements, outline=str(extra.get("outline") or ""),
         coord_space=meta["coord_space"],
+        snapshot_freshness=PHASE_FRESH,
         hint="act only with a token from this snapshot"
         if not px_allowed else "px allowed on this snapshot (degraded or escalate_px)",
     )
@@ -1043,6 +1108,7 @@ def _browser_tab_snapshot(
         ok=True, effective=True, action=action, snapshot_id=snapshot_id,
         pid=pid, window_id=window_id, effect="captured", after_png=png,
         elements=elements, outline=outline, coord_space=meta["coord_space"],
+        snapshot_freshness=PHASE_FRESH,
         hint="act with a fresh browser ref; px only if this snapshot allows it",
     )
 
@@ -1244,12 +1310,9 @@ def cu_act(
             action=kind, effect="hidden",
             hint="computer-use not effective; use chrome-devtools",
         )
-    snap = _SNAPSHOTS.get(str(snapshot_id or "").strip())
-    if not snap:
-        return empty_evidence(
-            ok=False, effective=True, action=kind, snapshot_id=snapshot_id,
-            effect="stale", hint="capture again",
-        )
+    snap, rejected = _require_snapshot(snapshot_id, action=kind, need_phase=PHASE_FRESH)
+    if rejected:
+        return rejected
     token = str(element_token or "").strip()
     ref_id = str(ref or "").strip()
     coords = _parse_xy(x, y)
@@ -1340,14 +1403,11 @@ def cu_act(
                 action=kind, effective=True, snapshot_id=snapshot_id,
                 effect="unverifiable", hint=f"cua-driver not installed ({error})",
             )
-        effect = _map_effect(data, "unverifiable")
+        effect = _act_effect(data, "unverifiable")
         blob = _driver_blob(data)
         if "browser_input_trust_unavailable" in blob:
             effect = "escalate_foreground"
-        if effect in _ESCALATE:
-            snap["escalate"] = effect
-            if effect == "escalate_px":
-                snap["px_allowed"] = True
+        freshness = _apply_invoked_effect(snap, effect)
         return empty_evidence(
             ok=effect not in {"stale", "refused"}, effective=True, action=kind,
             snapshot_id=snapshot_id, pid=snap.get("pid") or 0,
@@ -1357,6 +1417,7 @@ def cu_act(
             after_png=_png(data, "screenshot_path", "after_png", "screenshot_file_path"),
             coord_space=snap.get("coord_space") or "",
             outline=snap.get("outline") or "",
+            snapshot_freshness=freshness,
             hint="call rig_cu_confirm before reporting success"
             if effect not in {"stale", "refused"} else "capture again",
         )
@@ -1401,11 +1462,8 @@ def cu_act(
                 action=kind, effective=True, snapshot_id=snapshot_id,
                 effect="unverifiable", hint=f"cua-driver not installed ({error})",
             )
-        effect = _map_effect(data, "unverifiable")
-        if effect in _ESCALATE:
-            snap["escalate"] = effect
-            if effect == "escalate_px":
-                snap["px_allowed"] = True
+        effect = _act_effect(data, "unverifiable")
+        freshness = _apply_invoked_effect(snap, effect)
         return empty_evidence(
             ok=effect not in {"stale", "refused"}, effective=True, action=kind,
             snapshot_id=snapshot_id, pid=snap.get("pid") or 0,
@@ -1415,6 +1473,7 @@ def cu_act(
             after_png=_png(data, "screenshot_path", "after_png", "screenshot_file_path"),
             coord_space=snap.get("coord_space") or "",
             outline=snap.get("outline") or "",
+            snapshot_freshness=freshness,
             hint="call rig_cu_confirm before reporting success"
             if effect not in {"stale", "refused"} else "capture again",
         )
@@ -1451,11 +1510,8 @@ def cu_act(
             action=kind, effective=True, snapshot_id=snapshot_id,
             effect="unverifiable", hint=f"cua-driver not installed ({error})",
         )
-    effect = _map_effect(data, "unverifiable")
-    if effect in _ESCALATE:
-        snap["escalate"] = effect
-        if effect == "escalate_px":
-            snap["px_allowed"] = True
+    effect = _act_effect(data, "unverifiable")
+    freshness = _apply_invoked_effect(snap, effect)
     return empty_evidence(
         ok=effect not in {"stale", "refused"}, effective=True, action=kind,
         snapshot_id=snapshot_id, pid=snap.get("pid") or 0,
@@ -1464,6 +1520,7 @@ def cu_act(
         effect=effect, before_png=snap.get("png") or "",
         after_png=_png(data, "screenshot_path", "after_png"),
         coord_space=snap.get("coord_space") or "",
+        snapshot_freshness=freshness,
         hint="call rig_cu_confirm before reporting success" if effect not in {"stale", "refused"} else "capture again",
     )
 
@@ -1475,12 +1532,9 @@ def cu_confirm(repo: Path, *, snapshot_id: str, runner=None, profile_opener=None
             action=action, effect="hidden",
             hint="computer-use not effective; use chrome-devtools",
         )
-    snap = _SNAPSHOTS.get(str(snapshot_id or "").strip())
-    if not snap:
-        return empty_evidence(
-            ok=False, effective=True, action=action, snapshot_id=snapshot_id,
-            effect="stale", hint="capture again",
-        )
+    snap, rejected = _require_snapshot(snapshot_id, action=action, need_phase=PHASE_CONFIRM)
+    if rejected:
+        return rejected
     px_carry = bool(snap.get("px_allowed") or snap.get("escalate") == "escalate_px")
     if snap.get("target_id") and snap.get("tab_id"):
         captured = _browser_tab_snapshot(
@@ -1503,6 +1557,7 @@ def cu_confirm(repo: Path, *, snapshot_id: str, runner=None, profile_opener=None
         )
     if captured.get("effect") == "hidden":
         return captured
+    snap["phase"] = PHASE_DONE
     new_id = str(captured.get("snapshot_id") or "").strip()
     new_snap = _SNAPSHOTS.get(new_id)
     if new_snap is not None and px_carry:
@@ -1515,6 +1570,7 @@ def cu_confirm(repo: Path, *, snapshot_id: str, runner=None, profile_opener=None
         effect=effect,
         before_png=snap.get("png") or "",
         ok=effect == "confirmed",
+        snapshot_freshness=PHASE_FRESH,
         hint="" if effect == "confirmed" else f"Driver says {effect}",
     )
     captured["brief_block"] = brief_block(captured)
@@ -1635,13 +1691,7 @@ def cu_record(
 
 
 def parent_mcp_line(cli: str) -> str:
-    if not cli:
-        return "missing — rig computer-use setup"
-    if not isolation_supported(cli):
-        return f"call ({cli} cannot isolate children)"
-    if mcp_wired(cli):
-        return f"wired ({cli})"
-    return "missing — rig computer-use setup"
+    return "Rig proxy (raw cua-driver MCP is not required)"
 
 
 def status_lines(repo: Path) -> list[str]:
@@ -1667,7 +1717,7 @@ def status_lines(repo: Path) -> list[str]:
         f"  project:    {project_line}",
         f"  effective:  {effective_state(machine, bool(binary), project)}",
         f"  session:    {session_line(binary)}",
-        f"  parent MCP: {parent_mcp_line(cli)}",
+        "  parent MCP: Rig proxy (raw cua-driver MCP is not required)",
         f"  existing-profile: human grant ({EXISTING_PROFILE_HINT})",
         "  fallback:   chrome-devtools",
     ]
@@ -1708,11 +1758,8 @@ def cmd_off(repo: Path) -> int:
 def cmd_setup(repo: Path) -> int:
     cua_install.main(["--cua-driver"])
     binary = binary_path()
-    cli = parent_cli(repo)
-    print(wire_parent_mcp(cli, binary))
-    print(install_skill_pack(binary))
-    if binary and not isolation_supported(cli):
-        print(f"Parent CLI {cli or '(unknown)'} cannot isolate children; use cua-driver call.")
+    print("Use Rig MCP rig_cu_status, then rig_cu_capture/rig_cu_act/rig_cu_confirm.")
+    print("Raw cua-driver MCP and vendor skill installation are not required.")
     print("setup does not flip this repo [computer-use] enabled. Per project: rig computer-use on")
     if binary:
         print("next: fully quit the parent once, then rig computer-use on in this repo")

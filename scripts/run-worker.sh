@@ -131,7 +131,9 @@ try:
                 resources=resources, workflow_id=os.environ.get("RIG_WORKFLOW_ID", ""),
                 workflow_node_id=os.environ.get("RIG_WORKFLOW_NODE_ID", ""),
                 workflow_spec_hash=os.environ.get("RIG_WORKFLOW_SPEC_HASH", ""),
-                workflow_attempt=os.environ.get("RIG_WORKFLOW_ATTEMPT") or 0, **supplied,
+                workflow_attempt=os.environ.get("RIG_WORKFLOW_ATTEMPT") or 0,
+                continues_job_id=os.environ.get("RIG_CONTINUES_JOB_ID", ""),
+                **supplied,
             )
             if execution_mode == "dry_run":
                 # Register the fresh ID while preview and registration share the lock.
@@ -142,7 +144,8 @@ try:
                            "executor_kind": "wrapper", "status": "reserved", "ownership_established": False}
                 import job_metadata
                 job_metadata.write_json_atomic(path, preview)
-        keys = ("reservation_id", "attempt_id", "job_id", "queue_id", "access", "owner", "scope_unknown", "preview_id")
+        keys = ("reservation_id", "attempt_id", "job_id", "queue_id", "access", "owner", "scope_unknown", "preview_id",
+                "continues_job_id", "continuation_root_id", "continuation_depth", "continues_reservation_id")
         result = {key: record[key] for key in keys if key in record}
         result["protected_files"] = record.get("files", [])
         result["ownership_established"] = execution_mode == "live"
@@ -397,6 +400,19 @@ continues_id = os.environ.get("RIG_CONTINUES_JOB_ID", "")
 if continues_id:
     overlay["continues_job_id"] = continues_id
 for key, env_key in (
+    ("continuation_root_id", "RIG_CONTINUATION_ROOT_ID"),
+    ("continuation_mode", "RIG_CONTINUATION_MODE"),
+):
+    value = os.environ.get(env_key, "")
+    if value:
+        overlay[key] = value
+depth = os.environ.get("RIG_CONTINUATION_DEPTH", "")
+if depth:
+    try:
+        overlay["continuation_depth"] = int(depth)
+    except ValueError:
+        pass
+for key, env_key in (
     ("workflow_id", "RIG_WORKFLOW_ID"),
     ("workflow_node_id", "RIG_WORKFLOW_NODE_ID"),
     ("workflow_spec_hash", "RIG_WORKFLOW_SPEC_HASH"),
@@ -523,6 +539,19 @@ if session_id:
 continues_id = os.environ.get("RIG_CONTINUES_JOB_ID", "")
 if continues_id:
     overlay["continues_job_id"] = continues_id
+for key, env_key in (
+    ("continuation_root_id", "RIG_CONTINUATION_ROOT_ID"),
+    ("continuation_mode", "RIG_CONTINUATION_MODE"),
+):
+    value = os.environ.get(env_key, "")
+    if value:
+        overlay[key] = value
+depth = os.environ.get("RIG_CONTINUATION_DEPTH", "")
+if depth:
+    try:
+        overlay["continuation_depth"] = int(depth)
+    except ValueError:
+        pass
 if model:
     overlay["model"] = model
 if effort:
@@ -625,6 +654,23 @@ import json, sys
 print(json.loads(sys.argv[1]).get("credentials_path", ""))
 PY
 )"
+if [[ -z "${RIG_CONTINUATION_ROOT_ID:-}" ]]; then
+  RIG_CONTINUATION_ROOT_ID="$(python3 - "$ADMISSION_META_JSON" <<'PY'
+import json, sys
+print(json.loads(sys.argv[1]).get("continuation_root_id") or "")
+PY
+)"
+  export RIG_CONTINUATION_ROOT_ID
+fi
+if [[ -z "${RIG_CONTINUATION_DEPTH:-}" ]]; then
+  RIG_CONTINUATION_DEPTH="$(python3 - "$ADMISSION_META_JSON" <<'PY'
+import json, sys
+value = json.loads(sys.argv[1]).get("continuation_depth")
+print("" if value in (None, "") else value)
+PY
+)"
+  export RIG_CONTINUATION_DEPTH
+fi
 trap wrapper_cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
@@ -669,15 +715,18 @@ fi
 CONTINUES_WORKER=""
 CONTINUES_SESSION=""
 CONTINUES_RESUMABLE=""
+CONTINUATION_MODE=""
 if [[ -n "${RIG_CONTINUES_JOB_ID:-}" ]]; then
-  CONTINUES_META="$(python3 - "$REPO" "$JOB_DIR" "$BRIEF" "${RIG_CONTINUES_JOB_ID}" <<'PY'
-import json, pathlib, sys
-root, job_dir, brief = map(pathlib.Path, sys.argv[1:4])
-prior_id = sys.argv[4]
+  CONTINUES_META="$(python3 - "$ADMISSION_PY" "$REPO" "$JOB_DIR" "$BRIEF" "${RIG_CONTINUES_JOB_ID}" "$WORKER" <<'PY'
+import json, os, pathlib, sys
+sys.path.insert(0, str(pathlib.Path(sys.argv[1]).parent))
+import admission
+root, job_dir, brief = map(pathlib.Path, sys.argv[2:5])
+prior_id, worker = sys.argv[5], sys.argv[6]
 prior_dir = root / ".rig" / "jobs" / prior_id
 meta = {}
 result = {}
-for name, dest in (("meta.json", "meta"), ("result.json", "result")):
+for name in ("meta.json", "result.json"):
     path = prior_dir / name
     try:
         obj = json.loads(path.read_text())
@@ -701,13 +750,21 @@ for name in ("change-evidence.json", "result.json"):
     path = prior_dir / name
     if path.is_file():
         evidence.append(str(path))
+predecessor = {
+    "worker": str(meta.get("worker") or result.get("worker") or ""),
+    "session_id": session_id,
+    "resumable": resumable,
+    "executor_kind": str(meta.get("executor_kind") or result.get("executor_kind") or ""),
+}
+mode = admission.continuation_resume_mode(predecessor, worker)
 context = {
     "prior_job_id": prior_id,
-    "worker": str(meta.get("worker") or result.get("worker") or ""),
+    "worker": predecessor["worker"],
     "status": status,
     "summary": summary,
     "files_changed": files_changed,
     "evidence": evidence,
+    "continuation_mode": mode,
 }
 if session_id:
     context["session_id"] = session_id
@@ -723,9 +780,10 @@ text = brief.read_bytes()
 if b"## Previous worker context" not in text:
     brief.write_bytes(text + section.encode("utf-8"))
 print(json.dumps({
-    "worker": context["worker"],
+    "worker": predecessor["worker"],
     "session_id": session_id,
     "resumable": resumable,
+    "continuation_mode": mode,
 }))
 PY
 )" || CONTINUES_META="{}"
@@ -753,12 +811,22 @@ except Exception:
     print("")
 PY
 )"
+  CONTINUATION_MODE="$(python3 - "$CONTINUES_META" <<'PY'
+import json, sys
+try:
+    print(json.loads(sys.argv[1]).get("continuation_mode") or "fresh")
+except Exception:
+    print("fresh")
+PY
+)"
+  if [[ "$CONTINUATION_MODE" == "fresh-fallback" ]]; then
+    echo "run-worker: native resume start failed; falling back to a fresh invocation with prior context" >&2
+  fi
 fi
+export RIG_CONTINUATION_MODE="${CONTINUATION_MODE:-}"
 SHOULD_RESUME=0
-if [[ -n "${RIG_CONTINUES_JOB_ID:-}" && "$CONTINUES_RESUMABLE" == "true" && -n "$CONTINUES_SESSION" && "$CONTINUES_WORKER" == "$WORKER" ]]; then
-  case "$WORKER" in
-    grok|claude|codex|opencode) SHOULD_RESUME=1 ;;
-  esac
+if [[ "$CONTINUATION_MODE" == "native" && -n "$CONTINUES_SESSION" ]]; then
+  SHOULD_RESUME=1
 fi
 BRIEF_TEXT="$(cat "$BRIEF")"
 CHILD_MCP_PREPARE="$(python3 "$CHILD_MCP_PY" prepare "$JOB_DIR" "$JOB_ID" "$REPO" "$WORKER")"
@@ -793,8 +861,9 @@ if [[ -z "$PARENT_THREAD" ]]; then
   fi
 fi
 
-SESSION_ID=""
-CMD=()
+build_worker_cmd() {
+  SESSION_ID=""
+  CMD=()
 case "$WORKER" in
   grok)
     if [[ "$SHOULD_RESUME" -eq 1 ]]; then
@@ -956,6 +1025,9 @@ case "$WORKER" in
     )
     ;;
 esac
+return 0
+}
+build_worker_cmd
 CMD_STR="$(shell_join "${CMD[@]}")"
 
 write_meta "reserved"
@@ -1048,8 +1120,18 @@ PY
 )"
 LAUNCH_GATE="$JOB_DIR/launch-$ATTEMPT_ID.json"
 LAUNCH_READY="$JOB_DIR/launch-ready-$ATTEMPT_ID.json"
+FRESH_CMD=()
+FRESH_SESSION_ID=""
+if [[ "$SHOULD_RESUME" -eq 1 ]]; then
+  SHOULD_RESUME=0
+  build_worker_cmd
+  FRESH_CMD=("${CMD[@]}")
+  FRESH_SESSION_ID="$SESSION_ID"
+  SHOULD_RESUME=1
+  build_worker_cmd
+fi
 RIG_JOB_ID="$JOB_ID" RIG_JOB_DIR="$JOB_DIR" RIG_REPO="$REPO" RIG_ROLE="$ROLE" \
-python3 - "$ADMISSION_PY" "$REPO" "$$" "$LAUNCH_GATE" "$LAUNCH_READY" "${CMD[@]}" >"$LOG" 2>&1 <<'PY' &
+python3 - "$ADMISSION_PY" "$REPO" "$$" "$LAUNCH_GATE" "$LAUNCH_READY" "$FRESH_SESSION_ID" "${#FRESH_CMD[@]}" ${FRESH_CMD[@]+"${FRESH_CMD[@]}"} "${CMD[@]}" >"$LOG" 2>&1 <<'PY' &
 import json, os, pathlib, sys, time
 sys.path.insert(0, str(pathlib.Path(sys.argv[1]).parent))
 import admission
@@ -1079,7 +1161,12 @@ while not gate.is_file():
 os.chdir(repo)
 # Child notifications do not need parent admission credentials.
 os.environ.pop("RIG_OWNER_TOKEN", None)
-os.execvp(sys.argv[6], sys.argv[6:])
+count = int(sys.argv[7])
+fresh, command = sys.argv[8:8 + count], sys.argv[8 + count:]
+if fresh:
+    import worker_launch
+    raise SystemExit(worker_launch.run_resume_command(command, fresh, gate.parent, sys.argv[6]))
+os.execvp(command[0], command)
 PY
 CHILD=$!
 for _READY_POLL in {1..250}; do
@@ -1087,9 +1174,7 @@ for _READY_POLL in {1..250}; do
   kill -0 "$CHILD" 2>/dev/null || break
   sleep 0.02
 done
-if [[ ! -f "$LAUNCH_READY" ]]; then
-  refuse "child did not reach the launch barrier"
-fi
+[[ -f "$LAUNCH_READY" ]] || refuse "child did not reach the launch barrier"
 admission_call activate "$LAUNCH_READY" >/dev/null || refuse "could not activate the reserved child"
 ADMISSION_ACTIVATED=1
 write_meta "running"
@@ -1151,6 +1236,11 @@ if ! kill -0 "$CHILD" 2>/dev/null; then
 fi
 set -e
 
+if [[ -f "$JOB_DIR/resume-fallback.json" ]]; then
+  CONTINUATION_MODE=fresh-fallback
+  export RIG_CONTINUATION_MODE="$CONTINUATION_MODE"
+  SESSION_ID="$FRESH_SESSION_ID"
+fi
 ENDED="$(iso_now)"
 complete_execution
 

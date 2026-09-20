@@ -997,5 +997,135 @@ class AdmissionTests(unittest.TestCase):
             proc.wait(timeout=2)
 
 
+    def _terminal(self, job="prior", files=None, status="ok", worker="grok", owner=None, **fields):
+        owner = owner or self.owner
+        files = ["a.py"] if files is None else files
+        lease = self.reserve(job, files=files, worker=worker, owner=owner)
+        folder = self.repo / ".rig" / "jobs" / job
+        folder.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "job_id": job, "worker": worker, "status": status, "files": files,
+            "reservation_id": lease["reservation_id"], "executor_kind": "wrapper",
+            "owner_session": (owner or {}).get("session_id") or "admission-tests",
+        }
+        payload.update({key: value for key, value in fields.items() if key != "session_id"})
+        if fields.get("session_id"):
+            payload["session_id"] = fields["session_id"]
+            payload["resumable"] = True
+        (folder / "meta.json").write_text(json.dumps(payload))
+        (folder / "result.json").write_text(json.dumps({"status": status, **payload}))
+        record = admission._read(admission._reservation_path(self.repo, lease["reservation_id"]), required=True)
+        record.update(stopped=True, execution_status=status, stage="verifying", slot_held=False)
+        for key in ("continues_job_id", "continuation_root_id", "continuation_depth"):
+            if key in fields:
+                record[key] = fields[key]
+        admission._save(self.repo, record)
+        return lease
+
+    def test_continuation_requires_terminal_predecessor(self):
+        self.reserve("live")
+        with self.assertRaisesRegex(admission.AdmissionError, "not terminal"):
+            self.reserve("next", continues_job_id="live")
+
+    def test_continuation_rejects_cancelled_predecessor(self):
+        self._terminal("prior-cancel", status="cancelled")
+        with self.assertRaisesRegex(admission.AdmissionError, "cancelled predecessor"):
+            self.reserve("next-cancel", continues_job_id="prior-cancel")
+
+    def test_continuation_rejects_worker_owner_and_file_mismatch(self):
+        self._terminal("prior-grok", worker="grok", files=["g.py"])
+        with self.assertRaisesRegex(admission.AdmissionError, "worker mismatch"):
+            self.reserve("next-claude", worker="claude", files=["g.py"], continues_job_id="prior-grok")
+        self._terminal("prior-owner", files=["o.py"])
+        with self.assertRaisesRegex(admission.AdmissionError, "owner/session"):
+            self.reserve("next-owner", files=["o.py"], owner=_owner(session="other-session"),
+                         continues_job_id="prior-owner")
+        self._terminal("prior-files", files=["f.py"])
+        with self.assertRaisesRegex(admission.AdmissionError, "equal or narrower"):
+            self.reserve("next-wide", files=["f.py", "x.py"], continues_job_id="prior-files")
+
+    def test_continuation_handoff_lineage_and_launch_failed_restore(self):
+        prior = self._terminal("prior", files=["a.py", "b.py"])
+        nxt = self.reserve("next", files=["a.py"], continues_job_id="prior")
+        self.assertEqual(nxt["continues_job_id"], "prior")
+        self.assertEqual(nxt["continuation_root_id"], "prior")
+        self.assertEqual(nxt["continuation_depth"], 1)
+        pred = admission.get_reservation(self.repo, prior["reservation_id"])
+        self.assertTrue(pred.get("superseded"))
+        self.assertEqual(pred.get("continued_by"), "next")
+        self.assertEqual(pred.get("continuation_status"), "superseded")
+        self.assertEqual(pred.get("stage"), "verifying")
+        self.assertFalse(pred.get("slot_held"))
+        with self.assertRaisesRegex(admission.AdmissionError, "files overlap"):
+            self.reserve("other", files=["a.py"])
+        with self.assertRaisesRegex(admission.AdmissionError, "files overlap"):
+            self.reserve("other-omitted", files=["b.py"])
+        admission.release(
+            self.repo, **admission.credentials(nxt), owner=self.owner,
+            rationale="setup failed", mode="launch_failed",
+        )
+        restored = admission.get_reservation(self.repo, prior["reservation_id"])
+        self.assertFalse(restored.get("superseded"))
+        self.assertNotEqual(restored.get("stage"), "released")
+        released = admission.get_reservation(self.repo, nxt["reservation_id"])
+        self.assertEqual(released["stage"], "released")
+
+    def test_continuation_cap_and_resume_mode(self):
+        self._terminal("root", files=["root.py"])
+        self._terminal("deep", continues_job_id="root", continuation_root_id="root", continuation_depth=3)
+        with self.assertRaisesRegex(admission.AdmissionError, r"inconsistent continuation depth"):
+            self.reserve("too-deep", continues_job_id="deep")
+        self.assertEqual(
+            admission.continuation_resume_mode(
+                {"worker": "grok", "session_id": "s1", "resumable": True}, "grok",
+            ),
+            "native",
+        )
+        self.assertEqual(
+            admission.continuation_resume_mode({"worker": "grok", "resumable": True}, "grok"),
+            "fresh",
+        )
+        self.assertEqual(
+            admission.continuation_resume_mode(
+                {"worker": "grok", "session_id": "s1", "resumable": True, "executor_kind": "wrapper"},
+                "grok", executor_kind="native_child",
+            ),
+            "fresh-fallback",
+        )
+
+    def test_continuation_requires_authenticated_completion(self):
+        lease = self.reserve("not-stopped")
+        result = admission.finish(self.repo, **admission.credentials(lease),
+                                  owner=self.owner, status="ok")
+        self.assertFalse(result["stopped"])
+        with self.assertRaisesRegex(admission.AdmissionError, "confirmed stopped"):
+            self.reserve("unsafe", continues_job_id="not-stopped")
+
+    def test_continuation_root_budget_counts_siblings_and_failed_launches(self):
+        self._terminal("root")
+        for i in range(3):
+            nxt = self.reserve(f"next-{i}", continues_job_id="root")
+            admission.release(self.repo, **admission.credentials(nxt), owner=self.owner,
+                              rationale="failed setup", mode="launch_failed")
+        with self.assertRaisesRegex(admission.AdmissionError, "cap reached"):
+            self.reserve("fourth", continues_job_id="root")
+
+    def test_continuation_retains_predecessor_resources(self):
+        prior = self._terminal("root", files=["a.py", "b.py"])
+        record = admission._read(admission._reservation_path(self.repo, prior["reservation_id"]))
+        record["resources"] = [{"name": "test-database", "access": "write"}]
+        admission._save(self.repo, record)
+        self.reserve("narrow", files=["a.py"], continues_job_id="root")
+        with self.assertRaisesRegex(admission.AdmissionError, "resource overlap"):
+            self.reserve("other", files=["c.py"], resources=record["resources"])
+
+    def test_continuation_rejects_cyclic_and_negative_lineage(self):
+        self._terminal("cycle", continues_job_id="cycle")
+        with self.assertRaisesRegex(admission.AdmissionError, "cyclic"):
+            self.reserve("next-cycle", continues_job_id="cycle")
+        self._terminal("negative", files=["b.py"], continuation_root_id="negative", continuation_depth=-1)
+        with self.assertRaisesRegex(admission.AdmissionError, "invalid continuation depth"):
+            self.reserve("next-negative", files=["b.py"], continues_job_id="negative")
+
 if __name__ == "__main__":
     unittest.main()

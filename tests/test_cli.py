@@ -200,6 +200,18 @@ class CliMemoryAndThread(unittest.TestCase):
     def _template_ignore_entries(self):
         return [line for line in (ROOT / "templates" / "gitignore-fragment").read_text().splitlines() if line]
 
+    def test_init_system_bash_completes_and_preserves_protocol(self):
+        env = dict(os.environ, RIG_HOME=str(ROOT), RIG_INSTALL_TRANSACTION="1",
+                   RIG_SKIP_UPDATE_CHECK="1", RIG_SKIP_MODEL_CATALOG="1")
+        proc = subprocess.run(
+            ["/bin/bash", str(RIG), "init"], cwd=self.repo, env=env,
+            capture_output=True, text=True, timeout=30,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        def protocol(path):
+            return path.read_text().split("<!-- rig:start -->", 1)[1].split("<!-- rig:end -->", 1)[0]
+        self.assertEqual(protocol(self.repo / "AGENTS.md"), protocol(ROOT / "AGENTS.md"))
+
     def test_init_applies_template_gitignore_and_keeps_max_running(self):
         gi = self.repo / ".gitignore"
         gi.write_text(".rig/\nkeep-unrelated/\n")
@@ -620,7 +632,10 @@ class InitPresence(unittest.TestCase):
         self.assertIn("slash-command catalog", text)
         self.assertNotIn("omit --model unless RIG_MODEL is set", text)
         start = text.split("<!-- rig:start -->", 1)[1].split("<!-- rig:end -->", 1)[0]
-        self.assertNotIn("'", start)
+        # Quoted protocol text must remain literal and valid on macOS Bash 3.2.
+        syntax = subprocess.run(["/bin/bash", "-n", str(RIG)], capture_output=True, text=True)
+        self.assertEqual(syntax.returncode, 0, syntax.stderr)
+        self.assertIn("the parent's reply includes", start)
         self.assertIn("stay|explore|mini|bulk|implement|hard|review|verify", start)
         self.assertIn("rig_workflow_wait", start)
         self.assertIn("rig_workflow_advance", start)
@@ -1151,7 +1166,7 @@ class ComputerUseCli(unittest.TestCase):
         self.assertIn("fallback:", doc.stdout)
         self.assertIn("chrome-devtools", doc.stdout)
 
-    def test_setup_wires_isolating_parent_only(self):
+    def test_setup_uses_rig_proxy_without_raw_parent_mcp(self):
         self._fake_driver()
         (self.home / ".rig").mkdir()
         (self.home / ".rig" / "cua-driver.json").write_text(
@@ -1164,15 +1179,15 @@ class ComputerUseCli(unittest.TestCase):
             env=self._env(RIG_PARENT="codex"),
         )
         self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
-        codex = (self.home / ".codex" / "config.toml").read_text()
-        self.assertIn("mcp_servers.cua-driver", codex)
-        self.assertIn("cua-driver", codex)
+        self.assertFalse((self.home / ".codex" / "config.toml").exists())
+        self.assertIn("rig_cu_status", proc.stdout)
+        self.assertIn("rig_cu_capture", proc.stdout)
         grok_cfg = self.home / ".grok" / "config.toml"
         if grok_cfg.is_file():
             self.assertNotIn("cua-driver", grok_cfg.read_text())
         self.assertFalse((self.home / ".omp" / "mcp.json").exists())
 
-    def test_setup_skips_mcp_when_parent_cannot_isolate(self):
+    def test_setup_uses_rig_proxy_for_grok_parent(self):
         self._fake_driver()
         (self.home / ".rig").mkdir()
         (self.home / ".rig" / "cua-driver.json").write_text(
@@ -1185,8 +1200,9 @@ class ComputerUseCli(unittest.TestCase):
             env=self._env(RIG_PARENT="grok", GROK_HOME=str(self.home / ".grok")),
         )
         self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
-        self.assertIn("cannot isolate children", proc.stdout)
-        self.assertIn("cua-driver call", proc.stdout)
+        self.assertIn("rig_cu_status", proc.stdout)
+        self.assertIn("rig_cu_capture", proc.stdout)
+        self.assertNotIn("use cua-driver call", proc.stdout)
         grok_cfg = self.home / ".grok" / "config.toml"
         if grok_cfg.is_file():
             self.assertNotIn("cua-driver", grok_cfg.read_text())

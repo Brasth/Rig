@@ -326,6 +326,32 @@ class McpDispatch(unittest.TestCase):
         listed = jobs.list_jobs(self.repo)
         self.assertTrue(any(j["job_id"] == job_id and j["status"] == "running" for j in listed))
 
+    def test_job_start_continuation_is_exposed_and_forwarded(self):
+        tool = next(tool for tool in rig_mcp.TOOLS if tool["name"] == "rig_job_start")
+        self.assertIn("continues_job_id", tool["inputSchema"]["properties"])
+        with mock.patch.object(rig_mcp.rig_jobs, "start_job", return_value={"job_id": "next"}) as start:
+            out = rig_mcp.call_tool("rig_job_start", {
+                "repo": str(self.repo), "worker": "codex", "continues_job_id": "prior",
+            })
+        self.assertNotIn("isError", out)
+        self.assertEqual(start.call_args.kwargs["continues_job_id"], "prior")
+
+    def test_cu_status_is_visible_when_actions_are_disabled(self):
+        import computer_use as cu
+        with mock.patch.object(cu, "machine_state", return_value="unset"), \
+             mock.patch.object(cu, "binary_path", return_value=""), \
+             mock.patch.object(cu, "project_state", return_value="false"), \
+             mock.patch.object(rig_mcp, "is_child", return_value=False):
+            names = {tool["name"] for tool in rig_mcp.listed_tools()}
+            self.assertIn("rig_cu_status", names)
+            self.assertNotIn("rig_cu_capture", names)
+            result = rig_mcp.call_tool("rig_cu_status", {"repo": str(self.repo)})
+            status = result["structuredContent"]
+            self.assertFalse(status["effective"])
+            self.assertEqual(len(status["blockers"]), 3)
+        with mock.patch.object(rig_mcp, "is_child", return_value=True):
+            self.assertFalse(any(tool["name"].startswith("rig_cu_") for tool in rig_mcp.listed_tools()))
+
     def test_job_finish_writes_result(self):
         start = rig_mcp.call_tool(
             "rig_job_start",
@@ -1212,6 +1238,79 @@ class McpDispatch(unittest.TestCase):
         self.assertEqual(kwargs.get("x"), 10.0)
         self.assertEqual(kwargs.get("y"), 20.0)
         self.assertEqual(kwargs.get("element_token"), "")
+
+    def _png_fixture(self):
+        raw = (
+            b"\x89PNG\r\n\x1a\n"
+            b"\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
+            b"\x08\x06\x00\x00\x00\x1f\x15\xc4\x89"
+            b"\x00\x00\x00\nIDATx\x9cc\x00\x01\x00\x00\x05\x00\x01\r\n-\xb4"
+            b"\x00\x00\x00\x00IEND\xaeB`\x82"
+        )
+        path = Path(self.td.name) / "cu-shot.png"
+        path.write_bytes(raw)
+        return path, raw
+
+    def test_parent_cu_capture_includes_image_when_png_readable(self):
+        os.environ["RIG_REPO"] = str(self.repo)
+        png, raw = self._png_fixture()
+        ev = {
+            "ok": True, "effective": True, "action": "capture", "snapshot_id": "drv-1",
+            "pid": 1, "window_id": 2, "addressed": {"element_token": "", "index": None, "label": ""},
+            "effect": "captured", "before_png": "", "after_png": str(png),
+            "elements": [{"index": 1, "role": "AXButton", "label": "1", "element_token": "tok-1"}],
+            "brief_block": "Child must not click.", "hint": "act only with a token",
+            "coord_space": "window_local", "outline": "Calculator",
+        }
+        with mock.patch("computer_use.cu_capture", return_value=ev):
+            out = rig_mcp.call_tool(
+                "rig_cu_capture",
+                {"repo": str(self.repo), "pid": 1, "window_id": 2},
+            )
+        self.assertNotIn("isError", out)
+        self.assertEqual(out["structuredContent"]["snapshot_id"], "drv-1")
+        self.assertEqual(out["structuredContent"]["receipt"]["version"], "rig.cu.v1")
+        self.assertTrue(out["structuredContent"]["receipt"]["image"]["available"])
+        types = [item["type"] for item in out["content"]]
+        self.assertIn("text", types)
+        self.assertIn("image", types)
+        image = [item for item in out["content"] if item["type"] == "image"][0]
+        self.assertEqual(image["mimeType"], "image/png")
+        import base64
+        self.assertEqual(base64.b64decode(image["data"]), raw)
+        self.assertIn("Child must not click", self._text(out))
+
+    def test_parent_cu_capture_omits_image_when_unavailable(self):
+        os.environ["RIG_REPO"] = str(self.repo)
+        ev = {
+            "ok": True, "effective": True, "action": "capture", "snapshot_id": "drv-1",
+            "pid": 1, "window_id": 2, "addressed": {"element_token": "", "index": None, "label": ""},
+            "effect": "captured", "before_png": "", "after_png": "/no/such/cu.png",
+            "elements": [], "brief_block": "Child must not click.", "hint": "",
+        }
+        with mock.patch("computer_use.cu_capture", return_value=ev):
+            out = rig_mcp.call_tool("rig_cu_capture", {"repo": str(self.repo)})
+        self.assertNotIn("isError", out)
+        self.assertEqual(out["structuredContent"]["snapshot_id"], "drv-1")
+        self.assertFalse(out["structuredContent"]["receipt"]["image"]["available"])
+        self.assertFalse(any(item.get("type") == "image" for item in out["content"]))
+
+    def test_parent_cu_record_stays_text_without_image(self):
+        os.environ["RIG_REPO"] = str(self.repo)
+        ev = {
+            "ok": True, "effective": True, "action": "record_start",
+            "effect": "recorded", "recording_path": "/repo/.rig/cu-evidence/run/recording.mp4",
+            "output_dir": "/repo/.rig/cu-evidence/run", "brief_block": "Child must not click.",
+            "hint": "stop with rig_cu_record action=stop",
+        }
+        with mock.patch("computer_use.cu_record", return_value=ev):
+            out = rig_mcp.call_tool(
+                "rig_cu_record",
+                {"repo": str(self.repo), "action": "start", "output_dir": ".rig/cu-evidence/run"},
+            )
+        self.assertEqual(out["structuredContent"]["action"], "record_start")
+        self.assertFalse(any(item.get("type") == "image" for item in out["content"]))
+        self.assertIn("receipt", out["structuredContent"])
 
     def test_parent_cu_record_passes_action(self):
         os.environ["RIG_REPO"] = str(self.repo)

@@ -636,14 +636,31 @@ class WorkerLaunchTests(unittest.TestCase):
         self.assertIn("active work", denied["content"][0]["text"])
         self.assertNotIn(token, denied["content"][0]["text"])
 
-    def _seed_terminal(self, job_id, status="ok"):
+    def _seed_terminal(self, job_id, status="ok", files=None, worker="grok",
+                       owner_session="launch-tests", **job_fields):
+        files = ["a.py"] if files is None else files
         folder = self.repo / ".rig" / "jobs" / job_id
         ended = "" if status == "running" else "2026-09-10T07:01:00Z"
+        if status != "running":
+            owner = admission.caller_owner("parent", owner_session=owner_session)
+            lease = admission.reserve(
+                self.repo, job_id=job_id, worker=worker, role="implement",
+                model="grok-4.6", files=files, owner=owner,
+            )
+            record = admission._read(admission._reservation_path(self.repo, lease["reservation_id"]), required=True)
+            record.update(stopped=True, execution_status=status, stage="verifying", slot_held=False)
+            for key in ("continues_job_id", "continuation_root_id", "continuation_depth"):
+                if key in job_fields:
+                    record[key] = job_fields[key]
+            admission._save(self.repo, record)
         jobs.write_job_files(
-            folder, job_id, "grok", "implement", status,
+            folder, job_id, worker, "implement", status,
             0 if status in {"ok", "running"} else 1,
             "2026-09-10T07:00:00Z", ended, "done" if status != "running" else "",
-            kind="wrapper", executor_kind="wrapper", files=["a.py"],
+            kind="wrapper", executor_kind="wrapper", files=files,
+            **{key: value for key, value in job_fields.items() if key in {
+                "continues_job_id", "continuation_root_id", "continuation_depth", "continuation_mode",
+            }},
         )
         return folder
 
@@ -661,13 +678,88 @@ class WorkerLaunchTests(unittest.TestCase):
                 role="implement", model="grok-4.6", effort="high", files=["b.py"],
                 continues_job_id="prior-live", owner_session="launch-tests",
             )
-        self._seed_terminal("prior-ok", status="ok")
+        self._seed_terminal("prior-ok", status="ok", files=["b.py"])
         launched = self._launch("next-ok", files=["b.py"], continues_job_id="prior-ok")
         env = self._wrapper_env("next-ok")
         self.assertEqual(env.get("RIG_CONTINUES_JOB_ID"), "prior-ok")
+        self.assertEqual(env.get("RIG_CONTINUATION_ROOT_ID"), "prior-ok")
+        self.assertEqual(env.get("RIG_CONTINUATION_DEPTH"), "1")
         meta = json.loads((self.repo / ".rig" / "jobs" / "next-ok" / "meta.json").read_text())
         self.assertEqual(meta.get("continues_job_id"), "prior-ok")
+        self.assertEqual(meta.get("continuation_root_id"), "prior-ok")
+        self.assertEqual(meta.get("continuation_depth"), 1)
         self.assertEqual(launched["job_id"], "next-ok")
+        prior = next(row for row in admission.list_reservations(self.repo) if row.get("job_id") == "prior-ok")
+        self.assertTrue(prior.get("superseded"))
+        self.assertEqual(prior.get("continued_by"), "next-ok")
+        self.assertEqual(prior.get("stage"), "verifying")
+
+    def test_continuation_rejects_cancelled_worker_owner_and_wider_files(self):
+        (self.repo / "c.py").write_text("c\n")
+        (self.repo / "d.py").write_text("d\n")
+        self._seed_terminal("prior-cancel", status="cancelled", files=["a.py"])
+        with self.assertRaisesRegex(worker_launch.LaunchError, "cancelled predecessor"):
+            self._launch("next-cancel", files=["a.py"], continues_job_id="prior-cancel")
+        self._seed_terminal("prior-grok", status="ok", files=["b.py"])
+        with self.assertRaisesRegex(worker_launch.LaunchError, "worker mismatch"):
+            self._launch("next-claude", worker="claude", model="claude-sonnet-5", effort="medium",
+                         files=["b.py"], continues_job_id="prior-grok")
+        self._seed_terminal("prior-owner", status="ok", files=["c.py"])
+        with self.assertRaisesRegex(worker_launch.LaunchError, "owner/session"):
+            self._launch("next-owner", files=["c.py"], continues_job_id="prior-owner",
+                         owner_session="other-session")
+        self._seed_terminal("prior-narrow", status="ok", files=["d.py"])
+        with self.assertRaisesRegex(worker_launch.LaunchError, "equal or narrower"):
+            self._launch("next-wide", files=["d.py", "a.py"], continues_job_id="prior-narrow")
+
+    def test_continuation_cap_requires_a_fresh_job(self):
+        self._seed_terminal("root", files=["root.py"])
+        self._seed_terminal(
+            "prior-deep", status="ok", continues_job_id="root",
+            continuation_root_id="root", continuation_depth=3,
+        )
+        with self.assertRaisesRegex(worker_launch.LaunchError, "inconsistent continuation depth"):
+            self._launch("next-deep", continues_job_id="prior-deep")
+
+
+class ResumeExecution(unittest.TestCase):
+    def run_resume(self, folder, diagnostic, *, connected=False, fresh_exit=0):
+        if connected:
+            (folder / "meta.json").write_text(json.dumps({
+                "child_mcp_status": "connected", "child_mcp_protocol": 1,
+            }))
+        resume = [sys.executable, "-c", f"print({diagnostic!r}); raise SystemExit(2)"]
+        fresh = [sys.executable, "-c", f"print('FRESH_EXECUTED'); raise SystemExit({fresh_exit})"]
+        code = (
+            "import sys; sys.path.insert(0, sys.argv[1]); import worker_launch; "
+            "raise SystemExit(worker_launch.run_resume_command("
+            f"{resume!r}, {fresh!r}, sys.argv[2], 'new-session'))"
+        )
+        return subprocess.run([sys.executable, "-c", code, str(ROOT / "scripts"), str(folder)],
+                              stdin=subprocess.DEVNULL, capture_output=True, text=True,
+                              start_new_session=True, timeout=20)
+
+    def test_real_failed_resume_runs_fresh_once_and_preserves_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp)
+            result = self.run_resume(folder, "Error: session not found: missing", fresh_exit=9)
+            self.assertEqual(result.returncode, 9, result.stdout + result.stderr)
+            self.assertEqual(result.stdout.count("FRESH_EXECUTED"), 1)
+            self.assertIn("session not found", (folder / "resume-attempt.log").read_text())
+            self.assertEqual(json.loads((folder / "resume-fallback.json").read_text())["session_id"], "new-session")
+
+    def test_activity_or_handshake_or_arbitrary_failure_never_replays(self):
+        for diagnostic, connected in [
+            ('{"type":"tool_call"}\nError: session not found: missing', False),
+            ("Error: session not found: missing", True),
+            ("Error: network timeout", False),
+        ]:
+            with self.subTest(diagnostic=diagnostic, connected=connected), tempfile.TemporaryDirectory() as tmp:
+                folder = Path(tmp)
+                result = self.run_resume(folder, diagnostic, connected=connected)
+                self.assertEqual(result.returncode, 2)
+                self.assertNotIn("FRESH_EXECUTED", result.stdout)
+                self.assertFalse((folder / "resume-fallback.json").exists())
 
 
 if __name__ == "__main__":

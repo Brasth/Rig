@@ -740,6 +740,7 @@ for _tool in TOOLS:
         _tool["inputSchema"]["properties"].update({
             "files": {"type": "array", "items": {"type": "string"}},
             "writer_job_id": {"type": "string"},
+            "continues_job_id": {"type": "string"},
             "writer_snapshot_id": {"type": "string"},
             "routing": {"type": "object", "description": "Untrusted pick routing metadata. Never an ownership credential."},
             "assessment": RAW_ASSESSMENT_SCHEMA,
@@ -875,15 +876,18 @@ TOOLS.extend([
      "inputSchema": {"type": "object", "properties": {**_WORKFLOW_ID, **_WORKFLOW_OWNER, "request_id": {"type": "string"}, "decision": {"type": "string", "enum": ["reply", "stop"]}, "text": {"type": "string"}}, "required": ["id", "request_id"]}},
     {"name": "rig_job_coordination_request", "description": "Child only after inbox handshake. Request parent coordination: dependency, contract, or scope. Never expands files, resources, effects, or frozen contracts.",
      "inputSchema": {"type": "object", "properties": {"kind": {"type": "string", "enum": ["dependency", "contract", "scope"]}, "text": {"type": "string"}, "payload": {"type": "object"}}, "required": ["kind", "text"]}},
+    {"name": "rig_cu_status",
+     "description": "Parent-only read-only Cua Driver readiness diagnostics. Always discoverable, even when action tools are hidden. Reports machine opt-in, binary, project flag and recovery steps. Does not enable, install or grant access.",
+     "inputSchema": {"type": "object", "properties": {"repo": {"type": "string"}}}},
     {"name": "rig_cu_capture",
-     "description": "Parent-only computer-use capture. Cua Driver get_window_state or named Chrome profile bind. Hidden unless computer-use is effective. Children never receive this tool.",
+     "description": "Parent-only computer-use capture. Cua Driver get_window_state or named Chrome profile bind. Returns a concise summary, rig.cu.v1 receipt, and image content when the PNG is readable. Hidden unless computer-use is effective. Children never receive this tool.",
      "inputSchema": {"type": "object", "properties": {
          "repo": {"type": "string"}, "pid": {"type": "integer"}, "window_id": {"type": "integer"},
          "bundle_id": {"type": "string"}, "app_name": {"type": "string"},
          "profile_key": {"type": "string"}, "url": {"type": "string"},
      }}},
     {"name": "rig_cu_act",
-     "description": "Parent-only computer-use act. Fresh element_token or browser ref from rig_cu_capture, or x,y after degraded/escalate_px. Children never receive this tool.",
+     "description": "Parent-only computer-use act. One action on a fresh snapshot: element_token or browser ref from rig_cu_capture, or x,y after degraded/escalate_px. Consumes the snapshot until confirm. Returns receipt plus image when available. Children never receive this tool.",
      "inputSchema": {"type": "object", "properties": {
          "repo": {"type": "string"}, "snapshot_id": {"type": "string"},
          "element_token": {"type": "string"}, "ref": {"type": "string"},
@@ -892,12 +896,12 @@ TOOLS.extend([
          "x": {"type": "number"}, "y": {"type": "number"},
      }, "required": ["snapshot_id"]}},
     {"name": "rig_cu_confirm",
-     "description": "Parent-only computer-use recapture/confirm. Children never receive this tool.",
+     "description": "Parent-only computer-use recapture/confirm. Allowed only after a successful act. Yields a fresh successor snapshot. Confirm is the only confirmed outcome. Returns receipt plus image when available. Children never receive this tool.",
      "inputSchema": {"type": "object", "properties": {
          "repo": {"type": "string"}, "snapshot_id": {"type": "string"},
      }, "required": ["snapshot_id"]}},
     {"name": "rig_cu_record",
-     "description": "Parent-only computer-use recording. Start/stop Cua Driver session video (recording.mp4) under .rig/cu-evidence. Do not shell cua-driver. Hidden unless computer-use is effective. Children never receive this tool.",
+     "description": "Parent-only computer-use recording. Start/stop Cua Driver session video (recording.mp4) under .rig/cu-evidence. Structured/text only unless an image is actually returned. Do not shell cua-driver. Hidden unless computer-use is effective. Children never receive this tool.",
      "inputSchema": {"type": "object", "properties": {
          "repo": {"type": "string"},
          "action": {"type": "string", "enum": ["start", "stop"]},
@@ -975,6 +979,7 @@ TOOL_ORDER = (
     "rig_workflow_cancel",
     "rig_workflow_report",
     "rig_job_coordination_reply",
+    "rig_cu_status",
 )
 CHILD_TOOL_ORDER = (
     "rig_job_doing",
@@ -1786,6 +1791,7 @@ def call_tool(name: str, args: dict, on_tick=None, *, wait_paths: list[Path] | N
                         **_execution_args(args),
                         files=args.get("files"),
                         writer_job_id=_optional_string(args, "writer_job_id"),
+                        continues_job_id=_optional_string(args, "continues_job_id"),
                         writer_snapshot_id=_optional_string(args, "writer_snapshot_id"),
                         access=_optional_string(args, "access"), queue_id=_optional_string(args, "queue_id"),
                         native_agent_id=_optional_string(args, "native_agent_id"), return_details=True,
@@ -1953,8 +1959,13 @@ def call_tool(name: str, args: dict, on_tick=None, *, wait_paths: list[Path] | N
                 return _err("payload must be an object")
             result = rig_coordination.request(repo, child_job_id(), kind, text, payload)
             return _workflow_response(result)
+        if name == "rig_cu_status":
+            import computer_use as cu
+            status = cu.cu_status(repo)
+            return {**_ok(json.dumps(status, indent=2)), "structuredContent": status}
         if name in CU_TOOL_NAMES:
             import computer_use as cu
+            import cu_receipt
             if name == "rig_cu_capture":
                 ev = cu.cu_capture(
                     repo,
@@ -1993,7 +2004,7 @@ def call_tool(name: str, args: dict, on_tick=None, *, wait_paths: list[Path] | N
                 )
             else:
                 ev = cu.cu_confirm(repo, snapshot_id=str(args.get("snapshot_id") or ""))
-            return {**_ok(json.dumps(ev, indent=2)), "structuredContent": ev}
+            return cu_receipt.present_mcp(ev)
         if name == "rig_job_launch":
             extra = sorted(set(args) - LAUNCH_ARG_NAMES)
             if extra:

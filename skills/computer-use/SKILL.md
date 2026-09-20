@@ -17,15 +17,17 @@ Stay. Do not spawn a clicker. Do not call `computer_use(...)`. Children never cl
 
 ## When Driver is effective
 
+First call parent-only `rig_cu_status` when action tools are absent or recently failed. It reports machine opt-in, binary availability, and the repository flag without changing them. Resolve the reported blocker with `rig computer-use setup` / `rig computer-use on`, then restart parent/MCP discovery if the client cached the tool list. If status itself is absent, the running Rig MCP is outdated: update it after safely completing active jobs and restart the parent. Do not bypass a failed or missing Rig tool with raw Driver shell/MCP, native CU, or another browser tool. Report the blocker; use the documented chrome-devtools fallback only when Driver is not effective.
+
 This repo `[computer-use] enabled=true` **and** `cua-driver` is on PATH. Every legal parent (Grok, Codex, OpenCode, OMP, Pi, agy) uses the **same** Rig MCP tools — not raw cua-driver MCP, not `computer_use(...)`. Do not shell cua-driver for capture, act, confirm, or recording:
 
-1. `rig_cu_capture` — snapshot. Record `snapshot_id`. For a logged-in site (Figma), pass `profile_key` + `url`. Parent `chrome-profile open --json --no-activate` materializes that Chrome mapping; Driver binds the exact window (`existing_profile`). Isolated Driver profile is not the Figma path.
-2. `rig_cu_act` — prefer a **fresh** `element_token` (AX) or browser `ref` from that capture (`click` / `type` / `key`).
-3. `rig_cu_confirm` — recapture the same window/tab and read `effect` before the next action or the report.
-4. `rig_cu_record` — GUI-test video (`action=start` then `action=stop`). Output under `.rig/cu-evidence`. See `skills/computer-test/references/record-video.md`.
+1. `rig_cu_capture` — snapshot (fresh, 30s). Inspect the text summary, `rig.cu.v1` receipt, and image content when present. Record `snapshot_id`. For a logged-in site (Figma), pass `profile_key` + `url`. Parent `chrome-profile open --json --no-activate` materializes that Chrome mapping; Driver binds the exact window (`existing_profile`). Isolated Driver profile is not the Figma path.
+2. `rig_cu_act` — **one** action on that fresh snapshot. Prefer a fresh `element_token` (AX) or browser `ref` (`click` / `type` / `key`). A valid act consumes the snapshot; a second act is `capture_required` / stale and does not call Driver.
+3. `rig_cu_confirm` — **mandatory** after a successful act, before the next action or the report. Confirm is the only `confirmed` outcome and yields a fresh successor snapshot. Confirm before act, expired, consumed, or unknown snapshots return `capture_required` / stale and do not call Driver.
+4. `rig_cu_record` — GUI-test video (`action=start` then `action=stop`). Output under `.rig/cu-evidence`. Structured/text only unless an image is actually returned. See `skills/computer-test/references/record-video.md`.
 5. Px (`x`,`y`) only after that snapshot is `degraded` or the last act/confirm is `escalate_px`. Token/ref and `x,y` are mutually exclusive. Native PNG is window-local; browser PNG is `viewport_css_px` (Driver scale). Foreground only if Driver says `escalate_foreground`.
 6. Existing-profile CDP requires a **human** `cua-driver serve --grant existing-profile`. Rig never silent-grants. Missing grant → refuse with that hint. Human daemon start is the only cua-driver CLI.
-7. Tool JSON is Astra-class evidence: before/after paths, what was clicked, outline, `brief_block`.
+7. Semantic Astra parity: the parent gets a visual observation (MCP image when the local PNG is readable) plus a Rig-owned `rig.cu.v1` receipt (operation, status, snapshot id/freshness/coord space, observation, target, effect/next_action, image metadata, redacted `brief_block`). This is **not** Astra wire-format cloning and does **not** give CUA to workers. Image bytes are response-only.
 8. Paste `brief_block` into the worker brief (including Devin). Tell the child not to click.
 
 Figma MCP stays parent **file/node** work. It is not computer-use and not a clicker. Canvas / WebGL is CU px off the same screenshot.
