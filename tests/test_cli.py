@@ -881,6 +881,9 @@ class InitPresence(unittest.TestCase):
             "\n"
             "[queue]\n"
             "max_running = 3\n"
+            "\n"
+            "[computer-use]\n"
+            "enabled = false\n"
         )
         path = rig_dir / "harness.toml"
         path.write_text(original)
@@ -923,6 +926,62 @@ class InitPresence(unittest.TestCase):
         self.assertEqual(doc.returncode, 0, doc.stderr)
         self.assertNotIn("profile=", doc.stdout)
         self.assertNotRegex(doc.stdout, r"(?m)^\s*profile:")
+
+    def test_init_syncs_all_kit_skills(self):
+        proc = run_rig(self.repo, "init", env={"PATH": _stub_path()})
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        skills = self.repo / ".agents" / "skills"
+        for name in (
+            "delegate-harness",
+            "rig-jobs",
+            "rig-queue",
+            "computer-use",
+            "computer-test",
+            "style-guide",
+        ):
+            self.assertTrue((skills / name / "SKILL.md").is_file(), name)
+        self.assertTrue(
+            (skills / "computer-use" / "references" / "desktop-drive.md").is_file()
+        )
+
+    def test_init_backfills_computer_use_on_existing_harness(self):
+        rig_dir = self.repo / ".rig"
+        rig_dir.mkdir()
+        (rig_dir / "harness.toml").write_text(
+            'parent = "codex"\n\n[workers]\ncodex = true\ngrok = false\n'
+        )
+        proc = run_rig(self.repo, "init", env={"PATH": _stub_path()})
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        text = (rig_dir / "harness.toml").read_text()
+        self.assertRegex(text, r"\[computer-use\]")
+        self.assertRegex(text, r"enabled\s*=\s*false")
+        self.assertIn('parent = "codex"', text)
+
+    def test_init_preserves_existing_computer_use_flag(self):
+        rig_dir = self.repo / ".rig"
+        rig_dir.mkdir()
+        (rig_dir / "harness.toml").write_text(
+            'parent = "codex"\n\n[workers]\ncodex = true\ngrok = false\n\n'
+            "[computer-use]\nenabled = true\n"
+        )
+        proc = run_rig(self.repo, "init", env={"PATH": _stub_path()})
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        text = (rig_dir / "harness.toml").read_text()
+        self.assertRegex(text, r"enabled\s*=\s*true")
+        section = text.split("[computer-use]", 1)[1]
+        next_section = section.find("\n[")
+        if next_section != -1:
+            section = section[:next_section]
+        self.assertNotRegex(section, r"enabled\s*=\s*false")
+
+    def test_init_keeps_project_own_skills(self):
+        own = self.repo / ".agents" / "skills" / "my-own"
+        own.mkdir(parents=True)
+        sentinel = "project-owned skill sentinel\n"
+        (own / "SKILL.md").write_text(sentinel)
+        proc = run_rig(self.repo, "init", env={"PATH": _stub_path()})
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        self.assertEqual((own / "SKILL.md").read_text(), sentinel)
 
 
 class CliWorkflow(unittest.TestCase):

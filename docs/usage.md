@@ -233,15 +233,13 @@ rig doctor
 | `.rig/harness.toml` | Agent config. **Kept** if it already exists. |
 | `.rig/MEMORY.md` | Durable standing facts. **Kept** if it exists. |
 | `.rig/STATE.md` | Last job snapshot (overwritten each run). **Kept** if it exists on first write; later runs overwrite contents. |
-| `.agents/skills/delegate-harness/SKILL.md` | **Refreshed every init.** |
-| `.agents/skills/rig-jobs/SKILL.md` | **Refreshed every init.** |
-| `.agents/skills/rig-queue/SKILL.md` | **Refreshed every init.** `/queue` parks work; does not spawn. |
+| `.agents/skills/<name>/` | Every skill dir in `~/.rig/skills` is **refreshed every init** (currently `delegate-harness`, `rig-jobs`, `rig-queue`, `computer-use`, `style-guide`, `computer-test`), including `references/`. Project-added skill dirs are kept. |
 | `AGENTS.md` | Inserts a **MUST use Rig** block at the **top** (markers `<!-- rig:start -->` / `<!-- rig:end -->`). Never replaces the rest of the file. `--no-patch-agents` skips. |
 | `CLAUDE.md` | Only with `--patch-claude`, and only if the file is **missing**. |
 | `.gitignore` | Idempotently applies every nonempty line from `templates/gitignore-fragment` (creates the file if missing; preserves unrelated content). Current entries: `.rig/jobs/`, `.rig/thread`, `.rig/queue/`, `.rig/workflows/`, `.rig/workflows/*/owner-credentials.json`. |
 | `.rig/workflows/<id>/` | Workflow `spec.json`, `state.json`, `events/`, and `owner-credentials.json` (mode 0600). Gitignored. |
 
-**New harness only:** Grok / Claude / Cursor / OpenCode / OMP / Pi / agy / Devin are turned **on** if that CLI is on PATH. Codex stays **off** (preferred parent). **Existing harness flags are never flipped.** Missing worker keys are appended as `false` → enable later with `rig workers <name>=on`. Missing `[queue] max_running` is appended as `3`; an existing value is kept.
+**New harness only:** Grok / Claude / Cursor / OpenCode / OMP / Pi / agy / Devin are turned **on** if that CLI is on PATH. Codex stays **off** (preferred parent). **Existing harness flags are never flipped.** Missing worker keys are appended as `false` → enable later with `rig workers <name>=on`. Missing `[queue] max_running` is appended as `3`; an existing value is kept. Missing `[computer-use] enabled` is appended as `false` → enable per repo with `rig computer-use on`.
 
 Open a **new** parent thread after init. An old Grok/Codex/OpenCode/OMP/Pi/agy session will not pick up `AGENTS.md` or skills.
 
