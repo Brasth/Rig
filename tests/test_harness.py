@@ -231,6 +231,47 @@ class StartJob(unittest.TestCase):
         self.assertIn("worker=grok", text)
 
 
+class ComputerUseFlag(unittest.TestCase):
+    def setUp(self):
+        self.td = tempfile.TemporaryDirectory()
+        self.repo = Path(self.td.name)
+        (self.repo / ".git").mkdir()
+        (self.repo / ".rig").mkdir()
+
+    def tearDown(self):
+        self.td.cleanup()
+
+    def test_omitted_section_is_off(self):
+        _write_harness(self.repo, 'parent = "codex"\n\n[workers]\ngrok = true\n')
+        parsed = harness.parse_harness(harness.harness_path(self.repo))
+        self.assertFalse(parsed["computer_use"]["enabled"])
+        self.assertFalse(harness.computer_use_enabled(self.repo))
+        self.assertFalse(harness.computer_use_enabled(parsed))
+
+    def test_enabled_false_is_off(self):
+        _write_harness(self.repo, "[computer-use]\nenabled = false\n")
+        self.assertFalse(harness.computer_use_enabled(self.repo))
+
+    def test_enabled_true_is_on(self):
+        _write_harness(self.repo, "[computer-use]\nenabled = true\n")
+        self.assertTrue(harness.computer_use_enabled(self.repo))
+
+    def test_quoted_true_is_on(self):
+        _write_harness(self.repo, '[computer-use]\nenabled = "true"\n')
+        self.assertTrue(harness.computer_use_enabled(self.repo))
+
+    def test_junk_values_are_off(self):
+        for body in (
+            "[computer-use]\nenabled = True\n",
+            "[computer-use]\nenabled = 1\n",
+            "[computer-use]\nenabled = yes\n",
+            "[computer-use]\nenabled = on\n",
+            '[computer-use]\nenabled = "True"\n',
+        ):
+            _write_harness(self.repo, body)
+            self.assertFalse(harness.computer_use_enabled(self.repo), body)
+
+
 class LiveParent(unittest.TestCase):
     def test_pi_prefix_is_pi(self):
         self.assertEqual(harness._comm_parent("pi", 1), "pi")

@@ -806,7 +806,13 @@ class InitPresence(unittest.TestCase):
         self.assertTrue((home / ".pi" / "agent" / "skills" / "delegate-harness").exists())
         self.assertTrue((home / ".gemini" / "antigravity-cli" / "skills" / "delegate-harness").exists())
         self.assertTrue((home / ".grok" / "skills" / "rig-queue").exists())
+        self.assertTrue((home / ".grok" / "skills" / "computer-use").exists())
+        self.assertTrue((home / ".grok" / "skills" / "style-guide").exists())
+        self.assertTrue((home / ".grok" / "skills" / "computer-test").exists())
         self.assertTrue((home / ".codex" / "skills" / "rig-queue").exists())
+        self.assertTrue((home / ".codex" / "skills" / "computer-use").exists())
+        self.assertTrue((home / ".codex" / "skills" / "style-guide").exists())
+        self.assertTrue((home / ".codex" / "skills" / "computer-test").exists())
         self.assertTrue((home / ".config" / "opencode" / "skill" / "rig-queue").exists())
         self.assertTrue((home / ".codex" / "prompts" / "queue.md").is_file())
         self.assertTrue((home / ".config" / "opencode" / "commands" / "queue.md").is_file())
@@ -1011,6 +1017,131 @@ class CliWorkflow(unittest.TestCase):
         missing = run_rig(self.repo, "workflow", "show")
         self.assertEqual(missing.returncode, 1)
         self.assertIn("workflow id", missing.stderr)
+
+    def test_help_lists_computer_use(self):
+        help_out = run_rig(self.repo, "-h")
+        self.assertEqual(help_out.returncode, 2)
+        self.assertIn("computer-use", help_out.stdout)
+        self.assertIn("--cua-driver", help_out.stdout)
+
+
+class ComputerUseCli(unittest.TestCase):
+    def setUp(self):
+        self.td = tempfile.TemporaryDirectory()
+        self.repo = Path(self.td.name) / "repo"
+        self.home = Path(self.td.name) / "home"
+        self.bins = Path(self.td.name) / "bins"
+        self.repo.mkdir()
+        self.home.mkdir()
+        self.bins.mkdir()
+        (self.repo / ".git").mkdir()
+        proc = run_rig(self.repo, "init", env={"PATH": _stub_path()})
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+
+    def tearDown(self):
+        self.td.cleanup()
+
+    def _env(self, **extra):
+        env = {
+            "HOME": str(self.home),
+            "RIG_HOME": str(self.home / ".rig"),
+            "RIG_SRC": str(ROOT),
+            "PATH": _stub_path(self.bins),
+            "RIG_SKIP_CUA_DRIVER": "1",
+        }
+        env.update(extra)
+        return env
+
+    def _fake_driver(self):
+        path = self.bins / "cua-driver"
+        path.write_text(
+            "#!/bin/sh\n"
+            'if [ "$1" = "--version" ]; then echo "cua-driver 0.28.0"; exit 0; fi\n'
+            'if [ "$1" = "doctor" ]; then echo "ok"; exit 0; fi\n'
+            'if [ "$1" = "skills" ]; then echo "skills installed"; exit 0; fi\n'
+            "exit 0\n"
+        )
+        path.chmod(0o755)
+        return path
+
+    def test_init_defaults_computer_use_off(self):
+        text = (self.repo / ".rig" / "harness.toml").read_text()
+        self.assertRegex(text, r"\[computer-use\]")
+        self.assertRegex(text, r"enabled\s*=\s*false")
+        shown = run_rig(self.repo, "computer-use", env=self._env())
+        self.assertEqual(shown.returncode, 0, shown.stderr + shown.stdout)
+        self.assertIn("enabled=false", shown.stdout)
+        self.assertIn("off (project)", shown.stdout)
+        self.assertIn("chrome-devtools", shown.stdout)
+
+    def test_on_off_round_trip_does_not_need_binary(self):
+        on = run_rig(self.repo, "computer-use", "on", env=self._env())
+        self.assertEqual(on.returncode, 0, on.stderr + on.stdout)
+        self.assertIn("enabled = true", on.stdout)
+        self.assertIn("binary missing", on.stdout)
+        text = (self.repo / ".rig" / "harness.toml").read_text()
+        self.assertRegex(text, r"enabled\s*=\s*true")
+        off = run_rig(self.repo, "computer-use", "off", env=self._env())
+        self.assertEqual(off.returncode, 0, off.stderr)
+        self.assertRegex((self.repo / ".rig" / "harness.toml").read_text(), r"enabled\s*=\s*false")
+
+    def test_doctor_includes_computer_use_block(self):
+        doc = run_rig(self.repo, "doctor", env={**self._env(), "RIG_PARENT": "codex"})
+        self.assertEqual(doc.returncode, 0, doc.stderr + doc.stdout)
+        self.assertIn("Computer-use", doc.stdout)
+        self.assertIn("fallback:", doc.stdout)
+        self.assertIn("chrome-devtools", doc.stdout)
+
+    def test_setup_wires_isolating_parent_only(self):
+        self._fake_driver()
+        (self.home / ".rig").mkdir()
+        (self.home / ".rig" / "cua-driver.json").write_text(
+            json.dumps({"schema": 1, "opt_in": True, "source": "test", "updated_at": "2026-09-19T00:00:00Z"})
+        )
+        proc = run_rig(
+            self.repo,
+            "computer-use",
+            "setup",
+            env=self._env(RIG_PARENT="codex"),
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        codex = (self.home / ".codex" / "config.toml").read_text()
+        self.assertIn("mcp_servers.cua-driver", codex)
+        self.assertIn("cua-driver", codex)
+        grok_cfg = self.home / ".grok" / "config.toml"
+        if grok_cfg.is_file():
+            self.assertNotIn("cua-driver", grok_cfg.read_text())
+        self.assertFalse((self.home / ".omp" / "mcp.json").exists())
+
+    def test_setup_skips_mcp_when_parent_cannot_isolate(self):
+        self._fake_driver()
+        (self.home / ".rig").mkdir()
+        (self.home / ".rig" / "cua-driver.json").write_text(
+            json.dumps({"schema": 1, "opt_in": True, "source": "test", "updated_at": "2026-09-19T00:00:00Z"})
+        )
+        proc = run_rig(
+            self.repo,
+            "computer-use",
+            "setup",
+            env=self._env(RIG_PARENT="grok", GROK_HOME=str(self.home / ".grok")),
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        self.assertIn("cannot isolate children", proc.stdout)
+        self.assertIn("cua-driver call", proc.stdout)
+        grok_cfg = self.home / ".grok" / "config.toml"
+        if grok_cfg.is_file():
+            self.assertNotIn("cua-driver", grok_cfg.read_text())
+        self.assertFalse((self.home / ".codex" / "config.toml").exists())
+
+    def test_setup_flags_are_accepted_unknown_still_errors(self):
+        home = self.home
+        skip = self._env()
+        skip["RIG_HOME"] = str(home / ".rig")
+        ok = run_rig(self.repo, "setup", "--no-cua-driver", env=skip)
+        self.assertEqual(ok.returncode, 0, ok.stderr + ok.stdout)
+        bad = run_rig(self.repo, "setup", "--bogus", env=skip)
+        self.assertEqual(bad.returncode, 2, bad.stderr)
+        self.assertIn("unknown flag", bad.stderr)
 
 
 if __name__ == "__main__":

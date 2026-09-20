@@ -327,6 +327,142 @@ class ProtocolDocumentation(unittest.TestCase):
         self.assertNotRegex(journal_l, r"installed smoke (passed|complete|done|verified)")
         self.assertNotRegex(journal_l, r"combined rollout (passed|complete|done|verified)")
 
+    def test_computer_use_parent_protocol_and_fallback(self):
+        sources = {
+            "AGENTS.md": (ROOT / "AGENTS.md").read_text(),
+            "generated parent protocol": (ROOT / "bin" / "rig").read_text().split(
+                "<!-- rig:start -->", 1)[1].split("<!-- rig:end -->", 1)[0],
+            "skills/delegate-harness/SKILL.md": (ROOT / "skills" / "delegate-harness" / "SKILL.md").read_text(),
+            "docs/usage.md": (ROOT / "docs" / "usage.md").read_text(),
+            "docs/rig-flow.md": (ROOT / "docs" / "rig-flow.md").read_text(),
+            "README.md": (ROOT / "README.md").read_text(),
+        }
+        phrases = (
+            "[computer-use] enabled",
+            "cua-driver",
+            "chrome-devtools",
+            "Never Figma MCP or Playwright",
+            "Children never receive cua-driver",
+            "rig_cu_capture",
+            "rig_cu_record",
+            "escalate_px",
+            "existing-profile",
+        )
+        for name, source in sources.items():
+            for phrase in phrases:
+                with self.subTest(source=name, phrase=phrase):
+                    self.assertIn(phrase, source)
+            with self.subTest(source=name, hermes="forbidden fallback"):
+                self.assertIn("Hermes", source)
+                self.assertIn("computer_use", source)
+
+    def test_computer_use_figma_to_code_fidelity_loop(self):
+        skill = (ROOT / "skills" / "computer-use" / "SKILL.md").read_text()
+        howto = (ROOT / "skills" / "computer-use" / "references" / "figma-to-code.md").read_text()
+        usage = (ROOT / "docs" / "usage.md").read_text()
+        for name, source in (("skill", skill), ("howto", howto), ("usage", usage)):
+            with self.subTest(source=name, phrase="download every image"):
+                self.assertIn("download every image", source)
+            with self.subTest(source=name, phrase="stand-in"):
+                self.assertIn("stand-in", source)
+        self.assertIn("references/figma-to-code.md", skill)
+        self.assertIn("inspect tokens", skill)
+        for name, source in (("skill", skill), ("howto", howto), ("usage", usage)):
+            with self.subTest(source=name, phrase="every section"):
+                self.assertIn("every section", source)
+            with self.subTest(source=name, phrase="spacing and gap"):
+                self.assertIn("spacing and gap", source)
+        self.assertIn("Inventory (all content)", howto)
+        self.assertIn("Spacing and gap (every section, every item)", howto)
+        self.assertIn("space to next sibling", howto)
+        self.assertIn("Colours (every fill, text, stroke, effect)", howto)
+        self.assertIn("Typography (every text layer)", howto)
+        self.assertIn("skills/style-guide/SKILL.md", howto)
+        self.assertIn("Compare until it matches", howto)
+        self.assertIn("figma-frame.png", howto)
+        self.assertIn("html-frame.png", howto)
+        self.assertIn("Children never click", howto)
+        self.assertIn("skills/computer-use/references/figma-to-code.md", usage)
+        self.assertIn("skills/style-guide/SKILL.md", usage)
+        guide = (ROOT / "skills" / "style-guide" / "SKILL.md").read_text()
+        homes = (ROOT / "skills" / "style-guide" / "references" / "token-homes.md").read_text()
+        self.assertIn("Write colour, spacing, and typography tokens", guide)
+        self.assertIn("token file", guide)
+        self.assertIn("--color-*", guide)
+        self.assertIn("--space-*", guide)
+        self.assertIn("--font-*", guide)
+        self.assertIn("Sass", guide)
+        self.assertIn("Tailwind", guide)
+        self.assertIn("theme.extend", guide)
+        self.assertIn("@theme", guide)
+        self.assertIn("Children never click", guide)
+        self.assertIn("references/token-homes.md", guide)
+        self.assertIn("Follow the codebase skill or rule first", guide)
+        self.assertIn("repo’s own style-guide skill or rules", guide)
+        self.assertIn("style-guide skill or rule", skill)
+        self.assertIn("style-guide skill or rule", howto)
+        self.assertIn("codebase’s own style-guide skill or rule", usage)
+        for name, source in (("skill", skill), ("howto", howto), ("usage", usage), ("guide", guide)):
+            with self.subTest(source=name, phrase="reuse existing"):
+                self.assertTrue(
+                    "reuse it" in source or "Reuse existing config" in source
+                    or "reuse it and do not create a new or custom file" in source,
+                    "missing reuse-existing-config rule",
+                )
+        self.assertIn("do not create a new or custom file", guide)
+        self.assertIn("Reuse existing config", guide)
+        self.assertIn("codebase assets folder", skill)
+        self.assertIn("codebase assets folder", howto)
+        self.assertIn("codebase assets folder", usage)
+        self.assertIn("repo-relative", howto)
+        self.assertNotIn("Absolute paths to downloaded images", howto)
+        self.assertIn("$color-heading", homes)
+        self.assertIn("tailwind.config", homes)
+        self.assertIn("@theme", homes)
+        self.assertIn("theme.extend", homes)
+        self.assertIn("references/figma-to-mobile.md", skill)
+        self.assertIn("references/screenshot-to-ui.md", skill)
+        mobile = (ROOT / "skills" / "computer-use" / "references" / "figma-to-mobile.md").read_text()
+        shot = (ROOT / "skills" / "computer-use" / "references" / "screenshot-to-ui.md").read_text()
+        self.assertIn("download every image", mobile)
+        self.assertIn("codebase assets folder", mobile)
+        self.assertIn("React Native", mobile)
+        self.assertIn("SwiftUI", mobile)
+        self.assertIn("source=visual", shot)
+        self.assertIn("download every image", shot)
+        self.assertIn("figma-to-mobile.md", usage)
+        self.assertIn("screenshot-to-ui.md", usage)
+        self.assertIn("Native (reuse the existing theme file)", homes)
+        self.assertIn("React Native", homes)
+        self.assertIn("skills/computer-test/SKILL.md", skill)
+        self.assertIn("references/desktop-drive.md", skill)
+        self.assertIn("references/logged-in-browser.md", skill)
+        self.assertIn("skills/computer-test/SKILL.md", usage)
+        test_skill = (ROOT / "skills" / "computer-test" / "SKILL.md").read_text()
+        gui = (ROOT / "skills" / "computer-test" / "references" / "gui-test.md").read_text()
+        desk = (ROOT / "skills" / "computer-use" / "references" / "desktop-drive.md").read_text()
+        browser = (ROOT / "skills" / "computer-use" / "references" / "logged-in-browser.md").read_text()
+        self.assertIn("Real GUI testing", test_skill)
+        self.assertIn("Children never click", test_skill)
+        self.assertIn("pass/fail", gui)
+        self.assertIn(".rig/cu-evidence", gui)
+        self.assertIn("window_id", desk)
+        self.assertIn("launch_app", desk)
+        self.assertIn("profile_key", browser)
+        self.assertIn("existing-profile", browser)
+        self.assertIn("recording.mp4", test_skill)
+        self.assertIn("Click the UI", test_skill)
+        self.assertIn("recording.mp4", gui)
+        rec = (ROOT / "skills" / "computer-test" / "references" / "record-video.md").read_text()
+        self.assertIn("recording.mp4", rec)
+        self.assertIn("rig_cu_record", rec)
+        self.assertNotIn("cua-driver recording start", rec)
+        self.assertIn("Do not shell cua-driver", rec)
+        self.assertIn(".rig/cu-evidence", rec)
+        self.assertIn("record-video.md", usage)
+        self.assertIn("rig_cu_record", usage)
+        self.assertIn("Do not shell cua-driver", skill)
+
 
 if __name__ == "__main__":
     unittest.main()

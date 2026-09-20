@@ -194,6 +194,104 @@ class WorkflowScheduler(unittest.TestCase):
         self.assertTrue(result["parent_action"]["kind"] == "parent_writes")
         self.assertEqual(result["parent_action"]["node_id"], result["launched"][0]["node_id"])
 
+    def test_default_launch_parent_fallback_uses_parent_executor(self):
+        created = self.create([{"id": "w1", "role": "implement", "files": ["a.py"]}])
+        spec, state = wf.load_pair(self.repo, created["workflow_id"], required=True)
+        node = spec["nodes"][0]
+        started = mock.Mock(return_value={
+            "job_id": "parent-job", "reservation_id": "res-p", "attempt_id": "att-p",
+            "credentials_path": str(self.repo / "creds.json"),
+        })
+        import jobs as rig_jobs
+        with mock.patch.object(rig_jobs, "start_job", started):
+            result = sched._default_launch(
+                self.repo, node=node, spec=spec, state=state,
+                choice={
+                    "parent_writes": True, "spawn": "native", "worker": "grok",
+                    "model": "grok-4.6", "effort": "",
+                    "routing": {"policy_mode": "smart", "selected_profile": None,
+                                "execution_strategy": "parent-fallback"},
+                },
+                owner={}, owner_session="sched-tests", resources=[], allow_read=[],
+            )
+        kwargs = started.call_args.kwargs
+        self.assertEqual(kwargs.get("worker"), "parent")
+        self.assertEqual(kwargs.get("executor_kind"), "parent")
+        self.assertEqual(result["kind"], "parent_writes")
+        self.assertEqual(result["job"]["job_id"], "parent-job")
+
+    def test_default_launch_stay_verify_uses_parent_executor_read_access(self):
+        created = self.create([
+            {"id": "w1", "role": "implement", "files": ["a.py"]},
+            {"id": "v1", "role": "verify", "files": ["a.py"], "depends_on": ["w1"]},
+        ])
+        spec, state = wf.load_pair(self.repo, created["workflow_id"], required=True)
+        node = next(item for item in spec["nodes"] if item["id"] == "v1")
+        started = mock.Mock(return_value={
+            "job_id": "verify-job", "reservation_id": "res-v", "attempt_id": "att-v",
+            "credentials_path": str(self.repo / "creds.json"),
+        })
+        import jobs as rig_jobs
+        with mock.patch.object(rig_jobs, "start_job", started):
+            result = sched._default_launch(
+                self.repo, node=node, spec=spec, state=state,
+                choice={
+                    "parent_writes": False, "spawn": "stay", "worker": "grok",
+                    "model": "grok-4.6", "effort": "", "executor_kind": "parent",
+                    "reason": "verify: no MCP-capable child; parent stays read-only. no native child.",
+                    "routing": {"policy_mode": "smart", "selected_profile": None,
+                                "execution_strategy": "stay"},
+                },
+                owner={}, owner_session="sched-tests", resources=[], allow_read=[],
+            )
+        kwargs = started.call_args.kwargs
+        self.assertEqual(kwargs.get("worker"), "parent")
+        self.assertEqual(kwargs.get("executor_kind"), "parent")
+        self.assertEqual(kwargs.get("access"), "read")
+        self.assertEqual(kwargs.get("role"), "verify")
+        self.assertEqual(result["kind"], "parent_writes")
+        self.assertEqual(result["job"]["job_id"], "verify-job")
+
+    def test_advance_stay_verify_registers_parent_action_instead_of_failing(self):
+        created = self.create([
+            {"id": "w1", "role": "implement", "files": ["a.py"]},
+            {"id": "v1", "role": "verify", "files": ["a.py"], "depends_on": ["w1"]},
+        ])
+        spec, state = wf.load_pair(self.repo, created["workflow_id"], required=True)
+        state["nodes"]["w1"].update(
+            job_id="writer-a", accepted=True, status="accepted", launched=True, ran=True,
+            reservation_id="res-w", acceptance_snapshot="snap-a",
+        )
+        wf.save_state(self.repo, state)
+
+        def _pick(node, spec, state, exclude=""):
+            self.assertEqual(node["id"], "v1")
+            return {
+                "worker": "grok", "spawn": "stay", "parent_writes": False,
+                "model": "grok-4.6", "effort": "", "executor_kind": "parent",
+                "reason": "verify: no MCP-capable child; parent stays read-only. no native child.",
+                "routing": {"policy_mode": "smart", "selected_profile": None,
+                            "execution_strategy": "stay"},
+            }
+
+        started = mock.Mock(return_value={
+            "job_id": "verify-job", "reservation_id": "res-v", "attempt_id": "att-v",
+            "credentials_path": str(self.repo / "creds.json"),
+        })
+        import jobs as rig_jobs
+        with mock.patch.object(rig_jobs, "start_job", started):
+            result = self.advance(created, pick_fn=_pick, launch_fn=sched._default_launch)
+        self.assertEqual((result.get("failure") or {}).get("node_id"), None)
+        self.assertEqual(result["parent_action"]["node_id"], "v1")
+        self.assertEqual(result["parent_action"]["job_id"], "verify-job")
+        self.assertEqual(result["parent_action"]["role"], "verify")
+        self.assertEqual(result["node_state"]["v1"]["status"], "running")
+        self.assertNotEqual(result.get("status"), "blocked")
+        kwargs = started.call_args.kwargs
+        self.assertEqual(kwargs.get("worker"), "parent")
+        self.assertEqual(kwargs.get("executor_kind"), "parent")
+        self.assertEqual(kwargs.get("access"), "read")
+
     def test_concurrent_advance_does_not_duplicate(self):
         created = self.create([{"id": "w1", "role": "implement", "files": ["a.py"]}])
         started = threading.Event()
@@ -497,6 +595,8 @@ class WorkflowScheduler(unittest.TestCase):
                 owner={}, owner_session="sched-tests", resources=[], allow_read=[],
             )
         native_kwargs = native.call_args.kwargs
+        self.assertEqual(native_kwargs.get("executor_kind"), "parent")
+        self.assertEqual(native_kwargs.get("worker"), "parent")
         self.assertEqual(native_kwargs.get("review_mode"), "independent")
         self.assertEqual(native_kwargs.get("writer_job_id"), "writer-a")
         self.assertEqual(native_kwargs.get("writer_snapshot_id"), "snap-a")

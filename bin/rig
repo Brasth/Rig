@@ -18,12 +18,13 @@ usage() {
   cat <<'EOF'
 usage: rig <command> [args]
 
-  setup [--shell-ui] [--shell bash|zsh] [--rc-file PATH]
+  setup [--shell-ui] [--shell bash|zsh] [--rc-file PATH] [--cua-driver|--no-cua-driver]
   ui [open|status|enable|disable|stop]
   uninstall [--dry-run] [--repo PATH]
   update
   init [--patch-agents|--no-patch-agents] [--patch-claude]
   doctor
+  computer-use [status|setup|on|off|doctor]
   status
   use codex|grok|opencode|omp|pi|agy
   workers grok=on|off claude=on|off codex=on|off cursor=on|off opencode=on|off omp=on|off pi=on|off agy=on|off devin=on|off
@@ -129,7 +130,7 @@ copy_rig_tree() {
   if [[ "$(cd "$src" && pwd)" != "$(cd "$dest" && pwd)" ]]; then
     # mv onto dest so a running bin/rig keeps its old inode
     install_file "$src/bin/rig" "$dest/bin/rig"
-    local f skill
+    local f skill nested
     for f in "$src/scripts/"*; do
       [[ -f "$f" ]] || continue
       install_file "$f" "$dest/scripts/$(basename "$f")"
@@ -138,8 +139,15 @@ copy_rig_tree() {
       [[ -d "$skill" ]] || continue
       mkdir -p "$dest/skills/$(basename "$skill")"
       for f in "$skill/"*; do
-        [[ -f "$f" ]] || continue
-        install_file "$f" "$dest/skills/$(basename "$skill")/$(basename "$f")"
+        if [[ -f "$f" ]]; then
+          install_file "$f" "$dest/skills/$(basename "$skill")/$(basename "$f")"
+        elif [[ -d "$f" ]]; then
+          mkdir -p "$dest/skills/$(basename "$skill")/$(basename "$f")"
+          for nested in "$f/"*; do
+            [[ -f "$nested" ]] || continue
+            install_file "$nested" "$dest/skills/$(basename "$skill")/$(basename "$f")/$(basename "$nested")"
+          done
+        fi
       done
     done
     for f in "$src/adapters/codex/agents/"*.toml; do
@@ -254,11 +262,12 @@ maybe_copy_queue_adapter() {
 }
 
 cmd_setup() {
-  local shell_ui=0 shell_args=()
+  local shell_ui=0 shell_args=() cua_flags=()
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --shell-ui) shell_ui=1; shift ;;
       --shell|--rc-file) [[ $# -ge 2 ]] || return 2; shell_args+=("$1" "$2"); shift 2 ;;
+      --cua-driver|--no-cua-driver) cua_flags+=("$1"); shift ;;
       *) echo "rig setup: unknown flag $1" >&2; return 2 ;;
     esac
   done
@@ -276,7 +285,7 @@ cmd_setup() {
     "$HOME/.omp/agent/skills" "$HOME/.pi/agent/skills" \
     "$HOME/.gemini/antigravity-cli/skills"
   local skill
-  for skill in delegate-harness rig-jobs rig-queue; do
+  for skill in delegate-harness rig-jobs rig-queue computer-use style-guide computer-test; do
     ensure_skill_link "$HOME/.agents/skills/$skill" "$dest/skills/$skill"
     ensure_skill_link "$HOME/.grok/skills/$skill" "$dest/skills/$skill"
     ensure_skill_link "$HOME/.codex/skills/$skill" "$dest/skills/$skill"
@@ -369,6 +378,13 @@ PY
   ui_py="$(py_script install-ui.py)"
   if [[ -f "$ui_py" ]]; then
     python3 "$ui_py" "$dest"
+  fi
+  if [[ ${#cua_flags[@]} -gt 0 ]]; then
+    local cua_py
+    cua_py="$(py_script install-cua-driver.py)"
+    if [[ -f "$cua_py" ]]; then
+      python3 "$cua_py" "${cua_flags[@]}" || true
+    fi
   fi
 
   mkdir -p "$HOME/.local/bin"
@@ -568,6 +584,7 @@ Spawn explore/mini for codebase gather only if the parent cannot name the files 
 If the implement brief already lists files, do not also spawn explore.
 Brief lists files, the change, and absolute skill file paths the child must follow. Child does not hunt extra updates.
 Do not tell the child to use computer-use, chrome-profile, or Figma MCP. Put artifacts in the brief.
+Parent may call Cua Driver only when this repo `[computer-use] enabled=true` and `cua-driver` is on PATH, via Rig MCP `rig_cu_capture` / `rig_cu_act` / `rig_cu_confirm` / `rig_cu_record` (capture → act on a fresh element_token → recapture). AX token first; px only after `degraded` / `escalate_px` on that snapshot. Named Chrome profile: parent `chrome-profile` open, then Driver existing-profile bind. Isolated profile is not the Figma path. Existing-profile grant is human (`cua-driver serve --grant existing-profile`); Rig never silent-grants. Otherwise chrome-devtools. Never Figma MCP or Playwright as computer-use fallback. Figma MCP remains parent file/node. Never the Hermes `computer_use` skill. Children never receive cua-driver or chrome-devtools MCP. Children never receive chrome-profile or `rig_cu_*`.
 Spawn for: write of the listed files when pick is run-worker, review, SSH/debug. Not "find the bug" on an implement spawn.
 Parent chooses kind from this user request and this user skills. Then MCP `rig_pick` with `role` stay|explore|mini|bulk|implement|hard|review|verify. `--case` is the task text, not a slash-command catalog.
 Do not encode local slash command names in pick.
@@ -871,6 +888,12 @@ cmd_doctor() {
       echo "  $mcp_name: unavailable ($mcp_reason)"
     fi
   done
+  local cu_py
+  cu_py="$(py_script computer_use.py)"
+  if [[ -f "$cu_py" ]]; then
+    echo
+    python3 "$cu_py" doctor --repo "$root" || true
+  fi
   echo
   echo "Watch"
   echo "  board:  rig tui"
@@ -1410,6 +1433,25 @@ main() {
     use) cmd_use "$@" ;;
     parent) cmd_parent "$@" ;;
     workers) cmd_workers "$@" ;;
+    computer-use|computer_use)
+      local cu_sub="${1:-status}"
+      shift || true
+      case "$cu_sub" in
+        status|setup|on|off|doctor) ;;
+        -h|--help|help)
+          echo "usage: rig computer-use [status|setup|on|off|doctor]" >&2
+          exit 2
+          ;;
+        *)
+          echo "usage: rig computer-use [status|setup|on|off|doctor]" >&2
+          exit 2
+          ;;
+      esac
+      if [[ "$cu_sub" == "on" || "$cu_sub" == "off" ]]; then
+        ensure_harness
+      fi
+      python3 "$(py_script computer_use.py)" "$cu_sub" --repo "$(repo_root)"
+      ;;
     prune) cmd_prune "$@" ;;
     run) cmd_run "$@" ;;
     jobs) cmd_jobs "$@" ;;

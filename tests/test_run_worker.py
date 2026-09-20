@@ -79,6 +79,7 @@ class ClaudeWorkerArgv(unittest.TestCase):
         self.assertIn("--permission-prompt-tool", out)
         self.assertIn("mcp__rig-ask__permission_prompt", out)
         self.assertIn("--mcp-config", out)
+        self.assertIn("--strict-mcp-config", out)
         self.assertNotIn("--bare", out)
         self.assertNotIn("--dangerously-skip-permissions", out)
         self.assertNotRegex(out, r"--output-format json\b")
@@ -91,6 +92,9 @@ class ClaudeWorkerArgv(unittest.TestCase):
         self.assertTrue(mcp.is_file(), out)
         cfg = json.loads(mcp.read_text())
         servers = cfg.get("mcpServers") or cfg
+        self.assertEqual(set(servers), {"rig", "rig-ask"})
+        self.assertNotIn("cua-driver", servers)
+        self.assertNotIn("chrome-devtools", servers)
         self.assertIn("rig-ask", servers)
         ask = servers["rig-ask"]
         self.assertIn("python3", ask["command"])
@@ -247,7 +251,48 @@ class CodexWorkerArgv(unittest.TestCase):
         self.assertIn("--json", out)
         self.assertIn("--ephemeral", out)
         self.assertIn("-s workspace-write", out)
+        self.assertIn("--ignore-user-config", out)
+        self.assertIn("mcp_servers.rig.command=", out)
+        self.assertNotIn("cua-driver", out)
+        self.assertNotIn("chrome-devtools", out)
         self.assertNotIn("gpt-5.3-codex-mini", out)
+        mcp = self.repo / ".rig" / "jobs" / "codex-json" / "mcp.json"
+        self.assertTrue(mcp.is_file(), out)
+        cfg = json.loads(mcp.read_text())
+        self.assertEqual(set(cfg.get("mcpServers") or {}), {"rig", "rig-ask"})
+
+
+class GrokJobMcpIsolation(unittest.TestCase):
+    def setUp(self):
+        self.td = tempfile.TemporaryDirectory()
+        self.repo = Path(self.td.name)
+        (self.repo / ".git").mkdir()
+        (self.repo / ".rig").mkdir()
+        (self.repo / ".rig" / "harness.toml").write_text(
+            'parent = "codex"\n\n[workers]\ncodex = false\ngrok = true\nclaude = false\n'
+        )
+        jobs = self.repo / ".rig" / "jobs" / "grok-stream"
+        jobs.mkdir(parents=True)
+        self.brief = jobs / "brief.md"
+        self.brief.write_text("You are a worker, not the orchestrator.\nFix the helper.\n")
+
+    def tearDown(self):
+        self.td.cleanup()
+
+    def test_grok_dry_run_payload_has_no_cua_driver(self):
+        proc = run_worker(
+            self.repo, "grok", "grok-stream", str(self.brief), env={"RIG_PARENT": "codex"}
+        )
+        out = proc.stdout + proc.stderr
+        self.assertIn(proc.returncode, (0, 127), out)
+        self.assertIn("would run:", out, out)
+        self.assertIn("grok", out)
+        self.assertNotIn("--mcp-config", out)
+        self.assertNotIn("cua-driver", out)
+        mcp = self.repo / ".rig" / "jobs" / "grok-stream" / "mcp.json"
+        self.assertTrue(mcp.is_file(), out)
+        cfg = json.loads(mcp.read_text())
+        self.assertEqual(set(cfg.get("mcpServers") or {}), {"rig", "rig-ask"})
 
 
 class OpenCodeOmpPiWorkerArgv(unittest.TestCase):
@@ -332,6 +377,11 @@ class OpenCodeOmpPiWorkerArgv(unittest.TestCase):
         self.assertNotIn("--plan-yolo", out)
         self.assertNotIn("gpt-5.6-sol", out)
         self.assertNotIn("claude-fable", out)
+        mcp = self.repo / ".rig" / "jobs" / "print-stream" / "mcp.json"
+        self.assertTrue(mcp.is_file(), out)
+        cfg = json.loads(mcp.read_text())
+        self.assertEqual(set(cfg.get("mcpServers") or {}), {"rig", "rig-ask"})
+        self.assertNotIn("cua-driver", json.dumps(cfg))
 
     def test_pi_dry_run_print_json_approve(self):
         proc = run_worker(self.repo, "pi", "print-stream", str(self.brief), env=self._env())

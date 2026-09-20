@@ -14,6 +14,7 @@ Spawn explore/mini for codebase gather only if the parent cannot name the files 
 If the implement brief already lists files, do not also spawn explore.
 Brief lists files, the change, and absolute skill file paths the child must follow. Child does not hunt extra updates.
 Do not tell the child to use computer-use, chrome-profile, or Figma MCP. Put artifacts in the brief.
+Parent may call Cua Driver only when this repo `[computer-use] enabled=true` and `cua-driver` is on PATH, via Rig MCP `rig_cu_capture` / `rig_cu_act` / `rig_cu_confirm` / `rig_cu_record` (capture → act on a fresh element_token → recapture). AX token first; px only after `degraded` / `escalate_px` on that snapshot. Named Chrome profile: parent `chrome-profile` open, then Driver existing-profile bind. Isolated profile is not the Figma path. Existing-profile grant is human (`cua-driver serve --grant existing-profile`); Rig never silent-grants. Otherwise chrome-devtools. Never Figma MCP or Playwright as computer-use fallback. Figma MCP remains parent file/node. Never the Hermes `computer_use` skill. Children never receive cua-driver or chrome-devtools MCP. Children never receive chrome-profile or `rig_cu_*`.
 Spawn for: write of the listed files when pick is run-worker, review, SSH/debug. Not "find the bug" on an implement spawn.
 Parent chooses kind from this user request and this user skills. Then MCP `rig_pick` with `role` stay|explore|mini|bulk|implement|hard|review|verify. `--case` is the task text, not a slash-command catalog.
 Do not encode local slash command names in pick.

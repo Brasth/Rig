@@ -874,6 +874,35 @@ TOOLS.extend([
      "inputSchema": {"type": "object", "properties": {**_WORKFLOW_ID, **_WORKFLOW_OWNER, "request_id": {"type": "string"}, "decision": {"type": "string", "enum": ["reply", "stop"]}, "text": {"type": "string"}}, "required": ["id", "request_id"]}},
     {"name": "rig_job_coordination_request", "description": "Child only after inbox handshake. Request parent coordination: dependency, contract, or scope. Never expands files, resources, effects, or frozen contracts.",
      "inputSchema": {"type": "object", "properties": {"kind": {"type": "string", "enum": ["dependency", "contract", "scope"]}, "text": {"type": "string"}, "payload": {"type": "object"}}, "required": ["kind", "text"]}},
+    {"name": "rig_cu_capture",
+     "description": "Parent-only computer-use capture. Cua Driver get_window_state or named Chrome profile bind. Hidden unless computer-use is effective. Children never receive this tool.",
+     "inputSchema": {"type": "object", "properties": {
+         "repo": {"type": "string"}, "pid": {"type": "integer"}, "window_id": {"type": "integer"},
+         "bundle_id": {"type": "string"}, "app_name": {"type": "string"},
+         "profile_key": {"type": "string"}, "url": {"type": "string"},
+     }}},
+    {"name": "rig_cu_act",
+     "description": "Parent-only computer-use act. Fresh element_token or browser ref from rig_cu_capture, or x,y after degraded/escalate_px. Children never receive this tool.",
+     "inputSchema": {"type": "object", "properties": {
+         "repo": {"type": "string"}, "snapshot_id": {"type": "string"},
+         "element_token": {"type": "string"}, "ref": {"type": "string"},
+         "action": {"type": "string", "enum": ["click", "type", "key"]},
+         "text": {"type": "string"}, "key": {"type": "string"},
+         "x": {"type": "number"}, "y": {"type": "number"},
+     }, "required": ["snapshot_id"]}},
+    {"name": "rig_cu_confirm",
+     "description": "Parent-only computer-use recapture/confirm. Children never receive this tool.",
+     "inputSchema": {"type": "object", "properties": {
+         "repo": {"type": "string"}, "snapshot_id": {"type": "string"},
+     }, "required": ["snapshot_id"]}},
+    {"name": "rig_cu_record",
+     "description": "Parent-only computer-use recording. Start/stop Cua Driver session video (recording.mp4) under .rig/cu-evidence. Do not shell cua-driver. Hidden unless computer-use is effective. Children never receive this tool.",
+     "inputSchema": {"type": "object", "properties": {
+         "repo": {"type": "string"},
+         "action": {"type": "string", "enum": ["start", "stop"]},
+         "output_dir": {"type": "string"},
+         "record_video": {"type": "boolean"},
+     }, "required": ["action"]}},
 ])
 for _tool in TOOLS:
     _properties = _tool["inputSchema"]["properties"]
@@ -899,6 +928,10 @@ TOOL_ORDER = (
     "rig_jobs",
     "rig_pick",
     "rig_status",
+    "rig_cu_capture",
+    "rig_cu_act",
+    "rig_cu_confirm",
+    "rig_cu_record",
     "rig_routing_report",
     "rig_billing_report",
     "rig_billing_import",
@@ -973,8 +1006,23 @@ def is_child() -> bool:
     return bool(child_job_id() or (os.environ.get("RIG_JOB_DIR") or "").strip())
 
 
+CU_TOOL_NAMES = frozenset({"rig_cu_capture", "rig_cu_act", "rig_cu_confirm", "rig_cu_record"})
+
+
 def listed_tools() -> list[dict]:
-    return list(CHILD_TOOLS) if is_child() else list(TOOLS)
+    if is_child():
+        return list(CHILD_TOOLS)
+    tools = list(TOOLS)
+    try:
+        import computer_use as cu
+        raw = (os.environ.get("RIG_REPO") or "").strip()
+        repo = _repo({"repo": raw} if raw else {})
+        if not cu.tools_listed(repo, child=False):
+            tools = [item for item in tools if item["name"] not in CU_TOOL_NAMES]
+    except Exception:
+        # Mixed ~/.rig copies or a CU helper crash must not kill tools/list.
+        tools = [item for item in tools if item["name"] not in CU_TOOL_NAMES]
+    return tools
 
 
 def child_job_dir(repo: Path) -> Path:
@@ -1034,6 +1082,22 @@ def _optional_string(args: dict, name: str) -> str:
     if not isinstance(value, str):
         raise ValueError(f"{name} must be a string")
     return value
+
+
+def _optional_number(args: dict, name: str):
+    if name not in args or args[name] is None or args[name] == "":
+        return None
+    value = args[name]
+    if isinstance(value, bool):
+        raise ValueError(f"{name} must be a number")
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value)
+        except ValueError as error:
+            raise ValueError(f"{name} must be a number") from error
+    raise ValueError(f"{name} must be a number")
 
 
 def _workflow_owner_args(args: dict) -> dict:
@@ -1887,6 +1951,47 @@ def call_tool(name: str, args: dict, on_tick=None, *, wait_paths: list[Path] | N
                 return _err("payload must be an object")
             result = rig_coordination.request(repo, child_job_id(), kind, text, payload)
             return _workflow_response(result)
+        if name in CU_TOOL_NAMES:
+            import computer_use as cu
+            if name == "rig_cu_capture":
+                ev = cu.cu_capture(
+                    repo,
+                    pid=int(args.get("pid") or 0),
+                    window_id=int(args.get("window_id") or 0),
+                    bundle_id=str(args.get("bundle_id") or ""),
+                    app_name=str(args.get("app_name") or ""),
+                    profile_key=str(args.get("profile_key") or ""),
+                    url=str(args.get("url") or ""),
+                )
+            elif name == "rig_cu_act":
+                ev = cu.cu_act(
+                    repo,
+                    snapshot_id=str(args.get("snapshot_id") or ""),
+                    element_token=str(args.get("element_token") or ""),
+                    ref=str(args.get("ref") or ""),
+                    action=str(args.get("action") or "click"),
+                    text=str(args.get("text") or ""),
+                    key=str(args.get("key") or ""),
+                    x=_optional_number(args, "x"),
+                    y=_optional_number(args, "y"),
+                )
+            elif name == "rig_cu_record":
+                video = args.get("record_video")
+                if video is None or video == "":
+                    video_flag = None
+                elif isinstance(video, bool):
+                    video_flag = video
+                else:
+                    return _err("record_video must be a boolean")
+                ev = cu.cu_record(
+                    repo,
+                    action=str(args.get("action") or ""),
+                    output_dir=str(args.get("output_dir") or ""),
+                    record_video=video_flag,
+                )
+            else:
+                ev = cu.cu_confirm(repo, snapshot_id=str(args.get("snapshot_id") or ""))
+            return {**_ok(json.dumps(ev, indent=2)), "structuredContent": ev}
         if name == "rig_job_launch":
             extra = sorted(set(args) - LAUNCH_ARG_NAMES)
             if extra:

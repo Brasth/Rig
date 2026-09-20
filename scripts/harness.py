@@ -19,6 +19,16 @@ def harness_path(repo: Path) -> Path:
     return repo / ".rig" / "harness.toml"
 
 
+def _toml_exact_true(val: str) -> bool:
+    """True only for unquoted true or a quoted \"true\" / 'true'. Junk is off."""
+    raw = (val or "").strip()
+    if raw == "true":
+        return True
+    if len(raw) >= 2 and raw[0] == raw[-1] and raw[0] in {'"', "'"}:
+        return raw[1:-1] == "true"
+    return False
+
+
 def parse_harness(path: Path) -> dict:
     out = {
         "parent": "codex",
@@ -26,6 +36,7 @@ def parse_harness(path: Path) -> dict:
         "queue": {"max_running": 3, "max_per_worker": 0, "per_worker": {}},
         "routing": {"mode": "smart"},
         "orchestration": {"mode": "adaptive", "max_nodes": 12},
+        "computer_use": {"enabled": False},
     }
     if not path.is_file():
         return out
@@ -47,6 +58,9 @@ def parse_harness(path: Path) -> dict:
         key, _, val = stripped.partition("=")
         key = key.strip()
         val = val.split("#", 1)[0].strip()
+        if section == "computer-use" and key == "enabled":
+            out["computer_use"]["enabled"] = _toml_exact_true(val)
+            continue
         val = val.strip('"')
         if section == "" and key == "parent":
             out["parent"] = val
@@ -86,6 +100,15 @@ def parse_harness(path: Path) -> dict:
 
 def preferred_parent(repo: Path) -> str:
     return parse_harness(harness_path(repo))["parent"]
+
+
+def computer_use_enabled(repo_or_parsed) -> bool:
+    """Project [computer-use] enabled. Omitted or junk is off. Dict or repo/file path."""
+    if isinstance(repo_or_parsed, dict):
+        return bool((repo_or_parsed.get("computer_use") or {}).get("enabled"))
+    path = Path(repo_or_parsed)
+    parsed = parse_harness(path if path.name == "harness.toml" else harness_path(path))
+    return bool((parsed.get("computer_use") or {}).get("enabled"))
 
 
 def find_worker_bin(name: str) -> str:

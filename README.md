@@ -67,6 +67,8 @@ No GitHub login. Clones over HTTPS, copies into `~/.rig`, puts `rig` on `~/.loca
 
 First install and `rig update` also try to install or upgrade tmux to **3.3+** (Homebrew on macOS; apt-get/dnf on Linux). Compatible tmux is left alone. Set `RIG_SKIP_TMUX_INSTALL=1` to opt out. The terminal companion still needs explicit opt-in below.
 
+They also **ask** to install Cua Driver for parent computer-use (default **No**). Piped install with no TTY skips unless `RIG_INSTALL_CUA_DRIVER=1`. Decline is remembered. Missing Driver does not fail Rig. Per project: `[computer-use] enabled` in `.rig/harness.toml` (default false). `rig computer-use setup` / `on` / `off` / `doctor`. Effective on requires machine opt-in **and** the binary **and** the repo flag. Every legal parent then uses Rig MCP `rig_cu_capture` / `rig_cu_act` / `rig_cu_confirm` / `rig_cu_record`. Do not shell cua-driver for that loop. AX token first; px only after `degraded` / `escalate_px` on that snapshot. Named Chrome profile: parent `chrome-profile` open, then Driver existing-profile bind. Isolated profile is not the Figma path. Existing-profile grant is human (`cua-driver serve --grant existing-profile`); Rig never silent-grants. Fallback is chrome-devtools only. Never Figma MCP or Playwright as computer-use fallback. Figma MCP remains parent file/node. Never the Hermes `computer_use` skill. Children never receive cua-driver or chrome-devtools MCP. Children never receive chrome-profile or `rig_cu_*`. Do not spawn a clicker.
+
 Already have `rig` on PATH: `rig update` (same `main` installer). Older `rig` without `update` still needs the curl once.
 
 Smart routing is included in `main`. New installations use it by default; existing installations can update with `rig update`, then fully restart parent/MCP sessions after safely finishing active work. An explicit `[routing] mode = "legacy"` setting remains in effect.
@@ -133,6 +135,12 @@ Optional shortcuts for the same keys:
 ```bash
 rig use codex
 rig workers grok=on claude=on
+rig computer-use on
+```
+
+```toml
+[computer-use]
+enabled = false
 ```
 
 - **Live parent** is whichever Codex, Grok, OpenCode, OMP, Pi, or agy you actually opened (`rig status`). The `parent =` key is only the preferred default. Optional shortcut: `rig use …`. Opening the CLI makes it live.

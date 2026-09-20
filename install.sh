@@ -39,8 +39,12 @@ export RIG_HOME
 export RIG_SRC="$SRC"
 if command -v python3 >/dev/null 2>&1; then
   python3 "$SRC/scripts/install-tmux.py"
+  if [[ -f "$SRC/scripts/install-cua-driver.py" ]]; then
+    python3 "$SRC/scripts/install-cua-driver.py" "$@" || true
+  fi
 else
   echo "tmux setup: Python 3 unavailable; install tmux 3.3+ manually to use the terminal companion."
+  echo "cua-driver setup: Python 3 unavailable; skip. Enable later: rig computer-use setup"
 fi
 bash "$SRC/bin/rig" setup "$@"
 

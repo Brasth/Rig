@@ -649,6 +649,30 @@ PY
 )"
 fi
 BRIEF_TEXT="$(cat "$BRIEF")"
+CHILD_MCP_PREPARE="$(python3 "$CHILD_MCP_PY" prepare "$JOB_DIR" "$JOB_ID" "$REPO" "$WORKER")"
+CHILD_MCP_ARGV=()
+while IFS= read -r _mcp_arg; do
+  [[ -n "$_mcp_arg" ]] && CHILD_MCP_ARGV+=("$_mcp_arg")
+done < <(printf '%s\n' "$CHILD_MCP_PREPARE" | python3 -c '
+import json, sys
+spec = json.load(sys.stdin)
+for item in spec.get("argv") or []:
+    print(item)
+')
+while IFS= read -r _mcp_line; do
+  [[ -z "$_mcp_line" ]] && continue
+  export "$_mcp_line"
+done < <(printf '%s\n' "$CHILD_MCP_PREPARE" | python3 -c '
+import json, sys
+spec = json.load(sys.stdin)
+for key, value in (spec.get("env") or {}).items():
+    if not key or any(ch not in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_" for ch in key):
+        continue
+    text = "" if value is None else str(value)
+    if "\n" in text or "\0" in text:
+        continue
+    print(f"{key}={text}")
+')
 PARENT_THREAD="${RIG_THREAD:-}"
 if [[ -z "$PARENT_THREAD" ]]; then
   JOBS_PY="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/jobs.py"
@@ -670,6 +694,7 @@ case "$WORKER" in
     CMD=(codex exec --json --ephemeral -s workspace-write -C "$REPO")
     [[ -n "$MODEL" ]] && CMD+=(-m "$MODEL")
     [[ -n "$EFFORT" ]] && CMD+=(-c "model_reasoning_effort=\"$EFFORT\"")
+    CMD+=("${CHILD_MCP_ARGV[@]}")
     CMD+=("$BRIEF_TEXT")
     ;;
   claude)
@@ -680,7 +705,6 @@ case "$WORKER" in
     # (can skip user auth), or --dangerously-skip-permissions (org
     # policy can disable bypass).
     CLAUDE_WORKER_MD="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../adapters/claude/CLAUDE.worker.md"
-    CLAUDE_MCP="$JOB_DIR/mcp.json"
     CMD=(
       claude -p
       --model "${MODEL:-claude-sonnet-5}"
@@ -689,9 +713,10 @@ case "$WORKER" in
       --permission-mode acceptEdits
       --allowedTools "Read,Grep,Glob,Bash,Edit,Write"
       --tools "Bash,Edit,Read,Grep,Glob,Write"
-      --mcp-config "$CLAUDE_MCP"
+    )
+    CMD+=("${CHILD_MCP_ARGV[@]}")
+    CMD+=(
       --permission-prompt-tool mcp__rig-ask__permission_prompt
-      --strict-mcp-config
       --disable-slash-commands
       --no-session-persistence
     )
@@ -793,7 +818,6 @@ case "$WORKER" in
     )
     ;;
 esac
-CHILD_MCP_PREPARE="$(python3 "$CHILD_MCP_PY" prepare "$JOB_DIR" "$JOB_ID" "$REPO" "$WORKER")"
 CMD_STR="$(shell_join "${CMD[@]}")"
 
 write_meta "reserved"
@@ -830,7 +854,7 @@ if [[ -z "$BIN" ]]; then
 fi
 
 # Default is dry-run. Live child only when RIG_LIVE=1.
-# Dry-run still prepares Claude --mcp-config argv; readiness is live-only.
+# Dry-run still writes JOB/mcp.json and isolation argv; readiness is live-only.
 if [[ "${RIG_LIVE:-0}" != "1" ]]; then
   echo "run-worker: dry-run ($WORKER job=$JOB_ID)"
   echo "would run: $CMD_STR"

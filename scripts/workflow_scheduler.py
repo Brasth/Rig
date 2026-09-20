@@ -182,9 +182,10 @@ def _default_launch(repo, *, node, spec, state, choice, owner, owner_session, re
         "workflow_attempt": int(((state.get("nodes") or {}).get(node["id"]) or {}).get("workflow_attempt") or 0) + 1,
     }
     handoff, _writers, _snapshots, _providers = _review_handoff_fields(repo, spec, state, node)
-    if choice.get("parent_writes") or choice.get("spawn") == "native":
+    if _is_parent_choice(choice) or choice.get("spawn") == "native":
         details = rig_jobs.start_job(
-            repo, worker=choice.get("worker") or "parent", role=node["role"],
+            repo, worker="parent", role=node["role"], executor_kind="parent",
+            model=choice.get("model") or "", effort=choice.get("effort") or "",
             summary=brief, files=files, access=access, owner_session=owner_session,
             routing=choice.get("routing"), assessment=node.get("assessment") or None,
             return_details=True,
@@ -227,8 +228,12 @@ def _never_started(message):
 
 
 def _is_parent_choice(choice):
-    return bool(choice.get("parent_writes") or (
-        choice.get("spawn") == "native" and choice.get("parent_writes")))
+    """Parent executes this node: parent_writes, or stay when no wrapper exists."""
+    choice = choice or {}
+    spawn = str(choice.get("spawn") or "")
+    routing = choice.get("routing") if isinstance(choice.get("routing"), dict) else {}
+    strategy = str(routing.get("execution_strategy") or choice.get("execution_strategy") or "")
+    return bool(choice.get("parent_writes") or spawn == "stay" or strategy == "stay")
 
 
 def advance(repo, workflow_id, *, owner=None, owner_session="", owner_token="",
@@ -346,7 +351,7 @@ def advance(repo, workflow_id, *, owner=None, owner_session="", owner_token="",
             claim["spec"] = copy.deepcopy(spec)
             claim["state"] = copy.deepcopy(state)
 
-        errors = (admission.AdmissionError, SchedulerError, OSError, TypeError, ValueError)
+        errors = (admission.AdmissionError, SchedulerError, OSError, TypeError, ValueError, SystemExit)
         if not is_parent:
             errors = Exception
         try:

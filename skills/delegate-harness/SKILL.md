@@ -74,6 +74,7 @@ This CLI is the parent. It manages. It does not sit on write/review/SSH when pic
 - codebase gather (grep, file search, trace) and remote/SSH gather (logs, server facts)
 
 Figma, computer-use, and chrome-profile stay with the parent. If this CLI has no Figma MCP, ask the user for a screenshot. Do not spawn a clicker.
+Parent may call Cua Driver only when this repo `[computer-use] enabled=true` and `cua-driver` is on PATH, via Rig MCP `rig_cu_capture` / `rig_cu_act` / `rig_cu_confirm` / `rig_cu_record` (capture → act on a fresh element_token → recapture). AX token first; px only after `degraded` / `escalate_px` on that snapshot. Named Chrome profile: parent `chrome-profile` open, then Driver existing-profile bind. Isolated profile is not the Figma path. Existing-profile grant is human (`cua-driver serve --grant existing-profile`); Rig never silent-grants. Otherwise chrome-devtools. Never Figma MCP or Playwright as computer-use fallback. Figma MCP remains parent file/node. Never the Hermes `computer_use` skill. Children never receive cua-driver or chrome-devtools MCP. Children never receive chrome-profile or `rig_cu_*`.
 
 ## Effective workers
 
