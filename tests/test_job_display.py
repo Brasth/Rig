@@ -160,5 +160,47 @@ class WorkflowHudDisplay(unittest.TestCase):
         self.assertEqual(scrub_secrets({"owner_token": secret, "ok": 1}), {"ok": 1})
 
 
+class TokenAndContinueDisplay(unittest.TestCase):
+    def test_format_tokens_compacts_present_fields_and_never_synthesizes_total(self):
+        self.assertEqual(jobs.format_tokens(None), "")
+        self.assertEqual(jobs.format_tokens({}), "")
+        self.assertEqual(jobs.format_tokens({"input": 12, "output": 34}), "12 in / 34 out")
+        self.assertNotIn("total", jobs.format_tokens({"input": 12, "output": 34}))
+        self.assertEqual(
+            jobs.format_tokens({"input": 12, "output": 34, "cached_input": 5, "reasoning": 8}),
+            "12 in / 34 out / 5 cached / 8 reasoning",
+        )
+        self.assertEqual(
+            jobs.format_tokens({"input": 12, "output": 34, "total": 46}),
+            "12 in / 34 out / 46 total",
+        )
+        self.assertEqual(jobs.format_tokens({"input": 999}), "999 in")
+        self.assertEqual(jobs.format_tokens({"input": 1000}), "1k in")
+        self.assertEqual(jobs.format_tokens({"output": 1500}), "1.5k out")
+        self.assertEqual(jobs.format_tokens({"total": 1_000_000}), "1m total")
+        self.assertEqual(jobs.format_tokens({"total": 1_500_000}), "1.5m total")
+
+    def test_format_show_includes_continues_line(self):
+        td = tempfile.TemporaryDirectory()
+        self.addCleanup(td.cleanup)
+        job_dir = Path(td.name) / "cont-show"
+        jobs.write_job_files(
+            job_dir,
+            "cont-show",
+            "grok",
+            "implement",
+            "ok",
+            0,
+            "2026-09-10T07:00:00Z",
+            "2026-09-10T07:01:00Z",
+            "done",
+            continues_job_id="prior-ok",
+        )
+        loaded = jobs.load_job(job_dir)
+        shown = jobs.format_show(loaded)
+        self.assertIn("continues prior-ok", shown)
+        self.assertNotIn("tokens", shown)
+
+
 if __name__ == "__main__":
     unittest.main()

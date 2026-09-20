@@ -559,6 +559,7 @@ def pick(
     writer_job_ids=None,
     writer_snapshot_ids=None,
     writer_providers=None,
+    continues_job_id: str = "",
     review_mode: str = "standalone",
     repo: Path | None = None,
     jobs_snapshot: list[dict] | None = None,
@@ -594,6 +595,9 @@ def pick(
         )
         if explain:
             choice["_explain"] = True
+        cid = (continues_job_id or "").strip()
+        if cid:
+            choice["continues_job_id"] = cid
         return choice
     cfg = routing_policy.load_config(repo, policy_mode="legacy")
     fingerprint = routing_policy.config_fingerprint(cfg)
@@ -719,7 +723,7 @@ def pick(
             reason = f"{kind}: cheap same-CLI {worker} {native_agent} ({model} {effort or 'default'})"
         else:
             reason = f"{kind}: {worker} child {model}" + (f" effort={effort}" if effort else "")
-    return _with_legacy_routing(
+    choice = _with_legacy_routing(
         _base_choice(
             kind,
             worker,
@@ -735,6 +739,10 @@ def pick(
         ),
         assessed, fingerprint, required, explain,
     )
+    cid = (continues_job_id or "").strip()
+    if cid:
+        choice["continues_job_id"] = cid
+    return choice
 
 
 def assert_child_model(model: str) -> str | None:
@@ -802,7 +810,7 @@ def format_text(choice: dict, *, explain: bool = False) -> str:
         env = f"RIG_LIVE=1 RIG_ROLE={shlex.quote(choice['kind'])} RIG_MODEL={shlex.quote(choice['model'])}"
         if choice.get("effort"):
             env += f" RIG_EFFORT={shlex.quote(choice['effort'])}"
-        for field in ("writer_job_id", "writer_cli", "writer_model", "writer_provider", "review_mode"):
+        for field in ("writer_job_id", "writer_cli", "writer_model", "writer_provider", "review_mode", "continues_job_id"):
             if choice.get(field):
                 env += f" RIG_{field.upper()}={shlex.quote(choice[field])}"
         lines.append(
@@ -826,6 +834,7 @@ def main() -> int:
     parser.add_argument("--writer-cli", default="")
     parser.add_argument("--writer-model", default="")
     parser.add_argument("--writer-provider", default="")
+    parser.add_argument("--continues-job-id", default="")
     parser.add_argument("--review-mode", choices=["standalone", "independent"], default="standalone")
     parser.add_argument("--repo", type=Path)
     parser.add_argument("--exclude", default="")
@@ -847,6 +856,8 @@ def main() -> int:
         err = assert_child_model(args.model) or assert_devin_model(args.worker, args.model, args.role)
         provider = provider_for(args.model)
         metadata = {"provider": provider, "provider_source": "model" if provider else "unknown"}
+        if args.continues_job_id.strip():
+            metadata["continues_job_id"] = args.continues_job_id.strip()
         if not err and classify(args.role, args.case) == "review":
             try:
                 context, err = _writer_context(**writer_args)
@@ -876,6 +887,7 @@ def main() -> int:
         choice = pick(
             args.live, effective, args.role, args.case, exclude=args.exclude,
             parent_model=args.parent_model, parent_effort=args.parent_effort, **writer_args,
+            continues_job_id=args.continues_job_id,
             complexity=args.complexity, risk=args.risk, uncertainty=args.uncertainty,
             assessment_reason=args.assessment_reason, policy_mode=args.policy_mode or None,
             explain=args.explain,

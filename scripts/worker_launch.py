@@ -24,7 +24,7 @@ LAUNCH_WORKERS = frozenset({"grok", "codex", "claude", "opencode", "omp", "pi", 
 LAUNCH_KEYS = frozenset({
     "id", "case", "role", "worker", "model", "effort", "access", "files", "brief",
     "queue_id", "reservation_id", "attempt_id", "owner_token", "owner_session",
-    "writer_job_id", "writer_snapshot_id", "writer_cli", "writer_model",
+    "writer_job_id", "continues_job_id", "writer_snapshot_id", "writer_cli", "writer_model",
     "writer_provider", "writer_job_ids", "writer_snapshot_ids", "writer_providers",
     "review_mode", "live", "routing", "assessment", "resources",
     "workflow_id", "workflow_node_id", "workflow_spec_hash", "workflow_attempt",
@@ -91,6 +91,23 @@ def _string_list(value, name: str):
     if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
         raise LaunchError(f"{name} must be an array of strings")
     return value
+
+
+def _require_continues_job(repo, continues_job_id: str) -> str:
+    job_id = (continues_job_id or "").strip()
+    if not job_id:
+        return ""
+    if job_id in {".", ".."} or not JOB_ID_RE.fullmatch(job_id):
+        raise LaunchError(f"invalid continues_job_id '{job_id}'")
+    path = rig_jobs.jobs_dir(repo) / job_id
+    job = rig_jobs.load_job(path, include_activity=False) if path.is_dir() else None
+    if job is None:
+        raise LaunchError(f"continues_job_id '{job_id}' does not exist")
+    job = rig_jobs.project_job(job)
+    effective = str(job.get("effective") or job.get("status") or "")
+    if effective not in TERMINAL_STATUSES:
+        raise LaunchError(f"continues_job_id '{job_id}' is not terminal (status {effective})")
+    return job_id
 
 
 def _access(role: str, access: str) -> str:
@@ -299,6 +316,7 @@ def launch(repo, **kwargs) -> dict:
     if review_mode not in {"standalone", "independent"}:
         raise LaunchError("review_mode must be standalone|independent")
     writer_job_id = _require_string(kwargs.get("writer_job_id"), "writer_job_id")
+    continues_job_id = _require_continues_job(repo, _require_string(kwargs.get("continues_job_id"), "continues_job_id"))
     writer_snapshot_id = _require_string(kwargs.get("writer_snapshot_id"), "writer_snapshot_id")
     writer_cli = _require_string(kwargs.get("writer_cli"), "writer_cli")
     writer_model = _require_string(kwargs.get("writer_model"), "writer_model")
@@ -404,7 +422,8 @@ def launch(repo, **kwargs) -> dict:
                 job_dir, job_id, worker, role, "running", 0, now, "", "",
                 kind="wrapper", thread=rig_jobs.current_thread(repo), files=listed,
                 model=model, effort=effort, executor_kind="wrapper", execution_mode="live",
-                writer_job_id=writer_job_id, writer_snapshot_id=writer_snapshot_id,
+                writer_job_id=writer_job_id, continues_job_id=continues_job_id,
+                writer_snapshot_id=writer_snapshot_id,
                 writer_job_ids=writer_job_ids, writer_snapshot_ids=writer_snapshot_ids,
                 writer_providers=writer_providers, reservation=record, capture_evidence=False,
                 resources=record.get("resources"), workflow_id=workflow_id,
@@ -441,6 +460,7 @@ def launch(repo, **kwargs) -> dict:
             "RIG_OWNER_TOKEN": record["owner_token"],
             "RIG_OWNER_SESSION": owner_session,
             "RIG_WRITER_JOB_ID": writer_job_id,
+            "RIG_CONTINUES_JOB_ID": continues_job_id,
             "RIG_WRITER_SNAPSHOT_ID": writer_snapshot_id,
             "RIG_WRITER_CLI": writer_cli,
             "RIG_WRITER_MODEL": writer_model,

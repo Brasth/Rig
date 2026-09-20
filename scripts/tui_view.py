@@ -231,6 +231,8 @@ def format_list_row(tab: str, row: dict, width: int, *, selected: bool = False, 
     extra = ""
     if tab == "Workflows":
         extra = f"{row.get('accepted', 0)}/{row.get('required', 0)}"
+    elif tab == "Jobs":
+        extra = rig_jobs.format_tokens(row.get("token_usage"))
     task = _row_task(tab, row)
     prefix = f"{marker} {label} "
     used = _text_width(prefix)
