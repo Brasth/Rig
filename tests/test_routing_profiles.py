@@ -15,7 +15,7 @@ class BuiltinPins(unittest.TestCase):
     def test_selectors_come_from_route_models(self):
         mapping = {
             "grok-4.5-low": ("grok", "explore"),
-            "grok-4.6-high": ("grok", "implement"),
+            "grok-4.7-high": ("grok", "implement"),
             "claude-haiku-4-5-low": ("claude", "explore"),
             "claude-sonnet-5-medium": ("claude", "implement"),
             "claude-opus-5-high": ("claude", "hard"),
@@ -53,7 +53,7 @@ class BuiltinPins(unittest.TestCase):
 
     def test_high_explore_uses_standard_and_strong_read_profiles(self):
         for pid in (
-            "grok-4.6-high",
+            "grok-4.7-high",
             "claude-sonnet-5-medium",
             "claude-opus-5-high",
             "omp-grok-4.6-high",
@@ -80,7 +80,7 @@ class PreferenceOrder(unittest.TestCase):
     def test_review_default_puts_claude_before_grok(self):
         rows = profiles.profiles_by_id()
         review = profiles.default_preference_ids("strong", rows, role="review")
-        self.assertLess(review.index("claude-opus-5-high"), review.index("grok-4.6-high"))
+        self.assertLess(review.index("claude-opus-5-high"), review.index("grok-4.7-high"))
 
     def test_override_mentions_then_appends_unmentioned(self):
         rows = profiles.profiles_by_id()

@@ -162,7 +162,7 @@ class Pick(unittest.TestCase):
         c = legacy_pick("codex", ["grok", "claude"], "implement", "add a header")
         self.assertEqual(c["worker"], "grok")
         self.assertEqual(c["spawn"], "run-worker")
-        self.assertEqual(c["model"], "grok-4.6")
+        self.assertEqual(c["model"], "grok-4.7")
         self.assertEqual(c["effort"], "high")
 
     def test_grok_parent_uses_claude_then_native(self):
@@ -374,7 +374,7 @@ class Pick(unittest.TestCase):
         c = legacy_pick("opencode", ["grok"], "implement", "add a header")
         self.assertEqual(c["worker"], "grok")
         self.assertEqual(c["spawn"], "run-worker")
-        self.assertEqual(c["model"], "grok-4.6")
+        self.assertEqual(c["model"], "grok-4.7")
 
     def test_opencode_live_no_other_is_native(self):
         c = legacy_pick("opencode", [], "implement", "add a header")

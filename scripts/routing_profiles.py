@@ -190,7 +190,7 @@ def builtin_profiles() -> tuple[Profile, ...]:
             provider="cursor",
         ),
         _p(
-            "grok-4.6-high",
+            "grok-4.7-high",
             "grok",
             grok_strong_m,
             roles=STRONG_ROLES,

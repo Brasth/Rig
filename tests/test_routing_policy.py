@@ -165,7 +165,7 @@ class SmartSelection(unittest.TestCase):
             complexity="high", risk="high", uncertainty="high", policy_mode="legacy",
         )
         self.assertEqual(legacy["worker"], "grok")
-        self.assertEqual(legacy["model"], "grok-4.6")
+        self.assertEqual(legacy["model"], "grok-4.7")
 
     def test_filters_live_exclude_cursor(self):
         live = smart_pick("grok", ["grok", "claude"], "implement", "add a header")
@@ -392,7 +392,7 @@ class ConfigValidation(unittest.TestCase):
             (repo / ".rig").mkdir()
             (repo / ".rig" / "routing.json").write_text(json.dumps({
                 "schema_version": 1,
-                "profiles": {"grok-4.6-high": {"catalog_required": "false"}},
+                "profiles": {"grok-4.7-high": {"catalog_required": "false"}},
             }))
             with self.assertRaises(policy.ConfigError):
                 policy.load_config(repo, policy_mode="smart")
@@ -413,7 +413,7 @@ class ConfigValidation(unittest.TestCase):
                 {"schema_version": 1, "profiles": {"codex-luna-low": {
                     "aliases": ["gpt-5.6-sol"]}}},
                 {"schema_version": 1, "profiles": {
-                    "grok-4.6-high": {}, " grok-4.6-high ": {}}},
+                    "grok-4.7-high": {}, " grok-4.7-high ": {}}},
             ):
                 (repo / ".rig/routing.json").write_text(json.dumps(config))
                 with self.assertRaises(policy.ConfigError):
@@ -425,13 +425,13 @@ class ConfigValidation(unittest.TestCase):
             (repo / ".rig").mkdir()
             (repo / ".rig" / "routing.json").write_text(json.dumps({
                 "schema_version": 1,
-                "profiles": {"grok-4.6-high": {"aliases": ["anthropic/claude-opus-5"]}},
+                "profiles": {"grok-4.7-high": {"aliases": ["anthropic/claude-opus-5"]}},
             }))
             with self.assertRaises(policy.ConfigError):
                 policy.load_config(repo, policy_mode="smart")
             (repo / ".rig" / "routing.json").write_text(json.dumps({
                 "schema_version": 1,
-                "profiles": {"grok-4.6-high": {"selector": "gpt-5.6-sol"}},
+                "profiles": {"grok-4.7-high": {"selector": "gpt-5.6-sol"}},
             }))
             with self.assertRaises(policy.ConfigError):
                 policy.load_config(repo, policy_mode="smart")
@@ -487,13 +487,13 @@ class ConfigValidation(unittest.TestCase):
             (repo / ".rig").mkdir()
             (repo / ".rig" / "routing.json").write_text(json.dumps({
                 "schema_version": 1,
-                "profiles": {"grok-4.6-high": {"enabled": True}},
+                "profiles": {"grok-4.7-high": {"enabled": True}},
             }))
             with self.assertRaises(policy.ConfigError):
                 policy.load_config(repo, policy_mode="smart")
             (repo / ".rig" / "routing.json").write_text(json.dumps({
                 "schema_version": 1,
-                "profiles": {"grok-4.6-high": {"effort": "max"}},
+                "profiles": {"grok-4.7-high": {"effort": "max"}},
             }))
             with self.assertRaises(policy.ConfigError):
                 policy.load_config(repo, policy_mode="smart")

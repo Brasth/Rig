@@ -211,7 +211,7 @@ class ResolveAgainstCatalog(unittest.TestCase):
     def test_codex_grok_claude_cursor_ignore_catalog(self):
         for worker, kind, pin in (
             ("codex", "implement", "gpt-5.6-luna"),
-            ("grok", "implement", "grok-4.6"),
+            ("grok", "implement", "grok-4.7"),
             ("claude", "implement", "claude-sonnet-5"),
             ("cursor", "implement", "composer-2.5"),
         ):
