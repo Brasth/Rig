@@ -103,6 +103,12 @@ JOB_EXECUTION_PROPERTIES = {
 TOOLS = [
     {
         "name": "rig_jobs",
+        "annotations": {
+            "readOnlyHint": True,
+            "destructiveHint": False,
+            "idempotentHint": True,
+            "openWorldHint": False,
+        },
         "description": (
             "List Rig worker jobs in this project: which agent is running, "
             "the task, status, and what it is doing now. Status ask or running: "
@@ -128,6 +134,12 @@ TOOLS = [
     },
     {
         "name": "rig_job_show",
+        "annotations": {
+            "readOnlyHint": True,
+            "destructiveHint": False,
+            "idempotentHint": True,
+            "openWorldHint": False,
+        },
         "description": "Show one Rig job: agent, task, status, session, and recent log.",
         "inputSchema": {
             "type": "object",
@@ -139,6 +151,12 @@ TOOLS = [
     },
     {
         "name": "rig_job_log",
+        "annotations": {
+            "readOnlyHint": True,
+            "destructiveHint": False,
+            "idempotentHint": True,
+            "openWorldHint": False,
+        },
         "description": "Decoded child log so you can see what the worker is doing.",
         "inputSchema": {
             "type": "object",
@@ -151,6 +169,12 @@ TOOLS = [
     },
     {
         "name": "rig_job_wait",
+        "annotations": {
+            "readOnlyHint": True,
+            "destructiveHint": False,
+            "idempotentHint": False,
+            "openWorldHint": True,
+        },
         "description": (
             "Block until the job (or jobs) asks for permission or finishes. "
             "Do not pass timeout unless you must cap the wait. Do not poll. "
@@ -190,6 +214,12 @@ TOOLS = [
     },
     {
         "name": "rig_job_allow",
+        "annotations": {
+            "readOnlyHint": False,
+            "destructiveHint": False,
+            "idempotentHint": True,
+            "openWorldHint": True,
+        },
         "description": (
             "Allow a pending permission prompt (Claude ask). "
             "Call this when rig_jobs or rig_job_wait shows status ask and the command is safe worker work "
@@ -206,6 +236,12 @@ TOOLS = [
     },
     {
         "name": "rig_job_deny",
+        "annotations": {
+            "readOnlyHint": False,
+            "destructiveHint": True,
+            "idempotentHint": True,
+            "openWorldHint": True,
+        },
         "description": (
             "Deny a pending permission prompt (Claude ask). "
             "Use for destructive, prod, or secrets commands. Optional reason is shown to the child."
@@ -221,6 +257,12 @@ TOOLS = [
     },
     {
         "name": "rig_job_cancel",
+        "annotations": {
+            "readOnlyHint": False,
+            "destructiveHint": True,
+            "idempotentHint": True,
+            "openWorldHint": True,
+        },
         "description": (
             "Abort a live job (running or ask) and its worker process. "
             "Use when the user cancelled the parent turn/wait (Esc/Stop). "
@@ -246,6 +288,12 @@ TOOLS = [
     },
     {
         "name": "rig_memory",
+        "annotations": {
+            "readOnlyHint": True,
+            "destructiveHint": False,
+            "idempotentHint": True,
+            "openWorldHint": False,
+        },
         "description": (
             "Show standing project facts in .rig/MEMORY.md. "
             "Call this at the start of a new thread."
@@ -259,6 +307,12 @@ TOOLS = [
     },
     {
         "name": "rig_memory_add",
+        "annotations": {
+            "readOnlyHint": False,
+            "destructiveHint": False,
+            "idempotentHint": True,
+            "openWorldHint": False,
+        },
         "description": (
             "Save one standing project fact to .rig/MEMORY.md. "
             "One short bullet. No transcripts. Duplicates and the 120-line cap are handled."
@@ -277,6 +331,12 @@ TOOLS = [
     },
     {
         "name": "rig_pick",
+        "annotations": {
+            "readOnlyHint": True,
+            "destructiveHint": False,
+            "idempotentHint": True,
+            "openWorldHint": True,
+        },
         "description": (
             "Pick worker, spawn kind, model, and effort for a task. "
             "Same JSON as rig pick --json. Live parent is this MCP process "
@@ -312,6 +372,12 @@ TOOLS = [
     },
     {
         "name": "rig_routing_report",
+        "annotations": {
+            "readOnlyHint": True,
+            "destructiveHint": False,
+            "idempotentHint": True,
+            "openWorldHint": False,
+        },
         "description": (
             "Read-only routing evidence report. Does not influence pick. "
             "Groups policy version, required tier, profile, and actual model/effort."
@@ -326,6 +392,12 @@ TOOLS = [
     },
     {
         "name": "rig_billing_report",
+        "annotations": {
+            "readOnlyHint": True,
+            "destructiveHint": False,
+            "idempotentHint": True,
+            "openWorldHint": False,
+        },
         "description": "Read-only invoice-dollar report. Actual receipts only; never estimates.",
         "inputSchema": {"type": "object", "properties": {
             "repo": {"type": "string"}, "scope": {"type": "string"},
@@ -333,6 +405,12 @@ TOOLS = [
     },
     {
         "name": "rig_billing_import",
+        "annotations": {
+            "readOnlyHint": False,
+            "destructiveHint": False,
+            "idempotentHint": True,
+            "openWorldHint": False,
+        },
         "description": "Parent-only. Import one actual USD receipt into the local billing ledger. Idempotent. Never stores credentials. dry_run validates without writing.",
         "inputSchema": {"type": "object", "properties": {
             "repo": {"type": "string"}, "scope": {"type": "string"},
@@ -342,6 +420,12 @@ TOOLS = [
     },
     {
         "name": "rig_billing_sync",
+        "annotations": {
+            "readOnlyHint": False,
+            "destructiveHint": False,
+            "idempotentHint": False,
+            "openWorldHint": True,
+        },
         "description": "Parent-only. OpenAI or Anthropic read-only receipt adapters. Network is explicit/opt-in. Generic providers use rig_billing_import. Never prints credential values.",
         "inputSchema": {"type": "object", "properties": {
             "repo": {"type": "string"}, "scope": {"type": "string"},
@@ -353,6 +437,12 @@ TOOLS = [
     },
     {
         "name": "rig_benchmark_report",
+        "annotations": {
+            "readOnlyHint": True,
+            "destructiveHint": False,
+            "idempotentHint": True,
+            "openWorldHint": False,
+        },
         "description": "Read-only benchmark coverage report. Separates observed tokens from actual invoice dollars. Savings is gated.",
         "inputSchema": {"type": "object", "properties": {
             "repo": {"type": "string"}, "id": {"type": "string"}, "scope": {"type": "string"},
@@ -360,6 +450,12 @@ TOOLS = [
     },
     {
         "name": "rig_benchmark_create",
+        "annotations": {
+            "readOnlyHint": False,
+            "destructiveHint": False,
+            "idempotentHint": True,
+            "openWorldHint": False,
+        },
         "description": "Parent-only. Freeze a local benchmark spec under .rig/benchmarks/<id>.",
         "inputSchema": {"type": "object", "properties": {
             "repo": {"type": "string"}, "spec": {"type": "object"},
@@ -367,6 +463,12 @@ TOOLS = [
     },
     {
         "name": "rig_benchmark_outcome",
+        "annotations": {
+            "readOnlyHint": False,
+            "destructiveHint": False,
+            "idempotentHint": True,
+            "openWorldHint": False,
+        },
         "description": "Parent-only. Attribute a currently accepted job to a frozen benchmark task and arm.",
         "inputSchema": {"type": "object", "properties": {
             "repo": {"type": "string"}, "id": {"type": "string"},
@@ -376,6 +478,12 @@ TOOLS = [
     },
     {
         "name": "rig_status",
+        "annotations": {
+            "readOnlyHint": True,
+            "destructiveHint": False,
+            "idempotentHint": True,
+            "openWorldHint": False,
+        },
         "description": (
             "Show live parent (this process / RIG_PARENT, not the toml parent key), "
             "preferred parent, effective workers, and job count."
@@ -389,6 +497,12 @@ TOOLS = [
     },
     {
         "name": "rig_job_start",
+        "annotations": {
+            "readOnlyHint": False,
+            "destructiveHint": False,
+            "idempotentHint": False,
+            "openWorldHint": False,
+        },
         "description": (
             "Record a running job in .rig/jobs (meta.json + STATE). "
             "Files only. Does not launch a worker. Returns the job id."
@@ -411,6 +525,12 @@ TOOLS = [
     },
     {
         "name": "rig_job_finish",
+        "annotations": {
+            "readOnlyHint": False,
+            "destructiveHint": False,
+            "idempotentHint": True,
+            "openWorldHint": False,
+        },
         "description": (
             "Finish a recorded job (ok|fail|timeout|cancelled). Writes result.json. "
             "Native cancelled finish still requires matching host completion, not caller attestation. "
@@ -437,6 +557,12 @@ TOOLS = [
     },
     {
         "name": "rig_job_record",
+        "annotations": {
+            "readOnlyHint": False,
+            "destructiveHint": False,
+            "idempotentHint": True,
+            "openWorldHint": False,
+        },
         "description": (
             "Record a retrospective terminal read-only result. Scoped writes must use rig_job_start before editing. "
             "A retrospective result cannot be verified."
@@ -467,6 +593,12 @@ TOOLS = [
     },
     {
         "name": "rig_session",
+        "annotations": {
+            "readOnlyHint": True,
+            "destructiveHint": False,
+            "idempotentHint": True,
+            "openWorldHint": True,
+        },
         "description": (
             "One call: memory, jobs, status, and pick JSON. "
             "Same as rig memory + rig jobs + rig status + rig pick. "
@@ -513,6 +645,12 @@ TOOLS = [
     },
     {
         "name": "rig_job_doing",
+        "annotations": {
+            "readOnlyHint": False,
+            "destructiveHint": False,
+            "idempotentHint": False,
+            "openWorldHint": False,
+        },
         "description": (
             "Child only. Set what this job is doing now. Writes job files. "
             "Do not pick, wait, or spawn."
@@ -527,6 +665,12 @@ TOOLS = [
     },
     {
         "name": "rig_job_note",
+        "annotations": {
+            "readOnlyHint": False,
+            "destructiveHint": False,
+            "idempotentHint": False,
+            "openWorldHint": False,
+        },
         "description": "Child only. Append a short activity note. Does not change ask state.",
         "inputSchema": {
             "type": "object",
@@ -538,6 +682,12 @@ TOOLS = [
     },
     {
         "name": "rig_job_ask",
+        "annotations": {
+            "readOnlyHint": False,
+            "destructiveHint": False,
+            "idempotentHint": False,
+            "openWorldHint": True,
+        },
         "description": (
             "Child only. Ask the parent a question and block until allow/deny. "
             "Same file protocol as Claude permission prompts."
@@ -556,6 +706,12 @@ TOOLS = [
     },
     {
         "name": "permission_prompt",
+        "annotations": {
+            "readOnlyHint": False,
+            "destructiveHint": True,
+            "idempotentHint": False,
+            "openWorldHint": True,
+        },
         "description": "Answer a Claude Code permission prompt for this Rig job.",
         "inputSchema": {
             "type": "object",
@@ -570,6 +726,12 @@ TOOLS = [
     },
     {
         "name": "rig_job_launch",
+        "annotations": {
+            "readOnlyHint": False,
+            "destructiveHint": False,
+            "idempotentHint": False,
+            "openWorldHint": True,
+        },
         "description": (
             "Parent only. Admit a scoped wrapper child and detach the installed "
             "run-worker.sh. Returns immediately with job_id, worker, role, "
@@ -614,6 +776,12 @@ TOOLS = [
     },
     {
         "name": "rig_job_inbox",
+        "annotations": {
+            "readOnlyHint": False,
+            "destructiveHint": False,
+            "idempotentHint": False,
+            "openWorldHint": True,
+        },
         "description": (
             "Child only. Required first Rig operation each session: pull the parent "
             "inbox once and ack it. Records the child MCP handshake. Empty if the "
@@ -623,6 +791,12 @@ TOOLS = [
     },
     {
         "name": "rig_job_message",
+        "annotations": {
+            "readOnlyHint": False,
+            "destructiveHint": False,
+            "idempotentHint": False,
+            "openWorldHint": True,
+        },
         "description": (
             "Parent only. Leave one message for a running child. "
             "The child pulls it with rig_job_inbox. Does not change ASK/wait."
@@ -639,6 +813,12 @@ TOOLS = [
     },
     {
         "name": "rig_queue_add",
+        "annotations": {
+            "readOnlyHint": False,
+            "destructiveHint": False,
+            "idempotentHint": True,
+            "openWorldHint": False,
+        },
         "description": (
             "Parent only. Park a work item in .rig/queue/. Does not spawn. "
             "Does not wait. Use while a child is running so the next free turn can drain it."
@@ -655,6 +835,12 @@ TOOLS = [
     },
     {
         "name": "rig_queue_list",
+        "annotations": {
+            "readOnlyHint": True,
+            "destructiveHint": False,
+            "idempotentHint": True,
+            "openWorldHint": False,
+        },
         "description": (
             "Parent only. List pending queue items and live/max slots. "
             "Does not spawn."
@@ -666,6 +852,12 @@ TOOLS = [
     },
     {
         "name": "rig_queue_cancel",
+        "annotations": {
+            "readOnlyHint": False,
+            "destructiveHint": True,
+            "idempotentHint": True,
+            "openWorldHint": False,
+        },
         "description": "Parent only. Cancel a queue item. Held execution reservations require confirmed shutdown; an owned, unlaunched claim can be released. Does not spawn.",
         "inputSchema": {
             "type": "object",
@@ -681,6 +873,12 @@ TOOLS = [
     },
     {
         "name": "rig_queue_claim",
+        "annotations": {
+            "readOnlyHint": False,
+            "destructiveHint": False,
+            "idempotentHint": False,
+            "openWorldHint": False,
+        },
         "description": (
             "Parent only. Claim a pending queue item by id if live < max_running "
             "and listed files are disjoint. Id required when more than one item is pending. "
@@ -704,6 +902,12 @@ TOOLS = [
     },
     {
         "name": "rig_queue_unclaim",
+        "annotations": {
+            "readOnlyHint": False,
+            "destructiveHint": False,
+            "idempotentHint": True,
+            "openWorldHint": False,
+        },
         "description": "Parent only. Return a claimed item to pending (brief failed). Does not spawn.",
         "inputSchema": {
             "type": "object",
@@ -716,6 +920,12 @@ TOOLS = [
     },
     {
         "name": "rig_queue_spawned",
+        "annotations": {
+            "readOnlyHint": False,
+            "destructiveHint": False,
+            "idempotentHint": True,
+            "openWorldHint": False,
+        },
         "description": "Parent only. After run-worker.sh, mark a claimed item spawned with its job id.",
         "inputSchema": {
             "type": "object",
@@ -753,6 +963,12 @@ _OWNERSHIP_PROPERTIES = {key: {"type": "string"} for key in
 TOOLS.extend([
     {
         "name": "rig_job_requirements",
+        "annotations": {
+            "readOnlyHint": False,
+            "destructiveHint": False,
+            "idempotentHint": False,
+            "openWorldHint": False,
+        },
         "description": "Parent declares the complete acceptance manifest before checks. Existing requirements are immutable once checks start.",
         "inputSchema": {"type": "object", "properties": {
             **_JOB_REF_PROPERTIES,
@@ -764,6 +980,12 @@ TOOLS.extend([
     },
     {
         "name": "rig_job_check",
+        "annotations": {
+            "readOnlyHint": False,
+            "destructiveHint": False,
+            "idempotentHint": False,
+            "openWorldHint": True,
+        },
         "description": "Run the exact parent-authorized argv for a declared required check, recording actual output and before/after content snapshots. Does not accept the work.",
         "inputSchema": {"type": "object", "properties": {
             **_JOB_REF_PROPERTIES, "name": {"type": "string"},
@@ -772,6 +994,12 @@ TOOLS.extend([
     },
     {
         "name": "rig_job_accept",
+        "annotations": {
+            "readOnlyHint": False,
+            "destructiveHint": False,
+            "idempotentHint": False,
+            "openWorldHint": False,
+        },
         "description": "Parent accepts or rejects current scoped content against EVERY manifest requirement. Check IDs cannot omit failed or missing requirements. next=review retains files for independent review.",
         "inputSchema": {"type": "object", "properties": {
             **_JOB_REF_PROPERTIES, "decision": {"type": "string", "enum": ["accept", "reject"]},
@@ -782,11 +1010,25 @@ TOOLS.extend([
 ])
 
 TOOLS.extend([
-    {"name": "rig_job_close", "description": "Parent deliberately releases a confirmed-stopped attempt without accepting or retrying it. Requires exact ownership credentials or a validated credentials_path, plus rationale.",
+    {"name": "rig_job_close",
+     "annotations": {
+         "readOnlyHint": False,
+         "destructiveHint": True,
+         "idempotentHint": True,
+         "openWorldHint": False,
+     },
+     "description": "Parent deliberately releases a confirmed-stopped attempt without accepting or retrying it. Requires exact ownership credentials or a validated credentials_path, plus rationale.",
      "inputSchema": {"type": "object", "properties": {
          **_JOB_REF_PROPERTIES, **_OWNERSHIP_PROPERTIES, "rationale": {"type": "string"},
      }, "required": ["id", "rationale"]}},
-    {"name": "rig_job_reconcile", "description": "Report held ownership by default. Apply only provably dead unlaunched recovery; explicit adopt/release reconciles legacy queue claims with parent attestation. Never expires live or unknown execution.",
+    {"name": "rig_job_reconcile",
+     "annotations": {
+         "readOnlyHint": False,
+         "destructiveHint": True,
+         "idempotentHint": False,
+         "openWorldHint": False,
+     },
+     "description": "Report held ownership by default. Apply only provably dead unlaunched recovery; explicit adopt/release reconciles legacy queue claims with parent attestation. Never expires live or unknown execution.",
      "inputSchema": {"type": "object", "properties": {
          **_JOB_REF_PROPERTIES, "queue_id": {"type": "string"}, "apply": {"type": "boolean", "default": False},
          "action": {"type": "string", "enum": ["report", "adopt", "release"], "default": "report"},
@@ -795,12 +1037,25 @@ TOOLS.extend([
          "files": {"type": "array", "items": {"type": "string"}},
          "rationale": {"type": "string"}, "completion": {"type": "object"},
      }}},
-    {"name": "rig_job_recover_cancelled", "description": "Parent-only. Recover a cancelled native child after the original parent CLI is dead, using exact credentials or a validated credentials_path, plus Codex host evidence. Dry-run unless apply=true. Does not accept caller terminal=true attestation. Releases files without acceptance.",
+    {"name": "rig_job_recover_cancelled",
+     "annotations": {
+         "readOnlyHint": False,
+         "destructiveHint": True,
+         "idempotentHint": True,
+         "openWorldHint": False,
+     },
+     "description": "Parent-only. Recover a cancelled native child after the original parent CLI is dead, using exact credentials or a validated credentials_path, plus Codex host evidence. Dry-run unless apply=true. Does not accept caller terminal=true attestation. Releases files without acceptance.",
      "inputSchema": {"type": "object", "properties": {
          **_JOB_REF_PROPERTIES, **_OWNERSHIP_PROPERTIES, "rationale": {"type": "string"},
          "apply": {"type": "boolean", "default": False},
      }, "required": ["id", "rationale"]}},
     {"name": "rig_job_recover_parent_write",
+     "annotations": {
+         "readOnlyHint": False,
+         "destructiveHint": True,
+         "idempotentHint": True,
+         "openWorldHint": False,
+     },
      "description": (
          "Parent-only Codex/Pi self-service recovery for a native parent write whose owning turn was "
          "explicitly cancelled/stopped and whose owner_token or job artifacts are unavailable. "
@@ -823,6 +1078,12 @@ TOOLS.extend([
          "rationale": {"type": "string"},
      }, "required": ["id", "confirmed_stopped", "rationale"]}},
     {"name": "rig_job_recover_wrapper_receipt",
+     "annotations": {
+         "readOnlyHint": True,
+         "destructiveHint": False,
+         "idempotentHint": True,
+         "openWorldHint": False,
+     },
      "description": (
          "Parent-only read-only recovery of a stopped wrapper's ownership receipt. "
          "Returns non-secret metadata including credentials_path. Rejects released scopes, "
@@ -831,6 +1092,12 @@ TOOLS.extend([
      ),
      "inputSchema": {"type": "object", "properties": {**_JOB_REF_PROPERTIES}, "required": ["id"]}},
     {"name": "rig_job_break_glass_close",
+     "annotations": {
+         "readOnlyHint": False,
+         "destructiveHint": True,
+         "idempotentHint": True,
+         "openWorldHint": False,
+     },
      "description": (
          "Parent-only audited break-glass close of a confirmed-stopped failed or cancelled wrapper. "
          "Requires the canonical mode-0600 owner-credentials path, confirmed_stopped=true, and rationale. "
@@ -849,37 +1116,133 @@ TOOLS.extend([
 _WORKFLOW_ID = {"id": {"type": "string", "description": "Workflow id."}, "repo": {"type": "string"}}
 _WORKFLOW_OWNER = {"owner_token": {"type": "string"}, "owner_session": {"type": "string"}}
 TOOLS.extend([
-    {"name": "rig_workflow_create", "description": "Parent-only. Create a repository-local adaptive workflow DAG. Accepts a spec object. Never prints owner tokens in text; structuredContent includes credentials_path.",
+    {"name": "rig_workflow_create",
+     "annotations": {
+         "readOnlyHint": False,
+         "destructiveHint": False,
+         "idempotentHint": False,
+         "openWorldHint": False,
+     },
+     "description": "Parent-only. Create a repository-local adaptive workflow DAG. Accepts a spec object. Never prints owner tokens in text; structuredContent includes credentials_path.",
      "inputSchema": {"type": "object", "properties": {
          "repo": {"type": "string"}, "spec": {"type": "object"}, "queue_id": {"type": "string"},
          "owner_session": {"type": "string"},
      }, "required": ["spec"]}},
-    {"name": "rig_workflows", "description": "Parent-only. List workflows with accepted/required counts, running/ASK counts, blocker, and next parent action. No ETA.",
+    {"name": "rig_workflows",
+     "annotations": {
+         "readOnlyHint": True,
+         "destructiveHint": False,
+         "idempotentHint": True,
+         "openWorldHint": False,
+     },
+     "description": "Parent-only. List workflows with accepted/required counts, running/ASK counts, blocker, and next parent action. No ETA.",
      "inputSchema": {"type": "object", "properties": {"repo": {"type": "string"}, "include_terminal": {"type": "boolean"}}}},
-    {"name": "rig_workflow_show", "description": "Parent-only. Show one workflow spec, node state, coordination, and next parent action. Sanitizes owner tokens.",
+    {"name": "rig_workflow_show",
+     "annotations": {
+         "readOnlyHint": True,
+         "destructiveHint": False,
+         "idempotentHint": True,
+         "openWorldHint": False,
+     },
+     "description": "Parent-only. Show one workflow spec, node state, coordination, and next parent action. Sanitizes owner tokens.",
      "inputSchema": {"type": "object", "properties": {**_WORKFLOW_ID}, "required": ["id"]}},
-    {"name": "rig_workflow_advance", "description": "Parent-only. Refresh then launch ready workflow nodes up to capacity. Refuses any repo ASK. Stops on cancel, unresolved failure, or coordination. parent_writes returns one registered parent action and launches no siblings that turn.",
+    {"name": "rig_workflow_advance",
+     "annotations": {
+         "readOnlyHint": False,
+         "destructiveHint": False,
+         "idempotentHint": False,
+         "openWorldHint": True,
+     },
+     "description": "Parent-only. Refresh then launch ready workflow nodes up to capacity. Refuses any repo ASK. Stops on cancel, unresolved failure, or coordination. parent_writes returns one registered parent action and launches no siblings that turn.",
      "inputSchema": {"type": "object", "properties": {**_WORKFLOW_ID, **_WORKFLOW_OWNER}, "required": ["id"]}},
-    {"name": "rig_workflow_wait", "description": "Parent-only. Wait on a workflow. Wakes COORDINATION and ASK. Shows sibling node status. Do not pass timeout unless you must cap the wait.",
+    {"name": "rig_workflow_wait",
+     "annotations": {
+         "readOnlyHint": True,
+         "destructiveHint": False,
+         "idempotentHint": False,
+         "openWorldHint": True,
+     },
+     "description": "Parent-only. Wait on a workflow. Wakes COORDINATION and ASK. Shows sibling node status. Do not pass timeout unless you must cap the wait.",
      "inputSchema": {"type": "object", "properties": {**_WORKFLOW_ID, "timeout": {"type": "number"}}}},
-    {"name": "rig_workflow_extend", "description": "Parent-only. Append-only workflow extension. Cannot alter launched nodes or contracts. No extension after final verify launches.",
+    {"name": "rig_workflow_extend",
+     "annotations": {
+         "readOnlyHint": False,
+         "destructiveHint": False,
+         "idempotentHint": False,
+         "openWorldHint": False,
+     },
+     "description": "Parent-only. Append-only workflow extension. Cannot alter launched nodes or contracts. No extension after final verify launches.",
      "inputSchema": {"type": "object", "properties": {**_WORKFLOW_ID, **_WORKFLOW_OWNER, "nodes": {"type": "array", "items": {"type": "object"}}}, "required": ["id", "nodes"]}},
-    {"name": "rig_workflow_resolve", "description": "Parent-only. Resolve a failed node: identical stopped/released retry, skip with rationale, or final failure. Required nodes cannot be silently waived. Accepted nodes cannot retry.",
+    {"name": "rig_workflow_resolve",
+     "annotations": {
+         "readOnlyHint": False,
+         "destructiveHint": False,
+         "idempotentHint": False,
+         "openWorldHint": True,
+     },
+     "description": "Parent-only. Resolve a failed node: identical stopped/released retry, skip with rationale, or final failure. Required nodes cannot be silently waived. Accepted nodes cannot retry.",
      "inputSchema": {"type": "object", "properties": {**_WORKFLOW_ID, **_WORKFLOW_OWNER, "node_id": {"type": "string"}, "action": {"type": "string", "enum": ["retry", "skip", "fail"]}, "rationale": {"type": "string"}}, "required": ["id", "node_id"]}},
-    {"name": "rig_workflow_approve", "description": "Parent-only. Approve a gated side-effect node. Bound to workflow+node+owner session+current spec hash; invalidated by spec change.",
+    {"name": "rig_workflow_approve",
+     "annotations": {
+         "readOnlyHint": False,
+         "destructiveHint": False,
+         "idempotentHint": True,
+         "openWorldHint": True,
+     },
+     "description": "Parent-only. Approve a gated side-effect node. Bound to workflow+node+owner session+current spec hash; invalidated by spec change.",
      "inputSchema": {"type": "object", "properties": {**_WORKFLOW_ID, **_WORKFLOW_OWNER, "node_id": {"type": "string"}, "rationale": {"type": "string"}}, "required": ["id", "node_id", "rationale"]}},
-    {"name": "rig_workflow_cancel", "description": "Parent-only. Freeze advancement, request cancellation only for active workflow attempts, cancel unstarted nodes. Unrelated jobs and queues stay. Confirmed-stop semantics unchanged.",
+    {"name": "rig_workflow_cancel",
+     "annotations": {
+         "readOnlyHint": False,
+         "destructiveHint": True,
+         "idempotentHint": True,
+         "openWorldHint": True,
+     },
+     "description": "Parent-only. Freeze advancement, request cancellation only for active workflow attempts, cancel unstarted nodes. Unrelated jobs and queues stay. Confirmed-stop semantics unchanged.",
      "inputSchema": {"type": "object", "properties": {**_WORKFLOW_ID, **_WORKFLOW_OWNER, "rationale": {"type": "string"}}, "required": ["id"]}},
-    {"name": "rig_workflow_report", "description": "Parent-only read-only report: observed wall time, node time, max concurrency, outcomes, acceptance. No estimated savings or ranking.",
+    {"name": "rig_workflow_report",
+     "annotations": {
+         "readOnlyHint": True,
+         "destructiveHint": False,
+         "idempotentHint": True,
+         "openWorldHint": False,
+     },
+     "description": "Parent-only read-only report: observed wall time, node time, max concurrency, outcomes, acceptance. No estimated savings or ranking.",
      "inputSchema": {"type": "object", "properties": {**_WORKFLOW_ID}, "required": ["id"]}},
-    {"name": "rig_job_coordination_reply", "description": "Parent-only. Reply to or stop a child coordination request. Coordination never expands files, resources, effects, or frozen contracts.",
+    {"name": "rig_job_coordination_reply",
+     "annotations": {
+         "readOnlyHint": False,
+         "destructiveHint": False,
+         "idempotentHint": False,
+         "openWorldHint": True,
+     },
+     "description": "Parent-only. Reply to or stop a child coordination request. Coordination never expands files, resources, effects, or frozen contracts.",
      "inputSchema": {"type": "object", "properties": {**_WORKFLOW_ID, **_WORKFLOW_OWNER, "request_id": {"type": "string"}, "decision": {"type": "string", "enum": ["reply", "stop"]}, "text": {"type": "string"}}, "required": ["id", "request_id"]}},
-    {"name": "rig_job_coordination_request", "description": "Child only after inbox handshake. Request parent coordination: dependency, contract, or scope. Never expands files, resources, effects, or frozen contracts.",
+    {"name": "rig_job_coordination_request",
+     "annotations": {
+         "readOnlyHint": False,
+         "destructiveHint": False,
+         "idempotentHint": False,
+         "openWorldHint": True,
+     },
+     "description": "Child only after inbox handshake. Request parent coordination: dependency, contract, or scope. Never expands files, resources, effects, or frozen contracts.",
      "inputSchema": {"type": "object", "properties": {"kind": {"type": "string", "enum": ["dependency", "contract", "scope"]}, "text": {"type": "string"}, "payload": {"type": "object"}}, "required": ["kind", "text"]}},
     {"name": "rig_cu_status",
+     "annotations": {
+         "readOnlyHint": True,
+         "destructiveHint": False,
+         "idempotentHint": True,
+         "openWorldHint": False,
+     },
      "description": "Parent-only read-only Cua Driver readiness diagnostics. Always discoverable, even when action tools are hidden. Reports machine opt-in, binary, project flag and recovery steps. Does not enable, install or grant access.",
      "inputSchema": {"type": "object", "properties": {"repo": {"type": "string"}}}},
     {"name": "rig_cu_capture",
+     "annotations": {
+         "readOnlyHint": False,
+         "destructiveHint": False,
+         "idempotentHint": False,
+         "openWorldHint": True,
+     },
      "description": "Parent-only computer-use capture. Cua Driver get_window_state or named Chrome profile bind. Returns a concise summary, rig.cu.v1 receipt, and image content when the PNG is readable. Hidden unless computer-use is effective. Children never receive this tool.",
      "inputSchema": {"type": "object", "properties": {
          "repo": {"type": "string"}, "pid": {"type": "integer"}, "window_id": {"type": "integer"},
@@ -887,6 +1250,12 @@ TOOLS.extend([
          "profile_key": {"type": "string"}, "url": {"type": "string"},
      }}},
     {"name": "rig_cu_act",
+     "annotations": {
+         "readOnlyHint": False,
+         "destructiveHint": False,
+         "idempotentHint": False,
+         "openWorldHint": True,
+     },
      "description": "Parent-only computer-use act. One action on a fresh snapshot: element_token or browser ref from rig_cu_capture, or x,y after degraded/escalate_px. Consumes the snapshot until confirm. Returns receipt plus image when available. Children never receive this tool.",
      "inputSchema": {"type": "object", "properties": {
          "repo": {"type": "string"}, "snapshot_id": {"type": "string"},
@@ -896,11 +1265,23 @@ TOOLS.extend([
          "x": {"type": "number"}, "y": {"type": "number"},
      }, "required": ["snapshot_id"]}},
     {"name": "rig_cu_confirm",
+     "annotations": {
+         "readOnlyHint": False,
+         "destructiveHint": False,
+         "idempotentHint": False,
+         "openWorldHint": True,
+     },
      "description": "Parent-only computer-use recapture/confirm. Allowed only after a successful act. Yields a fresh successor snapshot. Confirm is the only confirmed outcome. Returns receipt plus image when available. Children never receive this tool.",
      "inputSchema": {"type": "object", "properties": {
          "repo": {"type": "string"}, "snapshot_id": {"type": "string"},
      }, "required": ["snapshot_id"]}},
     {"name": "rig_cu_record",
+     "annotations": {
+         "readOnlyHint": False,
+         "destructiveHint": False,
+         "idempotentHint": False,
+         "openWorldHint": True,
+     },
      "description": "Parent-only computer-use recording. Start/stop Cua Driver session video (recording.mp4) under .rig/cu-evidence. Structured/text only unless an image is actually returned. Do not shell cua-driver. Hidden unless computer-use is effective. Children never receive this tool.",
      "inputSchema": {"type": "object", "properties": {
          "repo": {"type": "string"},
