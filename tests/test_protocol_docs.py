@@ -356,6 +356,56 @@ class ProtocolDocumentation(unittest.TestCase):
                 self.assertIn("Hermes", source)
                 self.assertIn("computer_use", source)
 
+    def test_browser_skill_parent_protocol(self):
+        sources = {
+            "AGENTS.md": (ROOT / "AGENTS.md").read_text(),
+            "generated parent protocol": (ROOT / "bin" / "rig").read_text().split(
+                "<!-- rig:start -->", 1)[1].split("<!-- rig:end -->", 1)[0],
+            "skills/delegate-harness/SKILL.md": (ROOT / "skills" / "delegate-harness" / "SKILL.md").read_text(),
+            "docs/usage.md": (ROOT / "docs" / "usage.md").read_text(),
+            "docs/rig-flow.md": (ROOT / "docs" / "rig-flow.md").read_text(),
+            "README.md": (ROOT / "README.md").read_text(),
+        }
+        phrases = (
+            "[browser-skill] enabled",
+            "rig_bsk_status",
+            "rig_bsk_observe",
+            "Never run `bsk install-skill`",
+            "Children never receive `bsk` or `rig_bsk_*`",
+        )
+        for name, source in sources.items():
+            for phrase in phrases:
+                with self.subTest(source=name, phrase=phrase):
+                    self.assertIn(phrase, source)
+
+    def test_browser_skill_real_cli_surface(self):
+        sources = {
+            "AGENTS.md": (ROOT / "AGENTS.md").read_text(),
+            "generated parent protocol": (ROOT / "bin" / "rig").read_text().split(
+                "<!-- rig:start -->", 1)[1].split("<!-- rig:end -->", 1)[0],
+            "docs/usage.md": (ROOT / "docs" / "usage.md").read_text(),
+            "docs/rig-flow.md": (ROOT / "docs" / "rig-flow.md").read_text(),
+            "README.md": (ROOT / "README.md").read_text(),
+            "skills/computer-use/SKILL.md": (ROOT / "skills" / "computer-use" / "SKILL.md").read_text(),
+            "logged-in-browser.md": (
+                ROOT / "skills" / "computer-use" / "references" / "logged-in-browser.md"
+            ).read_text(),
+        }
+        phrases = (
+            "session start --json",
+            "status.browsers",
+            "session_id",
+        )
+        for name, source in sources.items():
+            for phrase in phrases:
+                with self.subTest(source=name, phrase=phrase):
+                    self.assertIn(phrase, source)
+        self.assertIn("installer missing", (ROOT / "bin" / "rig").read_text())
+        self.assertNotIn(
+            "browser-skill setup: Python 3 unavailable; skip. Enable later: rig browser-skill setup",
+            (ROOT / "bin" / "rig").read_text(),
+        )
+
     def test_computer_use_figma_to_code_fidelity_loop(self):
         skill = (ROOT / "skills" / "computer-use" / "SKILL.md").read_text()
         howto = (ROOT / "skills" / "computer-use" / "references" / "figma-to-code.md").read_text()

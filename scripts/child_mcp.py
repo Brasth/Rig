@@ -50,6 +50,7 @@ CHILD_COORDINATION_TOOL = "rig_job_coordination_request"
 ALLOWED_JOB_MCP_SERVERS = frozenset({"rig", "rig-ask"})
 FORBIDDEN_MCP_SERVERS = frozenset({
     "cua-driver", "chrome-devtools", "chrome_devtools", "playwright", "figma",
+    "bsk", "browser-skill",
 })
 
 
