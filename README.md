@@ -6,7 +6,7 @@ Stop babysitting coding agents.
 
 Rig is a CLI harness. You talk to a parent agent; it scopes work, briefs workers over MCP, then verifies results. Done means accepted checks, not exit 0 vibes.
 
-**New: Adaptive workflows** (default). The parent can decompose eligible work into a DAG of disjoint workers, own the graph, briefs, and acceptance, and only mark verified after parent checks. Children never spawn children. See [Adaptive workflows](#adaptive-workflows) and [How an adaptive workflow moves](#how-an-adaptive-workflow-moves).
+**New: Adaptive workflows** (default). The parent can decompose eligible work into a DAG of disjoint workers, own the graph, briefs, and acceptance, and only mark verified after parent checks. Children never spawn children. See [Adaptive workflows](docs/usage.md#adaptive-workflows).
 
 [![Watch the Rig demo](https://img.youtube.com/vi/KuhHMH--oGk/maxresdefault.jpg)](https://youtu.be/KuhHMH--oGk)
 
@@ -32,11 +32,11 @@ Configure the preferred parent and workers in `.rig/harness.toml` (preferred). T
 
 ## Navigation
 
-- [Overall flow](#overall-flow)
-- [Install](#install) · [Per project](#per-project) · [Configure](#configure) · [FAQ](#faq)
-- [Smart routing](#smart-routing)
-- [Adaptive workflows](#adaptive-workflows) · [How an adaptive workflow moves](#how-an-adaptive-workflow-moves)
-- [Everyday prompts and queue](#everyday-prompts-and-queue)
-- [Optional terminal companion](#optional-terminal-companion) · [Watch](#watch)
-- [Verification and cancellation](#verification-and-cancellation)
-- [Troubleshooting](#troubleshooting) · [Docs](#docs)
+- [Overall flow](docs/rig-flow.md)
+- [Install](docs/usage.md#install) · [Per project](docs/usage.md#per-project-setup) · [Configure](docs/usage.md#configure-agents)
+- [Smart routing](docs/smart-routing.md)
+- [Adaptive workflows](docs/usage.md#adaptive-workflows)
+- [Everyday prompts](docs/usage.md#how-your-prompt-is-handled) · [Queue](docs/usage.md#how-the-queue-works)
+- [Terminal companion](docs/usage.md#optional-terminal-companion) · [Watch](docs/usage.md#watch-jobs-memory)
+- [Verification](docs/usage.md#protected-writes-and-parent-acceptance) · [Cancellation](docs/rig-flow.md#closing-cancelling-and-stopping)
+- [Troubleshooting](docs/usage.md#troubleshooting) · [Docs](docs/usage.md)
