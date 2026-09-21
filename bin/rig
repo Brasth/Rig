@@ -18,13 +18,14 @@ usage() {
   cat <<'EOF'
 usage: rig <command> [args]
 
-  setup [--shell-ui] [--shell bash|zsh] [--rc-file PATH] [--cua-driver|--no-cua-driver]
+  setup [--shell-ui] [--shell bash|zsh] [--rc-file PATH] [--cua-driver|--no-cua-driver] [--browser-skill|--no-browser-skill]
   ui [open|status|enable|disable|stop]
   uninstall [--dry-run] [--repo PATH]
   update
   init [--patch-agents|--no-patch-agents] [--patch-claude]
   doctor
   computer-use [status|setup|on|off|doctor]
+  browser-skill [status|setup|on|off|doctor]
   status
   use codex|grok|opencode|omp|pi|agy
   workers grok=on|off claude=on|off codex=on|off cursor=on|off opencode=on|off omp=on|off pi=on|off agy=on|off devin=on|off
@@ -262,12 +263,13 @@ maybe_copy_queue_adapter() {
 }
 
 cmd_setup() {
-  local shell_ui=0 shell_args=() cua_flags=()
+  local shell_ui=0 shell_args=() cua_flags=() bsk_flags=()
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --shell-ui) shell_ui=1; shift ;;
       --shell|--rc-file) [[ $# -ge 2 ]] || return 2; shell_args+=("$1" "$2"); shift 2 ;;
       --cua-driver|--no-cua-driver) cua_flags+=("$1"); shift ;;
+      --browser-skill|--no-browser-skill) bsk_flags+=("$1"); shift ;;
       *) echo "rig setup: unknown flag $1" >&2; return 2 ;;
     esac
   done
@@ -384,6 +386,15 @@ PY
     cua_py="$(py_script install-cua-driver.py)"
     if [[ -f "$cua_py" ]]; then
       python3 "$cua_py" "${cua_flags[@]}" || true
+    fi
+  fi
+  if [[ ${#bsk_flags[@]} -gt 0 ]]; then
+    local bsk_py
+    bsk_py="$(py_script install-browser-skill.py)"
+    if [[ -f "$bsk_py" ]]; then
+      python3 "$bsk_py" "${bsk_flags[@]}" || true
+    else
+      echo "browser-skill setup: installer missing; skip. Enable later: rig browser-skill setup"
     fi
   fi
 
@@ -526,6 +537,10 @@ cmd_init() {
       rig_set_toml_key "$harness" "computer-use" "enabled" "false"
       echo "appended [computer-use] enabled = false"
     fi
+    if [[ -f "$harness" ]] && ! rig_has_section_key "$harness" "browser-skill" "enabled"; then
+      rig_set_toml_key "$harness" "browser-skill" "enabled" "false"
+      echo "appended [browser-skill] enabled = false"
+    fi
   else
     echo "rig init: no python3; left template worker flags. later: rig workers NAME=on"
   fi
@@ -588,8 +603,9 @@ Parent checks first (read the code, name the update).
 Spawn explore/mini for codebase gather only if the parent cannot name the files after a short check.
 If the implement brief already lists files, do not also spawn explore.
 Brief lists files, the change, and absolute skill file paths the child must follow. Child does not hunt extra updates.
-Do not tell the child to use computer-use, chrome-profile, or Figma MCP. Put artifacts in the brief.
+Do not tell the child to use computer-use, chrome-profile, Figma MCP, BrowserSkill, or bsk. Put artifacts in the brief.
 Parent may call Cua Driver only when this repo `[computer-use] enabled=true` and `cua-driver` is on PATH, via Rig MCP `rig_cu_capture` / `rig_cu_act` / `rig_cu_confirm` / `rig_cu_record` (capture → act on a fresh element_token → recapture). AX token first; px only after `degraded` / `escalate_px` on that snapshot. Named Chrome profile: parent `chrome-profile` open, then Driver existing-profile bind. Isolated profile is not the Figma path. Existing-profile grant is human (`cua-driver serve --grant existing-profile`); Rig never silent-grants. Otherwise chrome-devtools. Never Figma MCP or Playwright as computer-use fallback. Figma MCP remains parent file/node. Never the Hermes `computer_use` skill. Children never receive cua-driver or chrome-devtools MCP. Children never receive chrome-profile or `rig_cu_*`.
+Parent may call BrowserSkill only when this repo `[browser-skill] enabled=true`, machine `~/.rig/browser-skill.json` opt_in=true, `bsk` on PATH, and the extension is connected, via Rig MCP `rig_bsk_status` / `rig_bsk_session` / `rig_bsk_observe` / `rig_bsk_act` / `rig_bsk_confirm` (`bsk session start --json`, optional `--no-focus`; retain `session_id`; `--session` on every scoped command; `session stop` with positional ID; observe → one click/fill/press on a fresh `@eN` ref → confirm; `rig_bsk_navigate` plus explicit tab list/borrow/return). nonempty `status.browsers` is connected. Never run `bsk install-skill`. Install is a Cua-style ask (default No). Website + real cookies → BSK. Native / canvas px → Driver. Neither effective → chrome-devtools. One backend per turn. Children never receive `bsk` or `rig_bsk_*`.
 Spawn for: write of the listed files when pick is run-worker, review, SSH/debug. Not "find the bug" on an implement spawn.
 Parent chooses kind from this user request and this user skills. Then MCP `rig_pick` with `role` stay|explore|mini|bulk|implement|hard|review|verify. `--case` is the task text, not a slash-command catalog.
 Do not encode local slash command names in pick.
@@ -901,6 +917,12 @@ cmd_doctor() {
   if [[ -f "$cu_py" ]]; then
     echo
     python3 "$cu_py" doctor --repo "$root" || true
+  fi
+  local bsk_py
+  bsk_py="$(py_script browser_skill.py)"
+  if [[ -f "$bsk_py" ]]; then
+    echo
+    python3 "$bsk_py" doctor --repo "$root" || true
   fi
   echo
   echo "Watch"
@@ -1459,6 +1481,25 @@ main() {
         ensure_harness
       fi
       python3 "$(py_script computer_use.py)" "$cu_sub" --repo "$(repo_root)"
+      ;;
+    browser-skill|browser_skill)
+      local bsk_sub="${1:-status}"
+      shift || true
+      case "$bsk_sub" in
+        status|setup|on|off|doctor) ;;
+        -h|--help|help)
+          echo "usage: rig browser-skill [status|setup|on|off|doctor]" >&2
+          exit 2
+          ;;
+        *)
+          echo "usage: rig browser-skill [status|setup|on|off|doctor]" >&2
+          exit 2
+          ;;
+      esac
+      if [[ "$bsk_sub" == "on" || "$bsk_sub" == "off" ]]; then
+        ensure_harness
+      fi
+      python3 "$(py_script browser_skill.py)" "$bsk_sub" --repo "$(repo_root)"
       ;;
     prune) cmd_prune "$@" ;;
     run) cmd_run "$@" ;;

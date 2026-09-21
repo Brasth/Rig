@@ -44,6 +44,7 @@ What that does:
 - `install.sh` clones `https://github.com/Brasth/Rig.git` over HTTPS into a **temp** dir (needs `git`; if HTTPS clone fails and `gh` is logged in, it tries `gh repo clone`).
 - Attempts to install or upgrade tmux to **3.3+** using existing Homebrew (macOS), apt-get, or dnf (Linux); skips compatible tmux.
 - **Asks** whether to install Cua Driver for parent computer-use (default **No**). Piped `curl | bash` has no TTY and skips unless `RIG_INSTALL_CUA_DRIVER=1`. Decline is remembered in `~/.rig/cua-driver.json`. Missing Driver does not fail Rig. Skip this run with `RIG_SKIP_CUA_DRIVER=1`. After a yes, run `rig computer-use setup` in a repo to wire parent MCP.
+- **Asks** whether to install BrowserSkill for parent logged-in browser (default **No**). Piped `curl | bash` has no TTY and skips unless `RIG_INSTALL_BROWSER_SKILL=1`. Decline is remembered in `~/.rig/browser-skill.json`. Missing BrowserSkill does not fail Rig. Skip this run with `RIG_SKIP_BROWSER_SKILL=1`. After a yes, the human installs the Chrome/Edge extension. Never run `bsk install-skill`. `rig browser-skill setup` reprints the store URLs and does not enable the repo flag.
 - Copies bin, scripts, skills, adapters, and templates into `~/.rig`.
 - Symlinks `~/.local/bin/rig` → `~/.rig/bin/rig`.
 - Runs `rig setup`.
@@ -67,7 +68,7 @@ Tmux package operations are noninteractive and time out after five minutes per o
 - `mcpServers.rig` in `~/.omp/mcp.json`, `~/.pi/agent/mcp.json`, and `~/.gemini/config/mcp_config.json`
 - Codex sandbox writable roots so Grok/Claude/Cursor/OpenCode/OMP/Pi/agy children can write sessions (`[sandbox_workspace_write]`)
 
-Setup does **not** write project `mcp.json` / `opencode.json`. Setup does **not** add `pi-mcp-adapter` to Pi `settings.json`. `rig setup --cua-driver` / `--no-cua-driver` forwards to the Cua Driver installer. `rig computer-use setup` is the complete machine path (binary + parent MCP on an isolating parent CLI + Cua skill pack). It does **not** write `cua-driver` into a CLI that cannot isolate children (Grok print-mode, OpenCode, Pi); those parents use `cua-driver call`. It never writes Driver into worker CLI configs.
+Setup does **not** write project `mcp.json` / `opencode.json`. Setup does **not** add `pi-mcp-adapter` to Pi `settings.json`. `rig setup --cua-driver` / `--no-cua-driver` forwards to the Cua Driver installer. `rig setup --browser-skill` / `--no-browser-skill` forwards to the BrowserSkill installer. `rig computer-use setup` is the complete machine path (binary + parent MCP on an isolating parent CLI + Cua skill pack). It does **not** write `cua-driver` into a CLI that cannot isolate children (Grok print-mode, OpenCode, Pi); those parents use `cua-driver call`. It never writes Driver into worker CLI configs. `rig browser-skill setup` installs/upgrades `bsk` and reprints extension URLs. It does **not** flip `[browser-skill] enabled` and never runs `bsk install-skill`.
 
 ## Computer-use (parent)
 
@@ -90,6 +91,24 @@ rig computer-use doctor       # also folded into rig doctor
 ```
 
 `rig init` writes `enabled = false`. Two repos on one machine can disagree. `on` with no binary writes the flag and warns; the parent still uses chrome-devtools until setup succeeds.
+
+## Browser-skill (parent)
+
+BrowserSkill is parent-only logged-in Chromium. Never a Rig worker. Never `[workers].bsk`. Children never receive `bsk` or `rig_bsk_*`. Never run `bsk install-skill`.
+
+Effective on = machine `~/.rig/browser-skill.json` `opt_in=true` **and** `bsk` on PATH **and** this repo `[browser-skill] enabled=true` **and** the extension connected (nonempty `status.browsers`). Missing any gate hides action tools (`rig_bsk_session` / `rig_bsk_observe` / `rig_bsk_act` / `rig_bsk_confirm` / `rig_bsk_navigate` / `rig_bsk_tab`). `rig_bsk_status` stays listed for the parent. Fallback is **chrome-devtools**. Website + real cookies → BSK. Native / canvas px → Driver. One backend per turn.
+
+When effective: `rig_bsk_session` start (`bsk session start --json`, optional `--no-focus`; retain `session_id`) → `rig_bsk_navigate` or explicit tab list/borrow/return → `rig_bsk_observe` → one `rig_bsk_act` (`click`/`fill`/`press` on a fresh `@eN` ref) → `rig_bsk_confirm`. Every scoped command gets `--session ID`; `session stop` uses the positional ID. Confirm is the only `confirmed` outcome. Receipt `rig.bsk.v1` plus `brief_block` under `.rig/bsk-evidence`. Child must not click. The human installs the Chrome/Edge extension and leaves Confirm before borrowing tabs ON. Rig never silent-grants, sideloads, or opens the store.
+
+```bash
+rig browser-skill              # machine + this-repo + extension + effective
+rig browser-skill setup        # install/upgrade bsk CLI; reprints store URLs; does not enable the repo flag
+rig browser-skill on           # this repo [browser-skill] enabled=true
+rig browser-skill off          # this repo enabled=false; does not uninstall the binary
+rig browser-skill doctor       # also folded into rig doctor
+```
+
+`rig init` backfills `[browser-skill] enabled = false`. `on` with no binary writes the flag and warns.
 
 Success print:
 
@@ -239,7 +258,7 @@ rig doctor
 | `.gitignore` | Idempotently applies every nonempty line from `templates/gitignore-fragment` (creates the file if missing; preserves unrelated content). Current entries: `.rig/jobs/`, `.rig/thread`, `.rig/queue/`, `.rig/workflows/`, `.rig/workflows/*/owner-credentials.json`. |
 | `.rig/workflows/<id>/` | Workflow `spec.json`, `state.json`, `events/`, and `owner-credentials.json` (mode 0600). Gitignored. |
 
-**New harness only:** Grok / Claude / Cursor / OpenCode / OMP / Pi / agy / Devin are turned **on** if that CLI is on PATH. Codex stays **off** (preferred parent). **Existing harness flags are never flipped.** Missing worker keys are appended as `false` → enable later with `rig workers <name>=on`. Missing `[queue] max_running` is appended as `3`; an existing value is kept. Missing `[computer-use] enabled` is appended as `false` → enable per repo with `rig computer-use on`.
+**New harness only:** Grok / Claude / Cursor / OpenCode / OMP / Pi / agy / Devin are turned **on** if that CLI is on PATH. Codex stays **off** (preferred parent). **Existing harness flags are never flipped.** Missing worker keys are appended as `false` → enable later with `rig workers <name>=on`. Missing `[queue] max_running` is appended as `3`; an existing value is kept. Missing `[computer-use] enabled` is appended as `false` → enable per repo with `rig computer-use on`. Missing `[browser-skill] enabled` is appended as `false` → enable per repo with `rig browser-skill on`.
 
 Open a **new** parent thread after init. An old Grok/Codex/OpenCode/OMP/Pi/agy session will not pick up `AGENTS.md` or skills.
 
@@ -593,7 +612,7 @@ agy 1.2.0 has no `UserPromptSubmit`. `/queue` on a free turn can still park via 
 
 1. Open Codex, Grok, OpenCode, OMP, Pi, or agy in an initialized repo; use a new thread after setup/init. Type the normal request, not `rig run`.
 2. Parent chooses semantic `role` and calls `rig_session(role=..., compact=true, terminal_limit=10, case=...)`. Questions/plans stay local, including non-English requests with an explicit role. The omitted-role fallback is bounded English inference. Compact keeps all active/ASK/reserved jobs and ten recent terminal rows; full mode remains the public default.
-3. Parent checks the relevant files, names scope and acceptance, and follows the returned worker/model/effort. Gather only if the parent cannot name files after a short check. Vision, Figma, computer-use, and chrome-profile stay with the parent; put their artifacts and required skill file paths in the brief. Parent may call Cua Driver only when `[computer-use] enabled=true` and `cua-driver` is on PATH, via Rig MCP `rig_cu_capture` / `rig_cu_act` / `rig_cu_confirm` / `rig_cu_record` (capture → one act on a fresh 30s element_token → mandatory confirm; inspect the `rig.cu.v1` receipt and image). AX token first; px only after `degraded` / `escalate_px` on that snapshot. Named Chrome profile: parent `chrome-profile` open, then Driver existing-profile bind. Isolated profile is not the Figma path. Existing-profile grant is human (`cua-driver serve --grant existing-profile`); Rig never silent-grants. Otherwise chrome-devtools. Never Figma MCP or Playwright as computer-use fallback. Figma MCP remains parent file/node. Never the Hermes `computer_use` skill. Children never receive cua-driver or chrome-devtools MCP. Children never receive chrome-profile or `rig_cu_*`.
+3. Parent checks the relevant files, names scope and acceptance, and follows the returned worker/model/effort. Gather only if the parent cannot name files after a short check. Vision, Figma, computer-use, and chrome-profile stay with the parent; put their artifacts and required skill file paths in the brief. Parent may call Cua Driver only when `[computer-use] enabled=true` and `cua-driver` is on PATH, via Rig MCP `rig_cu_capture` / `rig_cu_act` / `rig_cu_confirm` / `rig_cu_record` (capture → one act on a fresh 30s element_token → mandatory confirm; inspect the `rig.cu.v1` receipt and image). AX token first; px only after `degraded` / `escalate_px` on that snapshot. Named Chrome profile: parent `chrome-profile` open, then Driver existing-profile bind. Isolated profile is not the Figma path. Existing-profile grant is human (`cua-driver serve --grant existing-profile`); Rig never silent-grants. Otherwise chrome-devtools. Never Figma MCP or Playwright as computer-use fallback. Figma MCP remains parent file/node. Never the Hermes `computer_use` skill. Children never receive cua-driver or chrome-devtools MCP. Children never receive chrome-profile or `rig_cu_*`. Parent may call BrowserSkill only when `[browser-skill] enabled=true`, machine opt-in, `bsk` on PATH, and the extension is connected, via Rig MCP `rig_bsk_status` / `rig_bsk_session` / `rig_bsk_observe` / `rig_bsk_act` / `rig_bsk_confirm` (`bsk session start --json`, optional `--no-focus`; retain `session_id`; `--session` on every scoped command; `session stop` with positional ID; observe → one click/fill/press on a fresh `@eN` ref → confirm; `rig_bsk_navigate` plus explicit tab list/borrow/return). nonempty `status.browsers` is connected. Never run `bsk install-skill`. Website + real cookies → BSK. Native / canvas px → Driver. One backend per turn. Children never receive `bsk` or `rig_bsk_*`.
 4. Register every native/parent write before edits. Wrapper dispatch reserves before execution; queued launches consume their exact claim credentials. A job ID does not authorize reuse. Read-only retrospective history may use `rig_job_record`; writes cannot gain protection afterwards.
 5. Wait once on observable wrapper IDs, without timeout. ASK: allow/deny that job, then wait the same IDs again. Native agents use the owning host's wait/interrupt and authenticated completion. A dropped wait permits one `rig job wait ID --timeout 0` snapshot, followed by inspection/reconciliation. Explicit cancellation records intent for attached attempts; never re-wait, re-pick, or drain automatically. Never replace a worker because it asks permission.
 6. After confirmed task termination, inspect scoped evidence, declare requirements, run deliberate checks/manual review, and accept or reject the current content. Report actual changed behavior, validation, and limitations. Execution `ok` alone is completed-unverified.

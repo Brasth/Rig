@@ -179,9 +179,15 @@ class ChildMcpIsolation(unittest.TestCase):
         names = child_mcp.payload_server_names(payload)
         self.assertEqual(set(names), {"rig", "rig-ask"})
         blob = json.dumps(payload)
-        for banned in ("cua-driver", "chrome-devtools", "figma", "playwright"):
+        for banned in ("cua-driver", "chrome-devtools", "figma", "playwright", "bsk", "browser-skill"):
             self.assertNotIn(banned, names)
             self.assertNotIn(banned, blob)
+
+    def test_child_tool_surface_excludes_bsk(self):
+        self.assertFalse(any(name.startswith("rig_bsk_") for name in rig_mcp.CHILD_TOOL_NAMES))
+        self.assertNotIn("rig_bsk_navigate", rig_mcp.CHILD_TOOL_NAMES)
+        self.assertNotIn("rig_bsk_tab", rig_mcp.CHILD_TOOL_NAMES)
+        self.assertNotIn("bsk", rig_mcp.CHILD_TOOL_NAMES)
 
     def test_write_job_mcp_claude_is_strict(self):
         spec = child_mcp.write_job_mcp(self.job_dir, self.job_id, self.repo, "claude")
@@ -199,6 +205,8 @@ class ChildMcpIsolation(unittest.TestCase):
         self.assertIn("mcp_servers.rig.command=", joined)
         self.assertNotIn("cua-driver", joined)
         self.assertNotIn("chrome-devtools", joined)
+        self.assertNotIn("bsk", joined)
+        self.assertNotIn("browser-skill", joined)
         self.assertEqual(spec["isolation"], "ignore-user-config")
 
     def test_write_job_mcp_grok_does_not_pretend(self):

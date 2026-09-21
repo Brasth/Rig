@@ -4,8 +4,9 @@ description: >
   Parent-only desktop eyes and hands. Use Cua Driver when this repo has
   [computer-use] enabled=true and cua-driver is present; otherwise chrome-devtools.
   Recreating a Figma/canvas/screenshot as UI, driving a desktop app, logged-in
-  Chrome, or real GUI tests: download every image into the codebase folder when
-  matching a design; otherwise capture → act → confirm with evidence. Stay.
+  Chromium via parent-only BrowserSkill (`rig_bsk_*`), or real GUI tests:
+  download every image into the codebase folder when matching a design;
+  otherwise capture → act → confirm with evidence. Stay.
   Never spawn a clicker.
   Never a Rig worker.
 user-invocable: true
@@ -13,11 +14,13 @@ user-invocable: true
 
 # Computer-use (parent only)
 
-Stay. Do not spawn a clicker. Do not call `computer_use(...)`. Children never click.
+Stay. Do not spawn a clicker. Do not call `computer_use(...)`. Children never click. Children never receive `bsk` or `rig_bsk_*`. Never run `bsk install-skill`.
 
 ## When Driver is effective
 
 First call parent-only `rig_cu_status` when action tools are absent or recently failed. It reports machine opt-in, binary availability, and the repository flag without changing them. Resolve the reported blocker with `rig computer-use setup` / `rig computer-use on`, then restart parent/MCP discovery if the client cached the tool list. If status itself is absent, the running Rig MCP is outdated: update it after safely completing active jobs and restart the parent. Do not bypass a failed or missing Rig tool with raw Driver shell/MCP, native CU, or another browser tool. Report the blocker; use the documented chrome-devtools fallback only when Driver is not effective.
+
+Logged-in Chromium (real cookies) uses parent-only BrowserSkill when this repo `[browser-skill] enabled=true`, machine `~/.rig/browser-skill.json` opt_in=true, `bsk` on PATH, and the extension is connected: `rig_bsk_status` (always listed) then `rig_bsk_session` (`bsk session start --json`, optional `--no-focus`; retain `session_id`) → `rig_bsk_navigate` or explicit tab list/borrow/return → `rig_bsk_observe` → one `rig_bsk_act` (`click`/`fill`/`press` on a fresh `@eN` ref) → `rig_bsk_confirm`. `--session` on every scoped command; `session stop` with positional ID. nonempty `status.browsers` is connected. Never run `bsk install-skill`. Children never receive `bsk` or `rig_bsk_*`. Native / canvas px stays Cua Driver. One backend per turn.
 
 This repo `[computer-use] enabled=true` **and** `cua-driver` is on PATH. Every legal parent (Grok, Codex, OpenCode, OMP, Pi, agy) uses the **same** Rig MCP tools — not raw cua-driver MCP, not `computer_use(...)`. Do not shell cua-driver for capture, act, confirm, or recording:
 
@@ -39,7 +42,7 @@ Pick the HOW. Do not default to Figma-to-HTML.
 | Job | Read |
 | --- | --- |
 | Native desktop app | `references/desktop-drive.md` |
-| Logged-in Chrome (real profile) | `references/logged-in-browser.md` |
+| Logged-in Chromium (real cookies; prefer BSK) | `references/logged-in-browser.md` |
 | Real GUI test (click UI, pass/fail, record video) | `skills/computer-test/SKILL.md` |
 | Match a Figma/canvas/screenshot as UI | section below |
 
@@ -82,4 +85,5 @@ Never Figma MCP or Playwright as the computer-use fallback. Never the Hermes `co
 - Wiring Driver into child MCP
 - `--remote-debugging-port` on a personal Chrome profile, editing `Preferences` / `Local State`, copying the profile
 - Shelling `cua-driver` for capture, act, confirm, or recording (use Rig MCP)
-- Passing cua-driver, chrome-devtools, chrome-profile, or `rig_cu_*` to children
+- Passing cua-driver, chrome-devtools, chrome-profile, `rig_cu_*`, `bsk`, or `rig_bsk_*` to children
+- `bsk install-skill`

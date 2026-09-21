@@ -35,3 +35,8 @@ max_running = 3
 # Effective on = ~/.rig/cua-driver.json opt_in + cua-driver on PATH + enabled=true.
 [computer-use]
 enabled = false
+
+# Parent-only BrowserSkill. Machine opt-in is not this flag.
+# Effective on = ~/.rig/browser-skill.json opt_in + bsk on PATH + extension connected + enabled=true.
+[browser-skill]
+enabled = false

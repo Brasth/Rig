@@ -97,6 +97,8 @@ class ClaudeWorkerArgv(unittest.TestCase):
         self.assertEqual(set(servers), {"rig", "rig-ask"})
         self.assertNotIn("cua-driver", servers)
         self.assertNotIn("chrome-devtools", servers)
+        self.assertNotIn("bsk", servers)
+        self.assertNotIn("browser-skill", servers)
         self.assertIn("rig-ask", servers)
         ask = servers["rig-ask"]
         self.assertIn("python3", ask["command"])
@@ -145,7 +147,7 @@ class ClaudeWorkerArgv(unittest.TestCase):
         self.assertIn("do not spawn another worker", src)
         self.assertIn("IN_ASK", src)
         detect = (ROOT / "scripts" / "detect-binaries.sh").read_text()
-        self.assertIn("Do not use computer-use, chrome-profile, or Figma MCP", detect)
+        self.assertIn("Do not use computer-use, chrome-profile, Figma MCP, BrowserSkill, or bsk", detect)
         self.assertIn("Follow skill file paths listed in the brief", detect)
         self.assertIn("First Rig operation must be rig_job_inbox", detect)
         self.assertIn("strict child MCP handshake", detect)
@@ -295,6 +297,7 @@ class GrokJobMcpIsolation(unittest.TestCase):
         self.assertTrue(mcp.is_file(), out)
         cfg = json.loads(mcp.read_text())
         self.assertEqual(set(cfg.get("mcpServers") or {}), {"rig", "rig-ask"})
+        self.assertNotIn("bsk", json.dumps(cfg))
 
 
 class OpenCodeOmpPiWorkerArgv(unittest.TestCase):
@@ -383,7 +386,9 @@ class OpenCodeOmpPiWorkerArgv(unittest.TestCase):
         self.assertTrue(mcp.is_file(), out)
         cfg = json.loads(mcp.read_text())
         self.assertEqual(set(cfg.get("mcpServers") or {}), {"rig", "rig-ask"})
-        self.assertNotIn("cua-driver", json.dumps(cfg))
+        payload = json.dumps(cfg)
+        self.assertNotIn("cua-driver", payload)
+        self.assertNotIn("bsk", payload)
 
     def test_pi_dry_run_print_json_approve(self):
         proc = run_worker(self.repo, "pi", "print-stream", str(self.brief), env=self._env())

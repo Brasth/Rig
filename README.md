@@ -33,10 +33,26 @@ Configure the preferred parent and workers in `.rig/harness.toml` (preferred). T
 ## Navigation
 
 - [Overall flow](docs/rig-flow.md)
-- [Install](docs/usage.md#install) · [Per project](docs/usage.md#per-project-setup) · [Configure](docs/usage.md#configure-agents)
+- [Install](docs/usage.md#install) · [Per project](docs/usage.md#per-project-setup) · [Configure](docs/usage.md#configure-agents) · [BrowserSkill](#browserskill)
 - [Smart routing](docs/smart-routing.md)
 - [Adaptive workflows](docs/usage.md#adaptive-workflows)
 - [Everyday prompts](docs/usage.md#how-your-prompt-is-handled) · [Queue](docs/usage.md#how-the-queue-works)
 - [Terminal companion](docs/usage.md#optional-terminal-companion) · [Watch](docs/usage.md#watch-jobs-memory)
 - [Verification](docs/usage.md#protected-writes-and-parent-acceptance) · [Cancellation](docs/rig-flow.md#closing-cancelling-and-stopping)
 - [Troubleshooting](docs/usage.md#troubleshooting) · [Docs](docs/usage.md)
+
+## BrowserSkill
+
+Install and `rig update` **ask** to install BrowserSkill for parent logged-in browser (default **No**). Piped install with no TTY skips unless `RIG_INSTALL_BROWSER_SKILL=1`. Decline is remembered. Missing BrowserSkill does not fail Rig. Skip this run with `RIG_SKIP_BROWSER_SKILL=1`. The human installs the Chrome/Edge extension. Never run `bsk install-skill`. Children never receive `bsk` or `rig_bsk_*`.
+
+Parent-only BrowserSkill uses Rig MCP `rig_bsk_status` / `rig_bsk_session` / `rig_bsk_observe` / `rig_bsk_act` / `rig_bsk_confirm` (`bsk session start --json`, optional `--no-focus`; retain `session_id`; `--session` on every scoped command; `session stop` with positional ID; observe → one click/fill/press; `rig_bsk_navigate` plus explicit tab list/borrow/return) when `[browser-skill] enabled=true`, machine opt-in, `bsk` on PATH, and the extension is connected. nonempty `status.browsers` is connected. Website + real cookies → BSK. Native / canvas px → Driver. Neither effective → chrome-devtools. One backend per turn.
+
+```bash
+rig browser-skill              # machine + this-repo + extension + effective
+rig browser-skill setup        # install/upgrade bsk CLI; reprints store URLs; does not enable the repo flag
+rig browser-skill on           # this repo [browser-skill] enabled=true
+rig browser-skill off          # this repo enabled=false; does not uninstall the binary
+rig browser-skill doctor       # also folded into rig doctor
+```
+
+`rig setup --browser-skill` / `--no-browser-skill` forwards to the BrowserSkill installer. `rig init` backfills `[browser-skill] enabled = false`. Details: [Usage — install](docs/usage.md#install).

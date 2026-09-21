@@ -899,6 +899,9 @@ class InitPresence(unittest.TestCase):
             "\n"
             "[computer-use]\n"
             "enabled = false\n"
+            "\n"
+            "[browser-skill]\n"
+            "enabled = false\n"
         )
         path = rig_dir / "harness.toml"
         path.write_text(original)
@@ -970,6 +973,7 @@ class InitPresence(unittest.TestCase):
         text = (rig_dir / "harness.toml").read_text()
         self.assertRegex(text, r"\[computer-use\]")
         self.assertRegex(text, r"enabled\s*=\s*false")
+        self.assertRegex(text, r"\[browser-skill\]")
         self.assertIn('parent = "codex"', text)
 
     def test_init_preserves_existing_computer_use_flag(self):
@@ -1097,6 +1101,8 @@ class CliWorkflow(unittest.TestCase):
         self.assertEqual(help_out.returncode, 2)
         self.assertIn("computer-use", help_out.stdout)
         self.assertIn("--cua-driver", help_out.stdout)
+        self.assertIn("browser-skill", help_out.stdout)
+        self.assertIn("--browser-skill", help_out.stdout)
 
 
 class ComputerUseCli(unittest.TestCase):
@@ -1214,9 +1220,117 @@ class ComputerUseCli(unittest.TestCase):
         skip["RIG_HOME"] = str(home / ".rig")
         ok = run_rig(self.repo, "setup", "--no-cua-driver", env=skip)
         self.assertEqual(ok.returncode, 0, ok.stderr + ok.stdout)
+        ok_bsk = run_rig(self.repo, "setup", "--no-browser-skill", env=skip)
+        self.assertEqual(ok_bsk.returncode, 0, ok_bsk.stderr + ok_bsk.stdout)
         bad = run_rig(self.repo, "setup", "--bogus", env=skip)
         self.assertEqual(bad.returncode, 2, bad.stderr)
         self.assertIn("unknown flag", bad.stderr)
+
+
+class BrowserSkillCli(unittest.TestCase):
+    def setUp(self):
+        self.td = tempfile.TemporaryDirectory()
+        self.repo = Path(self.td.name) / "repo"
+        self.home = Path(self.td.name) / "home"
+        self.bins = Path(self.td.name) / "bins"
+        self.repo.mkdir()
+        self.home.mkdir()
+        self.bins.mkdir()
+        (self.repo / ".git").mkdir()
+        proc = run_rig(self.repo, "init", env={"PATH": _stub_path()})
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+
+    def tearDown(self):
+        self.td.cleanup()
+
+    def _env(self, **extra):
+        env = {
+            "HOME": str(self.home),
+            "RIG_HOME": str(self.home / ".rig"),
+            "RIG_SRC": str(ROOT),
+            "PATH": _stub_path(self.bins),
+            "RIG_SKIP_CUA_DRIVER": "1",
+            "RIG_SKIP_BROWSER_SKILL": "1",
+        }
+        env.update(extra)
+        return env
+
+    def _fake_bsk(self):
+        path = self.bins / "bsk"
+        path.write_text(
+            "#!/bin/sh\n"
+            'if [ "$1" = "--version" ]; then echo "bsk 0.1.0"; exit 0; fi\n'
+            'if [ "$1" = "status" ]; then echo "{\"ok\":true,\"browsers\":[{\"id\":\"chrome\"}]}"; exit 0; fi\n'
+            'if [ "$1" = "doctor" ]; then echo "ok"; exit 0; fi\n'
+            "exit 0\n"
+        )
+        path.chmod(0o755)
+        return path
+
+    def test_init_defaults_browser_skill_off(self):
+        text = (self.repo / ".rig" / "harness.toml").read_text()
+        self.assertRegex(text, r"\[browser-skill\]")
+        self.assertRegex(text, r"enabled\s*=\s*false")
+        shown = run_rig(self.repo, "browser-skill", env=self._env())
+        self.assertEqual(shown.returncode, 0, shown.stderr + shown.stdout)
+        self.assertIn("enabled=false", shown.stdout)
+        self.assertIn("off (project)", shown.stdout)
+        self.assertIn("chrome-devtools", shown.stdout)
+        self.assertIn("bsk install-skill", shown.stdout)
+
+    def test_on_off_round_trip_does_not_need_binary(self):
+        on = run_rig(self.repo, "browser-skill", "on", env=self._env())
+        self.assertEqual(on.returncode, 0, on.stderr + on.stdout)
+        self.assertIn("enabled = true", on.stdout)
+        self.assertIn("binary missing", on.stdout)
+        text = (self.repo / ".rig" / "harness.toml").read_text()
+        self.assertRegex(text.split("[browser-skill]", 1)[1], r"enabled\s*=\s*true")
+        off = run_rig(self.repo, "browser-skill", "off", env=self._env())
+        self.assertEqual(off.returncode, 0, off.stderr)
+        section = (self.repo / ".rig" / "harness.toml").read_text().split("[browser-skill]", 1)[1]
+        self.assertRegex(section, r"enabled\s*=\s*false")
+
+    def test_doctor_includes_browser_skill_block(self):
+        doc = run_rig(self.repo, "doctor", env={**self._env(), "RIG_PARENT": "codex"})
+        self.assertEqual(doc.returncode, 0, doc.stderr + doc.stdout)
+        self.assertIn("Browser-skill", doc.stdout)
+        self.assertIn("fallback:", doc.stdout)
+        self.assertIn("chrome-devtools", doc.stdout)
+        self.assertIn("bsk install-skill", doc.stdout)
+
+    def test_setup_reprints_urls_without_enabling_repo_flag(self):
+        self._fake_bsk()
+        (self.home / ".rig").mkdir()
+        (self.home / ".rig" / "browser-skill.json").write_text(
+            json.dumps({"schema": 1, "opt_in": True, "source": "test", "updated_at": "2026-09-19T00:00:00Z"})
+        )
+        before = (self.repo / ".rig" / "harness.toml").read_text()
+        proc = run_rig(
+            self.repo,
+            "browser-skill",
+            "setup",
+            env=self._env(RIG_PARENT="codex"),
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        self.assertIn("rig_bsk_status", proc.stdout)
+        self.assertIn("chromewebstore.google.com", proc.stdout)
+        self.assertIn("Never run bsk install-skill", proc.stdout)
+        after = (self.repo / ".rig" / "harness.toml").read_text()
+        self.assertEqual(before, after)
+
+    def test_setup_flags_are_accepted(self):
+        skip = self._env()
+        skip["RIG_HOME"] = str(self.home / ".rig")
+        ok = run_rig(self.repo, "setup", "--browser-skill", env={**skip, "RIG_SKIP_BROWSER_SKILL": "1"})
+        self.assertEqual(ok.returncode, 0, ok.stderr + ok.stdout)
+
+    def test_missing_installer_diagnostic_is_not_python3(self):
+        src = (ROOT / "bin" / "rig").read_text()
+        self.assertIn("browser-skill setup: installer missing", src)
+        self.assertNotIn(
+            "browser-skill setup: Python 3 unavailable; skip. Enable later: rig browser-skill setup",
+            src,
+        )
 
 
 if __name__ == "__main__":

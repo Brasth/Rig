@@ -1289,6 +1289,87 @@ TOOLS.extend([
          "output_dir": {"type": "string"},
          "record_video": {"type": "boolean"},
      }, "required": ["action"]}},
+    {"name": "rig_bsk_status",
+     "annotations": {
+         "readOnlyHint": True,
+         "destructiveHint": False,
+         "idempotentHint": True,
+         "openWorldHint": False,
+     },
+     "description": "Parent-only read-only BrowserSkill readiness diagnostics. Always discoverable, even when action tools are hidden. Reports machine opt-in, binary, project flag, and extension connection without changing them. Does not enable, install, or run bsk install-skill. Children never receive this tool.",
+     "inputSchema": {"type": "object", "properties": {"repo": {"type": "string"}}}},
+    {"name": "rig_bsk_session",
+     "annotations": {
+         "readOnlyHint": False,
+         "destructiveHint": False,
+         "idempotentHint": False,
+         "openWorldHint": True,
+     },
+     "description": "Parent-only BrowserSkill session start/stop. bsk session start --json (optional --no-focus); retain session_id; stop with positional ID. Hidden unless browser-skill is effective. Never --unattended. Children never receive this tool.",
+     "inputSchema": {"type": "object", "properties": {
+         "repo": {"type": "string"},
+         "action": {"type": "string", "enum": ["start", "stop"]},
+         "no_focus": {"type": "boolean"},
+     }}},
+    {"name": "rig_bsk_observe",
+     "annotations": {
+         "readOnlyHint": False,
+         "destructiveHint": False,
+         "idempotentHint": False,
+         "openWorldHint": True,
+     },
+     "description": "Parent-only BrowserSkill observe. bsk observe / screenshot with --session ID → snapshot plus @eN refs and optional PNG. Hidden unless browser-skill is effective. Children never receive this tool.",
+     "inputSchema": {"type": "object", "properties": {"repo": {"type": "string"}}}},
+    {"name": "rig_bsk_act",
+     "annotations": {
+         "readOnlyHint": False,
+         "destructiveHint": False,
+         "idempotentHint": False,
+         "openWorldHint": True,
+     },
+     "description": "Parent-only BrowserSkill act. One click/fill/press on a fresh @eN ref from rig_bsk_observe. Maps to bsk click/fill/press with --session ID. Consumes the snapshot until confirm. Hidden unless browser-skill is effective. Never evaluate, upload, or download. Children never receive this tool.",
+     "inputSchema": {"type": "object", "properties": {
+         "repo": {"type": "string"}, "snapshot_id": {"type": "string"},
+         "ref": {"type": "string"},
+         "action": {"type": "string", "enum": ["click", "fill", "press"]},
+         "text": {"type": "string"}, "key": {"type": "string"},
+     }, "required": ["snapshot_id"]}},
+    {"name": "rig_bsk_confirm",
+     "annotations": {
+         "readOnlyHint": False,
+         "destructiveHint": False,
+         "idempotentHint": False,
+         "openWorldHint": True,
+     },
+     "description": "Parent-only BrowserSkill re-observe/confirm. Allowed only after a successful act. Confirm is the only confirmed outcome. Hidden unless browser-skill is effective. Children never receive this tool.",
+     "inputSchema": {"type": "object", "properties": {
+         "repo": {"type": "string"}, "snapshot_id": {"type": "string"},
+     }, "required": ["snapshot_id"]}},
+    {"name": "rig_bsk_navigate",
+     "annotations": {
+         "readOnlyHint": False,
+         "destructiveHint": False,
+         "idempotentHint": False,
+         "openWorldHint": True,
+     },
+     "description": "Parent-only BrowserSkill navigate. bsk navigate URL --session ID. Hidden unless browser-skill is effective. Children never receive this tool.",
+     "inputSchema": {"type": "object", "properties": {
+         "repo": {"type": "string"},
+         "url": {"type": "string"},
+     }, "required": ["url"]}},
+    {"name": "rig_bsk_tab",
+     "annotations": {
+         "readOnlyHint": False,
+         "destructiveHint": False,
+         "idempotentHint": False,
+         "openWorldHint": True,
+     },
+     "description": "Parent-only BrowserSkill user-tab list/borrow/return. Explicit bsk tab list --scope user, tab borrow <id>, tab return <id> with --session ID. Never --unattended or --no-confirm. Hidden unless browser-skill is effective. Children never receive this tool.",
+     "inputSchema": {"type": "object", "properties": {
+         "repo": {"type": "string"},
+         "action": {"type": "string", "enum": ["list", "borrow", "return"]},
+         "tab_id": {"type": "string"},
+     }}},
 ])
 for _tool in TOOLS:
     _properties = _tool["inputSchema"]["properties"]
@@ -1318,6 +1399,12 @@ TOOL_ORDER = (
     "rig_cu_act",
     "rig_cu_confirm",
     "rig_cu_record",
+    "rig_bsk_session",
+    "rig_bsk_observe",
+    "rig_bsk_act",
+    "rig_bsk_confirm",
+    "rig_bsk_navigate",
+    "rig_bsk_tab",
     "rig_routing_report",
     "rig_billing_report",
     "rig_billing_import",
@@ -1361,6 +1448,7 @@ TOOL_ORDER = (
     "rig_workflow_report",
     "rig_job_coordination_reply",
     "rig_cu_status",
+    "rig_bsk_status",
 )
 CHILD_TOOL_ORDER = (
     "rig_job_doing",
@@ -1394,6 +1482,7 @@ def is_child() -> bool:
 
 
 CU_TOOL_NAMES = frozenset({"rig_cu_capture", "rig_cu_act", "rig_cu_confirm", "rig_cu_record"})
+BSK_TOOL_NAMES = frozenset({"rig_bsk_session", "rig_bsk_observe", "rig_bsk_act", "rig_bsk_confirm", "rig_bsk_navigate", "rig_bsk_tab"})
 
 
 def listed_tools() -> list[dict]:
@@ -1409,6 +1498,14 @@ def listed_tools() -> list[dict]:
     except Exception:
         # Mixed ~/.rig copies or a CU helper crash must not kill tools/list.
         tools = [item for item in tools if item["name"] not in CU_TOOL_NAMES]
+    try:
+        import browser_skill as bsk
+        raw = (os.environ.get("RIG_REPO") or "").strip()
+        repo = _repo({"repo": raw} if raw else {})
+        if not bsk.tools_listed(repo, child=False):
+            tools = [item for item in tools if item["name"] not in BSK_TOOL_NAMES]
+    except Exception:
+        tools = [item for item in tools if item["name"] not in BSK_TOOL_NAMES]
     return tools
 
 
@@ -2344,6 +2441,40 @@ def call_tool(name: str, args: dict, on_tick=None, *, wait_paths: list[Path] | N
             import computer_use as cu
             status = cu.cu_status(repo)
             return {**_ok(json.dumps(status, indent=2)), "structuredContent": status}
+        if name == "rig_bsk_status":
+            import browser_skill as bsk
+            status = bsk.bsk_status(repo)
+            return {**_ok(json.dumps(status, indent=2)), "structuredContent": status}
+        if name in BSK_TOOL_NAMES:
+            import browser_skill as bsk
+            if name == "rig_bsk_session":
+                ev = bsk.bsk_session(
+                    repo,
+                    action=str(args.get("action") or "start"),
+                    no_focus=args.get("no_focus", True) is not False,
+                )
+            elif name == "rig_bsk_observe":
+                ev = bsk.bsk_observe(repo)
+            elif name == "rig_bsk_act":
+                ev = bsk.bsk_act(
+                    repo,
+                    snapshot_id=str(args.get("snapshot_id") or ""),
+                    ref=str(args.get("ref") or ""),
+                    action=str(args.get("action") or "click"),
+                    text=str(args.get("text") or ""),
+                    key=str(args.get("key") or ""),
+                )
+            elif name == "rig_bsk_navigate":
+                ev = bsk.bsk_navigate(repo, url=str(args.get("url") or ""))
+            elif name == "rig_bsk_tab":
+                ev = bsk.bsk_tab(
+                    repo,
+                    action=str(args.get("action") or "list"),
+                    tab_id=str(args.get("tab_id") or ""),
+                )
+            else:
+                ev = bsk.bsk_confirm(repo, snapshot_id=str(args.get("snapshot_id") or ""))
+            return bsk.present_mcp(ev)
         if name in CU_TOOL_NAMES:
             import computer_use as cu
             import cu_receipt
