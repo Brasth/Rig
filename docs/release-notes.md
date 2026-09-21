@@ -1,5 +1,21 @@
 # Release Notes
 
+## Grok 4.7 CLI pin (2026-09-21)
+
+The Grok CLI strong pin is `grok-4.7` at effort `high` on profile `grok-4.7-high`. That covers implement, hard, verify, and review. Explore, mini, and bulk stay on `grok-4.5` low (`grok-4.5-low`).
+
+OMP, Pi, and Cursor keep their current Grok 4.6 selectors. Pi and the local OMP catalog do not list `grok-4.7`. `grok-4.7-build-fast` stays off the cheap rung: it is the same model at twice the token rate.
+
+A `.rig/routing.json` preference that names `grok-4.6-high` no longer matches a built-in profile. Point it at `grok-4.7-high`.
+
+### Rollout / restart
+
+Install the checkout into `~/.rig`, then fully restart parent and MCP sessions before the next admission. Mixed-version admission writers are unsupported.
+
+### Rollback
+
+Restore the Grok CLI rows in `scripts/route.py` to `grok-4.6` / `high` and the profile id `grok-4.6-high`.
+
 ## Live TUI and Codex Explorer (2026-09-16)
 
 Accepted release for live TUI activity, Codex JSON streaming, and explorer defaults.

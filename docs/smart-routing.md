@@ -51,7 +51,7 @@ Example: prefer Claude for standard tasks, without enabling its worker:
   "schema_version": 1,
   "profiles": {},
   "preferences": {
-    "standard": ["claude-sonnet-5-medium", "grok-4.6-high"]
+    "standard": ["claude-sonnet-5-medium", "grok-4.7-high"]
   }
 }
 ```
