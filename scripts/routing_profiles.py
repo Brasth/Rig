@@ -22,8 +22,8 @@ TRAITS = (
 )
 _MODEL_PREFIXES = ("xai-oauth/", "openai/", "anthropic/", "xai/", "google/", "cursor/", "xiaomi/")
 WRITER_ROLES = ("mini", "bulk", "implement", "hard")
-FAST_STANDARD_WORKERS = ("grok", "claude", "opencode", "omp", "pi", "agy", "mimo", "codex")
-STRONG_REVIEW_WORKERS = ("claude", "grok", "opencode", "omp", "pi", "agy", "mimo", "codex")
+FAST_STANDARD_WORKERS = ("grok", "claude", "codex", "devin", "mimo", "opencode", "omp", "pi", "agy")
+STRONG_REVIEW_WORKERS = ("devin", "claude", "codex", "grok", "opencode", "omp", "pi", "agy")
 CATALOG_WORKERS = frozenset({"opencode", "omp", "pi", "agy", "devin", "mimo"})
 KNOWN_PROVIDERS = frozenset({"openai", "anthropic", "xai", "google", "cursor", "cognition", "xiaomi"})
 DEVIN_FAST_ROLES = ("explore", "mini", "bulk")
@@ -459,10 +459,6 @@ def default_preference_ids(
                 ordered.append(profile.id)
     for profile in sorted(profiles.values(), key=lambda item: item.id):
         if profile.id in seen:
-            continue
-        # Devin is intentionally opt-in: a missing custom preference must not
-        # make it a fallback merely because every default worker is unavailable.
-        if profile.worker == "devin":
             continue
         if review and not profile.allows_role("review"):
             continue
