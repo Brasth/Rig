@@ -635,7 +635,6 @@ class SchemaAndDirectParent(unittest.TestCase):
                 {"schema_version": 2, "execution": {"direct_parent_low_risk": True, "extra": False}},
                 {"schema_version": 2, "execution": []},
                 {"schema_version": 1, "execution": {"direct_parent_low_risk": True}},
-                {"schema_version": 3},
             ):
                 (repo / ".rig" / "routing.json").write_text(json.dumps(bad))
                 with self.assertRaises(policy.ConfigError):

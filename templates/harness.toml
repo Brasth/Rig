@@ -8,6 +8,10 @@ parent = "codex"
 [routing]
 # Smart is also the default when this section is omitted. Legacy restores the old ladder.
 mode = "smart"
+# Local scored routing is the default. Set engine = "jev" after adding a global key.
+engine = "local"
+local_policy = "scored-v1"
+objective = "balanced"
 
 [orchestration]
 # Adaptive decomposes eligible work into a DAG (max 12 nodes). single keeps one-job behavior.
@@ -24,6 +28,7 @@ omp = false
 pi = false
 agy = false
 devin = false
+mimo = false
 
 [queue]
 max_running = 3

@@ -14,6 +14,8 @@ if str(HERE) not in sys.path:
 
 import jobs as rig_jobs  # noqa: E402
 import work_queue as rig_queue  # noqa: E402
+import jev_provider  # noqa: E402
+import jev_settings  # noqa: E402
 from tui_editor import Draft, InputDecoder  # noqa: E402
 from tui_runtime import BoardRuntime, visible_jobs as _visible_jobs  # noqa: E402
 from tui_view import (  # noqa: E402,F401
@@ -57,6 +59,7 @@ def _paint(stdscr, repo: Path, *, runtime=None) -> None:
     pasted_outside_editor = False
     help_mode = False
     confirm = None
+    secret_active, secret_text = False, ""
     bracketed = sys.stdout.isatty()
     if bracketed:
         sys.stdout.write("\x1b[?2004h")
@@ -106,7 +109,9 @@ def _paint(stdscr, repo: Path, *, runtime=None) -> None:
             h, w = stdscr.getmaxyx()
             runtime.request_snapshot(start=offsets["Jobs"], rows=max(0, h - 3) if h >= 8 and w >= 40 else 0,
                                      selected_id=identities["Jobs"])
-            curses.curs_set(1 if draft.active else 0)
+            curses.curs_set(1 if draft.active or secret_active else 0)
+            if secret_active:
+                footer = "Jev API key: " + ("•" * min(len(secret_text), 24)) + "  Enter saves · Esc cancels"
             offsets[tab] = render(stdscr, repo, runtime.snapshot, tab=tab, selected=selected[tab], offset=offsets[tab],
                                   follow=follow, log_off=log_off, footer=footer, snapshot_status=_snapshot_status(runtime),
                                   requested=requested, draft=draft, log_mode=log_mode, workflows=board_workflows,
@@ -143,6 +148,20 @@ def _paint(stdscr, repo: Path, *, runtime=None) -> None:
                     elif action == "cancel":
                         draft.active = False
                         footer = draft.message or "Enqueue cancelled"
+                    continue
+                if secret_active:
+                    if key == "\x1b":
+                        secret_active, secret_text, footer = False, "", "Jev key entry cancelled"
+                    elif key in ("\n", "\r", curses.KEY_ENTER):
+                        value = secret_text
+                        if not value:
+                            footer = "Jev key cannot be empty"
+                        elif runtime.submit("jev-key", lambda value=value: jev_provider.store_key(value)):
+                            secret_active, secret_text, footer = False, "", "Saving Jev key"
+                    elif key in ("\b", "\x7f", curses.KEY_BACKSPACE):
+                        secret_text = secret_text[:-1]
+                    elif isinstance(key, str) and key.isprintable():
+                        secret_text += key
                     continue
                 if confirm is not None:
                     pending = confirm
@@ -192,6 +211,21 @@ def _paint(stdscr, repo: Path, *, runtime=None) -> None:
                     tab = _TABS[(_TABS.index(tab) + step) % len(_TABS)]
                 elif key == "r":
                     runtime.refresh()
+                elif tab == "Settings" and row and key == "c" and row.get("id") == "jev":
+                    secret_active, secret_text, footer = True, "", "Enter Jev API key"
+                elif tab == "Settings" and row and key == "d" and row.get("id") == "jev":
+                    if runtime.submit("jev-remove", jev_provider.delete_key):
+                        footer = "Removing Jev key"
+                elif tab == "Settings" and row and key == "t" and row.get("id") == "engine":
+                    engine = "local" if "jev" in str(row.get("text") or "") else "jev"
+                    if runtime.submit("routing-engine", lambda engine=engine: jev_settings.update_project(repo, engine=engine)):
+                        footer = f"Setting project picker to {engine}"
+                elif tab == "Settings" and row and key == "o" and row.get("id") == "objective":
+                    values = ("quality", "balanced", "speed", "cost")
+                    old = next((value for value in values if value in str(row.get("text") or "")), "balanced")
+                    objective = values[(values.index(old) + 1) % len(values)]
+                    if runtime.submit("routing-objective", lambda objective=objective: jev_settings.update_project(repo, objective=objective)):
+                        footer = f"Setting local objective to {objective}"
                 elif key == "e":
                     draft.active, draft.message = True, ""
                 elif key == "o" and row and tab == "Jobs":
@@ -201,7 +235,7 @@ def _paint(stdscr, repo: Path, *, runtime=None) -> None:
                     action_key = f"answer:{row['job_id']}"
                     accepted = runtime.submit(action_key, lambda row=row, behavior=behavior: rig_jobs.answer_pending(row, behavior))
                     footer = f"{behavior} requested {row['job_id']}" if accepted else "Action already pending or busy"
-                elif key == "x" and row and tab != "Workflows":
+                elif key == "x" and row and tab in {"Jobs", "Queue"}:
                     jid = str(row.get("job_id") if tab == "Jobs" else row.get("id"))
                     if tab == "Jobs" and ((row.get("reservation") or {}).get("stopped") or
                                            (row.get("effective") in {"ok", "fail", "timeout"} and not row.get("cancellation_state"))):

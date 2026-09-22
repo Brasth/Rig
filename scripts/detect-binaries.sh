@@ -13,7 +13,7 @@ iso_now() {
   date -u +%Y-%m-%dT%H:%M:%SZ
 }
 
-RIG_WORKERS=(grok claude codex cursor opencode omp pi agy devin)
+RIG_WORKERS=(grok claude codex cursor opencode omp pi agy devin mimo)
 
 find_bin() {
   command -v "$1" 2>/dev/null || true
@@ -23,7 +23,7 @@ find_bin() {
 find_worker_bin() {
   local name="$1" p real
   case "$name" in
-    grok|claude|codex|opencode|omp|pi|agy|devin)
+    grok|claude|codex|opencode|omp|pi|agy|devin|mimo)
       find_bin "$name"
       ;;
     cursor)
@@ -92,7 +92,7 @@ harness_path() {
   printf '%s\n' "$(repo_root)/.rig/harness.toml"
 }
 
-# Sets HARNESS_PARENT, HARNESS_WORKER_{CODEX,GROK,CLAUDE,CURSOR,OPENCODE,OMP,PI,AGY,DEVIN}.
+# Sets HARNESS_PARENT, HARNESS_WORKER_{CODEX,GROK,CLAUDE,CURSOR,OPENCODE,OMP,PI,AGY,DEVIN,MIMO}.
 # [parent] profile in old harness files is ignored (not a spawn/pick input).
 parse_harness() {
   local file="${1:-$(harness_path)}"
@@ -106,6 +106,7 @@ parse_harness() {
   HARNESS_WORKER_PI="false"
   HARNESS_WORKER_AGY="false"
   HARNESS_WORKER_DEVIN="false"
+  HARNESS_WORKER_MIMO="false"
   HARNESS_FILE="$file"
   [[ -f "$file" ]] || return 0
 
@@ -144,6 +145,7 @@ parse_harness() {
             pi) HARNESS_WORKER_PI="$val" ;;
             agy) HARNESS_WORKER_AGY="$val" ;;
             devin) HARNESS_WORKER_DEVIN="$val" ;;
+            mimo) HARNESS_WORKER_MIMO="$val" ;;
           esac
           ;;
       esac
@@ -169,6 +171,7 @@ worker_flag() {
     pi) printf '%s\n' "$HARNESS_WORKER_PI" ;;
     agy) printf '%s\n' "$HARNESS_WORKER_AGY" ;;
     devin) printf '%s\n' "$HARNESS_WORKER_DEVIN" ;;
+    mimo) printf '%s\n' "$HARNESS_WORKER_MIMO" ;;
     *) printf '%s\n' "false" ;;
   esac
 }

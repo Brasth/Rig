@@ -11,6 +11,17 @@ import routing_profiles as rig_profiles
 from routing_config import POLICY_VERSION
 
 SIDECAR_NAME = "routing.json"
+PICKER_VERSION = 1
+FORBIDDEN_EVIDENCE_KEYS = frozenset({"case", "task", "prompt", "text", "brief", "query", "reason"})
+PICKER_STRINGS = (
+    "engine",
+    "requested_engine",
+    "local_policy",
+    "objective",
+    "selection_source",
+    "fallback",
+    "selected_profile_id",
+)
 
 
 def sidecar_path(job_dir: Path) -> Path:
@@ -68,6 +79,8 @@ def read_sidecar(job_dir: Path, expected_attempt_id: str | None = None) -> dict 
         if any(key in profile and not isinstance(profile[key], str)
                for key in ("id", "worker", "model", "effort", "tier", "provider", "selector")):
             return None
+    if "picker" in routing and not picker_evidence_ok(routing.get("picker")):
+        return None
     if expected_attempt_id is not None:
         want = str(expected_attempt_id).strip()
         if not want or want != attempt:
@@ -200,6 +213,55 @@ class CatalogSession:
         return info
 
 
+def _string_list(value) -> bool:
+    return isinstance(value, list) and all(isinstance(item, str) for item in value)
+
+
+def picker_evidence_ok(picker) -> bool:
+    if not isinstance(picker, dict):
+        return False
+    if FORBIDDEN_EVIDENCE_KEYS & set(picker):
+        return False
+    if type(picker.get("version")) is not int or picker.get("version") != PICKER_VERSION:
+        return False
+    if any(not isinstance(picker.get(key), str) for key in PICKER_STRINGS):
+        return False
+    if not _string_list(picker.get("traits")):
+        return False
+    canonical = picker.get("canonical")
+    if not isinstance(canonical, list):
+        return False
+    for row in canonical:
+        if not isinstance(row, dict) or (FORBIDDEN_EVIDENCE_KEYS & set(row)):
+            return False
+        if any(not isinstance(row.get(key), str) for key in ("provider", "model", "effort", "profile_id")):
+            return False
+        if "score" in row and type(row.get("score")) is not int:
+            return False
+        if "preference_rank" in row and type(row.get("preference_rank")) is not int:
+            return False
+        if not _string_list(row.get("explanation")) or not _string_list(row.get("transports")):
+            return False
+    return True
+
+
+def picker_contains_task_text(picker, case: str) -> bool:
+    banned = str(case or "").strip()
+    if not banned:
+        return False
+
+    def walk(value) -> bool:
+        if isinstance(value, str):
+            return banned in value
+        if isinstance(value, dict):
+            return any(walk(key) or walk(item) for key, item in value.items())
+        if isinstance(value, list):
+            return any(walk(item) for item in value)
+        return False
+
+    return walk(picker)
+
+
 def explain_lines(choice: dict) -> list[str]:
     routing = choice.get("routing") or {}
     lines = [
@@ -232,6 +294,22 @@ def explain_lines(choice: dict) -> list[str]:
     lines.append(f"review_recommendation={rec} (not a completion gate)")
     if routing.get("parent_fit_limitations"):
         lines.append(f"parent_fit={routing['parent_fit_limitations']}")
+    picker = routing.get("picker") or {}
+    if picker:
+        lines.append(
+            f"engine={picker.get('engine') or '-'} requested={picker.get('requested_engine') or '-'} "
+            f"local_policy={picker.get('local_policy') or '-'} objective={picker.get('objective') or '-'}"
+        )
+        traits = ",".join(picker.get("traits") or []) or "-"
+        lines.append(
+            f"traits={traits} source={picker.get('selection_source') or '-'} "
+            f"fallback={picker.get('fallback') or '-'}"
+        )
+        for row in picker.get("canonical") or []:
+            score = row.get("score")
+            shown = "-" if score is None else score
+            detail = " ".join(row.get("explanation") or [])
+            lines.append(f"canonical {row.get('profile_id') or '-'} score={shown} {detail}".rstrip())
     for row in routing.get("candidate_decisions") or []:
         extra = f" {row['detail']}" if row.get("detail") else ""
         lines.append(f"candidate {row.get('id') or '-'} {row.get('code')}{extra}")
@@ -244,6 +322,8 @@ def legacy_routing(
     assessment: dict,
     fingerprint: str,
     required: str,
+    role: str = "",
+    case: str = "",
 ) -> dict:
     routing = empty_routing(mode="legacy", fingerprint=fingerprint, assessment=assessment, required=required)
     routing["catalog"] = {"source": "legacy", "freshness": "n/a"}
@@ -272,6 +352,23 @@ def legacy_routing(
         routing["execution_strategy"] = "parent-fallback"
     elif spawn == "run-worker":
         routing["execution_strategy"] = "wrapper"
+    traits = ["general"]
+    if role or case:
+        import routing_policy as policy
+
+        traits = policy.task_traits(role or "implement", case)
+    routing["picker"] = {
+        "version": PICKER_VERSION,
+        "engine": "local",
+        "requested_engine": "local",
+        "local_policy": "ordered-v1",
+        "objective": "balanced",
+        "selection_source": "legacy",
+        "traits": traits,
+        "fallback": "",
+        "selected_profile_id": "",
+        "canonical": [],
+    }
     return routing
 
 
@@ -430,7 +527,7 @@ def validate_launch_tuple(
         else:
             out["execution_strategy"] = "parent-fallback"
         _require_smart_access(kind, access_value, profile=None)
-        return out
+        return _accept_recorded_picker(out, routing, cfg, case)
     if not isinstance(selected, dict):
         raise ValueError("routing.selected_profile must be an object; re-pick")
     if exec_kind == "parent":
@@ -476,4 +573,33 @@ def validate_launch_tuple(
     if isinstance(limits, str):
         out["parent_fit_limitations"] = limits
     _require_smart_access(kind, access_value, profile=profile)
+    return _accept_recorded_picker(out, routing, cfg, case)
+
+
+def _accept_recorded_picker(out: dict, routing: dict, cfg, case: str) -> dict:
+    raw = routing.get("picker") if isinstance(routing, dict) else None
+    if raw is None:
+        selected = out.get("selected_profile") or {}
+        out["picker"] = {
+            "version": PICKER_VERSION,
+            "engine": "local",
+            "requested_engine": cfg.engine,
+            "local_policy": cfg.local_policy,
+            "objective": cfg.objective,
+            "selection_source": str(out.get("execution_strategy") or ""),
+            "traits": [],
+            "fallback": "jev-unavailable" if cfg.engine == "jev" else "",
+            "selected_profile_id": str(selected.get("id") or "") if isinstance(selected, dict) else "",
+            "canonical": [],
+        }
+        return out
+    if not picker_evidence_ok(raw) or picker_contains_task_text(raw, case):
+        raise ValueError("routing evidence is invalid; re-pick")
+    if (
+        raw.get("requested_engine") != cfg.engine
+        or raw.get("local_policy") != cfg.local_policy
+        or raw.get("objective") != cfg.objective
+    ):
+        raise ValueError("routing evidence does not match the current picker; re-pick")
+    out["picker"] = raw
     return out

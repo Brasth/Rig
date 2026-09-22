@@ -14,7 +14,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
-CATALOG_WORKERS = frozenset({"opencode", "omp", "pi", "agy", "devin"})
+CATALOG_WORKERS = frozenset({"opencode", "omp", "pi", "agy", "devin", "mimo"})
 TTL_SECONDS = 3600
 STALE_MAX_SECONDS = 24 * 3600
 PROBE_TIMEOUT = 8.0
@@ -34,6 +34,7 @@ PROBE_ARGV = {
     "pi": ("--list-models",),
     "agy": ("models",),
     "devin": ("models", "list", "--format", "json"),
+    "mimo": ("models",),
 }
 
 
@@ -94,6 +95,15 @@ def parse_opencode(text: str) -> list[str]:
             continue
         token = raw.split()[0]
         if "/" in token:
+            ids.append(token)
+    return uniq_ids(ids)
+
+
+def parse_mimo(text: str) -> list[str]:
+    ids = []
+    for line in (text or "").splitlines():
+        token = line.strip().split(maxsplit=1)[0] if line.strip() else ""
+        if "/" in token and all(ch.isalnum() or ch in "./_-" for ch in token):
             ids.append(token)
     return uniq_ids(ids)
 
@@ -259,7 +269,7 @@ def probe_worker(worker: str, timeout: float = PROBE_TIMEOUT) -> list[str] | Non
     proc = _run(argv, timeout)
     if proc is None or proc.returncode != 0:
         return None
-    parsers = {"opencode": parse_opencode, "pi": parse_pi, "agy": parse_agy}
+    parsers = {"opencode": parse_opencode, "pi": parse_pi, "agy": parse_agy, "mimo": parse_mimo}
     ids = parsers[worker](proc.stdout or "")
     return ids or None
 
@@ -303,7 +313,7 @@ def probe_catalog(worker: str, timeout: float = PROBE_TIMEOUT) -> tuple[str, lis
     proc = _run(argv, timeout)
     if proc is None or proc.returncode != 0:
         return "unavailable", None
-    parsers = {"opencode": parse_opencode, "pi": parse_pi, "agy": parse_agy}
+    parsers = {"opencode": parse_opencode, "pi": parse_pi, "agy": parse_agy, "mimo": parse_mimo}
     ids = parsers[worker](proc.stdout or "")
     return ("ok", ids) if ids else ("empty", [])
 
@@ -722,7 +732,7 @@ def doctor_lines() -> list[str]:
     data = _read_cache_file()
     now = time.time()
     rows: list[str] = []
-    for worker in ("opencode", "omp", "pi", "agy", "devin"):
+    for worker in ("opencode", "omp", "pi", "agy", "devin", "mimo"):
         entry = data.get(worker)
         if not isinstance(entry, dict):
             continue

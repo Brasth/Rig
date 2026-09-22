@@ -9,7 +9,7 @@ import unicodedata
 import jobs as rig_jobs
 from ui_snapshot import _ACTIVE_STATUSES, _ATTENTION_STATUSES, format_parent_action, scrub_secrets
 
-_TABS = ("Jobs", "Queue", "Workflows")
+_TABS = ("Jobs", "Queue", "Workflows", "Settings")
 _SPLIT_MIN_WIDTH = 72
 _ASK_STATES = frozenset({"needs-input"})
 _JOB_ATTENTION_STATES = frozenset({
@@ -159,7 +159,7 @@ def _listing_id(tab: str, row: dict):
         return row.get("job_id")
     if tab == "Queue":
         return row.get("id")
-    return row.get("workflow_id")
+    return row.get("workflow_id") if tab == "Workflows" else row.get("id")
 
 
 def _row_task(tab: str, row: dict) -> str:
@@ -167,13 +167,13 @@ def _row_task(tab: str, row: dict) -> str:
         return str(row.get("task") or row.get("doing") or "")
     if tab == "Queue":
         return str(row.get("text") or "")
-    return str(row.get("title") or row.get("blocker") or "")
+    return str(row.get("title") or row.get("blocker") or row.get("text") or "")
 
 
 def _row_state(tab: str, row: dict, requested=()) -> str:
     jid = _listing_id(tab, row)
     state = row.get("cancellation_state") or row.get("display_state") or row.get("status") or "unknown"
-    if tab != "Workflows" and jid is not None and f"cancel:{tab}:{jid}" in requested and state != "stopped":
+    if tab in {"Jobs", "Queue"} and jid is not None and f"cancel:{tab}:{jid}" in requested and state != "stopped":
         state = row.get("cancellation_state") or "stop-requested"
     return state
 
@@ -220,7 +220,9 @@ def board_listing(tab: str, snapshot, workflows=None) -> list[dict]:
         return attention_first_jobs(getattr(snapshot, "jobs", None) or [])
     if tab == "Queue":
         return list(getattr(snapshot, "pending", None) or [])
-    return attention_first_workflows(_snapshot_workflows(snapshot, workflows))
+    if tab == "Workflows":
+        return attention_first_workflows(_snapshot_workflows(snapshot, workflows))
+    return list(getattr(snapshot, "settings", None) or [])
 
 
 def format_list_row(tab: str, row: dict, width: int, *, selected: bool = False, state: str | None = None) -> str:
@@ -431,13 +433,13 @@ def render(stdscr, repo, snapshot, *, tab, selected, offset, follow, log_off,
                 detail.extend(textwrap.wrap(str(row.get("text") or ""), max(1, rw)))
             else:
                 empty = {"Jobs": "No jobs in .rig/jobs", "Queue": "No pending queue items",
-                         "Workflows": "No workflows in .rig/workflows"}
+                         "Workflows": "No workflows in .rig/workflows", "Settings": "No settings"}
                 detail = [empty.get(tab, "No items")]
             for index, line in enumerate(detail[:max(0, h - 3)]):
                 _add(stdscr, index + 2, rx, str(line), width=rw)
         else:
             empty = {"Jobs": "No jobs in .rig/jobs", "Queue": "No pending queue items",
-                     "Workflows": "No workflows in .rig/workflows"}
+                     "Workflows": "No workflows in .rig/workflows", "Settings": "No settings"}
             if row:
                 state = _row_state(tab, row, requested)
                 summary = f"{state_label(state)} {_listing_id(tab, row)}  {_row_task(tab, row)}"
