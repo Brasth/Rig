@@ -219,20 +219,20 @@ class Pick(unittest.TestCase):
         self.assertEqual(c["model"], "")
         self.assertEqual(c["effort"], "")
         self.assertEqual(route.model_for("codex", "hard"), ("gpt-5.6-terra", "medium"))
-        self.assertEqual(route.model_for("codex", "explore"), ("gpt-5.6-luna", "low"))
-        self.assertEqual(route.model_for("codex", "mini"), ("gpt-5.6-luna", "low"))
+        self.assertEqual(route.model_for("codex", "explore"), ("gpt-6-luna", "low"))
+        self.assertEqual(route.model_for("codex", "mini"), ("gpt-6-luna", "low"))
 
     def test_review_different_vendor(self):
         c = legacy_pick("grok", ["claude", "codex"], "review", "review the writer diff")
         self.assertEqual(c["worker"], "claude")
-        self.assertEqual(c["model"], "claude-opus-5")
+        self.assertEqual(c["model"], "claude-opus-5-5")
         self.assertEqual(c["effort"], "high")
 
     def test_claude_code_ladder(self):
         self.assertEqual(route.model_for("claude", "explore"), ("claude-haiku-4-5-20251001", "low"))
         self.assertEqual(route.model_for("claude", "implement"), ("claude-sonnet-5", "medium"))
         hard = legacy_pick("grok", ["claude"], "hard", "multi-file architecture")
-        self.assertEqual((hard["model"], hard["effort"]), ("claude-opus-5", "high"))
+        self.assertEqual((hard["model"], hard["effort"]), ("claude-opus-5-5", "high"))
 
     def test_no_effective(self):
         c = legacy_pick("codex", [], "implement", "add a header")
@@ -257,15 +257,15 @@ class Pick(unittest.TestCase):
         self.assertIsNotNone(route.assert_child_model("gpt-5.6-sol"))
         self.assertIsNotNone(route.assert_child_model("gpt-5.6-sol-high"))
         self.assertIsNotNone(route.assert_child_model("gpt-6-astra"))
-        self.assertIsNone(route.assert_child_model("gpt-5.6-luna"))
+        self.assertIsNone(route.assert_child_model("gpt-6-luna"))
         self.assertIsNone(route.assert_child_model("gpt-5.3-codex-spark"))
-        self.assertIsNone(route.assert_child_model("claude-opus-5"))
+        self.assertIsNone(route.assert_child_model("claude-opus-5-5"))
         self.assertIsNone(route.assert_child_model("claude-sonnet-5"))
         self.assertIsNone(route.assert_child_model("claude-haiku-4-5-20251001"))
         self.assertIsNone(route.assert_child_model("composer-2.5"))
         self.assertIsNone(route.assert_child_model("cursor-grok-4.6-high"))
         self.assertIsNone(route.assert_child_model("openai/gpt-5.4-mini"))
-        self.assertIsNone(route.assert_child_model("openai/gpt-5.6-luna"))
+        self.assertIsNone(route.assert_child_model("openai/gpt-6-luna"))
         self.assertIsNone(route.assert_child_model("openai/gpt-5.6-terra"))
         self.assertIsNone(route.assert_child_model("gemini-3.8-flash-high"))
         self.assertIsNone(route.assert_child_model("gemini-3.1-pro-high"))
@@ -313,6 +313,7 @@ class Pick(unittest.TestCase):
     def test_cursor_explore_model(self):
         self.assertEqual(route.model_for("cursor", "explore"), ("composer-2.5-fast", ""))
         self.assertEqual(route.model_for("cursor", "hard"), ("cursor-grok-4.6-high", ""))
+        self.assertEqual(route.model_for("cursor", "review"), ("claude-opus-5-5-thinking-high", ""))
 
     def test_same_cli_beats_opencode_omp_pi_agy(self):
         c = legacy_pick("grok", ["opencode", "omp", "pi", "agy", "cursor", "codex"], "implement", "add a header")
@@ -331,7 +332,7 @@ class Pick(unittest.TestCase):
         c = legacy_pick("", ["opencode"], "implement", "add a header")
         self.assertEqual(c["worker"], "opencode")
         self.assertEqual(c["spawn"], "run-worker")
-        self.assertEqual(c["model"], "openai/gpt-5.6-luna")
+        self.assertEqual(c["model"], "openai/gpt-6-luna")
         self.assertEqual(c["effort"], "high")
 
     def test_grok_still_beats_opencode(self):
@@ -342,7 +343,7 @@ class Pick(unittest.TestCase):
         self.assertEqual(route.model_for("opencode", "explore"), ("openai/gpt-5.4-mini", "minimal"))
         self.assertEqual(route.model_for("opencode", "mini"), ("openai/gpt-5.4-mini", "minimal"))
         self.assertEqual(route.model_for("opencode", "bulk"), ("openai/gpt-5.4-mini", "minimal"))
-        self.assertEqual(route.model_for("opencode", "implement"), ("openai/gpt-5.6-luna", "high"))
+        self.assertEqual(route.model_for("opencode", "implement"), ("openai/gpt-6-luna", "high"))
         self.assertEqual(route.model_for("opencode", "hard"), ("openai/gpt-5.6-terra", "max"))
         self.assertEqual(route.model_for("opencode", "review"), ("openai/gpt-5.6-terra", "max"))
         self.assertEqual(route.model_for("omp", "explore"), ("grok-4.5", "low"))
@@ -350,13 +351,13 @@ class Pick(unittest.TestCase):
         self.assertEqual(route.model_for("omp", "bulk"), ("grok-4.5", "low"))
         self.assertEqual(route.model_for("omp", "implement"), ("grok-4.6", "high"))
         self.assertEqual(route.model_for("omp", "hard"), ("grok-4.6", "high"))
-        self.assertEqual(route.model_for("omp", "review"), ("claude-opus-5", "high"))
+        self.assertEqual(route.model_for("omp", "review"), ("claude-opus-5-5", "high"))
         self.assertEqual(route.model_for("pi", "explore"), ("grok-4.5", "low"))
         self.assertEqual(route.model_for("pi", "mini"), ("grok-4.5", "low"))
         self.assertEqual(route.model_for("pi", "bulk"), ("grok-4.5", "low"))
         self.assertEqual(route.model_for("pi", "implement"), ("grok-4.6", "high"))
         self.assertEqual(route.model_for("pi", "hard"), ("grok-4.6", "high"))
-        self.assertEqual(route.model_for("pi", "review"), ("claude-opus-5", "high"))
+        self.assertEqual(route.model_for("pi", "review"), ("claude-opus-5-5", "high"))
         self.assertEqual(route.model_for("agy", "explore"), ("gemini-3.8-flash-low", "low"))
         self.assertEqual(route.model_for("agy", "mini"), ("gemini-3.8-flash-low", "low"))
         self.assertEqual(route.model_for("agy", "bulk"), ("gemini-3.8-flash-low", "low"))
@@ -700,9 +701,9 @@ class ReviewProvenance(unittest.TestCase):
 
     def test_provider_models_across_cli_wrappers(self):
         for model, provider in (
-            ("gpt-5.6-luna", "openai"), ("openai/gpt-6-astra", "openai"),
+            ("gpt-6-luna", "openai"), ("openai/gpt-6-astra", "openai"),
             ("o3-mini", "openai"), ("codex-mini-latest", "openai"),
-            ("claude-opus-5-thinking-high", "anthropic"),
+            ("claude-opus-5-5-thinking-high", "anthropic"),
             ("openrouter/anthropic/claude-sonnet-5", "anthropic"),
             ("xai-oauth/grok-4.6", "xai"), ("cursor-grok-4.6-high", "xai"),
             ("google/gemini-3.1-pro-high", "google"), ("composer-2.5-fast", "cursor"),
@@ -766,7 +767,7 @@ class ReviewProvenance(unittest.TestCase):
 
     def test_conflicting_recorded_provenance_errors(self):
         for supplied in (
-            {"writer_cli": "grok"}, {"writer_model": "gpt-5.6-luna"}, {"writer_provider": "xai"},
+            {"writer_cli": "grok"}, {"writer_model": "gpt-6-luna"}, {"writer_provider": "xai"},
         ):
             with self.subTest(supplied=supplied), self.assertRaisesRegex(ValueError, "conflicts"):
                 self.pick(["grok"], writer_job_id="writer", **supplied)
@@ -785,7 +786,7 @@ class ReviewProvenance(unittest.TestCase):
     def test_actual_resolved_model_provider_is_validated(self):
         choice = self.pick(
             ["opencode", "omp"], writer_job_id="writer", review_mode="independent",
-            catalogs={"opencode": ["anthropic/claude-opus-5"], "omp": ["google/gemini-3.1-pro-high"]},
+            catalogs={"opencode": ["anthropic/claude-opus-5-5"], "omp": ["google/gemini-3.1-pro-high"]},
         )
         self.assertEqual(choice["worker"], "omp")
         self.assertEqual(choice["provider"], "google")

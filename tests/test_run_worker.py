@@ -259,6 +259,7 @@ class CodexWorkerArgv(unittest.TestCase):
         self.assertIn("mcp_servers.rig.command=", out)
         self.assertNotIn("cua-driver", out)
         self.assertNotIn("chrome-devtools", out)
+        self.assertIn("-m gpt-6-luna", out)
         self.assertNotIn("gpt-5.3-codex-mini", out)
         mcp = self.repo / ".rig" / "jobs" / "codex-json" / "mcp.json"
         self.assertTrue(mcp.is_file(), out)
@@ -358,7 +359,7 @@ class OpenCodeOmpPiWorkerArgv(unittest.TestCase):
         self.assertIn("--format json", out)
         self.assertIn("--dir", out)
         self.assertIn("--auto", out)
-        self.assertIn("-m openai/gpt-5.6-luna", out)
+        self.assertIn("-m openai/gpt-6-luna", out)
         self.assertIn("--variant high", out)
         self.assertNotIn("--interactive", out)
         self.assertNotIn("gpt-5.6-sol", out)
@@ -670,7 +671,7 @@ class WrapperChangeEvidence(unittest.TestCase):
         self.assertEqual((self.repo / "dirty file.txt").read_text(), "dirty before child\n")
 
     def test_actual_review_model_same_provider_is_refused(self):
-        proc = self._run(RIG_ROLE="review", RIG_MODEL="claude-opus-5", RIG_WRITER_PROVIDER="anthropic")
+        proc = self._run(RIG_ROLE="review", RIG_MODEL="claude-opus-5-5", RIG_WRITER_PROVIDER="anthropic")
         self.assertEqual(proc.returncode, 1)
         self.assertIn("matches writer provider anthropic", proc.stderr)
         self.assertEqual((self.repo / "dirty file.txt").read_text(), "dirty before child\n")

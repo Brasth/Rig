@@ -12,7 +12,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 import catalog  # noqa: E402
 import route  # noqa: E402
 
-OPENCODE_LUNA = "openai/gpt-5.6-luna"
+OPENCODE_LUNA = "openai/gpt-6-luna"
 OMP_GROK = "grok-4.6"
 AGY_FLASH = "gemini-3.8-flash-high"
 
@@ -54,13 +54,13 @@ class CatalogEnv(unittest.TestCase):
 class ParseCatalog(unittest.TestCase):
     def test_opencode_skips_json_blobs(self):
         text = (
-            "openai/gpt-5.6-luna\n"
+            "openai/gpt-6-luna\n"
             '{"type":"model","id":"nope"}\n'
             "anthropic/claude-sonnet-5\n"
         )
         self.assertEqual(
             catalog.parse_opencode(text),
-            ["openai/gpt-5.6-luna", "anthropic/claude-sonnet-5"],
+            ["openai/gpt-6-luna", "anthropic/claude-sonnet-5"],
         )
 
     def test_omp_json_prefers_selector(self):
@@ -127,7 +127,7 @@ class PinMatch(unittest.TestCase):
         self.assertTrue(catalog.pin_matches("grok-4.6", "grok-cli/grok-4.6"))
         self.assertTrue(catalog.pin_matches(OPENCODE_LUNA, OPENCODE_LUNA))
         self.assertFalse(catalog.pin_matches("grok-4", "xai-oauth/grok-4.6"))
-        self.assertTrue(catalog.pin_matches("openai/gpt-5.6-luna", "gpt-5.6-luna"))
+        self.assertTrue(catalog.pin_matches("openai/gpt-6-luna", "gpt-6-luna"))
 
 
 class ResolveAgainstCatalog(unittest.TestCase):
@@ -210,7 +210,7 @@ class ResolveAgainstCatalog(unittest.TestCase):
 
     def test_codex_grok_claude_cursor_ignore_catalog(self):
         for worker, kind, pin in (
-            ("codex", "implement", "gpt-5.6-luna"),
+            ("codex", "implement", "gpt-6-luna"),
             ("grok", "implement", "grok-4.7"),
             ("claude", "implement", "claude-sonnet-5"),
             ("cursor", "implement", "composer-2.5"),
@@ -292,7 +292,7 @@ class ProbeAndCache(CatalogEnv):
         )
 
     def test_probe_opencode_and_cache_hit(self):
-        self._bin("opencode", 'echo "openai/gpt-5.6-luna"\necho "anthropic/claude-sonnet-5"\n')
+        self._bin("opencode", 'echo "openai/gpt-6-luna"\necho "anthropic/claude-sonnet-5"\n')
         ids = catalog.load_catalog("opencode")
         self.assertEqual(ids, [OPENCODE_LUNA, "anthropic/claude-sonnet-5"])
         self.assertTrue(self.cache.is_file())

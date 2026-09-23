@@ -1,6 +1,6 @@
 name = "explorer"
 description = "Read-only codebase exploration. Use to locate files, trace call paths, and gather evidence before changes."
-model = "gpt-5.6-luna"
+model = "gpt-6-luna"
 model_reasoning_effort = "low"
 sandbox_mode = "read-only"
 

@@ -8,7 +8,7 @@ ROLES = ("explore", "mini", "bulk", "implement", "hard", "review", "verify")
 TIERS = ("fast", "standard", "strong")
 PREF_KEYS = ("fast", "standard", "strong", "review")
 WRITER_ROLES = ("mini", "bulk", "implement", "hard")
-FAST_STANDARD_WORKERS = ("grok", "claude", "opencode", "omp", "pi", "agy", "codex")
+FAST_STANDARD_WORKERS = ("codex", "grok", "claude", "opencode", "omp", "pi", "agy")
 STRONG_REVIEW_WORKERS = ("claude", "grok", "opencode", "omp", "pi", "agy", "codex")
 CATALOG_WORKERS = frozenset({"opencode", "omp", "pi", "agy", "devin"})
 KNOWN_PROVIDERS = frozenset({"openai", "anthropic", "xai", "google", "cursor", "cognition"})
@@ -115,7 +115,7 @@ def builtin_profiles() -> tuple[Profile, ...]:
     omp_grok45 = ("xai-oauth/grok-4.5", "xai/grok-4.5")
     pi_grok46 = ("xai/grok-4.6",)
     pi_grok45 = ("xai/grok-4.5",)
-    opus_alias = ("anthropic/claude-opus-5",)
+    opus_alias = ("anthropic/claude-opus-5-5",)
     return (
         _p("grok-4.5-low", "grok", grok_fast_m, effort=grok_fast_e, provider="xai"),
         _p(
@@ -211,7 +211,7 @@ def builtin_profiles() -> tuple[Profile, ...]:
             "opencode-gpt-5.6-luna-high",
             "opencode",
             oc_std_m,
-            aliases=("gpt-5.6-luna",),
+            aliases=("gpt-6-luna",),
             roles=STANDARD_ROLES,
             tiers=("standard",),
             effort=oc_std_e,

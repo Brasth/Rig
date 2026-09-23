@@ -1,5 +1,25 @@
 # Release Notes
 
+## OpenAI Luna and Claude Opus pins (2026-09-23)
+
+Codex explorer and routine Luna pins are `gpt-6-luna` at effort `low` on profiles `codex-explorer-low` and `codex-luna-low`. Role limits stay the same: the explorer profile is explore-only. Codex hard and review stay `gpt-5.6-terra` on `codex-terra-medium` and `codex-terra-high`.
+
+OpenCode standard Luna is exact selector `openai/gpt-6-luna` with alias `gpt-6-luna` on profile `opencode-gpt-5.6-luna-high`. That profile stays `catalog_required`. OpenCode cheap and Terra pins are unchanged.
+
+Claude Code hard/review and OMP/Pi review selectors are `claude-opus-5-5`. Cursor review is `claude-opus-5-5-thinking-high`. Profile IDs stay `claude-opus-5-high`, `omp-claude-opus-5-high`, `pi-claude-opus-5-high`, and `cursor-opus-thinking-high`.
+
+Default fast/standard worker order is Codex, Grok, Claude, OpenCode, OMP, Pi, agy. Strong/review stays Claude, Grok, OpenCode, OMP, Pi, agy, Codex. Preference order does not enable workers and does not bypass live-parent exclusion.
+
+This supersedes the 2026-09-16 shipped explorer selector.
+
+### Rollout / restart
+
+Install the checkout into `~/.rig`, then fully restart parent and MCP sessions before the next admission. Mixed-version admission writers are unsupported.
+
+### Rollback
+
+Restore Codex and OpenCode Luna selectors to `gpt-5.6-luna` and `openai/gpt-5.6-luna` (alias `gpt-5.6-luna`), Opus selectors to `claude-opus-5` (Cursor `claude-opus-5-thinking-high`, alias `anthropic/claude-opus-5`), and fast/standard worker order to Grok, Claude, OpenCode, OMP, Pi, agy, Codex. Fully restart parent and MCP sessions. Rollback does not delete routing data.
+
 ## Grok 4.7 CLI pin (2026-09-21)
 
 The Grok CLI strong pin is `grok-4.7` at effort `high` on profile `grok-4.7-high`. That covers implement, hard, verify, and review. Explore, mini, and bulk stay on `grok-4.5` low (`grok-4.5-low`).
@@ -24,7 +44,7 @@ Rig TUI now shows normalized live Pi and Codex assistant replies, concise tool s
 
 The Codex worker uses JSON streaming.
 
-The shipped explorer default is `gpt-5.6-luna` on profile `codex-explorer-low`. Unsupported `gpt-5.3-codex-mini` is no longer the shipped explorer selector.
+The shipped explorer default in this release was `gpt-5.6-luna` on profile `codex-explorer-low`. Unsupported `gpt-5.3-codex-mini` is no longer the shipped explorer selector. The 2026-09-23 note moves that selector to `gpt-6-luna`.
 
 `gpt-5.3-codex-spark` is an opt-in `codex-explorer-low` selector override. It is explore-only and cannot be assigned to write roles:
 
@@ -45,7 +65,7 @@ Spark smoke-test: after the override, explore-only routing may select Spark; wri
 
 ### Rollback
 
-Remove the `codex-explorer-low` Spark selector override to restore shipped `gpt-5.6-luna`.
+Remove the `codex-explorer-low` Spark selector override to restore the shipped explorer selector (`gpt-6-luna` as of 2026-09-23).
 
 ## Adaptive Workflows (combined wait-cancel rollout)
 
@@ -81,7 +101,7 @@ Devin is a child-only worker. It is never a parent and defaults off.
 
 ### Opt-in
 
-Enable Devin via routing preferences in `.rig/routing.json`. Default preference order stays Grok, Claude, OpenCode, OMP, Pi, agy, Codex.
+Enable Devin via routing preferences in `.rig/routing.json`. Default fast/standard order is Codex, Grok, Claude, OpenCode, OMP, Pi, agy. Strong/review stays Claude, Grok, OpenCode, OMP, Pi, agy, Codex.
 
 ### Role pins
 

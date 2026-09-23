@@ -79,7 +79,7 @@ class Assessment(unittest.TestCase):
         self.assertTrue(got["supplied"])
         with self.assertRaises(ValueError):
             policy.normalize_assessment("stay", {"complexity": "nope"})
-        choice = smart_pick("grok", ["claude"], "stay", "advise", catalogs={"opencode": ["openai/gpt-5.6-luna"]})
+        choice = smart_pick("grok", ["claude"], "stay", "advise", catalogs={"opencode": ["openai/gpt-6-luna"]})
         self.assertEqual(choice["spawn"], "stay")
         self.assertEqual(choice["routing"]["catalog"]["source"], "none")
 
@@ -143,13 +143,13 @@ class SmartSelection(unittest.TestCase):
             complexity="high", risk="low", uncertainty="low",
         )
         self.assertEqual(mini["worker"], "claude")
-        self.assertEqual(mini["model"], "claude-opus-5")
+        self.assertEqual(mini["model"], "claude-opus-5-5")
         explore = smart_pick(
             "codex", ["grok", "claude"], "explore", "trace remaining gates",
             complexity="high", risk="low", uncertainty="low",
         )
         self.assertEqual(explore["worker"], "claude")
-        self.assertEqual(explore["model"], "claude-opus-5")
+        self.assertEqual(explore["model"], "claude-opus-5-5")
         self.assertEqual(explore["spawn"], "run-worker")
         self.assertIn("explore", profiles.profiles_by_id()["claude-opus-5-high"].roles)
 
@@ -159,7 +159,7 @@ class SmartSelection(unittest.TestCase):
             complexity="high", risk="high", uncertainty="high",
         )
         self.assertEqual(smart["worker"], "claude")
-        self.assertEqual(smart["model"], "claude-opus-5")
+        self.assertEqual(smart["model"], "claude-opus-5-5")
         legacy = route.pick(
             "codex", ["grok", "claude"], "implement", "add a header",
             complexity="high", risk="high", uncertainty="high", policy_mode="legacy",
@@ -235,16 +235,16 @@ class SmartSelection(unittest.TestCase):
         self.assertEqual(observed["effort"], "low")
 
     def test_catalog_exact_alias_not_substring(self):
-        catalogs = {"opencode": ["openai/gpt-5.6-luna", "openai/gpt-5.6-luna-preview"]}
+        catalogs = {"opencode": ["openai/gpt-6-luna", "openai/gpt-6-luna-preview"]}
         choice = smart_pick(
             "", ["opencode"], "implement", "add a header",
             catalogs=catalogs, complexity="medium", risk="medium", uncertainty="medium",
         )
         self.assertEqual(choice["worker"], "opencode")
-        self.assertEqual(choice["model"], "openai/gpt-5.6-luna")
+        self.assertEqual(choice["model"], "openai/gpt-6-luna")
         miss = smart_pick(
             "", ["opencode"], "implement", "add a header",
-            catalogs={"opencode": ["openai/gpt-5.6-luna-preview"]},
+            catalogs={"opencode": ["openai/gpt-6-luna-preview"]},
             complexity="medium", risk="medium", uncertainty="medium",
         )
         self.assertEqual(miss["spawn"], "none")
@@ -425,7 +425,7 @@ class ConfigValidation(unittest.TestCase):
             (repo / ".rig").mkdir()
             (repo / ".rig" / "routing.json").write_text(json.dumps({
                 "schema_version": 1,
-                "profiles": {"grok-4.7-high": {"aliases": ["anthropic/claude-opus-5"]}},
+                "profiles": {"grok-4.7-high": {"aliases": ["anthropic/claude-opus-5-5"]}},
             }))
             with self.assertRaises(policy.ConfigError):
                 policy.load_config(repo, policy_mode="smart")
@@ -457,8 +457,8 @@ class ConfigValidation(unittest.TestCase):
             cfg = policy.load_config(repo, policy_mode="smart")
             luna = cfg.profiles["codex-luna-low"]
             explorer = cfg.profiles["codex-explorer-low"]
-            self.assertEqual(luna.selector, "gpt-5.6-luna")
-            self.assertEqual(explorer.selector, "gpt-5.6-luna")
+            self.assertEqual(luna.selector, "gpt-6-luna")
+            self.assertEqual(explorer.selector, "gpt-6-luna")
             self.assertEqual(luna.selector, explorer.selector)
             self.assertTrue(set(luna.roles) & set(profiles.WRITE_ROLES))
             self.assertEqual(explorer.roles, ("explore",))
@@ -523,28 +523,28 @@ class CatalogStale(unittest.TestCase):
         self.cache.write_text(json.dumps(data))
 
     def test_stale_within_24h_ok_even_if_refresh_failed(self):
-        self._put("opencode", ["openai/gpt-5.6-luna"], catalog.TTL_SECONDS + 10)
+        self._put("opencode", ["openai/gpt-6-luna"], catalog.TTL_SECONDS + 10)
         with patch.object(catalog, "probe_catalog", return_value=("unavailable", None)):
             info = catalog.load_catalog_info("opencode", require_fresh=True)
         self.assertEqual(info["state"], "stale")
         self.assertTrue(info["refresh_failed"])
-        self.assertEqual(info["ids"], ["openai/gpt-5.6-luna"])
+        self.assertEqual(info["ids"], ["openai/gpt-6-luna"])
         choice = smart_pick(
             "", ["opencode"], "implement", "add a header",
-            catalogs={"opencode": ["openai/gpt-5.6-luna"]},
+            catalogs={"opencode": ["openai/gpt-6-luna"]},
         )
-        self.assertEqual(choice["model"], "openai/gpt-5.6-luna")
+        self.assertEqual(choice["model"], "openai/gpt-6-luna")
 
     def test_invalid_cache_timestamp_or_status_requires_confirmation(self):
         for stamp, status in ((float("nan"), "ok"), (float("inf"), "ok"),
                               (time.time() + 10000, "ok"), (time.time() - 10, "failure")):
             self.cache.write_text(json.dumps({"opencode": {
-                "ids": ["openai/gpt-5.6-luna"], "fetched_at": stamp, "status": status}}))
+                "ids": ["openai/gpt-6-luna"], "fetched_at": stamp, "status": status}}))
             with patch.object(catalog, "probe_catalog", return_value=("unavailable", None)):
                 self.assertEqual(catalog.load_catalog_info("opencode")["state"], "unavailable")
 
     def test_older_than_24h_must_probe_else_reject(self):
-        self._put("opencode", ["openai/gpt-5.6-luna"], catalog.STALE_MAX_SECONDS + 10)
+        self._put("opencode", ["openai/gpt-6-luna"], catalog.STALE_MAX_SECONDS + 10)
         with patch.object(catalog, "probe_catalog", return_value=("unavailable", None)):
             info = catalog.load_catalog_info("opencode")
         self.assertEqual(info["state"], "unavailable")

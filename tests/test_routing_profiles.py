@@ -45,11 +45,21 @@ class BuiltinPins(unittest.TestCase):
         explorer = self.rows["codex-explorer-low"]
         self.assertEqual(explorer.roles, ("explore",))
         self.assertEqual(explorer.tiers, ("fast",))
-        self.assertEqual(explorer.selector, "gpt-5.6-luna")
+        self.assertEqual(explorer.selector, "gpt-6-luna")
         self.assertTrue(set(explorer.roles).isdisjoint(profiles.WRITE_ROLES))
         luna = self.rows["codex-luna-low"]
-        self.assertEqual(luna.selector, "gpt-5.6-luna")
+        self.assertEqual(luna.selector, "gpt-6-luna")
         self.assertTrue(set(luna.roles) & set(profiles.WRITE_ROLES))
+        oc = self.rows["opencode-gpt-5.6-luna-high"]
+        self.assertEqual(oc.selector, "openai/gpt-6-luna")
+        self.assertEqual(oc.aliases, ("gpt-6-luna",))
+        self.assertTrue(oc.catalog_required)
+        self.assertEqual(self.rows["claude-opus-5-high"].selector, "claude-opus-5-5")
+        self.assertEqual(self.rows["omp-claude-opus-5-high"].aliases, ("anthropic/claude-opus-5-5",))
+        self.assertEqual(self.rows["pi-claude-opus-5-high"].aliases, ("anthropic/claude-opus-5-5",))
+        self.assertEqual(self.rows["cursor-opus-thinking-high"].selector, "claude-opus-5-5-thinking-high")
+        self.assertEqual(self.rows["codex-terra-medium"].selector, "gpt-5.6-terra")
+        self.assertEqual(self.rows["codex-terra-high"].selector, "gpt-5.6-terra")
 
     def test_high_explore_uses_standard_and_strong_read_profiles(self):
         for pid in (
@@ -75,7 +85,10 @@ class PreferenceOrder(unittest.TestCase):
         rows = profiles.profiles_by_id()
         fast = profiles.default_preference_ids("fast", rows)
         self.assertIn("codex-explorer-low", fast)
+        self.assertLess(fast.index("codex-explorer-low"), fast.index("grok-4.5-low"))
         self.assertLess(fast.index("grok-4.5-low"), fast.index("claude-haiku-4-5-low"))
+        standard = profiles.default_preference_ids("standard", rows)
+        self.assertLess(standard.index("codex-luna-low"), standard.index("grok-4.7-high"))
 
     def test_review_default_puts_claude_before_grok(self):
         rows = profiles.profiles_by_id()

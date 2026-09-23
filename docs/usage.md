@@ -598,7 +598,7 @@ After `rig setup`, `/plugins` **Rig Queue**, `/hooks` trust, fully quit once: `/
 
 You: `Update README to mention the HUD.`
 
-Mini uses an edit-capable worker and starts a write reservation before editing `README.md` / `docs/usage.md`. Codex mini is `gpt-5.6-luna` low; its read-only explorer (`codex-explorer-low`) is reserved for exploration and also defaults to `gpt-5.6-luna`.
+Mini uses an edit-capable worker and starts a write reservation before editing `README.md` / `docs/usage.md`. Codex mini is `gpt-6-luna` low; its read-only explorer (`codex-explorer-low`) is reserved for exploration and also defaults to `gpt-6-luna`.
 
 ### 10. Review after a successful implement
 
@@ -625,7 +625,7 @@ Bash fallback when MCP is unavailable: `rig session --role implement --case "fix
 
 Optional `.rig/routing.json` schema 1 stays valid. Schema 2 may set `execution.direct_parent_low_risk` (boolean, default false). When true, smart mini/implement with all assessment dimensions low and an eligible tracked live parent writes here (`execution_strategy=direct-parent`) without catalog lookup. Register with `rig_job_start`, finish with authenticated parent completion, then accept the current snapshot. Other roles, medium/high assessments, excluded parents, and legacy mode keep the previous wrapper/parent-fallback path. Malformed execution settings fail smart mode; legacy still falls back to builtin config. Disable only the cost-aware lane with `execution.direct_parent_low_risk: false` (or schema 1) without leaving smart mode.
 
-Codex exploration stays on profile `codex-explorer-low` (explore-only). The shipped selector is `gpt-5.6-luna`. Spark is opt-in only:
+Codex exploration stays on profile `codex-explorer-low` (explore-only). The shipped selector is `gpt-6-luna`. Spark is opt-in only:
 
 ```json
 {
@@ -653,12 +653,12 @@ Smart mode uses declared profiles: exact selectors/aliases, supported effort, ro
 
 See [smart routing](smart-routing.md) for assessment defaults, `.rig/routing.json`, `--explain`, reporting and `[routing] mode="legacy"` rollback. Pins below are built-in profile inputs, not unconditional role-to-model assignments.
 
-- Claude: `claude-haiku-4-5-20251001` cheap, `claude-sonnet-5` implement, `claude-opus-5` hard/review
-- Cursor: `composer-2.5-fast` cheap, `composer-2.5` implement, `cursor-grok-4.6-high` hard, `claude-opus-5-thinking-high` review
+- Claude: `claude-haiku-4-5-20251001` cheap, `claude-sonnet-5` implement, `claude-opus-5-5` hard/review
+- Cursor: `composer-2.5-fast` cheap, `composer-2.5` implement, `cursor-grok-4.6-high` hard, `claude-opus-5-5-thinking-high` review
 - Grok: implement `grok-4.7` high; explore `grok-4.5`
-- Codex: cheap/explore `gpt-5.6-luna` low. Hard Codex work can use `gpt-5.6-terra` medium. Optional `.rig/routing.json` override for exploration only: profile `codex-explorer-low` selector `gpt-5.3-codex-spark`. Spark is not a baseline and cannot be enabled for write roles.
-- OpenCode: cheap `openai/gpt-5.4-mini` `--variant minimal`; implement `openai/gpt-5.6-luna` `--variant high`; hard/review `openai/gpt-5.6-terra` `--variant max`
-- OMP / Pi: cheap `grok-4.5` `--thinking low`; implement/hard `grok-4.6` `--thinking high`; review `claude-opus-5` `--thinking high`
+- Codex: cheap/explore `gpt-6-luna` low. Hard Codex work can use `gpt-5.6-terra` medium. Optional `.rig/routing.json` override for exploration only: profile `codex-explorer-low` selector `gpt-5.3-codex-spark`. Spark is not a baseline and cannot be enabled for write roles.
+- OpenCode: cheap `openai/gpt-5.4-mini` `--variant minimal`; implement `openai/gpt-6-luna` `--variant high`; hard/review `openai/gpt-5.6-terra` `--variant max`
+- OMP / Pi: cheap `grok-4.5` `--thinking low`; implement/hard `grok-4.6` `--thinking high`; review `claude-opus-5-5` `--thinking high`
 - agy: cheap `gemini-3.8-flash-low` `--effort low`; implement `gemini-3.8-flash-high` `--effort high`; hard/review `gemini-3.1-pro-high` `--effort high`
 - Devin (child-only): `swe-2-medium` explore/mini/bulk; `swe-2-high` implement; `swe-2-max` hard/review. No `--effort` flag; never swe aliases / SWE-1.x / Fusion / default
 
