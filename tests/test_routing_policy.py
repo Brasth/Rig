@@ -198,12 +198,20 @@ class SmartSelection(unittest.TestCase):
             self.assertIn("grok-4.5-low", cfg.preferences["fast"])
             self.assertIn("codex-explorer-low", cfg.preferences["fast"])
 
-    def test_devin_requires_explicit_preference_and_exact_catalog_pin(self):
-        no_opt_in = smart_pick(
+    def test_devin_default_candidate_still_requires_exact_catalog_pin(self):
+        selected_by_default = smart_pick(
             "codex", ["devin"], "implement", "add a header",
             catalogs={"devin": ["swe-2-high"]},
         )
-        self.assertNotEqual(no_opt_in.get("worker"), "devin")
+        self.assertEqual(
+            (selected_by_default["worker"], selected_by_default["model"], selected_by_default["effort"]),
+            ("devin", "swe-2-high", "high"),
+        )
+        disabled = smart_pick(
+            "codex", ["claude"], "implement", "add a header",
+            catalogs={"devin": ["swe-2-high"]},
+        )
+        self.assertNotEqual(disabled.get("worker"), "devin")
 
         with tempfile.TemporaryDirectory() as temp:
             repo = Path(temp)
@@ -635,7 +643,6 @@ class SchemaAndDirectParent(unittest.TestCase):
                 {"schema_version": 2, "execution": {"direct_parent_low_risk": True, "extra": False}},
                 {"schema_version": 2, "execution": []},
                 {"schema_version": 1, "execution": {"direct_parent_low_risk": True}},
-                {"schema_version": 3},
             ):
                 (repo / ".rig" / "routing.json").write_text(json.dumps(bad))
                 with self.assertRaises(policy.ConfigError):

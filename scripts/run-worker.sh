@@ -34,7 +34,7 @@ AGY_PERMS_MERGED=0
 DEVIN_MCP_INSTALLED=0
 
 case "$WORKER" in
-  grok|codex|claude|cursor|opencode|omp|pi|agy|devin) ;;
+  grok|codex|claude|cursor|opencode|omp|pi|agy|devin|mimo) ;;
   *)
     echo "run-worker: unknown worker '$WORKER'" >&2
     exit 2
@@ -1023,6 +1023,14 @@ case "$WORKER" in
       --permission-mode accept-edits
       --respect-workspace-trust true
     )
+    ;;
+  mimo)
+    # MiMo Code runs in JSON mode and inherits job-scoped RIG_JOB_* values for
+    # the already configured Rig MCP. Never enable its yolo permission mode.
+    CMD=(mimo run --format json --dir "$REPO")
+    [[ -n "$MODEL" ]] && CMD+=(--model "$MODEL")
+    [[ -n "$EFFORT" ]] && CMD+=(--variant "$EFFORT")
+    CMD+=("$BRIEF_TEXT")
     ;;
 esac
 return 0

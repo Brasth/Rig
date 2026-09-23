@@ -74,9 +74,22 @@ def _strategy(routing: dict | None) -> str:
     return ""
 
 
+def _picker(routing: dict | None) -> dict:
+    raw = (routing or {}).get("picker")
+    return raw if isinstance(raw, dict) else {}
+
+
+def _trait_key(picker: dict) -> str:
+    traits = picker.get("traits")
+    if not isinstance(traits, list):
+        return ""
+    return ",".join(str(item) for item in traits if isinstance(item, str))
+
+
 def _group_key(routing: dict | None, job: dict) -> tuple:
     routing = routing or {}
     profile = routing.get("selected_profile") or {}
+    picker = _picker(routing)
     model, effort = _actual_model(job)
     return (
         routing.get("policy_version") if routing.get("policy_mode") == "smart" else "legacy",
@@ -85,6 +98,10 @@ def _group_key(routing: dict | None, job: dict) -> tuple:
         model,
         effort,
         _strategy(routing),
+        str(picker.get("engine") or ""),
+        str(picker.get("selection_source") or ""),
+        _trait_key(picker),
+        str(picker.get("fallback") or ""),
     )
 
 
@@ -186,6 +203,10 @@ def build_report(repo: Path, *, days: int = 30, now: float | None = None) -> dic
                 "model": key[3],
                 "effort": key[4],
                 "execution_strategy": key[5],
+                "engine": key[6],
+                "selection_source": key[7],
+                "traits": key[8],
+                "fallback": key[9],
                 **_empty_bucket(),
             }
         return groups[key]
@@ -337,6 +358,8 @@ def build_report(repo: Path, *, days: int = 30, now: float | None = None) -> dic
     grouped.sort(key=lambda row: (
         str(row["policy_version"]), row["required_tier"], row["profile"], row["model"],
         row["effort"], row.get("execution_strategy") or "",
+        row.get("engine") or "", row.get("selection_source") or "",
+        row.get("traits") or "", row.get("fallback") or "",
     ))
     finished_totals = finish(totals)
     return {
@@ -349,8 +372,10 @@ def build_report(repo: Path, *, days: int = 30, now: float | None = None) -> dic
             "accepted_denominator": totals["assessed"],
             "note": (
                 "exit0 is not acceptance; cancellation is not a model-quality failure; "
+                "unverified results are not success; "
                 "smart, legacy, and manual provenance are counted separately; "
                 "direct-parent and wrapper attempts are counted separately; "
+                "groups separate engine, selection source, traits, profile, and fallback; "
                 "unknown token usage is not zero and is excluded from token aggregates; "
                 "missing/malformed sidecar evidence is never accepted"
             ),
@@ -403,6 +428,8 @@ def format_report(report: dict) -> str:
         coverage = row.get("token_coverage") or {}
         lines.append(
             f"  v={row['policy_version']} tier={row['required_tier'] or '-'} "
+            f"engine={row.get('engine') or '-'} source={row.get('selection_source') or '-'} "
+            f"traits={row.get('traits') or '-'} fallback={row.get('fallback') or '-'} "
             f"strategy={row.get('execution_strategy') or '-'} "
             f"profile={row['profile'] or '-'} model={row['model'] or '-'} effort={row['effort'] or '-'} "
             f"n={row['attempts']} ok_accept={row['accepted']} fail_exec={row['execution_failures']} "

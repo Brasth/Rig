@@ -745,6 +745,111 @@ class ComputerUseProxy(unittest.TestCase):
     def test_invoked_refused_cannot_be_confirmed_or_reused(self):
         self._assert_invoked_failure_not_confirmable("refused")
 
+    def test_cu_capture_isError_with_residual_elements_registers_no_snapshot(self):
+        runner = self._runner({
+            "get_window_state": {
+                "isError": True,
+                "ok": False,
+                "content": [{"type": "text", "text": "tool failed"}],
+                "elements": [{"index": 1, "role": "AXButton", "label": "ghost"}],
+                "snapshot_id": "drv-bad",
+            },
+        })
+        ev = computer_use.cu_capture(self.repo, pid=844, window_id=10725, runner=runner)
+        self.assertFalse(ev["ok"])
+        self.assertEqual(ev.get("effect"), "hidden")
+        self.assertFalse(ev.get("snapshot_id"))
+        self.assertEqual(computer_use._SNAPSHOTS, {})
+
+
+class ComputerUseSubprocessBoundary(unittest.TestCase):
+    def test_default_runner_uses_persistent_mcp_transport(self):
+        with mock.patch.object(computer_use.cua_transport, "call", return_value={"structuredContent": {"ok": True}}) as call:
+            data = computer_use._default_runner("/bin/cua-driver", ["click", '{"x":1}'], 12)
+        call.assert_called_once_with(
+            "/bin/cua-driver", computer_use.BROWSER_SESSION, "click", {"x": 1}, 12,
+        )
+        self.assertTrue(data.get("ok"))
+
+    def test_isError_with_residual_elements_refuses_capture(self):
+        payload = {
+            "isError": True,
+            "ok": False,
+            "content": [{"type": "text", "text": "tool failed"}],
+            "elements": [{"index": 1, "role": "AXButton", "label": "ghost"}],
+            "snapshot_id": "drv-bad",
+        }
+        data = computer_use._normalize_driver_output(0, json.dumps(payload), "")
+        self.assertFalse(data["ok"])
+        self.assertTrue(data.get("isError"))
+        self.assertTrue(computer_use._snapshot_failed(data))
+
+    def test_exit_zero_help_or_non_json_fails(self):
+        help_out = computer_use._normalize_driver_output(0, "Usage: cua-driver <subcommand>\n", "")
+        self.assertFalse(help_out["ok"])
+        self.assertTrue(help_out.get("non_json"))
+        plain = computer_use._normalize_driver_output(0, "not-json-at-all\n", "")
+        self.assertFalse(plain["ok"])
+        self.assertTrue(plain.get("non_json"))
+
+    def test_normalize_preserves_outer_ok_false_over_nested_ok_true(self):
+        outer = {
+            "ok": False,
+            "structuredContent": {"ok": True, "effect": "captured", "elements": [{"index": 1}]},
+            "content": [{"type": "text", "text": "outer failure"}],
+        }
+        data = computer_use._normalize_driver_output(0, json.dumps(outer), "")
+        self.assertFalse(data["ok"])
+        self.assertNotEqual(data.get("isError"), True)
+
+    def test_stopped_daemon_diagnostic_not_ready(self):
+        stopped = computer_use._interpret_daemon_status(
+            0, "daemon is not running; start serve", ""
+        )
+        self.assertEqual(stopped["state"], "stopped")
+        self.assertFalse(stopped["ready"])
+        self.assertIn("daemon", stopped["detail"].lower())
+
+    def test_nonzero_exit_never_reports_ready(self):
+        status = computer_use._interpret_daemon_status(
+            1, "daemon is running\n", "permission denied"
+        )
+        self.assertFalse(status["ready"])
+        self.assertNotEqual(status["state"], "ready")
+
+    def test_permission_error_is_not_missing_binary(self):
+        err = PermissionError(13, "Permission denied")
+        payload = computer_use._exception_driver_result(err)
+        self.assertFalse(payload.get("ok"))
+        self.assertFalse(payload.get("missing_binary"))
+        self.assertEqual(payload.get("exit_code"), 1)
+
+    def test_chrome_opener_preserves_permission_denied_stderr(self):
+        fake = mock.Mock(
+            returncode=1,
+            stdout="",
+            stderr="chrome-profile: permission denied opening profile",
+        )
+        with mock.patch.object(computer_use.shutil, "which", return_value="/bin/chrome-profile"), \
+             mock.patch.object(computer_use.subprocess, "run", return_value=fake):
+            data = computer_use._default_chrome_opener("Work", "https://example.com")
+        self.assertFalse(data["ok"])
+        self.assertIn("permission denied", data["hint"].lower())
+        self.assertNotEqual(data["hint"], computer_use.CHROME_PROFILE_SETUP_HINT)
+
+    def test_chrome_opener_exit_zero_keeps_json_ok_false(self):
+        fake = mock.Mock(
+            returncode=0,
+            stdout='{"ok": false, "hint": "profile locked"}',
+            stderr="",
+        )
+        with mock.patch.object(computer_use.shutil, "which", return_value="/bin/chrome-profile"), \
+             mock.patch.object(computer_use.subprocess, "run", return_value=fake):
+            data = computer_use._default_chrome_opener("Work", "https://example.com")
+        self.assertFalse(data["ok"])
+        self.assertIn("profile locked", data["hint"])
+
+
 
 if __name__ == "__main__":
     unittest.main()

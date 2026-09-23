@@ -63,6 +63,9 @@ usage: rig <command> [args]
     assessment: [--complexity low|medium|high] [--risk ...] [--uncertainty ...] [--assessment-reason TEXT]
     [--explain] [--policy-mode smart|legacy]
   routing report [--days N] [--json]
+  routing engine local|jev
+  routing objective quality|balanced|speed|cost
+  provider jev setup|status|remove
   billing import [--file PATH] [--scope NAME] [--dry-run] [--json]
   billing sync openai|anthropic [--file PATH] [--scope NAME] [--dry-run] [--validate] [--network] [--json]
   billing report [--scope NAME] [--json]
@@ -516,13 +519,13 @@ cmd_init() {
         fi
         rig_set_toml_key "$harness" "workers" "$name" "$flag"
       done
-      echo "workers from PATH: grok=$(worker_flag grok) claude=$(worker_flag claude) cursor=$(worker_flag cursor) opencode=$(worker_flag opencode) omp=$(worker_flag omp) pi=$(worker_flag pi) agy=$(worker_flag agy) devin=$(worker_flag devin)"
+      echo "workers from PATH: grok=$(worker_flag grok) claude=$(worker_flag claude) cursor=$(worker_flag cursor) opencode=$(worker_flag opencode) omp=$(worker_flag omp) pi=$(worker_flag pi) agy=$(worker_flag agy) devin=$(worker_flag devin) mimo=$(worker_flag mimo)"
     elif [[ -f "$harness" ]]; then
       local name
       for name in "${RIG_WORKERS[@]}"; do
         # Older harnesses treat an absent Devin flag as off; keep them byte-for-byte
         # stable until the user explicitly enables this opt-in worker.
-        [[ "$name" == "devin" ]] && continue
+        [[ "$name" == "devin" || "$name" == "mimo" ]] && continue
         if ! rig_has_section_key "$harness" "workers" "$name"; then
           rig_set_toml_key "$harness" "workers" "$name" "false"
           echo "appended $name = false (existing harness; run: rig workers $name=on)"
@@ -830,6 +833,9 @@ cmd_doctor() {
     echo "  Devin CLI missing (child-only SWE-2 worker):"
     echo "  https://docs.devin.ai/cli"
   fi
+  if [[ -z "$(find_worker_bin mimo)" ]]; then
+    echo "  MiMo Code CLI missing: https://github.com/MiMo-AI/mimo-code"
+  fi
   echo
   echo "Skill"
   local p proj_skill
@@ -893,7 +899,7 @@ cmd_doctor() {
   echo "MCP"
   local mcp_name mcp_reason mcp_bin mcp_schema
   echo "  Cursor CLI has no isolated job-scoped MCP; excluded until a safe --mcp-config exists"
-  for mcp_name in grok codex claude opencode omp pi agy devin cursor; do
+  for mcp_name in grok codex claude opencode omp pi agy devin mimo cursor; do
     mcp_reason="$(worker_mcp_reason "$mcp_name" 2>/dev/null || true)"
     mcp_bin="$(find_worker_bin "$mcp_name")"
     case "$mcp_name" in
@@ -902,6 +908,7 @@ cmd_doctor() {
       omp|pi|agy) mcp_schema="mcpServers.rig" ;;
       claude) mcp_schema="job mcp.json" ;;
       devin) mcp_schema="job .devin/mcp_config.local.json" ;;
+      mimo) mcp_schema="global MCP with job environment" ;;
       *) mcp_schema="mcp" ;;
     esac
     if [[ -z "$mcp_reason" ]]; then
@@ -1156,8 +1163,18 @@ cmd_routing() {
     report)
       python3 "$(py_script routing_report.py)" --repo "$(repo_root)" "$@"
       ;;
+    engine)
+      local engine="${1:-}"
+      [[ "$engine" == "local" || "$engine" == "jev" ]] || { echo "usage: rig routing engine local|jev" >&2; exit 2; }
+      python3 "$(py_script jev_settings.py)" project --repo "$(repo_root)" --engine "$engine"
+      ;;
+    objective)
+      local objective="${1:-}"
+      case "$objective" in quality|balanced|speed|cost) ;; *) echo "usage: rig routing objective quality|balanced|speed|cost" >&2; exit 2 ;; esac
+      python3 "$(py_script jev_settings.py)" project --repo "$(repo_root)" --objective "$objective"
+      ;;
     *)
-      echo "usage: rig routing report [--days N] [--json]" >&2
+      echo "usage: rig routing report [--days N] [--json] | engine local|jev | objective quality|balanced|speed|cost" >&2
       exit 2
       ;;
   esac
@@ -1203,7 +1220,7 @@ cmd_parent() {
 
 cmd_workers() {
   [[ $# -ge 1 ]] || {
-    echo "usage: rig workers grok=on|off claude=on|off codex=on|off cursor=on|off opencode=on|off omp=on|off pi=on|off agy=on|off devin=on|off" >&2
+    echo "usage: rig workers grok=on|off claude=on|off codex=on|off cursor=on|off opencode=on|off omp=on|off pi=on|off agy=on|off devin=on|off mimo=on|off" >&2
     exit 2
   }
   ensure_harness
@@ -1212,7 +1229,7 @@ cmd_workers() {
     name="${spec%%=*}"
     val="${spec#*=}"
     case "$name" in
-      grok|claude|codex|cursor|opencode|omp|pi|agy|devin) ;;
+      grok|claude|codex|cursor|opencode|omp|pi|agy|devin|mimo) ;;
       *)
         echo "rig workers: unknown worker '$name'" >&2
         exit 2
@@ -1512,6 +1529,11 @@ main() {
     job) cmd_job "$@" ;;
     pick) cmd_pick "$@" ;;
     routing) cmd_routing "$@" ;;
+    provider)
+      [[ "${1:-}" == "jev" ]] || { echo "usage: rig provider jev setup|status|remove" >&2; exit 2; }
+      shift
+      python3 "$(py_script jev_settings.py)" "$@"
+      ;;
     billing) cmd_billing "$@" ;;
     benchmark) cmd_benchmark "$@" ;;
     session) cmd_session "$@" ;;

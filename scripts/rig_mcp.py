@@ -33,7 +33,7 @@ import workflow as rig_workflow  # noqa: E402
 import coordination as rig_coordination  # noqa: E402
 
 PICK_ROLES = ("explore", "mini", "bulk", "implement", "hard", "review", "verify", "stay")
-JOB_WORKERS = ("grok", "codex", "claude", "cursor", "opencode", "omp", "pi", "agy", "devin", "parent")
+JOB_WORKERS = ("grok", "codex", "claude", "cursor", "opencode", "omp", "pi", "agy", "devin", "mimo", "parent")
 JOB_RECORD_STATUSES = ("ok", "fail", "timeout")
 JOB_FINISH_STATUSES = ("ok", "fail", "timeout", "cancelled")
 REVIEW_PROPERTIES = {
@@ -748,7 +748,7 @@ TOOLS = [
                 "role": {"type": "string", "description": "Pick kind or job role."},
                 "worker": {
                     "type": "string",
-                    "enum": ["grok", "codex", "claude", "opencode", "omp", "pi", "agy", "devin"],
+                    "enum": ["grok", "codex", "claude", "opencode", "omp", "pi", "agy", "devin", "mimo"],
                 },
                 "model": {"type": "string"},
                 "effort": {"type": "string"},

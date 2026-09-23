@@ -67,7 +67,47 @@ CODES = (
     "review-same-provider",
     "review-unknown-provider",
     "review-unavailable",
+    "outscored",
+    "collapsed-transport",
 )
+_ROLE_TRAITS = {
+    "implement": ("implementation",),
+    "hard": ("architecture", "implementation"),
+    "review": ("general",),
+    "explore": ("general",),
+    "mini": ("implementation",),
+    "bulk": ("implementation",),
+    "verify": ("tests",),
+    "stay": ("general",),
+}
+_TRAIT_TERMS = (
+    ("debugging", ("bug", "debug", "traceback", "exception", "broken", "failing")),
+    ("tests", ("test", "pytest", "unittest", "coverage")),
+    ("architecture", ("architect", "refactor", "boundary")),
+    ("security", ("security", "auth", "vulnerab", "owasp", "secret", "permission", "credential")),
+    ("performance", ("performance", "latency", "slow", "optimi", "benchmark")),
+    ("migration", ("migrat", "upgrade")),
+    ("documentation", ("docs", "readme", "document", "comment")),
+    ("frontend", ("frontend", "css", "react", "layout", "component")),
+    ("data", ("sql", "schema", "database", "query")),
+    ("implementation", ("implement", "feature")),
+)
+_TIER_INDEX = {"fast": 0, "standard": 1, "strong": 2}
+_REASONING_TARGET = {"fast": 40, "standard": 70, "strong": 95}
+_SCORE_WEIGHTS = {
+    "balanced": {"capability": 34, "tier": 30, "axis": 20, "preference": 10, "health": 6},
+    "quality": {"capability": 25, "tier": 15, "axis": 45, "preference": 10, "health": 5},
+    "speed": {"capability": 20, "tier": 30, "axis": 30, "preference": 10, "health": 10},
+    "cost": {"capability": 20, "tier": 25, "axis": 35, "preference": 10, "health": 10},
+}
+_DIRECT_WORKER = {
+    "xai": "grok",
+    "anthropic": "claude",
+    "openai": "codex",
+    "google": "agy",
+    "cognition": "devin",
+    "cursor": "cursor",
+}
 
 
 def _level(value: str, name: str) -> str:
@@ -287,6 +327,263 @@ def _hard_filter(profile: rig_profiles.Profile, *, live: str, blocked: set[str],
     return None
 
 
+def task_traits(kind: str, case: str) -> list[str]:
+    """Explainable task labels. The raw case is not retained."""
+    import re
+
+    text = str(case or "").lower()
+    found = set(_ROLE_TRAITS.get(kind, ("general",)))
+    for trait, terms in _TRAIT_TERMS:
+        for term in terms:
+            if re.search(rf"(?<![a-z0-9]){re.escape(term)}", text):
+                found.add(trait)
+                break
+    if found - {"general"}:
+        found.discard("general")
+    if not found:
+        found.add("general")
+    return [name for name in rig_profiles.TRAITS if name in found]
+
+
+def _preference_list(cfg, kind: str, tier: str) -> list[str]:
+    review = kind == "review"
+    default_ids = rig_profiles.default_preference_ids(
+        "strong" if review else tier,
+        cfg.profiles,
+        role="review" if review else "",
+    )
+    key = "review" if review else tier
+    return rig_profiles.preference_order(cfg.preferences.get(key) or [], default_ids)
+
+
+def _transport_health(profile: rig_profiles.Profile) -> int:
+    if profile.worker == _DIRECT_WORKER.get(profile.provider):
+        return 100
+    if profile.worker in {"omp", "pi", "opencode", "cursor"}:
+        return 40
+    return 55
+
+
+def _tier_fit(profile: rig_profiles.Profile, need: str, offered: str) -> int:
+    distance = _TIER_INDEX[offered] - _TIER_INDEX[need]
+    distance_score = max(0, 100 - distance * 45)
+    alignment = 100 - abs(profile.capability.reasoning - _REASONING_TARGET[need])
+    return (distance_score * 70 + alignment * 30) // 100
+
+
+def _pref_score(rank: int) -> int:
+    return max(0, 100 - rank * 8)
+
+
+def _score_profile(profile: rig_profiles.Profile, *, traits, need: str, offered: str, rank: int, objective: str):
+    weights = _SCORE_WEIGHTS[objective]
+    capability = profile.capability.fit(traits)
+    tier = _tier_fit(profile, need, offered)
+    if objective == "speed":
+        axis_name, axis = "speed", profile.capability.speed
+    elif objective == "cost":
+        axis_name, axis = "cost", profile.capability.cost
+    else:
+        axis_name, axis = "quality", profile.capability.quality
+    preference = _pref_score(rank)
+    health = _transport_health(profile)
+    total = (
+        capability * weights["capability"]
+        + tier * weights["tier"]
+        + axis * weights["axis"]
+        + preference * weights["preference"]
+        + health * weights["health"]
+    )
+    explanation = [
+        f"capability={capability}",
+        f"tier={tier}",
+        f"{axis_name}={axis}",
+        f"preference={preference}",
+        f"health={health}",
+    ]
+    return total, explanation
+
+
+def _offered_tier(profile: rig_profiles.Profile, need: str) -> str:
+    for tier in sufficient_tiers(need):
+        if profile.allows_tier(tier):
+            return tier
+    return ""
+
+
+def _review_failure(model: str, review_ctx: dict | None):
+    import route as rig_route
+
+    _independence, rejection = rig_route._review_model(model, review_ctx or {})
+    if not rejection:
+        return None
+    if "matches writer provider" in rejection:
+        code = "review-same-provider"
+    elif "known reviewer" in rejection:
+        code = "review-unknown-provider"
+    else:
+        code = "review-unavailable"
+    return code, rejection
+
+
+def _stamp_picker(routing: dict, cfg, *, source: str, traits, fallback: str, selected_id: str = "", canonical=None) -> dict:
+    from routing_evidence import PICKER_VERSION
+
+    routing["picker"] = {
+        "version": PICKER_VERSION,
+        "engine": "jev" if source == "jev" else "local",
+        "requested_engine": cfg.engine,
+        "local_policy": cfg.local_policy,
+        "objective": cfg.objective,
+        "selection_source": source,
+        "traits": list(traits),
+        "fallback": fallback,
+        "selected_profile_id": selected_id or "",
+        "canonical": list(canonical or []),
+    }
+    return routing
+
+
+def _select_ordered(cfg, kind: str, need: str, decisions: dict, session: CatalogSession, review_ctx, worker: str = ""):
+    selected = None
+    selected_tier = ""
+    selected_model = ""
+    catalog_meta = {"source": "none", "freshness": "n/a"}
+    for tier in sufficient_tiers(need):
+        order = _preference_list(cfg, kind, tier)
+        for index, pid in enumerate(order):
+            profile = cfg.profiles.get(pid)
+            if profile is None or pid in decisions:
+                continue
+            if worker and profile.worker != worker:
+                continue
+            if not profile.allows_tier(tier):
+                continue
+            if profile.catalog_required:
+                model, catalog_meta, failure = _catalog_model(profile, session)
+                if failure:
+                    decisions[profile.id] = _decision(profile.id, failure[0], failure[1])
+                    continue
+            else:
+                catalog_meta = {"source": "pin", "freshness": "unverified"}
+                model = profile.selector
+            if kind == "review":
+                failure = _review_failure(model, review_ctx)
+                if failure:
+                    decisions[profile.id] = _decision(profile.id, failure[0], failure[1])
+                    continue
+            selected = profile
+            selected_tier = tier
+            selected_model = model or profile.selector
+            decisions[profile.id] = _decision(profile.id, "selected", selected_tier)
+            canonical = [{
+                "provider": profile.provider,
+                "model": rig_profiles.canonical_model(selected_model),
+                "effort": profile.effort,
+                "profile_id": profile.id,
+                "preference_rank": index,
+                "explanation": ["ordered-v1 preference"],
+                "transports": [profile.id],
+            }]
+            return selected, selected_tier, selected_model, catalog_meta, canonical
+    return selected, selected_tier, selected_model, catalog_meta, []
+
+
+def _select_scored(cfg, kind: str, need: str, decisions: dict, session: CatalogSession, review_ctx, traits, worker: str = ""):
+    lists = {tier: _preference_list(cfg, kind, tier) for tier in sufficient_tiers(need)}
+    pool = set()
+    for order in lists.values():
+        pool.update(order)
+    required_order = lists.get(need, [])
+    rank_of = {pid: index for index, pid in enumerate(required_order)}
+    missing_rank = len(required_order)
+    eligible = []
+    for profile in sorted(cfg.profiles.values(), key=lambda item: item.id):
+        if worker and profile.worker != worker:
+            continue
+        if profile.id in decisions or profile.id not in pool:
+            continue
+        offered = _offered_tier(profile, need)
+        if not offered:
+            decisions[profile.id] = _decision(profile.id, "tier-insufficient", need)
+            continue
+        if profile.catalog_required:
+            model, meta, failure = _catalog_model(profile, session)
+            if failure:
+                decisions[profile.id] = _decision(profile.id, failure[0], failure[1])
+                continue
+        else:
+            meta = {"source": "pin", "freshness": "unverified"}
+            model = profile.selector
+        if kind == "review":
+            failure = _review_failure(model, review_ctx)
+            if failure:
+                decisions[profile.id] = _decision(profile.id, failure[0], failure[1])
+                continue
+        eligible.append({
+            "profile": profile,
+            "model": model or profile.selector,
+            "tier": offered,
+            "catalog": meta,
+            "rank": rank_of.get(profile.id, missing_rank),
+        })
+    grouped: dict[tuple, list] = {}
+    for row in eligible:
+        profile = row["profile"]
+        key = (profile.provider, rig_profiles.canonical_model(row["model"]), profile.effort)
+        grouped.setdefault(key, []).append(row)
+    ranked = []
+    for key in sorted(grouped):
+        rows = grouped[key]
+        rows.sort(key=lambda item: (-_transport_health(item["profile"]), item["rank"], item["profile"].id))
+        best = rows[0]
+        score, explanation = _score_profile(
+            best["profile"], traits=traits, need=need, offered=best["tier"],
+            rank=best["rank"], objective=cfg.objective,
+        )
+        transports = sorted(
+            (item["profile"].id for item in rows),
+            key=lambda pid: (pid != best["profile"].id, pid),
+        )
+        ranked.append({
+            "provider": key[0],
+            "model": key[1],
+            "effort": key[2],
+            "profile_id": best["profile"].id,
+            "score": score,
+            "preference_rank": best["rank"],
+            "explanation": explanation,
+            "transports": transports,
+            "best": best,
+            "rows": rows,
+        })
+    ranked.sort(key=lambda row: (-row["score"], row["preference_rank"], row["profile_id"]))
+    selected = None
+    selected_tier = ""
+    selected_model = ""
+    catalog_meta = {"source": "none", "freshness": "n/a"}
+    public = []
+    for row in ranked:
+        best = row.pop("best")
+        members = row.pop("rows")
+        public.append(row)
+        if selected is None:
+            selected = best["profile"]
+            selected_tier = best["tier"]
+            selected_model = best["model"]
+            catalog_meta = best["catalog"]
+            decisions[best["profile"].id] = _decision(best["profile"].id, "selected", selected_tier)
+            for other in members:
+                if other["profile"].id != best["profile"].id:
+                    decisions[other["profile"].id] = _decision(
+                        other["profile"].id, "collapsed-transport", best["profile"].id,
+                    )
+        else:
+            for other in members:
+                decisions[other["profile"].id] = _decision(other["profile"].id, "outscored", f"score={row['score']}")
+    return selected, selected_tier, selected_model, catalog_meta, public
+
+
 def _catalog_model(profile: rig_profiles.Profile, session: CatalogSession) -> tuple[str | None, dict, tuple[str, str] | None]:
     info = session.info(profile.worker)
     age = float(info.get("age_s") or 0)
@@ -308,6 +605,58 @@ def _catalog_model(profile: rig_profiles.Profile, session: CatalogSession) -> tu
     if info["state"] == "stale" and age > rig_catalog.STALE_MAX_SECONDS:
         return None, catalog_meta, ("catalog-stale-refresh-failed", "")
     return matched, catalog_meta, None
+
+
+def _jev_choice(case: str, kind: str, assessment: dict, traits: list[str], canonical: list[dict]) -> tuple[str, str]:
+    """Return a verified canonical profile id or a non-sensitive fallback code.
+
+    The provider receives only the bounded task summary and canonical candidates.
+    The result is never trusted until it maps back to this already hard-filtered pool.
+    """
+    try:
+        import jev_provider
+
+        candidates = [
+            {
+                "id": row["profile_id"],
+                "provider": row["provider"],
+                "effort": row["effort"],
+                "capability": row.get("explanation", []),
+            }
+            for row in canonical
+        ]
+        reply = jev_provider.choice(
+            summary=case, role=kind, assessment=assessment, traits=traits, choices=candidates,
+        )
+        selected_id = str(reply.get("id") or "").strip()
+        if selected_id not in {row["profile_id"] for row in canonical}:
+            return "", "jev-invalid-response"
+        return selected_id, ""
+    except Exception as exc:  # Provider faults always leave routing available.
+        code = str(exc)
+        if "credential-unavailable" in code:
+            return "", "jev-credential-unavailable"
+        if "candidate-limit" in code:
+            return "", "jev-candidate-limit"
+        return "", "jev-unavailable"
+
+
+def _select_jev_candidate(
+    selected_id: str, canonical: list[dict], cfg, session: CatalogSession, need: str,
+) -> tuple[rig_profiles.Profile | None, str, str, dict]:
+    row = next((item for item in canonical if item.get("profile_id") == selected_id), None)
+    if row is None:
+        return None, "", "", {"source": "none", "freshness": "n/a"}
+    profile = cfg.profiles.get(selected_id)
+    if profile is None:
+        return None, "", "", {"source": "none", "freshness": "n/a"}
+    if profile.catalog_required:
+        model, meta, failure = _catalog_model(profile, session)
+        if failure:
+            return None, "", "", meta
+    else:
+        model, meta = profile.selector, {"source": "pin", "freshness": "unverified"}
+    return profile, str(model or profile.selector), _offered_tier(profile, need), meta
 
 
 def smart_pick(
@@ -367,7 +716,18 @@ def smart_pick(
     def base(**kwargs):
         return rig_route._base_choice(kind, kwargs.pop("worker", ""), kwargs.pop("spawn", ""), classification=classification, **kwargs)
 
+    traits = task_traits(kind, case)
+    # jev is a declared engine with no local runtime; selection stays on the local policy.
+    fallback = "jev-unavailable" if cfg.engine == "jev" else ""
     routing = empty_routing(mode="smart", fingerprint=fingerprint, assessment=assessed)
+
+    def finish(choice, source: str, selected_id: str = "", canonical=None):
+        _stamp_picker(
+            routing, cfg, source=source, traits=traits, fallback=fallback,
+            selected_id=selected_id, canonical=canonical,
+        )
+        return _finish_choice(choice, routing)
+
     if kind == "stay":
         routing["execution_strategy"] = "stay"
         routing["parent_fit_limitations"] = (
@@ -375,7 +735,7 @@ def smart_pick(
         )
         if not actual_model:
             routing["parent_fit_limitations"] += "; parent model/effort unverified"
-        return _finish_choice(
+        return finish(
             base(
                 worker=live,
                 spawn="stay",
@@ -388,7 +748,7 @@ def smart_pick(
                     "Figma, computer-use, and chrome-profile stay with the parent."
                 ),
             ),
-            routing,
+            "stay",
         )
 
     need = required_tier(kind, assessed)
@@ -402,7 +762,7 @@ def smart_pick(
         )
         if not actual_model:
             routing["parent_fit_limitations"] += "; parent model/effort unverified"
-        return _finish_choice(
+        return finish(
             base(
                 worker=live,
                 spawn="native",
@@ -417,7 +777,7 @@ def smart_pick(
                     "retain ownership and finish authenticated. do not spawn a second same-CLI session."
                 ),
             ),
-            routing,
+            "direct-parent",
         )
     wrapper_names = [w for w in effective if w not in blocked and w != "cursor"]
     decisions: dict[str, dict] = {}
@@ -436,56 +796,41 @@ def smart_pick(
                 decisions[profile.id] = _decision(profile.id, "review-unavailable", review_reason)
         routing["candidate_decisions"] = [decisions[pid] for pid in sorted(decisions)]
         routing["execution_strategy"] = "none"
-        return _finish_choice(
+        return finish(
             base(worker="", spawn="none", reason=review_reason, review={**(review_ctx or {}), "independence": "unavailable"}),
-            routing,
+            "none",
         )
 
-    selected = None
-    selected_tier = ""
-    selected_model = ""
-    catalog_meta = {"source": "none", "freshness": "n/a"}
-    for tier in sufficient_tiers(need):
-        pref_key = "review" if kind == "review" else tier
-        default_ids = rig_profiles.default_preference_ids(
-            "strong" if pref_key == "review" else tier,
-            cfg.profiles,
-            role="review" if kind == "review" else "",
+    if cfg.local_policy == "ordered-v1":
+        selected, selected_tier, selected_model, catalog_meta, canonical = _select_ordered(
+            cfg, kind, need, decisions, session, review_ctx,
         )
-        mentioned = cfg.preferences.get(pref_key) or []
-        order = rig_profiles.preference_order(mentioned, default_ids)
-        for pid in order:
-            profile = cfg.profiles.get(pid)
-            if profile is None or pid in decisions:
-                continue
-            if not profile.allows_tier(tier):
-                continue
-            if profile.catalog_required:
-                model, catalog_meta, failure = _catalog_model(profile, session)
-                if failure:
-                    decisions[profile.id] = _decision(profile.id, failure[0], failure[1])
-                    continue
+        selection_source = "ordered"
+    else:
+        selected, selected_tier, selected_model, catalog_meta, canonical = _select_scored(
+            cfg, kind, need, decisions, session, review_ctx, traits,
+        )
+        selection_source = "scored"
+
+    if selected and cfg.engine == "jev" and canonical:
+        jev_id, jev_fallback = _jev_choice(case, kind, assessed, traits, canonical)
+        if jev_id:
+            jev_profile, jev_model, jev_tier, jev_catalog = _select_jev_candidate(
+                jev_id, canonical, cfg, session, need,
+            )
+            if jev_profile and jev_tier:
+                if jev_profile.id != selected.id:
+                    decisions[selected.id] = _decision(selected.id, "outscored", "jev-selected")
+                    decisions[jev_profile.id] = _decision(jev_profile.id, "selected", jev_tier)
+                selected, selected_model, selected_tier, catalog_meta = (
+                    jev_profile, jev_model, jev_tier, jev_catalog,
+                )
+                selection_source = "jev"
+                fallback = ""
             else:
-                catalog_meta = {"source": "pin", "freshness": "unverified"}
-                model = profile.selector
-            if kind == "review":
-                independence, rejection = rig_route._review_model(model, review_ctx or {})
-                if rejection:
-                    if "matches writer provider" in rejection:
-                        code = "review-same-provider"
-                    elif "known reviewer" in rejection:
-                        code = "review-unknown-provider"
-                    else:
-                        code = "review-unavailable"
-                    decisions[profile.id] = _decision(profile.id, code, rejection)
-                    continue
-            selected = profile
-            selected_tier = tier
-            selected_model = model or profile.selector
-            decisions[profile.id] = _decision(profile.id, "selected", selected_tier)
-            break
-        if selected:
-            break
+                fallback = "jev-catalog-invalid"
+        else:
+            fallback = jev_fallback
 
     for profile in cfg.profiles.values():
         if profile.id in decisions:
@@ -505,21 +850,25 @@ def smart_pick(
         if kind == "review":
             independence, _rejection = rig_route._review_model(selected_model, review_ctx or {})
             reason = f"review: {selected.worker} child {selected_model}" + (f" effort={effort}" if effort else "")
-            return _finish_choice(
+            return finish(
                 base(
                     worker=selected.worker, spawn="run-worker", model=selected_model, effort=effort,
                     reason=reason, executor_kind="wrapper", model_source="selected",
                     review={**(review_ctx or {}), "independence": independence},
                 ),
-                routing,
+                selection_source,
+                selected.id,
+                canonical,
             )
-        return _finish_choice(
+        return finish(
             base(
                 worker=selected.worker, spawn="run-worker", model=selected_model, effort=effort,
                 native_agent="", reason=reason, parent_writes=False,
                 executor_kind="wrapper", model_source="selected",
             ),
-            routing,
+            selection_source,
+            selected.id,
+            canonical,
         )
 
     if kind in {"explore", "verify"}:
@@ -529,13 +878,13 @@ def smart_pick(
         )
         if not actual_model:
             routing["parent_fit_limitations"] += "; parent model/effort unverified"
-        return _finish_choice(
+        return finish(
             base(
                 worker=live, spawn="stay", model=actual_model, effort=actual_effort,
                 executor_kind="parent", model_source="observed" if actual_model else "unknown",
                 reason=f"{kind}: no MCP-capable child; parent stays read-only. no native child.",
             ),
-            routing,
+            "stay",
         )
     if kind == "review":
         reason = review_reason or "review needs a different vendor; no eligible reviewer"
@@ -543,12 +892,12 @@ def smart_pick(
             reason = "review needs a different vendor; Cursor has no isolated job-scoped MCP"
         routing["execution_strategy"] = "none"
         routing["parent_fit_limitations"] = "independent review unavailable without a different known provider"
-        return _finish_choice(
+        return finish(
             base(
                 worker="", spawn="none", reason=reason,
                 review={**(review_ctx or {}), "independence": "unavailable"},
             ),
-            routing,
+            "none",
         )
     skip_native = bool(live) and (live in blocked or "native" in blocked)
     if kind in {"implement", "hard", "mini", "bulk"} and live in rig_route.NATIVE_PARENTS and not skip_native:
@@ -556,7 +905,7 @@ def smart_pick(
         routing["parent_fit_limitations"] = "no eligible wrapper; parent writes"
         if not actual_model:
             routing["parent_fit_limitations"] += "; parent model/effort unverified"
-        return _finish_choice(
+        return finish(
             base(
                 worker=live, spawn="native", model=actual_model, effort=actual_effort,
                 parent_writes=True, executor_kind="parent",
@@ -567,7 +916,7 @@ def smart_pick(
                     "retain ownership and finish authenticated. do not spawn a second same-CLI session."
                 ),
             ),
-            routing,
+            "parent-fallback",
         )
     names = {str(x).strip().lower() for x in effective}
     if names and names <= {"cursor"}:
@@ -578,7 +927,7 @@ def smart_pick(
         reason = "no effective worker; use cheaper same-CLI workers. That is success."
     routing["execution_strategy"] = "none"
     routing["parent_fit_limitations"] = reason
-    return _finish_choice(base(worker="", spawn="none", reason=reason), routing)
+    return finish(base(worker="", spawn="none", reason=reason), "none")
 
 
 def resolve_explicit_worker_choice(
@@ -627,40 +976,18 @@ def resolve_explicit_worker_choice(
             continue
         if kind and kind != "stay" and not profile.allows_role(kind):
             decisions[profile.id] = _decision(profile.id, "role-incompatible")
-    selected = None
-    selected_tier = ""
-    selected_model = ""
-    catalog_meta = {"source": "none", "freshness": "n/a"}
-    for tier in sufficient_tiers(need):
-        pref_key = "review" if kind == "review" else tier
-        default_ids = rig_profiles.default_preference_ids(
-            "strong" if pref_key == "review" else tier,
-            cfg.profiles,
-            role="review" if kind == "review" else "",
+    traits = task_traits(kind, case)
+    fallback = "jev-unavailable" if cfg.engine == "jev" else ""
+    if cfg.local_policy == "ordered-v1":
+        selected, selected_tier, selected_model, catalog_meta, canonical = _select_ordered(
+            cfg, kind, need, decisions, session, None, worker=worker,
         )
-        mentioned = cfg.preferences.get(pref_key) or []
-        order = rig_profiles.preference_order(mentioned, default_ids)
-        for pid in order:
-            profile = cfg.profiles.get(pid)
-            if profile is None or profile.worker != worker or pid in decisions:
-                continue
-            if not profile.allows_tier(tier):
-                continue
-            if profile.catalog_required:
-                model, catalog_meta, failure = _catalog_model(profile, session)
-                if failure:
-                    decisions[profile.id] = _decision(profile.id, failure[0], failure[1])
-                    continue
-            else:
-                catalog_meta = {"source": "pin", "freshness": "unverified"}
-                model = profile.selector
-            selected = profile
-            selected_tier = tier
-            selected_model = model or profile.selector
-            decisions[profile.id] = _decision(profile.id, "selected", selected_tier)
-            break
-        if selected:
-            break
+        source = "ordered"
+    else:
+        selected, selected_tier, selected_model, catalog_meta, canonical = _select_scored(
+            cfg, kind, need, decisions, session, None, traits, worker=worker,
+        )
+        source = "scored"
     if selected is None:
         raise ValueError(f"no eligible smart profile for worker '{worker}'; re-pick")
     routing = empty_routing(mode="smart", fingerprint=fingerprint, assessment=assessed, required=need)
@@ -668,6 +995,10 @@ def resolve_explicit_worker_choice(
     routing["selected_profile"] = selected_profile_dict(selected, model=selected_model, tier=selected_tier)
     routing["catalog"] = catalog_meta
     routing["candidate_decisions"] = [decisions[pid] for pid in sorted(decisions)]
+    _stamp_picker(
+        routing, cfg, source=source, traits=traits, fallback=fallback,
+        selected_id=selected.id, canonical=canonical,
+    )
     return {
         "worker": selected.worker,
         "model": selected_model,

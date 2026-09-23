@@ -20,7 +20,7 @@ import jobs as rig_jobs  # noqa: E402
 import route as rig_route  # noqa: E402
 
 JOB_ID_RE = re.compile(r"^[A-Za-z0-9._-]+$")
-LAUNCH_WORKERS = frozenset({"grok", "codex", "claude", "opencode", "omp", "pi", "agy", "devin"})
+LAUNCH_WORKERS = frozenset({"grok", "codex", "claude", "opencode", "omp", "pi", "agy", "devin", "mimo"})
 LAUNCH_KEYS = frozenset({
     "id", "case", "role", "worker", "model", "effort", "access", "files", "brief",
     "queue_id", "reservation_id", "attempt_id", "owner_token", "owner_session",
@@ -38,7 +38,7 @@ WRAPPER_ENV = (
     "PATH", "HOME", "USER", "LANG", "LC_ALL", "LC_CTYPE", "TZ", "TMPDIR",
     "RIG_HOME", "RIG_PARENT", "RIG_SKIP_MODEL_CATALOG", "RIG_SKIP_UPDATE_CHECK",
     "RIG_THREAD", "RIG_OWNER_SESSION", "GROK_SESSION_ID", "CODEX_THREAD_ID", "CODEX_SESSION_ID",
-    "OPENCODE_CONFIG", "OMP_MCP", "PI_CODING_AGENT_DIR", "PI_AGENT_DIR", "AGY_MCP",
+    "OPENCODE_CONFIG", "OMP_MCP", "PI_CODING_AGENT_DIR", "PI_AGENT_DIR", "AGY_MCP", "RIG_MIMO_MCP_READY",
 )
 TERMINAL_STATUSES = frozenset({"ok", "fail", "timeout", "cancelled"})
 STRING_LAUNCH_KEYS = LAUNCH_KEYS - OBJECT_LAUNCH_KEYS
@@ -317,7 +317,7 @@ def launch(repo, **kwargs) -> dict:
     if worker == "cursor":
         raise LaunchError(child_mcp.CURSOR_REASON)
     if worker not in LAUNCH_WORKERS:
-        raise LaunchError("worker must be grok|codex|claude|opencode|omp|pi|agy|devin")
+        raise LaunchError("worker must be grok|codex|claude|opencode|omp|pi|agy|devin|mimo")
     job_id = _job_id(_require_string(kwargs.get("id"), "id"))
     ready, reason = child_mcp.worker_mcp_ready(worker)
     if not ready:

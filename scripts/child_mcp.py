@@ -29,7 +29,7 @@ INBOX_FIRST = "first Rig operation must be rig_job_inbox"
 CURSOR_REASON = (
     "Cursor CLI has no isolated job-scoped MCP; excluded until a safe --mcp-config exists"
 )
-SCOPED_WORKERS = frozenset({"grok", "codex", "claude", "opencode", "omp", "pi", "agy", "devin"})
+SCOPED_WORKERS = frozenset({"grok", "codex", "claude", "opencode", "omp", "pi", "agy", "devin", "mimo"})
 DEVIN_MCP_REL = Path(".devin") / "mcp_config.local.json"
 DEVIN_LOCK_REL = Path(".rig") / "devin.lock"
 DEVIN_STATE = "devin-mcp-state.json"
@@ -78,6 +78,7 @@ SCHEMA_LABEL = {
     "agy": "mcpServers.rig",
     "claude": "job mcp.json",
     "devin": "job .devin/mcp_config.local.json",
+    "mimo": "Mimo global MCP with job environment",
 }
 
 
@@ -334,6 +335,10 @@ def worker_mcp_ready(worker: str, *, home: Path | None = None) -> tuple[bool, st
         return False, f"binary '{name}' not on PATH"
     if name == "claude" or name == "devin":
         return True, ""
+    if name == "mimo":
+        if os.environ.get("RIG_MIMO_MCP_READY", "").strip().lower() not in {"1", "true", "yes", "on"}:
+            return False, "mimo MCP missing — set up Rig MCP then set RIG_MIMO_MCP_READY=1"
+        return True, ""
     path = config_path(name, home)
     if path is None:
         return False, f"{name} has no isolated job-scoped MCP"
@@ -425,6 +430,7 @@ def write_job_mcp(job_dir: Path, job_id: str, repo: Path, worker: str) -> dict:
     - pi: PI_CODING_AGENT_DIR is the whole agent dir (auth/skills). Do not hijack it.
     - cursor: excluded until a safe --mcp-config exists
     - devin: repo .devin/mcp_config.local.json
+    - mimo: configured global MCP consumes this job's RIG_JOB_* environment
     """
     job_dir = Path(job_dir)
     job_dir.mkdir(parents=True, exist_ok=True)
@@ -450,6 +456,8 @@ def write_job_mcp(job_dir: Path, job_id: str, repo: Path, worker: str) -> dict:
         isolation = "AGY_MCP"
     elif name == "devin":
         isolation = "job-devin-mcp"
+    elif name == "mimo":
+        isolation = "global-mcp-job-environment"
     return {
         "ready": ready,
         "reason": reason,

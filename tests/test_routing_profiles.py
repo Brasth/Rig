@@ -80,7 +80,51 @@ class BuiltinPins(unittest.TestCase):
                 self.assertIn(role, roles, f"{pid} {role}")
 
 
+def _collapsed_workers(ids, rows):
+    order = []
+    for pid in ids:
+        worker = rows[pid].worker
+        if not order or order[-1] != worker:
+            order.append(worker)
+    return order
+
+
 class PreferenceOrder(unittest.TestCase):
+    def test_fast_and_standard_priority_places_mimo_before_opencode(self):
+        rows = profiles.profiles_by_id()
+        expected = ["codex", "grok", "claude", "devin", "mimo", "opencode", "omp", "pi", "agy", "cursor"]
+        for tier in ("fast", "standard"):
+            ids = profiles.default_preference_ids(tier, rows)
+            order = _collapsed_workers(ids, rows)
+            self.assertEqual(order, expected)
+            self.assertLess(order.index("devin"), order.index("opencode"))
+            self.assertLess(order.index("mimo"), order.index("opencode"))
+            self.assertIn("devin-swe-2-medium" if tier == "fast" else "devin-swe-2-high", ids)
+
+    def test_strong_and_review_priority_omits_mimo(self):
+        rows = profiles.profiles_by_id()
+        expected = ["devin", "claude", "codex", "grok", "opencode", "omp", "pi", "agy", "cursor"]
+        lists = (
+            profiles.default_preference_ids("strong", rows),
+            profiles.default_preference_ids("strong", rows, role="review"),
+            profiles.default_preference_ids("review", rows),
+        )
+        for ids in lists:
+            order = _collapsed_workers(ids, rows)
+            self.assertEqual(order, expected)
+            self.assertNotIn("mimo", order)
+            self.assertFalse(any(pid.startswith("mimo-") for pid in ids))
+            self.assertIn("devin-swe-2-max", ids)
+
+    def test_unmentioned_devin_stays_in_default_order(self):
+        rows = profiles.profiles_by_id()
+        fast = profiles.default_preference_ids("fast", rows)
+        ordered = profiles.preference_order(["claude-haiku-4-5-low"], fast)
+        self.assertEqual(ordered[0], "claude-haiku-4-5-low")
+        self.assertIn("devin-swe-2-medium", ordered)
+        self.assertLess(ordered.index("devin-swe-2-medium"), ordered.index("mimo-v2-flash-low"))
+        self.assertLess(ordered.index("mimo-v2-flash-low"), ordered.index("opencode-gpt-5.4-mini-minimal"))
+
     def test_fast_default_includes_codex_explorer(self):
         rows = profiles.profiles_by_id()
         fast = profiles.default_preference_ids("fast", rows)

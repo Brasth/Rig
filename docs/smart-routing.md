@@ -1,6 +1,6 @@
 # Smart routing
 
-Smart is the default for `rig pick`, `rig session`, and their MCP equivalents, including existing harnesses without a routing section. The parent supplies a semantic role and a short assessment; Rig selects a declared model+effort profile. This is deterministic policy, not a second model call or automatic learning system.
+Smart is the default for `rig pick`, `rig session`, and their MCP equivalents, including existing harnesses without a routing section. The parent supplies a semantic role and a short assessment; Rig selects a declared model+effort profile. Local routing uses the scored picker by default; Jev is an optional external choice engine with local fallback.
 
 ## Assessment and selection
 
@@ -19,7 +19,25 @@ In smart mode, an optional cost-aware lane can skip wrapper/catalog lookup. It i
 
 All other roles and assessments keep the wrapper catalog path. If no eligible wrapper remains, parent writes use a distinct `execution_strategy=parent-fallback`. Wrapper selections are `wrapper`. Stay is `stay`. Unavailable spawn is `none`. Legacy mode never takes the direct-parent lane.
 
-Profiles are filtered by worker eligibility, exclusion, role, model bans, catalog confirmation, and review-provider rules. Among remaining profiles, choose the minimum sufficient tier, configured preference, then stable ID. Default fast/standard worker order is Codex, Grok, Claude, OpenCode, OMP, Pi, agy. Strong/review order is Claude, Grok, OpenCode, OMP, Pi, agy, Codex. Devin is omitted from those default lists (opt-in via `.rig/routing.json` preferences). Cheap implementation can select a fast model; a high-risk mini task can select strong. There is no unconditional Grok-first ladder in smart mode.
+Profiles are filtered by worker eligibility, exclusion, role, model bans, catalog confirmation, and review-provider rules. The local picker then scores every eligible canonical model/effort group for task traits, tier fit, configured preference, transport health, and the selected objective (`quality`, `balanced`, `speed`, or `cost`). Duplicate transports for one provider/model/effort group are collapsed before scoring. Default fast/standard worker order is Codex, Grok, Claude, Devin, MiMo, OpenCode, OMP, Pi, agy. Strong/review order is Devin, Claude, Codex, Grok, OpenCode, OMP, Pi, agy. MiMo is fast/standard only. Devin is a conditional default candidate. Unavailable, disabled, or unverified Devin and MiMo are skipped automatically. Cheap implementation can select a fast model; a high-risk mini task can select strong. There is no unconditional Grok-first ladder in smart mode.
+
+## Picker engine and Jev
+
+Project settings live under `[routing]` in `.rig/harness.toml`:
+
+```toml
+[routing]
+mode = "smart"
+engine = "local" # local | jev
+local_policy = "scored-v1" # scored-v1 | ordered-v1
+objective = "balanced" # quality | balanced | speed | cost
+```
+
+Use `rig routing engine jev` to enable Jev for one project and `rig routing engine local` to return to the local picker. `rig routing objective quality|balanced|speed|cost` changes only that project. The TUI Settings tab exposes the same project controls.
+
+Set the global Jev key once with `rig provider jev setup`; it is held in the macOS Keychain as service `rig`, account `jev-api-key`. `RIG_API_JEV_KEY` takes precedence for CI. `rig provider jev status --json` and `rig provider jev remove` inspect or remove the global credential. Keys never enter a project file, route sidecar, command argv, or routing report.
+
+Jev only receives a bounded task summary, role, assessment, trait labels, and the already hard-filtered canonical candidate IDs. It cannot enable a disabled worker, choose a banned model, bypass a catalog, or evade independent-review provider checks. Missing credentials, timeouts, transport/API errors, invalid answers, or more than 255 candidates fall back to the scored local picker. Routing evidence records the engine, selected ID, traits, scores, and fallback code without preserving the task text.
 
 Worker flags, binary availability, scoped MCP readiness and live-parent exclusion remain mandatory. Cursor remains excluded. Explore/review are read-only. A parent fallback preserves the actual observed model/effort or reports unknown: picking a cheaper suggestion never changes the live parent model. Direct-parent jobs use the same `rig_job_start` / authenticated `rig_job_finish` / parent acceptance lifecycle as other parent writes.
 
@@ -42,7 +60,7 @@ Each launch writes `.rig/jobs/<id>/routing.json`, bound to the exact attempt ID 
 
 ## Profile configuration
 
-Built-in selectors derive from `scripts/route.py` model pins. Optional `.rig/routing.json` accepts `schema_version` **1** or **2**. Both may include `profiles` keyed by stable ID and `preferences` keyed by `fast`, `standard`, `strong`, or `review`. Schema 1 remains valid. Schema 2 adds optional `execution.direct_parent_low_risk` (boolean, default `false`). Unknown keys and non-boolean execution values fail smart picks and `rig doctor`; legacy mode still falls back to builtin config.
+Built-in selectors derive from `scripts/route.py` model pins. Optional `.rig/routing.json` accepts `schema_version` **1**, **2**, or **3**. Schema 1 has profiles/preferences; schema 2 adds optional `execution.direct_parent_low_risk`; schema 3 adds `picker` (`engine`, `local_policy`, `objective`) as a project-specific override. Unknown keys and invalid picker/execution values fail smart picks and `rig doctor`; legacy mode still falls back to builtin config.
 
 Example: prefer Claude for standard tasks, without enabling its worker:
 
@@ -67,13 +85,15 @@ Opt in to low-risk parent writes before catalog lookup:
 }
 ```
 
-Unmentioned preferences append in default order. Existing profile IDs can override `worker`, `selector`, `aliases`, `roles`, `tiers`, `effort`, `supported_efforts`, `provider`, and `catalog_required`. New IDs require worker, selector, roles, tiers, effort and provider. supported_efforts defaults to the selected effort, catalog_required defaults by worker, and aliases are optional. Effort must appear in supported_efforts. Roles are explore/mini/bulk/implement/hard/review/verify; tiers fast/standard/strong. Providers are openai/anthropic/xai/google/cursor/cognition and must agree with recognizable model families. Config never enables workers or permits banned models. Invalid config fails smart picks and `rig doctor` instead of silently using legacy.
+Unmentioned preferences append in default order. Existing profile IDs can override `worker`, `selector`, `aliases`, `roles`, `tiers`, `effort`, `supported_efforts`, `provider`, and `catalog_required`. New IDs require worker, selector, roles, tiers, effort and provider. supported_efforts defaults to the selected effort, catalog_required defaults by worker, and aliases are optional. Effort must appear in supported_efforts. Roles are explore/mini/bulk/implement/hard/review/verify; tiers fast/standard/strong. Providers are openai/anthropic/xai/google/cursor/cognition/xiaomi and must agree with recognizable model families. Config never enables workers or permits banned models. Invalid config fails smart picks and `rig doctor` instead of silently using legacy.
 
 ## Catalog confirmation
 
-OpenCode, OMP, Pi, agy and Devin profiles require a successful CLI catalog. Only exact selectors or explicitly declared aliases match; no substring or arbitrary-first-model fallback. Devin uses `devin models list --format json` only and never falls back to a table parse, keyword hit, or first remaining model. Catalog enumeration order cannot change the chosen profile.
+OpenCode, OMP, Pi, agy, Devin, and MiMo profiles require a successful CLI catalog. Only exact selectors or explicitly declared aliases match; no substring or arbitrary-first-model fallback. Devin uses `devin models list --format json` only and never falls back to a table parse, keyword hit, or first remaining model. Catalog enumeration order cannot change the chosen profile.
 
-Devin is child-only. Built-in profiles are role-strict: `devin-swe-2-medium` (`swe-2-medium`, explore/mini/bulk, fast), `devin-swe-2-high` (`swe-2-high`, implement, standard), `devin-swe-2-max` (`swe-2-max`, hard/review, strong). Provider is `cognition`. Those IDs are not in the default preference lists (fast/standard: Codex, Grok, Claude, OpenCode, OMP, Pi, agy; strong/review: Claude, Grok, OpenCode, OMP, Pi, agy, Codex); put them first in `.rig/routing.json` `preferences` to opt in. Manual/direct wrapper launches still reject swe aliases, SWE-1.x, Fusion, empty/default, and role-mismatched SWE-2 selectors.
+MiMo Code is an opt-in child (`mimo = false` by default). Its binary, worker flag, catalog, and the explicitly confirmed Rig MCP setup (`RIG_MIMO_MCP_READY=1`) are all required. The launcher uses `mimo run --format json` and never passes MiMo’s `--yolo` flag; normal child inbox handshake and admission checks still apply. When those gates pass, MiMo is a fast/standard default candidate after Devin and before OpenCode. It has no strong/review profile. Unavailable, disabled, or unverified MiMo is skipped automatically.
+
+Devin is child-only and stays disabled unless the user enables it. Built-in profiles are role-strict: `devin-swe-2-medium` (`swe-2-medium`, explore/mini/bulk, fast), `devin-swe-2-high` (`swe-2-high`, implement, standard), `devin-swe-2-max` (`swe-2-max`, hard/review, strong). Provider is `cognition`. Those IDs are conditional default candidates: fast/standard places Codex first, then Grok and Claude, then Devin before MiMo; strong/review places Devin first. Selection still requires the worker flag, the `devin` binary, job-scoped MCP readiness, and an exact confirmed catalog model. Unavailable, disabled, or unverified Devin is skipped automatically. Manual/direct wrapper launches still reject swe aliases, SWE-1.x, Fusion, empty/default, and role-mismatched SWE-2 selectors.
 
 Cache is fresh for one hour. Successful results up to 24 hours old may be used while refreshing; failed refreshes preserve that bounded cache. Beyond 24 hours, a successful refresh is required. Successful-empty and unavailable are distinct. Probes are bounded and lazy in ranked-candidate order; lower-ranked catalogs are not needed after a sufficient candidate is selected. `RIG_SKIP_MODEL_CATALOG=1` is not confirmation. Static Grok/Claude/Codex pins remain explicitly unverified catalog provenance.
 

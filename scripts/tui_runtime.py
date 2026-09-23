@@ -19,6 +19,7 @@ class Snapshot:
     slots: int = 0
     cap: int = 3
     captured_at: float = 0.0
+    settings: list[dict] = field(default_factory=list)
 
 
 def visible_jobs(listing, repo, start, stop):
@@ -51,6 +52,9 @@ def _pending_reason(item, held, slots, cap, worker_cap):
 
 
 def load_snapshot(repo, *, start=0, rows=20, selected_id=None):
+    import harness as rig_harness
+    import jev_provider
+
     listing = rig_jobs.list_jobs(repo)
     if selected_id:
         selected = next((i for i, row in enumerate(listing) if row.get("job_id") == selected_id), start)
@@ -70,7 +74,15 @@ def load_snapshot(repo, *, start=0, rows=20, selected_id=None):
             worker_caps[worker] = rig_queue.max_per_worker(repo, worker) if worker else 0
         reason = _pending_reason(item, held, slots, cap, worker_caps[worker])
         pending.append({**item, "waiting_reason": reason})
-    return Snapshot(projected, pending, slots, cap, time.monotonic())
+    routing = rig_harness.parse_harness(rig_harness.harness_path(Path(repo))).get("routing") or {}
+    jev = jev_provider.status()
+    settings = [
+        {"id": "jev", "state": "configured" if jev["configured"] else "missing",
+         "text": f"Jev global key: {jev['source']} (c connect/replace, d remove)"},
+        {"id": "engine", "state": "configured", "text": f"Project picker: {routing.get('engine') or 'local'} (t toggle)"},
+        {"id": "objective", "state": "configured", "text": f"Local objective: {routing.get('objective') or 'balanced'} (o cycle)"},
+    ]
+    return Snapshot(projected, pending, slots, cap, time.monotonic(), settings)
 
 
 @dataclass(frozen=True)

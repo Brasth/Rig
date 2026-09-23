@@ -99,6 +99,14 @@ MODELS = {
     ("devin", "hard"): ("swe-2-max", "max"),
     ("devin", "verify"): ("swe-2-high", "high"),
     ("devin", "review"): ("swe-2-max", "max"),
+    # MiMo Code resolves exact provider/model IDs from its catalog.
+    ("mimo", "explore"): ("xiaomi/mimo-v2-flash", "low"),
+    ("mimo", "mini"): ("xiaomi/mimo-v2-flash", "low"),
+    ("mimo", "bulk"): ("xiaomi/mimo-v2-flash", "low"),
+    ("mimo", "implement"): ("xiaomi/mimo-v2-pro", "high"),
+    ("mimo", "hard"): ("xiaomi/mimo-v2-pro", "high"),
+    ("mimo", "verify"): ("xiaomi/mimo-v2-pro", "high"),
+    ("mimo", "review"): ("xiaomi/mimo-v2-pro", "high"),
 }
 
 NATIVE = {
@@ -137,9 +145,9 @@ NATIVE = {
 NATIVE_PARENTS = frozenset({"codex", "grok", "opencode", "omp", "pi", "agy"})
 LAST_RESORT = ("opencode", "omp", "pi", "agy", "codex")
 WORKER_NAMES = frozenset(
-    {"grok", "claude", "cursor", "opencode", "omp", "pi", "agy", "devin", "codex", "native"}
+    {"grok", "claude", "cursor", "opencode", "omp", "pi", "agy", "devin", "mimo", "codex", "native"}
 )
-PROVIDERS = frozenset({"openai", "anthropic", "xai", "google", "cursor", "cognition"})
+PROVIDERS = frozenset({"openai", "anthropic", "xai", "google", "cursor", "cognition", "xiaomi"})
 DEVIN_SWE2 = frozenset({"swe-2-medium", "swe-2-high", "swe-2-max"})
 DEVIN_ROLE_MODELS = {
     "explore": "swe-2-medium",
@@ -272,6 +280,7 @@ def provider_for(model: str) -> str:
         ("google", r"gemini-\d"),
         ("cursor", r"composer-\d"),
         ("cognition", r"swe-2-(?:medium|high|max)$"),
+        ("xiaomi", r"mimo[-\w.]*$"),
     )
     for provider, pattern in families:
         if re.match(pattern, family):
@@ -532,11 +541,15 @@ def _base_choice(
     return choice
 
 
-def _with_legacy_routing(choice: dict, assessment: dict, fingerprint: str, required: str, explain: bool) -> dict:
+def _with_legacy_routing(
+    choice: dict, assessment: dict, fingerprint: str, required: str, explain: bool,
+    *, kind: str, case: str,
+) -> dict:
     import routing_policy
 
     choice["routing"] = routing_policy.legacy_routing(
         choice, assessment=assessment, fingerprint=fingerprint, required=required,
+        role=kind, case=case,
     )
     if explain:
         choice["_explain"] = True
@@ -643,7 +656,7 @@ def pick(
                     executor_kind="wrapper", model_source="selected",
                     review={**context, "independence": independence},
                 )
-                return _with_legacy_routing(choice, assessed, fingerprint, required, explain)
+                return _with_legacy_routing(choice, assessed, fingerprint, required, explain, kind=kind, case=case)
             failures.append(f"{worker}: {rejection}")
             remaining = [w for w in remaining if w != worker]
         return _with_legacy_routing(
@@ -651,7 +664,7 @@ def pick(
                 kind, "", "none", classification=classification, reason=reason,
                 review={**context, "independence": "unavailable"},
             ),
-            assessed, fingerprint, required, explain,
+            assessed, fingerprint, required, explain, kind=kind, case=case,
         )
     worker, spawn = choose_worker(kind, effective, live, exclude=exclude)
     actual_model = (parent_model or "").strip()
@@ -679,7 +692,7 @@ def pick(
                 model_source="observed" if actual_model else "unknown",
                 reason=stay_reason,
             ),
-            assessed, fingerprint, required, explain,
+            assessed, fingerprint, required, explain, kind=kind, case=case,
         )
     if spawn == "none" or not worker:
         if kind == "review":
@@ -702,7 +715,7 @@ def pick(
                 reason = "no effective worker; use cheaper same-CLI workers. That is success."
         return _with_legacy_routing(
             _base_choice(kind, "", "none", classification=classification, reason=reason),
-            assessed, fingerprint, required, explain,
+            assessed, fingerprint, required, explain, kind=kind, case=case,
         )
     parent_writes = spawn == "native" and kind in {"implement", "hard", "mini", "bulk"}
     native_agent = "" if parent_writes else (NATIVE.get((worker, kind), "") if spawn == "native" else "")
@@ -737,7 +750,7 @@ def pick(
             executor_kind=executor_kind,
             model_source=model_source,
         ),
-        assessed, fingerprint, required, explain,
+        assessed, fingerprint, required, explain, kind=kind, case=case,
     )
     cid = (continues_job_id or "").strip()
     if cid:

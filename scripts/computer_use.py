@@ -7,6 +7,7 @@ proxy; raw cua-driver MCP configuration is not required.
 from __future__ import annotations
 
 import argparse
+import errno
 import importlib.util
 import json
 import os
@@ -16,6 +17,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import uuid
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -23,6 +25,7 @@ if str(HERE) not in sys.path:
     sys.path.insert(0, str(HERE))
 
 import harness  # noqa: E402
+import cua_transport  # noqa: E402
 
 
 def _load_hyphen_module(name: str, filename: str):
@@ -247,8 +250,13 @@ def tools_listed(repo: Path, *, child: bool) -> bool:
     return (not child) and is_effective(repo)
 
 
-def cu_status(repo: Path) -> dict:
-    """Read-only diagnostics, available even when action tools are hidden."""
+def cu_status(repo: Path, *, status_runner=None) -> dict:
+    """Read-only diagnostics, available even when action tools are hidden.
+
+    `effective` stays the configured gate (machine opt-in, binary, repo flag).
+    A bounded `cua-driver status` probe reports daemon readiness separately and
+    never starts the daemon, grants permissions, or changes opt-in.
+    """
     machine, binary, project = machine_state(), binary_path(), project_state(repo)
     blockers = []
     if machine != "on":
@@ -257,12 +265,29 @@ def cu_status(repo: Path) -> dict:
         blockers.append("cua-driver is missing; run rig computer-use setup")
     if project != "true":
         blockers.append("project is disabled; run rig computer-use on in this repository")
+    if binary:
+        probe = _probe_daemon(binary, runner=status_runner)
+    else:
+        probe = {"state": "skipped", "ready": False, "detail": "", "recovery": "", "probed": False}
+    next_action = (
+        "Resolve blockers, then restart parent/MCP tool discovery" if blockers else
+        "Use rig_cu_capture; if absent, restart parent/MCP tool discovery"
+    )
+    recovery = str(probe.get("recovery") or "")
+    if probe.get("probed") and not probe.get("ready") and recovery:
+        if blockers:
+            recovery = recovery + " Configured effective stays off until blockers are resolved."
+        else:
+            next_action = recovery
     return {
         "machine": machine, "binary": binary, "project": project,
         "effective": not blockers, "blockers": blockers,
+        "daemon": probe.get("state") or "unknown",
+        "daemon_ready": bool(probe.get("ready")),
+        "daemon_detail": str(probe.get("detail") or ""),
+        "recovery": recovery,
         "transport": "Rig MCP rig_cu_capture/rig_cu_act/rig_cu_confirm/rig_cu_record",
-        "next_action": "Resolve blockers, then restart parent/MCP tool discovery" if blockers else
-                       "Use rig_cu_capture; if absent, restart parent/MCP tool discovery",
+        "next_action": next_action,
         "existing_profile": EXISTING_PROFILE_HINT,
         "note": "No install, opt-in, daemon or permission changes were made. Do not bypass Rig MCP.",
     }
@@ -277,7 +302,9 @@ PHASE_FRESH = "fresh"
 PHASE_CONFIRM = "confirm_required"
 PHASE_DONE = "done"
 CHROME_BUNDLE = "com.google.Chrome"
-BROWSER_SESSION = "rig-cu"
+# Driver sessions are connection-scoped.  A unique parent session prevents a
+# stale public session from another Rig MCP process being reused accidentally.
+BROWSER_SESSION = f"rig-cu-{os.getpid()}-{uuid.uuid4().hex[:8]}"
 EXISTING_PROFILE_HINT = "start CuaDriver with: cua-driver serve --grant existing-profile"
 CHROME_PROFILE_SETUP_HINT = "chrome-profile setup"
 EVIDENCE_REL = Path(".rig") / "cu-evidence"
@@ -430,24 +457,285 @@ def _unwrap_driver(data: dict) -> dict:
     return merged
 
 
-def _default_runner(binary: str, args: list[str], timeout: int) -> dict:
-    result = subprocess.run(
-        [binary, *args],
-        stdin=subprocess.DEVNULL,
-        capture_output=True,
-        text=True,
-        timeout=timeout,
+DAEMON_HINT = "cua-driver daemon is not running; start CuaDriver.app / cua-driver serve"
+DAEMON_RECOVERY = (
+    "Cua Driver daemon is not running. Start CuaDriver.app or run `cua-driver serve` "
+    "in the graphical session, then call rig_cu_status again. Rig does not start the "
+    "daemon, grant permissions, or change opt-in."
+)
+STATUS_PROBE_TIMEOUT = 5
+
+
+def _daemon_stopped_text(blob: str) -> bool:
+    lowered = (blob or "").lower()
+    return (
+        "daemon is not running" in lowered
+        or "no cua driver daemon listening" in lowered
+        or "daemon unavailable" in lowered
     )
-    blob = ((result.stdout or "") + (result.stderr or "")).strip()
-    data = _extract_json(blob)
-    if isinstance(data, dict):
-        data = _unwrap_driver(data)
-        data.setdefault("exit_code", result.returncode)
-        data.setdefault("ok", result.returncode == 0)
-        if blob and "raw" not in data:
-            data["raw"] = blob
-        return data
-    return {"ok": result.returncode == 0, "raw": blob, "exit_code": result.returncode}
+
+
+def _looks_like_driver_help(blob: str) -> bool:
+    lowered = (blob or "").lstrip().lower()
+    if not lowered or lowered.startswith("{") or lowered.startswith("["):
+        return False
+    return (
+        "usage: cua-driver" in lowered
+        or lowered.startswith("usage:")
+        or "subcommands:" in lowered
+        or "you probably meant one of:" in lowered
+    )
+
+
+def _mcp_text(data: dict) -> str:
+    content = data.get("content")
+    parts = []
+    if isinstance(content, list):
+        for item in content:
+            if isinstance(item, dict):
+                text = item.get("text")
+                if isinstance(text, str):
+                    parts.append(text)
+            elif isinstance(item, str):
+                parts.append(item)
+    elif isinstance(content, str):
+        parts.append(content)
+    return "\n".join(parts).strip()
+
+
+def _failure_text(data: dict) -> str:
+    if not isinstance(data, dict):
+        return ""
+    return "\n".join(
+        str(data.get(key) or "")
+        for key in ("hint", "error", "message", "raw")
+        if data.get(key)
+    )
+
+
+def _invoke_error_hint(error: BaseException) -> str:
+    if isinstance(error, (subprocess.TimeoutExpired, TimeoutError)):
+        return f"cua-driver timed out ({error})"
+    text = str(error or "")
+    if _daemon_stopped_text(text):
+        return DAEMON_HINT
+    missing = isinstance(error, FileNotFoundError) or (
+        isinstance(error, OSError) and getattr(error, "errno", None) == errno.ENOENT
+    )
+    if missing:
+        return f"cua-driver not installed ({error})"
+    return f"cua-driver failed ({error})"
+
+
+def _public_driver_hint(data: dict, fallback: str) -> str:
+    if not isinstance(data, dict):
+        return fallback
+    hint = str(data.get("hint") or "")
+    error = str(data.get("error") or "")
+    message = str(data.get("message") or "")
+    raw = str(data.get("raw") or "")
+    blob = "\n".join(part for part in (hint, error, message, raw) if part).strip()
+    lowered = blob.lower()
+    if data.get("timeout") or "timed out" in lowered:
+        if hint and "timed out" in hint.lower():
+            return hint
+        if error and "timed out" in error.lower():
+            return error
+        return "cua-driver timed out" + (f" ({blob})" if blob else "")
+    if _daemon_stopped_text(blob):
+        return DAEMON_HINT
+    if data.get("missing_binary"):
+        return hint or f"cua-driver not installed ({blob or fallback})"
+    if hint:
+        return hint
+    if error:
+        return error
+    if message:
+        return message
+    if raw:
+        return raw
+    return fallback
+
+
+def _non_json_failure(exit_code: int, blob: str) -> dict:
+    hint = blob or f"cua-driver exited {exit_code} with no JSON"
+    if _daemon_stopped_text(blob):
+        hint = DAEMON_HINT
+    elif _looks_like_driver_help(blob):
+        hint = (
+            "cua-driver returned help text, not a tool result; "
+            "`cua-driver call <tool> <json>` requires a running daemon"
+        )
+    return {
+        "ok": False,
+        "non_json": True,
+        "exit_code": exit_code,
+        "raw": blob,
+        "hint": hint,
+        "error": hint,
+    }
+
+
+def _normalize_driver_output(exit_code: int, stdout: str, stderr: str) -> dict:
+    """MCP isError / structuredContent / text JSON. Exit 0 and help text are not success."""
+    out = stdout or ""
+    err = stderr or ""
+    blob = (out + ("\n" + err if err else "")).strip()
+    if _looks_like_driver_help(out) or (not out.strip() and _looks_like_driver_help(blob)):
+        return _non_json_failure(exit_code, blob)
+    data = None
+    stripped = out.strip()
+    if stripped.startswith("{") or stripped.startswith("["):
+        data = _extract_json(stripped)
+    if not isinstance(data, dict):
+        if _looks_like_driver_help(blob):
+            return _non_json_failure(exit_code, blob)
+        data = _extract_json(blob)
+    if not isinstance(data, dict):
+        return _non_json_failure(exit_code, blob)
+    text = _mcp_text(data)
+    text_stripped = text.strip()
+    text_json = None
+    if text_stripped.startswith("{") or text_stripped.startswith("["):
+        text_json = _extract_json(text_stripped)
+    text_error = False
+    if isinstance(text_json, dict):
+        text_error = (
+            text_json.get("isError") is True
+            or text_json.get("is_error") is True
+            or text_json.get("ok") is False
+        )
+        for key, value in text_json.items():
+            if key in {"isError", "is_error", "content"}:
+                continue
+            data.setdefault(key, value)
+    # Outer envelope failure wins over nested structuredContent ok:true.
+    outer_failed = (
+        data.get("isError") is True
+        or data.get("is_error") is True
+        or data.get("ok") is False
+        or text_error
+    )
+    is_error = data.get("isError") is True or data.get("is_error") is True or text_error
+    data = _unwrap_driver(data)
+    data.pop("structuredContent", None)
+    is_error = is_error or data.get("isError") is True or data.get("is_error") is True
+    daemon = _daemon_stopped_text(blob) or _daemon_stopped_text(text)
+    failed = outer_failed or is_error or daemon or exit_code != 0 or data.get("ok") is False
+    if failed:
+        data["ok"] = False
+        # Preserve MCP isError only when the envelope/tool reported it.
+        # Plain ok:false (stale/refused/hidden) must stay semantic, not isError.
+        if is_error:
+            data["isError"] = True
+        if daemon:
+            data["error"] = DAEMON_HINT
+            data["hint"] = DAEMON_HINT
+        elif is_error:
+            message = text or str(data.get("error") or data.get("message") or data.get("hint") or "")
+            message = message or "cua-driver tool returned isError"
+            data.setdefault("error", message)
+            data.setdefault("hint", message)
+        elif outer_failed:
+            message = text or str(data.get("error") or data.get("message") or data.get("hint") or "")
+            message = message or "cua-driver returned ok:false"
+            data.setdefault("error", message)
+            data.setdefault("hint", message)
+        else:
+            data.setdefault("hint", str(data.get("error") or data.get("message") or blob or f"cua-driver exited {exit_code}"))
+    else:
+        data["ok"] = True
+    data["exit_code"] = exit_code
+    data.setdefault("raw", blob)
+    return data
+
+
+def _exception_driver_result(error: BaseException) -> dict:
+    hint = _invoke_error_hint(error)
+    payload = {"ok": False, "raw": str(error), "hint": hint, "error": hint}
+    if isinstance(error, (subprocess.TimeoutExpired, TimeoutError)):
+        payload["timeout"] = True
+        payload["exit_code"] = 124
+        return payload
+    if isinstance(error, FileNotFoundError) or (
+        isinstance(error, OSError) and getattr(error, "errno", None) == errno.ENOENT
+    ):
+        payload["missing_binary"] = True
+        payload["exit_code"] = 127
+        return payload
+    payload["exit_code"] = 1
+    return payload
+
+
+def _default_runner(binary: str, args: list[str], timeout: int) -> dict:
+    """Call one Driver tool over this parent's persistent MCP connection."""
+    if not args:
+        return {"ok": False, "non_json": True, "hint": "missing cua-driver tool"}
+    tool = str(args[0])
+    try:
+        body = json.loads(args[1]) if len(args) > 1 else {}
+        if not isinstance(body, dict):
+            raise ValueError("cua-driver tool arguments must be an object")
+        result = cua_transport.call(binary, BROWSER_SESSION, tool, body, timeout)
+    except (OSError, subprocess.TimeoutExpired, TimeoutError, ValueError, cua_transport.TransportError) as error:
+        return _exception_driver_result(error)
+    return _normalize_driver_output(0, json.dumps(result), "")
+
+
+def _snapshot_failed(data: dict) -> bool:
+    """ok:false and isError win even when residual elements, refs, or snapshot text remain."""
+    if not isinstance(data, dict):
+        return True
+    if data.get("timeout") or data.get("missing_binary") or data.get("non_json"):
+        return True
+    if data.get("isError") is True or data.get("is_error") is True:
+        return True
+    if data.get("ok") is False:
+        return True
+    return False
+
+
+def _transport_failure(data: dict) -> bool:
+    """Subprocess or MCP envelope failure. Semantic stale/refused effects still flow."""
+    if not isinstance(data, dict):
+        return True
+    if data.get("timeout") or data.get("missing_binary") or data.get("non_json"):
+        return True
+    if data.get("isError") is True or data.get("is_error") is True:
+        return True
+    if _daemon_stopped_text(_failure_text(data)):
+        return True
+    if data.get("ok") is False:
+        effect = str(data.get("effect") or "").strip().lower()
+        if effect in {"stale", "refused", "hidden"} | set(_ESCALATE):
+            return False
+        return True
+    code = data.get("exit_code")
+    if isinstance(code, int) and code != 0 and data.get("ok") is not True:
+        return True
+    return False
+
+
+def _refuse_transport(action: str, snapshot_id: str, snap: dict | None, data: dict, addressed: dict | None = None) -> dict:
+    snap = snap or {}
+    # A connection failure may have happened after Driver received the action.
+    # Do not allow that snapshot to issue another action on a replacement
+    # connection: force the parent to capture and inspect the live state first.
+    if snapshot_id and snap is _SNAPSHOTS.get(snapshot_id):
+        snap["phase"] = PHASE_DONE
+    return empty_evidence(
+        ok=False,
+        effective=True,
+        action=action,
+        snapshot_id=snapshot_id,
+        pid=snap.get("pid") or 0,
+        window_id=snap.get("window_id") or 0,
+        addressed=addressed if isinstance(addressed, dict) else _addressed(),
+        before_png=snap.get("png") or "",
+        effect="hidden",
+        coord_space=snap.get("coord_space") or "",
+        hint="transport failed; capture again before another action",
+    )
 
 
 def invoke_driver(args: list[str], *, runner=None, timeout: int = 30, binary: str = "") -> dict:
@@ -458,7 +746,172 @@ def invoke_driver(args: list[str], *, runner=None, timeout: int = 30, binary: st
     if mapped:
         mapped[0] = driver_tool(str(mapped[0]))
     fn = runner or _default_runner
-    return _unwrap_driver(fn(exe, mapped, timeout))
+    try:
+        result = fn(exe, mapped, timeout)
+    except (OSError, subprocess.TimeoutExpired) as error:
+        return _exception_driver_result(error)
+    if not isinstance(result, dict):
+        return {"ok": False, "non_json": True, "hint": "malformed driver output", "error": "malformed driver output"}
+    return _unwrap_driver(result)
+
+
+def _executable(path: str) -> bool:
+    return bool(path) and Path(path).is_file() and os.access(path, os.X_OK)
+
+
+def _interpret_daemon_status(
+    exit_code: int,
+    stdout: str,
+    stderr: str,
+    *,
+    timeout: bool = False,
+    missing_binary: bool = False,
+) -> dict:
+    blob = ((stdout or "") + ("\n" + stderr if stderr else "")).strip()
+    if timeout:
+        return {
+            "state": "unknown",
+            "ready": False,
+            "probed": True,
+            "detail": blob or "status probe timed out",
+            "recovery": (
+                "cua-driver status timed out. This is not a missing binary. "
+                "Retry rig_cu_status, or run `cua-driver status` yourself. "
+                "Rig does not start the daemon."
+            ),
+        }
+    if missing_binary:
+        return {
+            "state": "unknown",
+            "ready": False,
+            "probed": True,
+            "detail": blob or "status probe could not execute cua-driver",
+            "recovery": "cua-driver is missing; run rig computer-use setup",
+        }
+    # Nonzero exit is never ready, even if stdout mentions a running daemon.
+    if exit_code != 0:
+        if _daemon_stopped_text(blob):
+            return {
+                "state": "stopped",
+                "ready": False,
+                "probed": True,
+                "detail": blob,
+                "recovery": DAEMON_RECOVERY,
+            }
+        return {
+            "state": "unknown",
+            "ready": False,
+            "probed": True,
+            "detail": blob or f"exit {exit_code}",
+            "recovery": (
+                "cua-driver status exited nonzero. Run `cua-driver status`. "
+                "If the daemon is stopped, start CuaDriver.app or `cua-driver serve`. "
+                "Rig will not start it."
+            ),
+        }
+    lowered = blob.lower()
+    if _daemon_stopped_text(blob):
+        return {
+            "state": "stopped",
+            "ready": False,
+            "probed": True,
+            "detail": blob,
+            "recovery": DAEMON_RECOVERY,
+        }
+    if "daemon is running" in lowered or "daemon listening" in lowered or "registered (running)" in lowered:
+        return {"state": "ready", "ready": True, "probed": True, "detail": blob, "recovery": ""}
+    data = _extract_json(stdout or "") or _extract_json(blob)
+    if isinstance(data, dict) and not _looks_like_driver_help(blob):
+        daemon = str(data.get("daemon") or data.get("state") or data.get("status") or "").strip().lower()
+        running = data.get("running")
+        if running is True or daemon in {"running", "ready", "listening"}:
+            return {"state": "ready", "ready": True, "probed": True, "detail": blob, "recovery": ""}
+        if running is False or daemon in {"stopped", "not_running", "not running"}:
+            return {"state": "stopped", "ready": False, "probed": True, "detail": blob, "recovery": DAEMON_RECOVERY}
+    if _looks_like_driver_help(blob) or not blob:
+        detail = blob or "status probe returned no daemon status"
+        return {
+            "state": "unknown",
+            "ready": False,
+            "probed": True,
+            "detail": detail,
+            "recovery": (
+                "cua-driver status did not report a running daemon. Help text, exit 0, "
+                "or non-JSON output is not success. Run `cua-driver status`. If the daemon "
+                "is stopped, start CuaDriver.app or `cua-driver serve`."
+            ),
+        }
+    return {
+        "state": "unknown",
+        "ready": False,
+        "probed": True,
+        "detail": blob or f"exit {exit_code}",
+        "recovery": (
+            "Could not tell whether the daemon is running. Run `cua-driver status`. "
+            "If it is stopped, start CuaDriver.app or `cua-driver serve`. "
+            "Rig will not start it."
+        ),
+    }
+
+
+def _default_status_runner(binary: str, args: list[str], timeout: int) -> dict:
+    if list(args) != ["status"]:
+        return {"returncode": 2, "stdout": "", "stderr": "status probe refused unexpected arguments"}
+    try:
+        result = subprocess.run(
+            [binary, *args],
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired as error:
+        return {"returncode": 124, "stdout": "", "stderr": str(error), "timeout": True}
+    except FileNotFoundError as error:
+        return {"returncode": 127, "stdout": "", "stderr": str(error), "missing_binary": True}
+    except OSError as error:
+        return {"returncode": 1, "stdout": "", "stderr": str(error)}
+    return {"returncode": result.returncode, "stdout": result.stdout or "", "stderr": result.stderr or ""}
+
+
+def _probe_daemon(binary: str, *, runner=None, timeout: int = STATUS_PROBE_TIMEOUT) -> dict:
+    if runner is None and not _executable(binary):
+        return {
+            "state": "unknown",
+            "ready": False,
+            "probed": False,
+            "detail": "status probe skipped; cua-driver path is not executable",
+            "recovery": "run rig computer-use setup",
+        }
+    fn = runner or _default_status_runner
+    try:
+        result = fn(binary, ["status"], timeout)
+    except subprocess.TimeoutExpired as error:
+        return _interpret_daemon_status(124, "", str(error), timeout=True)
+    except FileNotFoundError as error:
+        return _interpret_daemon_status(127, "", str(error), missing_binary=True)
+    except OSError as error:
+        text = str(error)
+        return _interpret_daemon_status(
+            127 if getattr(error, "errno", None) == errno.ENOENT else 1,
+            "",
+            text,
+            missing_binary=getattr(error, "errno", None) == errno.ENOENT,
+        )
+    if not isinstance(result, dict):
+        return _interpret_daemon_status(1, "", "status probe returned a non-object")
+    if "state" in result and "ready" in result:
+        result.setdefault("probed", True)
+        result.setdefault("detail", "")
+        result.setdefault("recovery", "" if result.get("ready") else DAEMON_RECOVERY)
+        return result
+    return _interpret_daemon_status(
+        int(result.get("returncode", result.get("exit_code", 1)) or 0),
+        str(result.get("stdout") or ""),
+        str(result.get("stderr") or ""),
+        timeout=bool(result.get("timeout")),
+        missing_binary=bool(result.get("missing_binary")),
+    )
 
 
 def _elements_from_driver(data: dict) -> list[dict]:
@@ -690,7 +1143,10 @@ def _list_window_id(pid: int, *, runner=None) -> int:
     if int(pid or 0) <= 0:
         return 0
     try:
-        listed = invoke_driver(["list_windows", json.dumps({"pid": int(pid)})], runner=runner)
+        listed = invoke_driver(
+            ["list_windows", json.dumps({"pid": int(pid), "session": BROWSER_SESSION})],
+            runner=runner,
+        )
     except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
         return 0
     return _first_window_id(listed)
@@ -931,15 +1387,38 @@ def _default_chrome_opener(profile_key: str, url: str) -> dict:
         )
     except (FileNotFoundError, OSError, subprocess.TimeoutExpired) as error:
         return {"ok": False, "hint": f"chrome-profile failed ({error})"}
-    blob = ((result.stdout or "") + (result.stderr or "")).strip()
+    blob = ((result.stdout or "") + ("\n" + (result.stderr or "") if result.stderr else "")).strip()
     data = _extract_json(result.stdout or "") or _extract_json(blob) or {}
     if not isinstance(data, dict):
         data = {}
     else:
         data = dict(data)
+    diagnostic = "\n".join(
+        part
+        for part in (
+            str(data.get("hint") or "").strip(),
+            str(data.get("error") or "").strip(),
+            str(data.get("message") or "").strip(),
+            (result.stderr or "").strip(),
+            (result.stdout or "").strip() if data.get("ok") is False else "",
+        )
+        if part
+    ).strip()
     if result.returncode != 0:
         data["ok"] = False
-        data.setdefault("hint", CHROME_PROFILE_SETUP_HINT)
+        # Keep permission-denied / CLI stderr; only fall back to setup hint.
+        if diagnostic:
+            data["hint"] = diagnostic
+        else:
+            data.setdefault("hint", CHROME_PROFILE_SETUP_HINT)
+        data["raw"] = blob
+        return data
+    # Exit 0 must not overwrite JSON ok:false.
+    if data.get("ok") is False:
+        if diagnostic:
+            data.setdefault("hint", diagnostic)
+        else:
+            data.setdefault("hint", CHROME_PROFILE_SETUP_HINT)
         data["raw"] = blob
         return data
     data["ok"] = True
@@ -998,22 +1477,24 @@ def _native_snapshot_result(
 ) -> dict:
     action = "capture"
     png_path = _fresh_png_path(pid, window_id)
-    payload = {"pid": pid, "window_id": window_id, "screenshot_out_file": png_path}
+    payload = {
+        "pid": pid,
+        "window_id": window_id,
+        "screenshot_out_file": png_path,
+        "session": BROWSER_SESSION,
+    }
     try:
         data = invoke_driver(["get_window_state", json.dumps(payload)], runner=runner)
     except (FileNotFoundError, OSError, subprocess.TimeoutExpired) as error:
         return empty_evidence(
-            action=action, effective=True, effect="hidden",
-            hint=f"cua-driver not installed ({error})",
+            ok=False, action=action, effective=True, effect="hidden",
+            hint=_invoke_error_hint(error),
         )
     data = _unwrap_driver(data)
-    if data.get("ok") is False and not data.get("elements"):
-        hint = str(data.get("raw") or data.get("error") or data.get("hint") or "get_window_state failed")
-        if "daemon is not running" in hint.lower():
-            hint = "cua-driver daemon is not running; start CuaDriver.app / cua-driver serve"
+    if _snapshot_failed(data):
         return empty_evidence(
             ok=False, effective=True, action=action, pid=pid, window_id=window_id,
-            effect="hidden", hint=hint,
+            effect="hidden", hint=_public_driver_hint(data, "get_window_state failed"),
         )
     elements = _elements_from_driver(data)
     snapshot_id = str(data.get("snapshot_id") or "").strip() or f"snap-{len(_SNAPSHOTS) + 1}"
@@ -1033,6 +1514,7 @@ def _native_snapshot_result(
         pixel_to_css_scale_x=meta["pixel_to_css_scale_x"],
         pixel_to_css_scale_y=meta["pixel_to_css_scale_y"],
         **extra,
+        session=BROWSER_SESSION,
     )
     return empty_evidence(
         ok=True, effective=True, action=action, snapshot_id=snapshot_id,
@@ -1070,15 +1552,14 @@ def _browser_tab_snapshot(
         data = invoke_driver(["get_browser_state", json.dumps(body)], runner=runner)
     except (FileNotFoundError, OSError, subprocess.TimeoutExpired) as error:
         return empty_evidence(
-            action=action, effective=True, effect="hidden",
-            hint=f"cua-driver not installed ({error})",
+            ok=False, action=action, effective=True, effect="hidden",
+            hint=_invoke_error_hint(error),
         )
     data = _unwrap_driver(data)
-    if data.get("ok") is False and not data.get("refs") and not data.get("snapshot"):
-        hint = str(data.get("raw") or data.get("error") or data.get("hint") or "get_browser_state snapshot failed")
+    if _snapshot_failed(data):
         return empty_evidence(
             ok=False, effective=True, action=action, pid=pid, window_id=window_id,
-            effect="unverifiable", hint=hint,
+            effect="hidden", hint=_public_driver_hint(data, "get_browser_state snapshot failed"),
         )
     refs = _refs_from_driver(data)
     elements = _elements_from_driver(data)
@@ -1159,7 +1640,7 @@ def _bind_named_profile(
         except (FileNotFoundError, OSError, subprocess.TimeoutExpired) as error:
             return empty_evidence(
                 action=action, effective=True, effect="hidden",
-                hint=f"cua-driver not installed ({error})",
+                hint=_invoke_error_hint(error),
             )
         bind = _unwrap_driver(bind)
         if _grant_missing(bind):
@@ -1173,7 +1654,7 @@ def _bind_named_profile(
             except (FileNotFoundError, OSError, subprocess.TimeoutExpired) as error:
                 return empty_evidence(
                     action=action, effective=True, effect="hidden",
-                    hint=f"cua-driver not installed ({error})",
+                    hint=_invoke_error_hint(error),
                 )
             if _grant_missing(prepared) or prepared.get("ok") is False:
                 return empty_evidence(
@@ -1185,7 +1666,7 @@ def _bind_named_profile(
             except (FileNotFoundError, OSError, subprocess.TimeoutExpired) as error:
                 return empty_evidence(
                     action=action, effective=True, effect="hidden",
-                    hint=f"cua-driver not installed ({error})",
+                    hint=_invoke_error_hint(error),
                 )
             bind = _unwrap_driver(bind)
             if _grant_missing(bind) or _setup_needed(bind):
@@ -1258,18 +1739,28 @@ def cu_capture(
     name = str(app_name or "").strip()
     if pid_n <= 0 and (bundle or name):
         launch = {"bundle_id": bundle} if bundle else {"name": name}
+        launch["session"] = BROWSER_SESSION
         try:
             launched = invoke_driver(["launch_app", json.dumps(launch)], runner=runner)
         except (FileNotFoundError, OSError, subprocess.TimeoutExpired) as error:
             return empty_evidence(
-                action=action, effective=True, effect="hidden",
-                hint=f"cua-driver not installed ({error})",
+                ok=False, action=action, effective=True, effect="hidden",
+                hint=_invoke_error_hint(error),
             )
         launched = _unwrap_driver(launched)
+        if _transport_failure(launched):
+            hint = _public_driver_hint(launched, "launch_app failed")
+            pending = "permissions_pending" in _failure_text(launched).lower()
+            if pending:
+                hint = "macOS Accessibility/Screen Recording pending; cua-driver permissions grant"
+            return empty_evidence(
+                ok=False, effective=True, action=action,
+                effect="refused" if pending else "hidden", hint=hint,
+            )
         pid_n = _as_int(launched.get("pid"))
         win_n = _resolve_window_id(pid_n, win_n, launched, runner=runner)
         if pid_n <= 0:
-            hint = str(launched.get("raw") or launched.get("error") or "launch_app returned no pid")
+            hint = _public_driver_hint(launched, "launch_app returned no pid")
             effect = "refused" if "permissions_pending" in hint.lower() else "unverifiable"
             if effect == "refused":
                 hint = "macOS Accessibility/Screen Recording pending; cua-driver permissions grant"
@@ -1390,6 +1881,7 @@ def cu_act(
                 "window_id": snap.get("window_id") or 0,
                 "x": px_x,
                 "y": px_y,
+                "session": snap.get("session") or BROWSER_SESSION,
             }
             if kind == "type":
                 body["text"] = text
@@ -1400,8 +1892,13 @@ def cu_act(
             data = invoke_driver([tool, json.dumps(body)], runner=runner)
         except (FileNotFoundError, OSError, subprocess.TimeoutExpired) as error:
             return empty_evidence(
-                action=kind, effective=True, snapshot_id=snapshot_id,
-                effect="unverifiable", hint=f"cua-driver not installed ({error})",
+                ok=False, action=kind, effective=True, snapshot_id=snapshot_id,
+                effect="hidden", hint=_invoke_error_hint(error),
+            )
+        data = _unwrap_driver(data)
+        if _transport_failure(data):
+            return _refuse_transport(
+                kind, snapshot_id, snap, data, _addressed(kind="px", x=px_x, y=px_y),
             )
         effect = _act_effect(data, "unverifiable")
         blob = _driver_blob(data)
@@ -1459,8 +1956,14 @@ def cu_act(
             data = invoke_driver([tool, json.dumps(body)], runner=runner)
         except (FileNotFoundError, OSError, subprocess.TimeoutExpired) as error:
             return empty_evidence(
-                action=kind, effective=True, snapshot_id=snapshot_id,
-                effect="unverifiable", hint=f"cua-driver not installed ({error})",
+                ok=False, action=kind, effective=True, snapshot_id=snapshot_id,
+                effect="hidden", hint=_invoke_error_hint(error),
+            )
+        data = _unwrap_driver(data)
+        if _transport_failure(data):
+            return _refuse_transport(
+                kind, snapshot_id, snap, data,
+                _addressed(kind="ref", row=ref_row, ref=ref_id),
             )
         effect = _act_effect(data, "unverifiable")
         freshness = _apply_invoked_effect(snap, effect)
@@ -1496,6 +1999,7 @@ def cu_act(
         "window_id": snap.get("window_id") or 0,
         "snapshot_id": snapshot_id,
         "element_token": token,
+        "session": snap.get("session") or BROWSER_SESSION,
     }
     if row and row.get("index") is not None:
         body["element_index"] = row["index"]
@@ -1507,8 +2011,14 @@ def cu_act(
         data = invoke_driver([driver_tool(kind), json.dumps(body)], runner=runner)
     except (FileNotFoundError, OSError, subprocess.TimeoutExpired) as error:
         return empty_evidence(
-            action=kind, effective=True, snapshot_id=snapshot_id,
-            effect="unverifiable", hint=f"cua-driver not installed ({error})",
+            ok=False, action=kind, effective=True, snapshot_id=snapshot_id,
+            effect="hidden", hint=_invoke_error_hint(error),
+        )
+    data = _unwrap_driver(data)
+    if _transport_failure(data):
+        return _refuse_transport(
+            kind, snapshot_id, snap, data,
+            _addressed(kind="ax", token=token, row=row),
         )
     effect = _act_effect(data, "unverifiable")
     freshness = _apply_invoked_effect(snap, effect)
@@ -1634,9 +2144,14 @@ def cu_record(
         except (FileNotFoundError, OSError, subprocess.TimeoutExpired) as error:
             return empty_evidence(
                 action="record_start", effective=True, effect="hidden",
-                hint=f"cua-driver not installed ({error})",
+                hint=_invoke_error_hint(error),
             )
         data = _unwrap_driver(data)
+        if _transport_failure(data):
+            return empty_evidence(
+                ok=False, effective=True, action="record_start", effect="hidden",
+                hint=_public_driver_hint(data, "start_recording failed"),
+            )
         effect = _map_effect(data, "recorded")
         blob = _driver_blob(data)
         if "daemon is not running" in blob:
@@ -1662,9 +2177,14 @@ def cu_record(
     except (FileNotFoundError, OSError, subprocess.TimeoutExpired) as error:
         return empty_evidence(
             action="record_stop", effective=True, effect="hidden",
-            hint=f"cua-driver not installed ({error})",
+            hint=_invoke_error_hint(error),
         )
     data = _unwrap_driver(data)
+    if _transport_failure(data):
+        return empty_evidence(
+            ok=False, effective=True, action="record_stop", effect="hidden",
+            hint=_public_driver_hint(data, "stop_recording failed"),
+        )
     effect = _map_effect(data, "stopped")
     last = str(data.get("last_video_path") or "").strip()
     remembered = _RECORDING.get("output_dir") or ""

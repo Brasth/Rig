@@ -7,7 +7,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
-WORKERS = ("grok", "claude", "codex", "cursor", "opencode", "omp", "pi", "agy", "devin")
+WORKERS = ("grok", "claude", "codex", "cursor", "opencode", "omp", "pi", "agy", "devin", "mimo")
 PARENTS = frozenset({"grok", "codex", "claude", "cursor", "opencode", "omp", "pi", "agy"})
 
 # Missing harness file and missing keys are all false so pick cannot
@@ -34,7 +34,7 @@ def parse_harness(path: Path) -> dict:
         "parent": "codex",
         "workers": dict(_DEFAULT_WORKERS),
         "queue": {"max_running": 3, "max_per_worker": 0, "per_worker": {}},
-        "routing": {"mode": "smart"},
+        "routing": {"mode": "smart", "engine": "", "local_policy": "", "objective": ""},
         "orchestration": {"mode": "adaptive", "max_nodes": 12},
         "computer_use": {"enabled": False},
     }
@@ -84,8 +84,8 @@ def parse_harness(path: Path) -> dict:
             except (TypeError, ValueError):
                 continue
             out["queue"]["per_worker"][key] = max(0, n)
-        elif section == "routing" and key == "mode":
-            out["routing"]["mode"] = val.strip().strip('"').lower()
+        elif section == "routing" and key in {"mode", "engine", "local_policy", "objective"}:
+            out["routing"][key] = val.strip().strip('"').lower()
         elif section == "orchestration" and key == "mode":
             mode = val.strip().strip('"').lower()
             out["orchestration"]["mode"] = mode if mode in {"adaptive", "single"} else "adaptive"
@@ -112,7 +112,7 @@ def computer_use_enabled(repo_or_parsed) -> bool:
 
 
 def find_worker_bin(name: str) -> str:
-    if name in {"grok", "claude", "codex", "opencode", "omp", "pi", "agy", "devin"}:
+    if name in {"grok", "claude", "codex", "opencode", "omp", "pi", "agy", "devin", "mimo"}:
         return shutil.which(name) or ""
     if name != "cursor":
         return shutil.which(name) or ""

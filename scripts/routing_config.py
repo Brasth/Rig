@@ -12,7 +12,13 @@ import routing_profiles as rig_profiles
 POLICY_VERSION = 1
 ROUTING_JSON = ".rig/routing.json"
 MODES = ("smart", "legacy")
-SCHEMA_VERSIONS = (1, 2)
+ENGINES = ("local", "jev")
+LOCAL_POLICIES = ("scored-v1", "ordered-v1")
+OBJECTIVES = ("quality", "balanced", "speed", "cost")
+DEFAULT_ENGINE = "local"
+DEFAULT_LOCAL_POLICY = "scored-v1"
+DEFAULT_OBJECTIVE = "balanced"
+SCHEMA_VERSIONS = (1, 2, 3)
 PROFILE_FIELDS = frozenset(
     {
         "worker",
@@ -24,12 +30,15 @@ PROFILE_FIELDS = frozenset(
         "supported_efforts",
         "provider",
         "catalog_required",
+        "capability",
     }
 )
 V1_FIELDS = frozenset({"schema_version", "profiles", "preferences"})
 V2_FIELDS = V1_FIELDS | {"execution"}
 EXECUTION_FIELDS = frozenset({"direct_parent_low_risk"})
-CONFIG_FIELDS = V2_FIELDS
+PICKER_FIELDS = frozenset({"engine", "local_policy", "objective"})
+V3_FIELDS = V2_FIELDS | {"picker"}
+CONFIG_FIELDS = V3_FIELDS
 
 
 class ConfigError(ValueError):
@@ -44,6 +53,9 @@ class RoutingConfig:
     routing_json: dict | None
     source: str
     direct_parent_low_risk: bool = False
+    engine: str = DEFAULT_ENGINE
+    local_policy: str = DEFAULT_LOCAL_POLICY
+    objective: str = DEFAULT_OBJECTIVE
 
 
 def routing_json_path(repo: Path | None) -> Path | None:
@@ -91,6 +103,16 @@ def config_fingerprint(cfg: RoutingConfig) -> str:
     }
     if cfg.direct_parent_low_risk:
         payload["execution"] = {"direct_parent_low_risk": True}
+    if (cfg.engine, cfg.local_policy, cfg.objective) != (
+        DEFAULT_ENGINE,
+        DEFAULT_LOCAL_POLICY,
+        DEFAULT_OBJECTIVE,
+    ):
+        payload["picker"] = {
+            "engine": cfg.engine,
+            "local_policy": cfg.local_policy,
+            "objective": cfg.objective,
+        }
     return hashlib.sha256(_canonical(payload).encode("utf-8")).hexdigest()
 
 
@@ -168,6 +190,11 @@ def _apply_override(base: rig_profiles.Profile, raw: dict, pid: str) -> rig_prof
         else base.provider
     )
     catalog = _strict_bool(raw["catalog_required"], f"profiles.{pid}.catalog_required") if "catalog_required" in raw else base.catalog_required
+    capability = (
+        _capability_from_raw(raw["capability"], base.capability, f"profiles.{pid}.capability")
+        if "capability" in raw
+        else base.capability
+    )
     return rig_profiles.Profile(
         id=pid,
         worker=worker,
@@ -179,6 +206,7 @@ def _apply_override(base: rig_profiles.Profile, raw: dict, pid: str) -> rig_prof
         supported_efforts=supported,
         provider=provider,
         catalog_required=catalog,
+        capability=capability,
     )
 
 
@@ -211,8 +239,42 @@ def _new_profile(pid: str, raw: dict) -> rig_profiles.Profile:
         supported_efforts=(),
         provider="",
         catalog_required=False,
+        capability=rig_profiles.SAFE_CAPABILITY,
     )
     return _apply_override(empty, raw, pid)
+
+
+def _capability_from_raw(raw, base: rig_profiles.Capability, name: str) -> rig_profiles.Capability:
+    if not isinstance(raw, dict) or isinstance(raw, bool):
+        raise ConfigError(f"{name} must be an object")
+    _unknown_fields(raw, frozenset(rig_profiles.CAPABILITY_FIELDS), name)
+    data = rig_profiles.capability_dict(base)
+    for key, value in raw.items():
+        if type(value) is not int or not 0 <= value <= 100:
+            raise ConfigError(f"{name}.{key} must be an integer 0..100")
+        data[key] = value
+    return rig_profiles.Capability(**data)
+
+
+def harness_picker(harness: dict | None) -> tuple[str, str, str]:
+    section = {}
+    if isinstance(harness, dict):
+        raw = harness.get("routing")
+        if isinstance(raw, dict):
+            section = raw
+    engine = str(section.get("engine") or "").strip().lower() or DEFAULT_ENGINE
+    policy = str(section.get("local_policy") or "").strip().lower() or DEFAULT_LOCAL_POLICY
+    objective = str(section.get("objective") or "").strip().lower() or DEFAULT_OBJECTIVE
+    return engine, policy, objective
+
+
+def _validate_picker(engine: str, policy: str, objective: str) -> None:
+    if engine not in ENGINES:
+        raise ConfigError(f"picker.engine must be local|jev, got {engine!r}")
+    if policy not in LOCAL_POLICIES:
+        raise ConfigError(f"picker.local_policy must be scored-v1|ordered-v1, got {policy!r}")
+    if objective not in OBJECTIVES:
+        raise ConfigError(f"picker.objective must be quality|balanced|speed|cost, got {objective!r}")
 
 
 def validate_profiles(rows: dict[str, rig_profiles.Profile]) -> None:
@@ -305,17 +367,36 @@ def _parse_execution(raw: dict, path: Path | None, version: int) -> bool:
     return _strict_bool(spec["direct_parent_low_risk"], "execution.direct_parent_low_risk")
 
 
-def _parse_routing_json(path: Path | None, raw: dict | None, profiles: dict[str, rig_profiles.Profile], preferences: dict[str, list[str]]) -> tuple[dict[str, rig_profiles.Profile], dict[str, list[str]], dict | None, str, bool]:
+def _parse_picker(raw: dict, path: Path | None, base: tuple[str, str, str]) -> tuple[str, str, str]:
+    if "picker" not in raw:
+        return base
+    spec = raw.get("picker")
+    if not isinstance(spec, dict) or isinstance(spec, bool):
+        raise ConfigError(f"{path} picker must be an object")
+    _unknown_fields(spec, PICKER_FIELDS, "picker")
+    engine, policy, objective = base
+    if "engine" in spec:
+        engine = _require_str(spec["engine"], "picker.engine").lower()
+    if "local_policy" in spec:
+        policy = _require_str(spec["local_policy"], "picker.local_policy").lower()
+    if "objective" in spec:
+        objective = _require_str(spec["objective"], "picker.objective").lower()
+    return engine, policy, objective
+
+
+def _parse_routing_json(path: Path | None, raw: dict | None, profiles: dict[str, rig_profiles.Profile], preferences: dict[str, list[str]], picker: tuple[str, str, str]) -> tuple[dict[str, rig_profiles.Profile], dict[str, list[str]], dict | None, str, bool, tuple[str, str, str]]:
     if raw is None:
-        return profiles, preferences, None, "builtin", False
+        return profiles, preferences, None, "builtin", False, picker
     version = raw.get("schema_version")
     if type(version) is not int or version not in SCHEMA_VERSIONS:
-        raise ConfigError(f"{path} schema_version must be 1 or 2")
-    allowed = V2_FIELDS if version == 2 else V1_FIELDS
+        raise ConfigError(f"{path} schema_version must be 1, 2 or 3")
+    allowed = {1: V1_FIELDS, 2: V2_FIELDS, 3: V3_FIELDS}[version]
     extra_keys = set(raw) - allowed
     if extra_keys:
         raise ConfigError(f"{path} unknown keys: {sorted(extra_keys)[0]}")
     direct_parent = _parse_execution(raw, path, version)
+    if version >= 3:
+        picker = _parse_picker(raw, path, picker)
     overrides = raw.get("profiles") or {}
     if overrides and not isinstance(overrides, dict):
         raise ConfigError(f"{path} profiles must be an object keyed by stable id")
@@ -350,22 +431,38 @@ def _parse_routing_json(path: Path | None, raw: dict | None, profiles: dict[str,
     for key, default in defaults.items():
         if key not in (pref_raw or {}):
             preferences[key] = default
-    return profiles, preferences, raw, str(path), direct_parent
+    return profiles, preferences, raw, str(path), direct_parent, picker
 
 
 def load_config(repo: Path | None, *, policy_mode: str | None = None, harness: dict | None = None) -> RoutingConfig:
+    if harness is None and repo is not None:
+        import harness as rig_harness
+
+        harness = rig_harness.parse_harness(rig_harness.harness_path(Path(repo)))
     mode = resolve_mode(repo, policy_mode, harness)
+    picker = harness_picker(harness)
     builtin = rig_profiles.profiles_by_id()
     path = routing_json_path(repo)
 
-    def builtin_cfg(source: str = "builtin") -> RoutingConfig:
+    def builtin_cfg(source: str = "builtin", selected: tuple[str, str, str] | None = None) -> RoutingConfig:
         profiles = dict(builtin)
+        engine, policy, objective = selected or (DEFAULT_ENGINE, DEFAULT_LOCAL_POLICY, DEFAULT_OBJECTIVE)
+        if mode == "smart":
+            _validate_picker(engine, policy, objective)
+        else:
+            try:
+                _validate_picker(engine, policy, objective)
+            except ConfigError:
+                engine, policy, objective = DEFAULT_ENGINE, DEFAULT_LOCAL_POLICY, DEFAULT_OBJECTIVE
         cfg = RoutingConfig(
             mode=mode,
             profiles=profiles,
             preferences=_default_preferences(profiles),
             routing_json=None,
             source=source,
+            engine=engine,
+            local_policy=policy,
+            objective=objective,
         )
         if mode == "smart":
             validate_profiles(cfg.profiles)
@@ -378,11 +475,19 @@ def load_config(repo: Path | None, *, policy_mode: str | None = None, harness: d
             return builtin_cfg(source="builtin")
         raise
     if raw is None:
-        return builtin_cfg()
+        return builtin_cfg(selected=picker)
     try:
-        profiles, preferences, parsed, source, direct_parent = _parse_routing_json(
-            path, raw, dict(builtin), _default_preferences(dict(builtin))
+        profiles, preferences, parsed, source, direct_parent, selected = _parse_routing_json(
+            path, raw, dict(builtin), _default_preferences(dict(builtin)), picker,
         )
+        if mode == "smart":
+            _validate_picker(*selected)
+        else:
+            try:
+                _validate_picker(*selected)
+            except ConfigError:
+                return builtin_cfg(source="builtin")
+        engine, policy, objective = selected
         cfg = RoutingConfig(
             mode=mode,
             profiles=profiles,
@@ -390,6 +495,9 @@ def load_config(repo: Path | None, *, policy_mode: str | None = None, harness: d
             routing_json=parsed,
             source=source,
             direct_parent_low_risk=direct_parent,
+            engine=engine,
+            local_policy=policy,
+            objective=objective,
         )
         validate_profiles(cfg.profiles)
     except ConfigError:
@@ -407,6 +515,9 @@ def doctor_lines(repo: Path | None) -> list[str]:
         rows.append(f"  error: {exc}")
         return rows
     rows.append(f"  mode: {cfg.mode} (policy v{POLICY_VERSION})")
+    rows.append(f"  engine: {cfg.engine}")
+    rows.append(f"  local_policy: {cfg.local_policy}")
+    rows.append(f"  objective: {cfg.objective}")
     rows.append(f"  fingerprint: {config_fingerprint(cfg)}")
     rows.append(f"  profiles: {len(cfg.profiles)}")
     rows.append(f"  direct_parent_low_risk: {str(cfg.direct_parent_low_risk).lower()}")

@@ -1805,7 +1805,7 @@ def format_log(job: dict, n: int = 40) -> str:
 
 
 JOB_WORKERS = frozenset(
-    {"grok", "codex", "claude", "cursor", "opencode", "omp", "pi", "agy", "devin", "parent"}
+    {"grok", "codex", "claude", "cursor", "opencode", "omp", "pi", "agy", "devin", "mimo", "parent"}
 )
 JOB_STATUSES = frozenset({"ok", "fail", "timeout", "running", "cancelled"})
 JOB_ID_RE = re.compile(r"^[A-Za-z0-9._-]+$")

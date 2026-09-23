@@ -2,16 +2,30 @@
 """Declared routing profiles. Selectors come from route.MODELS at runtime."""
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 
 ROLES = ("explore", "mini", "bulk", "implement", "hard", "review", "verify")
 TIERS = ("fast", "standard", "strong")
 PREF_KEYS = ("fast", "standard", "strong", "review")
+TRAITS = (
+    "implementation",
+    "debugging",
+    "tests",
+    "architecture",
+    "security",
+    "performance",
+    "migration",
+    "documentation",
+    "frontend",
+    "data",
+    "general",
+)
+_MODEL_PREFIXES = ("xai-oauth/", "openai/", "anthropic/", "xai/", "google/", "cursor/", "xiaomi/")
 WRITER_ROLES = ("mini", "bulk", "implement", "hard")
-FAST_STANDARD_WORKERS = ("codex", "grok", "claude", "opencode", "omp", "pi", "agy")
-STRONG_REVIEW_WORKERS = ("claude", "grok", "opencode", "omp", "pi", "agy", "codex")
-CATALOG_WORKERS = frozenset({"opencode", "omp", "pi", "agy", "devin"})
-KNOWN_PROVIDERS = frozenset({"openai", "anthropic", "xai", "google", "cursor", "cognition"})
+FAST_STANDARD_WORKERS = ("codex", "grok", "claude", "devin", "mimo", "opencode", "omp", "pi", "agy")
+STRONG_REVIEW_WORKERS = ("devin", "claude", "codex", "grok", "opencode", "omp", "pi", "agy")
+CATALOG_WORKERS = frozenset({"opencode", "omp", "pi", "agy", "devin", "mimo"})
+KNOWN_PROVIDERS = frozenset({"openai", "anthropic", "xai", "google", "cursor", "cognition", "xiaomi"})
 DEVIN_FAST_ROLES = ("explore", "mini", "bulk")
 DEVIN_IMPLEMENT_ROLES = ("implement", "verify")
 DEVIN_STRONG_ROLES = ("hard", "review")
@@ -20,6 +34,49 @@ WRITE_ROLES = ("mini", "bulk", "implement", "hard", "review")
 STANDARD_ROLES = ("explore", "mini", "bulk", "implement", "verify")
 STRONG_ROLES = ("explore", "mini", "bulk", "implement", "hard", "review", "verify")
 STRONG_NO_REVIEW = ("explore", "mini", "bulk", "implement", "hard", "verify")
+
+
+@dataclass(frozen=True)
+class Capability:
+    """Task-fit metadata. Omitted custom profiles keep these unspecialized defaults."""
+
+    implementation: int = 50
+    debugging: int = 50
+    tests: int = 50
+    architecture: int = 50
+    security: int = 50
+    performance: int = 50
+    migration: int = 50
+    documentation: int = 50
+    frontend: int = 50
+    data: int = 50
+    general: int = 50
+    quality: int = 50
+    speed: int = 50
+    cost: int = 50
+    reasoning: int = 50
+
+    def fit(self, traits: tuple[str, ...] | list[str]) -> int:
+        names = [name for name in traits if name in TRAITS]
+        if not names:
+            return self.general
+        return sum(getattr(self, name) for name in names) // len(names)
+
+
+CAPABILITY_FIELDS = tuple(item.name for item in fields(Capability))
+SAFE_CAPABILITY = Capability()
+
+
+def capability_dict(cap: Capability) -> dict:
+    return {name: int(getattr(cap, name)) for name in CAPABILITY_FIELDS}
+
+
+def canonical_model(selector: str) -> str:
+    text = str(selector or "").strip().lower()
+    for prefix in _MODEL_PREFIXES:
+        if text.startswith(prefix):
+            return text[len(prefix):]
+    return text
 
 
 @dataclass(frozen=True)
@@ -34,6 +91,7 @@ class Profile:
     supported_efforts: tuple[str, ...]
     provider: str
     catalog_required: bool
+    capability: Capability = SAFE_CAPABILITY
 
     def allows_role(self, role: str) -> bool:
         return role in self.roles
@@ -79,6 +137,7 @@ def _p(
         supported_efforts=efforts,
         provider=provider,
         catalog_required=catalog,
+        capability=_builtin_capability(pid),
     )
 
 
@@ -107,6 +166,8 @@ def builtin_profiles() -> tuple[Profile, ...]:
     devin_fast_m, devin_fast_e = _pin("devin", "explore")
     devin_std_m, devin_std_e = _pin("devin", "implement")
     devin_strong_m, devin_strong_e = _pin("devin", "hard")
+    mimo_fast_m, mimo_fast_e = _pin("mimo", "explore")
+    mimo_std_m, mimo_std_e = _pin("mimo", "implement")
     cur_fast_m, cur_fast_e = _pin("cursor", "explore")
     cur_std_m, cur_std_e = _pin("cursor", "implement")
     cur_hard_m, cur_hard_e = _pin("cursor", "hard")
@@ -181,6 +242,7 @@ def builtin_profiles() -> tuple[Profile, ...]:
             effort=devin_fast_e,
             provider="cognition",
         ),
+        _p("mimo-v2-flash-low", "mimo", mimo_fast_m, effort=mimo_fast_e, provider="xiaomi"),
         _p(
             "cursor-composer-2.5-fast",
             "cursor",
@@ -254,6 +316,10 @@ def builtin_profiles() -> tuple[Profile, ...]:
             tiers=("standard",),
             effort=devin_std_e,
             provider="cognition",
+        ),
+        _p(
+            "mimo-v2-pro-high", "mimo", mimo_std_m,
+            roles=STANDARD_ROLES, tiers=("standard",), effort=mimo_std_e, provider="xiaomi",
         ),
         _p(
             "cursor-composer-2.5",
@@ -394,10 +460,6 @@ def default_preference_ids(
     for profile in sorted(profiles.values(), key=lambda item: item.id):
         if profile.id in seen:
             continue
-        # Devin is intentionally opt-in: a missing custom preference must not
-        # make it a fallback merely because every default worker is unavailable.
-        if profile.worker == "devin":
-            continue
         if review and not profile.allows_role("review"):
             continue
         if want_tier in TIERS and not profile.allows_tier(want_tier):
@@ -432,4 +494,73 @@ def as_dict(profile: Profile) -> dict:
         "supported_efforts": list(profile.supported_efforts),
         "provider": profile.provider,
         "catalog_required": profile.catalog_required,
+        "capability": capability_dict(profile.capability),
     }
+
+
+def _cap(quality: int, speed: int, cost: int, reasoning: int, **traits: int) -> Capability:
+    data = capability_dict(SAFE_CAPABILITY)
+    data.update(quality=quality, speed=speed, cost=cost, reasoning=reasoning)
+    data.update(traits)
+    return Capability(**data)
+
+
+def _from(base: dict, **overrides: int) -> Capability:
+    merged = dict(base)
+    merged.update(overrides)
+    return _cap(**merged)
+
+
+def _builtin_capability(pid: str) -> Capability:
+    fast = dict(quality=56, speed=84, cost=86, reasoning=42, implementation=64, debugging=60, tests=58, general=60)
+    standard = dict(
+        quality=78, speed=58, cost=48, reasoning=74,
+        implementation=80, debugging=76, tests=74, architecture=70,
+        security=66, performance=64, migration=68, documentation=66,
+        frontend=62, data=66, general=74,
+    )
+    strong = dict(
+        quality=90, speed=36, cost=24, reasoning=92,
+        implementation=88, debugging=86, tests=82, architecture=90,
+        security=86, performance=78, migration=80, documentation=76,
+        frontend=70, data=74, general=84,
+    )
+    table = {
+        "grok-4.5-low": _from(fast, debugging=66),
+        "claude-haiku-4-5-low": _from(fast, documentation=72, speed=88, cost=84),
+        "codex-explorer-low": _from(fast, implementation=22, general=72, quality=60),
+        "codex-luna-low": _from(fast, implementation=70, quality=64, reasoning=48),
+        "opencode-gpt-5.4-mini-minimal": _from(fast, quality=52, speed=80),
+        "omp-grok-4.5-low": _from(fast, debugging=66),
+        "pi-grok-4.5-low": _from(fast, debugging=66),
+        "agy-gemini-3.8-flash-low": _from(fast, speed=86, cost=88, quality=54),
+        "devin-swe-2-medium": _from(fast, implementation=68, quality=60),
+        "cursor-composer-2.5-fast": _from(fast, quality=50, speed=82),
+        "grok-4.7-high": _from(standard, quality=82, debugging=84, reasoning=78),
+        "claude-sonnet-5-medium": _from(standard, quality=80, frontend=84, documentation=80),
+        "opencode-gpt-5.6-luna-high": _from(standard, quality=76, implementation=76),
+        "omp-grok-4.6-high": _from(standard, quality=74, implementation=76, reasoning=72),
+        "pi-grok-4.6-high": _from(standard, quality=74, implementation=76, reasoning=72),
+        "agy-gemini-3.8-flash-high": _from(standard, quality=74, speed=70),
+        "devin-swe-2-high": _from(standard, quality=72, implementation=74),
+        "mimo-v2-flash-low": _from(fast, quality=58, implementation=66, speed=82),
+        "mimo-v2-pro-high": _from(standard, quality=77, implementation=79, debugging=78),
+        "cursor-composer-2.5": _from(standard, quality=70),
+        "claude-opus-5-high": _from(
+            strong, quality=96, architecture=96, security=94, reasoning=96, implementation=92, debugging=90,
+        ),
+        "opencode-gpt-5.6-terra-max": _from(strong, quality=91, architecture=88, reasoning=90),
+        "omp-claude-opus-5-high": _from(
+            strong, quality=96, architecture=96, security=94, reasoning=96, implementation=92,
+        ),
+        "pi-claude-opus-5-high": _from(
+            strong, quality=96, architecture=96, security=94, reasoning=96, implementation=92,
+        ),
+        "agy-gemini-3.1-pro-high": _from(strong, quality=88, data=84, reasoning=88),
+        "devin-swe-2-max": _from(strong, quality=86, architecture=84),
+        "codex-terra-medium": _from(strong, quality=84, reasoning=80, implementation=82),
+        "codex-terra-high": _from(strong, quality=86, reasoning=88),
+        "cursor-grok-4.6-high": _from(standard, quality=74, reasoning=76),
+        "cursor-opus-thinking-high": _from(strong, quality=90, reasoning=90),
+    }
+    return table.get(pid, SAFE_CAPABILITY)

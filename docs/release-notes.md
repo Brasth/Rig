@@ -8,7 +8,7 @@ OpenCode standard Luna is exact selector `openai/gpt-6-luna` with alias `gpt-6-l
 
 Claude Code hard/review and OMP/Pi review selectors are `claude-opus-5-5`. Cursor review is `claude-opus-5-5-thinking-high`. Profile IDs stay `claude-opus-5-high`, `omp-claude-opus-5-high`, `pi-claude-opus-5-high`, and `cursor-opus-thinking-high`.
 
-Default fast/standard worker order is Codex, Grok, Claude, OpenCode, OMP, Pi, agy. Strong/review stays Claude, Grok, OpenCode, OMP, Pi, agy, Codex. Preference order does not enable workers and does not bypass live-parent exclusion.
+Default fast/standard worker order is Codex, Grok, Claude, conditional Devin, conditional MiMo, OpenCode, OMP, Pi, agy. Strong/review is conditional Devin, Claude, Codex, Grok, OpenCode, OMP, Pi, agy. MiMo is fast/standard only. Devin stays disabled unless the user enables it; MiMo stays opt-in. Preference order does not enable workers and does not bypass live-parent exclusion or other gates.
 
 This supersedes the 2026-09-16 shipped explorer selector.
 
