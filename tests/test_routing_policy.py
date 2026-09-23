@@ -232,6 +232,74 @@ class SmartSelection(unittest.TestCase):
             )
             self.assertNotEqual(missing.get("worker"), "devin")
 
+    def test_mimo_only_effective_worker_uses_exact_catalog_model(self):
+        fast = smart_pick(
+            "codex", ["mimo"], "mini", "tiny comment",
+            catalogs={"mimo": ["xiaomi/mimo-v2-flash"]},
+        )
+        self.assertEqual(
+            (fast["worker"], fast["model"], fast["effort"], fast["spawn"]),
+            ("mimo", "xiaomi/mimo-v2-flash", "low", "run-worker"),
+        )
+        self.assertEqual(fast["routing"]["required_tier"], "fast")
+        self.assertEqual(fast["routing"]["selected_profile"]["id"], "mimo-v2-flash-low")
+        self.assertEqual(fast["model_source"], "selected")
+
+        standard = smart_pick(
+            "codex", ["mimo"], "implement", "add a header",
+            catalogs={"mimo": ["xiaomi/mimo-v2-pro"]},
+        )
+        self.assertEqual(
+            (standard["worker"], standard["model"], standard["effort"], standard["spawn"]),
+            ("mimo", "xiaomi/mimo-v2-pro", "high", "run-worker"),
+        )
+        self.assertEqual(standard["routing"]["required_tier"], "standard")
+        self.assertEqual(standard["routing"]["selected_profile"]["id"], "mimo-v2-pro-high")
+        self.assertEqual(standard["model_source"], "selected")
+
+        disabled = smart_pick(
+            "codex", ["claude"], "implement", "add a header",
+            catalogs={"mimo": ["xiaomi/mimo-v2-flash", "xiaomi/mimo-v2-pro"]},
+        )
+        self.assertNotEqual(disabled.get("worker"), "mimo")
+        disabled_codes = {
+            row["id"]: row["code"]
+            for row in disabled["routing"]["candidate_decisions"]
+            if row["id"].startswith("mimo-")
+        }
+        self.assertEqual(
+            disabled_codes,
+            {"mimo-v2-flash-low": "worker-not-effective", "mimo-v2-pro-high": "worker-not-effective"},
+        )
+
+        missing = smart_pick(
+            "codex", ["mimo"], "implement", "add a header",
+            catalogs={"mimo": None},
+        )
+        self.assertNotEqual(missing.get("worker"), "mimo")
+        self.assertNotEqual(missing.get("model"), "xiaomi/mimo-v2-pro")
+        missing_codes = {
+            row["code"]
+            for row in missing["routing"]["candidate_decisions"]
+            if row["id"].startswith("mimo-")
+        }
+        self.assertIn("catalog-unavailable", missing_codes)
+        self.assertNotIn("selected", missing_codes)
+
+        guessed = smart_pick(
+            "codex", ["mimo"], "implement", "add a header",
+            catalogs={"mimo": ["xiaomi/not-a-mimo-model"]},
+        )
+        self.assertNotEqual(guessed.get("worker"), "mimo")
+        self.assertNotEqual(guessed.get("model"), "xiaomi/not-a-mimo-model")
+        guessed_codes = {
+            row["id"]: row["code"]
+            for row in guessed["routing"]["candidate_decisions"]
+            if row["id"].startswith("mimo-")
+        }
+        self.assertEqual(guessed_codes.get("mimo-v2-pro-high"), "catalog-miss")
+        self.assertNotIn("selected", guessed_codes.values())
+
     def test_parent_fallback_after_all_wrappers(self):
         choice = smart_pick("codex", [], "implement", "add a header")
         self.assertEqual(choice["spawn"], "native")
