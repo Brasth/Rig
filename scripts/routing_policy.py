@@ -53,6 +53,9 @@ CODES = (
     "selected",
     "not-evaluated",
     "worker-not-effective",
+    "worker-disabled",
+    "worker-cli-missing",
+    "worker-mcp-unavailable",
     "worker-excluded",
     "worker-live-parent",
     "cursor-excluded",
@@ -294,17 +297,39 @@ def direct_parent_eligible(
     )
 
 
-def _hard_filter(profile: rig_profiles.Profile, *, live: str, blocked: set[str], wrapper_names: list[str], kind: str) -> tuple[str, str] | None:
+def _worker_unavailable(profile: rig_profiles.Profile, repo: Path | None) -> tuple[str, str]:
+    """Explain the first concrete gate that keeps a worker out of the pool."""
+    if repo is None:
+        return "worker-not-effective", "worker is not in the effective set supplied to this picker"
+    import harness as rig_harness
+
+    name = profile.worker
+    enabled = rig_harness.parse_harness(rig_harness.harness_path(Path(repo)))["workers"].get(name) == "true"
+    if not enabled:
+        return "worker-disabled", f"enable with: rig workers {name}=on"
+    if not rig_harness.find_worker_bin(name):
+        if name == "mimo":
+            return "worker-cli-missing", "install with: rig setup --mimo"
+        return "worker-cli-missing", f"install the {name} CLI, then rerun rig pick"
+    import child_mcp
+
+    ready, reason = child_mcp.worker_mcp_ready(name)
+    if not ready:
+        return "worker-mcp-unavailable", reason or f"{name} job-scoped MCP is unavailable"
+    return "worker-not-effective", "worker is not in this run's effective worker set"
+
+
+def _hard_filter(profile: rig_profiles.Profile, *, live: str, blocked: set[str], wrapper_names: list[str], kind: str, repo: Path | None = None) -> tuple[str, str] | None:
     import route as rig_route
 
     if profile.worker == "cursor":
         return "cursor-excluded", "Cursor CLI has no isolated job-scoped MCP"
     if profile.worker == live:
-        return "worker-live-parent", ""
+        return "worker-live-parent", f"{live} is the live parent; choose a different child CLI"
     if profile.worker in blocked:
-        return "worker-excluded", ""
+        return "worker-excluded", "excluded by --exclude; remove it to consider this worker"
     if profile.worker not in wrapper_names:
-        return "worker-not-effective", ""
+        return _worker_unavailable(profile, repo)
     banned = rig_route.assert_child_model(profile.selector)
     if not banned:
         for role in profile.roles:
@@ -323,7 +348,8 @@ def _hard_filter(profile: rig_profiles.Profile, *, live: str, blocked: set[str],
         if banned:
             return "banned-model", banned
     if not profile.allows_role(kind):
-        return "role-incompatible", ""
+        supported = ", ".join(profile.roles) or "none"
+        return "role-incompatible", f"supports roles: {supported}"
     return None
 
 
@@ -584,6 +610,12 @@ def _select_scored(cfg, kind: str, need: str, decisions: dict, session: CatalogS
     return selected, selected_tier, selected_model, catalog_meta, public
 
 
+def _catalog_refresh_command(worker: str) -> str:
+    if worker == "mimo":
+        return "mimo models xiaomi --refresh"
+    return f"{worker} models"
+
+
 def _catalog_model(profile: rig_profiles.Profile, session: CatalogSession) -> tuple[str | None, dict, tuple[str, str] | None]:
     info = session.info(profile.worker)
     age = float(info.get("age_s") or 0)
@@ -591,19 +623,21 @@ def _catalog_model(profile: rig_profiles.Profile, session: CatalogSession) -> tu
         info = session.info(profile.worker, require_fresh=True)
         age = float(info.get("age_s") or 0)
     catalog_meta = {"source": info.get("source") or "catalog", "freshness": info.get("freshness") or info.get("state") or "n/a"}
+    refresh_command = _catalog_refresh_command(profile.worker)
     if info["state"] == "unavailable":
-        return None, catalog_meta, ("catalog-unavailable", "")
+        return None, catalog_meta, ("catalog-unavailable", f"run `{refresh_command}` and confirm the CLI catalog is available")
     if info["state"] in {"unverified", "skipped"}:
-        return None, catalog_meta, ("catalog-unconfirmed", "")
+        return None, catalog_meta, ("catalog-unconfirmed", f"catalog for {profile.worker} has not been confirmed; run `{refresh_command}`")
     if info.get("confirmed_empty") or info["state"] == "empty":
-        return None, catalog_meta, ("catalog-empty", "")
+        return None, catalog_meta, ("catalog-empty", f"`{refresh_command}` returned no models")
     if info.get("ids") is None:
-        return None, catalog_meta, ("catalog-unconfirmed", "")
+        return None, catalog_meta, ("catalog-unconfirmed", f"catalog for {profile.worker} has not been confirmed; run `{refresh_command}`")
     matched = match_profile_model(profile, info["ids"])
     if not matched:
-        return None, catalog_meta, ("catalog-miss", "")
+        selectors = ", ".join(profile.model_keys())
+        return None, catalog_meta, ("catalog-miss", f"catalog did not contain pinned selector {selectors}; check `rig doctor` and the worker model IDs")
     if info["state"] == "stale" and age > rig_catalog.STALE_MAX_SECONDS:
-        return None, catalog_meta, ("catalog-stale-refresh-failed", "")
+        return None, catalog_meta, ("catalog-stale-refresh-failed", f"catalog refresh failed; rerun `{refresh_command}` and pick again")
     return matched, catalog_meta, None
 
 
@@ -785,7 +819,7 @@ def smart_pick(
 
     for profile in sorted(cfg.profiles.values(), key=lambda item: item.id):
         filtered = _hard_filter(
-            profile, live=live, blocked=blocked, wrapper_names=wrapper_names, kind=kind,
+            profile, live=live, blocked=blocked, wrapper_names=wrapper_names, kind=kind, repo=repo,
         )
         if filtered:
             decisions[profile.id] = _decision(profile.id, filtered[0], filtered[1])

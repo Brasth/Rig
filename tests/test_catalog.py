@@ -50,8 +50,34 @@ class CatalogEnv(unittest.TestCase):
         path.write_text("#!/bin/sh\n" + script)
         path.chmod(0o755)
 
+    def test_mimo_probe_refreshes_xiaomi_catalog(self):
+        self._bin(
+            "mimo",
+            'printf "%s\\n" "$*" > "$MIMO_ARGS_FILE"\n'
+            'printf "%s\\n" "xiaomi/mimo-v2.6-flash" "xiaomi/mimo-v2.6-pro"\n',
+        )
+        args_file = Path(self.td.name) / "mimo-args"
+        os.environ["MIMO_ARGS_FILE"] = str(args_file)
+        try:
+            self.assertEqual(
+                catalog.probe_worker("mimo"),
+                ["xiaomi/mimo-v2.6-flash", "xiaomi/mimo-v2.6-pro"],
+            )
+            self.assertEqual(args_file.read_text().strip(), "models xiaomi --refresh")
+        finally:
+            os.environ.pop("MIMO_ARGS_FILE", None)
+
 
 class ParseCatalog(unittest.TestCase):
+    def test_mimo_model_selectors(self):
+        self.assertEqual(
+            catalog.parse_mimo(
+                "xiaomi/mimo-v2.6-flash  MiMo V2.6 Flash\n"
+                "xiaomi/mimo-v2.6-pro  MiMo V2.6 Pro\n"
+            ),
+            ["xiaomi/mimo-v2.6-flash", "xiaomi/mimo-v2.6-pro"],
+        )
+
     def test_opencode_skips_json_blobs(self):
         text = (
             "openai/gpt-6-luna\n"

@@ -100,13 +100,11 @@ MODELS = {
     ("devin", "verify"): ("swe-2-high", "high"),
     ("devin", "review"): ("swe-2-max", "max"),
     # MiMo Code resolves exact provider/model IDs from its catalog.
-    ("mimo", "explore"): ("xiaomi/mimo-v2-flash", "low"),
-    ("mimo", "mini"): ("xiaomi/mimo-v2-flash", "low"),
-    ("mimo", "bulk"): ("xiaomi/mimo-v2-flash", "low"),
-    ("mimo", "implement"): ("xiaomi/mimo-v2-pro", "high"),
-    ("mimo", "hard"): ("xiaomi/mimo-v2-pro", "high"),
-    ("mimo", "verify"): ("xiaomi/mimo-v2-pro", "high"),
-    ("mimo", "review"): ("xiaomi/mimo-v2-pro", "high"),
+    ("mimo", "explore"): ("xiaomi/mimo-v2.6-flash", "low"),
+    ("mimo", "mini"): ("xiaomi/mimo-v2.6-flash", "low"),
+    ("mimo", "bulk"): ("xiaomi/mimo-v2.6-flash", "low"),
+    ("mimo", "implement"): ("xiaomi/mimo-v2.6-pro", "high"),
+    ("mimo", "verify"): ("xiaomi/mimo-v2.6-pro", "high"),
 }
 
 NATIVE = {

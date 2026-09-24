@@ -18,7 +18,7 @@ usage() {
   cat <<'EOF'
 usage: rig <command> [args]
 
-  setup [--shell-ui] [--shell bash|zsh] [--rc-file PATH] [--cua-driver|--no-cua-driver] [--browser-skill|--no-browser-skill]
+  setup [--shell-ui] [--shell bash|zsh] [--rc-file PATH] [--cua-driver|--no-cua-driver] [--browser-skill|--no-browser-skill] [--mimo|--no-mimo]
   ui [open|status|enable|disable|stop]
   uninstall [--dry-run] [--repo PATH]
   update
@@ -28,7 +28,7 @@ usage: rig <command> [args]
   browser-skill [status|setup|on|off|doctor]
   status
   use codex|grok|opencode|omp|pi|agy
-  workers grok=on|off claude=on|off codex=on|off cursor=on|off opencode=on|off omp=on|off pi=on|off agy=on|off devin=on|off
+  workers grok=on|off claude=on|off codex=on|off cursor=on|off opencode=on|off omp=on|off pi=on|off agy=on|off devin=on|off mimo=on|off
   prune
   run "prompt"
   jobs [--json] [--thread [ID]]
@@ -266,13 +266,14 @@ maybe_copy_queue_adapter() {
 }
 
 cmd_setup() {
-  local shell_ui=0 shell_args=() cua_flags=() bsk_flags=()
+  local shell_ui=0 shell_args=() cua_flags=() bsk_flags=() mimo_flag=""
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --shell-ui) shell_ui=1; shift ;;
       --shell|--rc-file) [[ $# -ge 2 ]] || return 2; shell_args+=("$1" "$2"); shift 2 ;;
       --cua-driver|--no-cua-driver) cua_flags+=("$1"); shift ;;
       --browser-skill|--no-browser-skill) bsk_flags+=("$1"); shift ;;
+      --mimo|--no-mimo) mimo_flag="$1"; shift ;;
       *) echo "rig setup: unknown flag $1" >&2; return 2 ;;
     esac
   done
@@ -400,6 +401,17 @@ PY
       echo "browser-skill setup: installer missing; skip. Enable later: rig browser-skill setup"
     fi
   fi
+  local mimo_py
+  mimo_py="$(py_script mimo_setup.py)"
+  if [[ -f "$mimo_py" ]]; then
+    if [[ -n "$mimo_flag" ]]; then
+      python3 "$mimo_py" "$mimo_flag" --repo "$(repo_root)" --rig-bin "$dest/bin/rig" || true
+    else
+      python3 "$mimo_py" --repo "$(repo_root)" --rig-bin "$dest/bin/rig" || true
+    fi
+  else
+    echo "MiMo setup: helper missing; retry after rig update: rig setup --mimo"
+  fi
 
   mkdir -p "$HOME/.local/bin"
   if [[ ! -e "$HOME/.local/bin/rig" || -L "$HOME/.local/bin/rig" ]]; then
@@ -512,7 +524,10 @@ cmd_init() {
       local name flag
       for name in "${RIG_WORKERS[@]}"; do
         [[ "$name" == "codex" ]] && continue
-        if [[ -n "$(find_worker_bin "$name")" ]]; then
+        if [[ "$name" == "mimo" ]]; then
+          # MiMo is explicitly opt-in, even when the CLI is already installed.
+          flag=false
+        elif [[ -n "$(find_worker_bin "$name")" ]]; then
           flag=true
         else
           flag=false
@@ -697,11 +712,15 @@ worker_reason() {
   bin="$(find_worker_bin "$name")"
   live="$(live_parent)"
   if [[ "$flag" != "true" ]]; then
-    printf '%s\n' "flag"
+    printf '%s\n' "disabled; enable with: rig workers $name=on"
   elif [[ -z "$bin" ]]; then
-    printf '%s\n' "no binary"
+    if [[ "$name" == "mimo" ]]; then
+      printf '%s\n' "CLI missing; install with: rig setup --mimo"
+    else
+      printf '%s\n' "CLI missing; install the $name CLI"
+    fi
   elif [[ "$name" == "$live" ]]; then
-    printf '%s\n' "is live parent"
+    printf '%s\n' "is the live parent; choose a different child CLI"
   else
     mcp="$(worker_mcp_reason "$name" 2>/dev/null || true)"
     printf '%s\n' "$mcp"
@@ -908,7 +927,7 @@ cmd_doctor() {
       omp|pi|agy) mcp_schema="mcpServers.rig" ;;
       claude) mcp_schema="job mcp.json" ;;
       devin) mcp_schema="job .devin/mcp_config.local.json" ;;
-      mimo) mcp_schema="global MCP with job environment" ;;
+      mimo) mcp_schema="job-scoped MIMOCODE_CONFIG_DIR" ;;
       *) mcp_schema="mcp" ;;
     esac
     if [[ -z "$mcp_reason" ]]; then

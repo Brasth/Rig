@@ -34,7 +34,7 @@ PROBE_ARGV = {
     "pi": ("--list-models",),
     "agy": ("models",),
     "devin": ("models", "list", "--format", "json"),
-    "mimo": ("models",),
+    "mimo": ("models", "xiaomi", "--refresh"),
 }
 
 

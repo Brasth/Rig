@@ -39,7 +39,7 @@ class ChildMcpReadiness(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.home = Path(self.temp.name).resolve()
         self.bins = self.home / "bins"
-        for name in ("grok", "codex", "claude", "opencode", "omp", "pi", "agy", "devin"):
+        for name in ("grok", "codex", "claude", "opencode", "omp", "pi", "agy", "devin", "mimo"):
             mcp_test_support.fake_bin(self.bins, name)
         self.launcher = mcp_test_support.seed_installed_mcp(self.home)
         self._env = mock.patch.dict(os.environ, {
@@ -52,7 +52,7 @@ class ChildMcpReadiness(unittest.TestCase):
             os.environ.pop(key, None)
 
     def test_setup_configs_are_ready_when_binary_exists(self):
-        for worker in ("grok", "codex", "claude", "opencode", "omp", "pi", "agy", "devin"):
+        for worker in ("grok", "codex", "claude", "opencode", "omp", "pi", "agy", "devin", "mimo"):
             ready, reason = child_mcp.worker_mcp_ready(worker, home=self.home)
             self.assertTrue(ready, f"{worker}: {reason}")
         ready, reason = child_mcp.worker_mcp_ready("cursor", home=self.home)
@@ -220,6 +220,18 @@ class ChildMcpIsolation(unittest.TestCase):
         spec = child_mcp.write_job_mcp(self.job_dir, self.job_id, self.repo, "omp")
         self.assertEqual(spec["env"].get("OMP_MCP"), spec["path"])
         self.assertEqual(spec["isolation"], "OMP_MCP")
+
+    def test_write_job_mcp_mimo_uses_private_config_dir(self):
+        spec = child_mcp.write_job_mcp(self.job_dir, self.job_id, self.repo, "mimo")
+        config_dir = self.job_dir / "mimo-config"
+        config = json.loads((config_dir / "mimocode.json").read_text())
+        self.assertEqual(spec["env"]["MIMOCODE_CONFIG_DIR"], str(config_dir))
+        self.assertEqual(spec["isolation"], "MIMOCODE_CONFIG_DIR")
+        self.assertEqual(set(config["mcp"]), {"rig", "rig-ask"})
+        self.assertTrue(all(row["enabled"] for row in config["mcp"].values()))
+        self.assertTrue(all(row["type"] == "local" for row in config["mcp"].values()))
+        self.assertTrue(all(row["environment"]["RIG_JOB_ID"] == self.job_id for row in config["mcp"].values()))
+        self.assertFalse((self.repo / ".mimocode" / "mimocode.json").exists())
 
 
 class ChildMcpHandshakeLock(unittest.TestCase):

@@ -1148,6 +1148,7 @@ class ComputerUseCli(unittest.TestCase):
         text = (self.repo / ".rig" / "harness.toml").read_text()
         self.assertRegex(text, r"\[computer-use\]")
         self.assertRegex(text, r"enabled\s*=\s*false")
+        self.assertRegex(text, r"(?m)^mimo\s*=\s*false$")
         shown = run_rig(self.repo, "computer-use", env=self._env())
         self.assertEqual(shown.returncode, 0, shown.stderr + shown.stdout)
         self.assertIn("enabled=false", shown.stdout)
@@ -1225,6 +1226,26 @@ class ComputerUseCli(unittest.TestCase):
         bad = run_rig(self.repo, "setup", "--bogus", env=skip)
         self.assertEqual(bad.returncode, 2, bad.stderr)
         self.assertIn("unknown flag", bad.stderr)
+
+    def test_setup_mimo_opt_in_enables_only_this_repo(self):
+        mimo = self.bins / "mimo"
+        mimo.write_text("#!/bin/sh\nexit 0\n")
+        mimo.chmod(0o755)
+        global_cfg = self.home / ".config" / "mimocode" / "mimocode.json"
+        global_cfg.parent.mkdir(parents=True)
+        global_cfg.write_text('{"model":"xiaomi/keep-me"}\n')
+        proc = run_rig(self.repo, "setup", "--mimo", env=self._env())
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        harness = (self.repo / ".rig" / "harness.toml").read_text()
+        self.assertRegex(harness, r"(?m)^mimo\s*=\s*true$")
+        self.assertEqual(global_cfg.read_text(), '{"model":"xiaomi/keep-me"}\n')
+
+    def test_setup_no_mimo_does_not_install_or_enable(self):
+        proc = run_rig(self.repo, "setup", "--no-mimo", env=self._env())
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        self.assertIn("MiMo setup: skipped", proc.stdout)
+        harness = (self.repo / ".rig" / "harness.toml").read_text()
+        self.assertRegex(harness, r"(?m)^mimo\s*=\s*false$")
 
 
 class BrowserSkillCli(unittest.TestCase):

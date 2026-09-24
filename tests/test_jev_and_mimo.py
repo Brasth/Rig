@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import json
-import os
 import sys
 import tempfile
 import unittest
@@ -60,14 +59,14 @@ class JevPickerTests(unittest.TestCase):
 
 
 class MimoWorkerTests(unittest.TestCase):
-    def test_mimo_is_opt_in_and_requires_rig_mcp_confirmation(self):
+    def test_mimo_mcp_readiness_uses_job_scoped_config_support(self):
         self.assertIn("mimo", harness.WORKERS)
-        with patch.object(child_mcp, "worker_binary", return_value="/tmp/mimo"), patch.dict(os.environ, {}, clear=False):
-            os.environ.pop("RIG_MIMO_MCP_READY", None)
+        with patch.object(child_mcp, "worker_binary", return_value="/tmp/mimo"):
+            ready, reason = child_mcp.worker_mcp_ready("mimo")
+        self.assertEqual((ready, reason), (True, ""))
+
+    def test_mimo_cli_is_still_required_for_job_scoped_mcp(self):
+        with patch.object(child_mcp, "worker_binary", return_value=""):
             ready, reason = child_mcp.worker_mcp_ready("mimo")
         self.assertFalse(ready)
-        self.assertIn("MCP missing", reason)
-
-    def test_mimo_mcp_gate_accepts_explicit_ready_marker(self):
-        with patch.object(child_mcp, "worker_binary", return_value="/tmp/mimo"), patch.dict(os.environ, {"RIG_MIMO_MCP_READY": "1"}):
-            self.assertEqual(child_mcp.worker_mcp_ready("mimo"), (True, ""))
+        self.assertIn("binary 'mimo' not on PATH", reason)

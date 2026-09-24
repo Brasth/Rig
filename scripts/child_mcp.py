@@ -78,7 +78,7 @@ SCHEMA_LABEL = {
     "agy": "mcpServers.rig",
     "claude": "job mcp.json",
     "devin": "job .devin/mcp_config.local.json",
-    "mimo": "Mimo global MCP with job environment",
+    "mimo": "job-scoped MIMOCODE_CONFIG_DIR",
 }
 
 
@@ -336,8 +336,7 @@ def worker_mcp_ready(worker: str, *, home: Path | None = None) -> tuple[bool, st
     if name == "claude" or name == "devin":
         return True, ""
     if name == "mimo":
-        if os.environ.get("RIG_MIMO_MCP_READY", "").strip().lower() not in {"1", "true", "yes", "on"}:
-            return False, "mimo MCP missing — set up Rig MCP then set RIG_MIMO_MCP_READY=1"
+        # Rig writes the MCP config into each job's private directory below.
         return True, ""
     path = config_path(name, home)
     if path is None:
@@ -430,7 +429,7 @@ def write_job_mcp(job_dir: Path, job_id: str, repo: Path, worker: str) -> dict:
     - pi: PI_CODING_AGENT_DIR is the whole agent dir (auth/skills). Do not hijack it.
     - cursor: excluded until a safe --mcp-config exists
     - devin: repo .devin/mcp_config.local.json
-    - mimo: configured global MCP consumes this job's RIG_JOB_* environment
+    - mimo: private MIMOCODE_CONFIG_DIR with only job-scoped Rig MCP servers
     """
     job_dir = Path(job_dir)
     job_dir.mkdir(parents=True, exist_ok=True)
@@ -457,7 +456,20 @@ def write_job_mcp(job_dir: Path, job_id: str, repo: Path, worker: str) -> dict:
     elif name == "devin":
         isolation = "job-devin-mcp"
     elif name == "mimo":
-        isolation = "global-mcp-job-environment"
+        config_dir = job_dir / "mimo-config"
+        config_dir.mkdir(parents=True, exist_ok=True)
+        config_file = config_dir / "mimocode.json"
+        server = _server(job_dir, job_id, repo)
+        config_file.write_text(json.dumps({
+            "$schema": "https://mimo.xiaomi.com/mimocode/config.json",
+            "mcp": {
+                "rig": {"type": "local", "command": [server["command"], *server["args"]], "environment": server["env"], "enabled": True},
+                "rig-ask": {"type": "local", "command": [server["command"], *server["args"]], "environment": server["env"], "enabled": True},
+            },
+        }, indent=2) + "\n")
+        env["MIMOCODE_CONFIG_DIR"] = str(config_dir)
+        path = config_file
+        isolation = "MIMOCODE_CONFIG_DIR"
     return {
         "ready": ready,
         "reason": reason,

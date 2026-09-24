@@ -70,6 +70,10 @@ Tmux package operations are noninteractive and time out after five minutes per o
 
 Setup does **not** write project `mcp.json` / `opencode.json`. Setup does **not** add `pi-mcp-adapter` to Pi `settings.json`. `rig setup --cua-driver` / `--no-cua-driver` forwards to the Cua Driver installer. `rig setup --browser-skill` / `--no-browser-skill` forwards to the BrowserSkill installer. `rig computer-use setup` installs/upgrades the binary. It does **not** write raw `cua-driver` MCP into parent or worker CLI configs; all parents use Rig MCP. Vendor skill installation is not required. Recovery stays manual: machine opt-in (`~/.rig/cua-driver.json`), repo `[computer-use] enabled=true`, daemon (`CuaDriver.app` / `cua-driver serve`), and OS permissions — no auto-grants, no silent config, no live daemon launch. `rig browser-skill setup` installs/upgrades `bsk` and reprints extension URLs. It does **not** flip `[browser-skill] enabled` and never runs `bsk install-skill`.
 
+MiMo Code is optional and remains off in new repos. `rig setup` asks before installing it; `rig setup --mimo` accepts the prompt and installs with MiMo's official installer when the `mimo` CLI is missing, then enables MiMo only in the current initialized repo. `rig setup --no-mimo` skips it. Piped or otherwise noninteractive setup skips and prints `rig setup --mimo` as the retry. Setup does not edit MiMo's global configuration. You can enable an already installed CLI for one repo with `rig workers mimo=on`.
+
+Each MiMo job gets its own `.rig/jobs/<job-id>/mimo-config/mimocode.json` via `MIMOCODE_CONFIG_DIR`. That config contains only Rig's job-scoped MCP servers; the inbox handshake remains required before the job is considered started. MiMo setup and its job MCP do not require editing `~/.config/mimocode`.
+
 ## Computer-use (parent)
 
 Cua Driver is parent-only eyes and hands. Never a Rig worker. Never `[workers].cua`. Children never receive cua-driver or chrome-devtools MCP.
