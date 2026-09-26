@@ -31,7 +31,7 @@ def _toml_exact_true(val: str) -> bool:
 
 def parse_harness(path: Path) -> dict:
     out = {
-        "parent": "codex",
+        "parent": "",
         "workers": dict(_DEFAULT_WORKERS),
         "queue": {"max_running": 3, "max_per_worker": 0, "per_worker": {}},
         "routing": {"mode": "smart", "engine": "", "local_policy": "", "objective": ""},
@@ -270,7 +270,7 @@ def format_status(
     # Status historically counts every directory, including unreadable records.
     n_jobs = getattr(jobs_snapshot, "directory_count", len(jobs_snapshot))
     lines = [
-        f"parent live={live or '(none)'} preferred={pref}",
+        f"parent live={live or '(none)'} preferred={pref or '(none)'}",
         f"effective: {' '.join(effs) if effs else 'none'}",
         f"jobs: {n_jobs}",
     ]

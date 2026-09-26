@@ -801,7 +801,7 @@ cmd_doctor() {
   echo
   echo "Parent"
   echo "  live:      ${live:-(none)}"
-  echo "  preferred: $pref"
+  echo "  preferred: ${pref:-(none)}"
   echo
   echo "Workers"
   local name flag bin reason eff
@@ -976,7 +976,7 @@ cmd_status() {
   if [[ -d "$(repo_root)/.rig/jobs" ]]; then
     jobs="$(command find "$(repo_root)/.rig/jobs" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l | tr -d ' ')"
   fi
-  echo "parent live=${live:-(none)} preferred=$pref"
+  echo "parent live=${live:-(none)} preferred=${pref:-(none)}"
   echo "effective: ${effs:-none}"
   echo "jobs: $jobs"
   local jp mp thread last

@@ -1,10 +1,3 @@
-parent = "codex"
-# parent = "grok"
-# parent = "opencode"
-# parent = "omp"
-# parent = "pi"
-# parent = "agy"
-
 [routing]
 # Smart is also the default when this section is omitted. Legacy restores the old ladder.
 mode = "smart"

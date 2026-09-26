@@ -96,7 +96,7 @@ harness_path() {
 # [parent] profile in old harness files is ignored (not a spawn/pick input).
 parse_harness() {
   local file="${1:-$(harness_path)}"
-  HARNESS_PARENT="codex"
+  HARNESS_PARENT=""
   HARNESS_WORKER_CODEX="false"
   HARNESS_WORKER_GROK="false"
   HARNESS_WORKER_CLAUDE="false"
