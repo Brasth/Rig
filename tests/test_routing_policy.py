@@ -175,7 +175,7 @@ class SmartSelection(unittest.TestCase):
         cursor = smart_pick("codex", ["cursor", "claude"], "implement", "add a header")
         self.assertEqual(cursor["worker"], "claude")
         codes = {row["code"] for row in cursor["routing"]["candidate_decisions"] if row["id"].startswith("cursor-")}
-        self.assertIn("cursor-excluded", codes)
+        self.assertNotIn("cursor-excluded", codes)
         one = {row["id"]: row["code"] for row in cursor["routing"]["candidate_decisions"]}
         self.assertEqual(len(one), len(cursor["routing"]["candidate_decisions"]))
 

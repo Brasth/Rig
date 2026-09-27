@@ -399,7 +399,7 @@ class InitPresence(unittest.TestCase):
         self.assertIn("grok-bot", doc.stdout)
         self.assertIn("curl https://cursor.com/install", doc.stdout)
         self.assertIn("MCP", doc.stdout)
-        self.assertRegex(doc.stdout, r"cursor: excluded")
+        self.assertRegex(doc.stdout, r"cursor: not ready")
         self.assertRegex(doc.stdout, r"grok: unavailable \(binary 'grok' not on PATH\)")
         self.assertRegex(doc.stdout, r"codex: unavailable \(binary 'codex' not on PATH\)")
         self.assertRegex(doc.stdout, r"opencode: unavailable \(binary 'opencode' not on PATH\)")
@@ -729,7 +729,7 @@ class InitPresence(unittest.TestCase):
         self.assertRegex(doc.stdout, r"omp: unavailable \(.*MCP missing")
         self.assertRegex(doc.stdout, r"pi: unavailable \(.*MCP missing")
         self.assertRegex(doc.stdout, r"agy: unavailable \(.*MCP missing")
-        self.assertRegex(doc.stdout, r"cursor: excluded")
+        self.assertRegex(doc.stdout, r"cursor: not ready")
         self.assertIn("/rig /queue in Grok, Codex, OpenCode, OMP, Pi, or agy", doc.stdout)
         self.assertIn(".config/opencode/skill/delegate-harness", doc.stdout)
         self.assertIn(".omp/agent/skills/delegate-harness", doc.stdout)
@@ -764,7 +764,7 @@ class InitPresence(unittest.TestCase):
         self.assertRegex(doc.stdout, r"pi: ready \(mcpServers\.rig")
         self.assertRegex(doc.stdout, r"agy: ready \(mcpServers\.rig")
         self.assertNotIn("pi MCP adapter missing", doc.stdout)
-        self.assertRegex(doc.stdout, r"cursor: excluded")
+        self.assertRegex(doc.stdout, r"cursor: not ready")
 
     def test_doctor_pi_adapter_present_skips_hint(self):
         proc = run_rig(self.repo, "init", env={"PATH": _stub_path()})

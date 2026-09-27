@@ -215,18 +215,21 @@ class CursorWorkerArgv(unittest.TestCase):
         out = proc.stdout + proc.stderr
         self.assertIn("--mode=ask", out, out)
 
-    def test_cursor_live_refuses_mcp_readiness(self):
+    def test_cursor_live_prepares_guarded_plugin_mcp(self):
+        home = self.repo / "home"
+        home.mkdir()
         env = {
             "PATH": f"{self.bins}:/usr/bin:/bin",
             "RIG_PARENT": "grok",
             "RIG_LIVE": "1",
             "RIG_MODEL": "composer-2.5",
             "RIG_ROLE": "implement",
+            "HOME": str(home),
         }
         proc = run_worker(self.repo, "cursor", "cursor-stream", str(self.brief), env=env)
         out = proc.stdout + proc.stderr
-        self.assertNotEqual(proc.returncode, 0, out)
-        self.assertIn("isolated job-scoped MCP", out)
+        self.assertNotIn("child MCP not ready", out)
+        self.assertTrue((self.repo / ".rig" / "jobs" / "cursor-stream" / "rigjob" / ".mcp.json").is_file())
 
 
 class CodexWorkerArgv(unittest.TestCase):

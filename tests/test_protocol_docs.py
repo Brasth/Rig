@@ -188,10 +188,10 @@ class ProtocolDocumentation(unittest.TestCase):
         protocol = (ROOT / "bin" / "rig").read_text().split("<!-- rig:start -->", 1)[1].split("<!-- rig:end -->", 1)[0]
         self.assertFalse(set(pattern.findall(protocol)) - known)
 
-    def test_delegate_harness_copies_are_byte_consistent(self):
-        left = (ROOT / "skills" / "delegate-harness" / "SKILL.md").read_bytes()
-        right = (ROOT / ".agents" / "skills" / "delegate-harness" / "SKILL.md").read_bytes()
-        self.assertEqual(left, right)
+    def test_delegate_harness_source_documents_cursor_tripwire(self):
+        source = (ROOT / "skills" / "delegate-harness" / "SKILL.md").read_text()
+        self.assertIn("job-scoped `--plugin-dir` Rig MCP", source)
+        self.assertIn("Cursor is last resort in pick", source)
 
     def test_generated_parent_protocol_matches_agents_workflow_contract(self):
         agents = (ROOT / "AGENTS.md").read_text().split(

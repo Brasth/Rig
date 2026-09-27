@@ -28,7 +28,7 @@ REQUIRED parent launch is MCP `rig_job_launch` (pass brief TEXT with files/acces
 
 ## Child handshake
 
-Children MUST call `rig_job_inbox` first. Handshake records connected/time/protocol 1. No success without it; fail exact `child MCP handshake missing` while preserving evidence and ownership. Permission bootstrap does not count as handshake. Restricted child tools: inbox/doing/note/ask/own show/project memory. Parent steering uses `rig_job_message`. Legacy/unknown jobs are not retroactively failed. Cursor remains excluded (no safe scoped MCP). Durable `.rig/jobs/<id>/` files: `launcher.log` (prechild), `stdout.log`, `activity.json`, `meta.json`, `result.json`, `inbox.json`, ask/reply, evidence. Detached wrapper survives parent/MCP shutdown. `stdout.log` prunes only after successful decoded activity; failures retain it.
+Children MUST call `rig_job_inbox` first. Handshake records connected/time/protocol 1. No success without it; fail exact `child MCP handshake missing` while preserving evidence and ownership. Permission bootstrap does not count as handshake. Restricted child tools: inbox/doing/note/ask/own show/project memory. Parent steering uses `rig_job_message`. Legacy/unknown jobs are not retroactively failed. Cursor runs with a job-scoped `--plugin-dir` Rig MCP and `--force`; other plugin MCPs stay visible, so the wrapper fails the job on any non-Rig MCP call (tripwire). Cursor is last resort in pick. Durable `.rig/jobs/<id>/` files: `launcher.log` (prechild), `stdout.log`, `activity.json`, `meta.json`, `result.json`, `inbox.json`, ask/reply, evidence. Detached wrapper survives parent/MCP shutdown. `stdout.log` prunes only after successful decoded activity; failures retain it.
 
 ## First call
 

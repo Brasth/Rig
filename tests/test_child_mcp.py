@@ -39,7 +39,7 @@ class ChildMcpReadiness(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.home = Path(self.temp.name).resolve()
         self.bins = self.home / "bins"
-        for name in ("grok", "codex", "claude", "opencode", "omp", "pi", "agy", "devin", "mimo"):
+        for name in ("grok", "codex", "claude", "cursor-agent", "opencode", "omp", "pi", "agy", "devin", "mimo"):
             mcp_test_support.fake_bin(self.bins, name)
         self.launcher = mcp_test_support.seed_installed_mcp(self.home)
         self._env = mock.patch.dict(os.environ, {
@@ -56,8 +56,15 @@ class ChildMcpReadiness(unittest.TestCase):
             ready, reason = child_mcp.worker_mcp_ready(worker, home=self.home)
             self.assertTrue(ready, f"{worker}: {reason}")
         ready, reason = child_mcp.worker_mcp_ready("cursor", home=self.home)
+        self.assertTrue(ready, reason)
+
+    def test_cursor_guard_rejects_forbidden_server(self):
+        path = self.home / ".cursor" / "mcp.json"
+        path.parent.mkdir()
+        path.write_text(json.dumps({"mcpServers": {"chrome-devtools": {}}}))
+        ready, reason = child_mcp.worker_mcp_ready("cursor", home=self.home)
         self.assertFalse(ready)
-        self.assertIn("isolated job-scoped MCP", reason)
+        self.assertIn("chrome-devtools", reason)
 
     def test_rejects_comment_only_disabled_malformed_and_invalid(self):
         grok = self.home / ".grok" / "config.toml"
@@ -208,6 +215,29 @@ class ChildMcpIsolation(unittest.TestCase):
         self.assertNotIn("bsk", joined)
         self.assertNotIn("browser-skill", joined)
         self.assertEqual(spec["isolation"], "ignore-user-config")
+
+    def test_write_job_mcp_cursor_uses_guarded_plugin(self):
+        spec = child_mcp.write_job_mcp(self.job_dir, self.job_id, self.repo, "cursor")
+        plugin_dir = self.job_dir / "rigjob"
+        self.assertEqual(spec["argv"][:1], ["--plugin-dir"])
+        self.assertIn("--approve-mcps", spec["argv"])
+        self.assertEqual(spec["isolation"], "cursor-plugin+guarded")
+        self.assertEqual(json.loads((plugin_dir / ".cursor-plugin" / "plugin.json").read_text())["name"], "rigjob")
+        payload = json.loads(Path(spec["path"]).read_text())
+        self.assertEqual(set(child_mcp.payload_server_names(payload)), {"rig", "rig-ask"})
+
+    def test_cursor_tripwire_reads_complete_lines_only(self):
+        log = self.job_dir / "cursor.log"
+        allowed = {"tool_call": {"mcpToolCall": {"args": {"serverIdentifier": "plugin-rigjob-rig", "toolName": "rig_job_inbox"}}}}
+        forbidden = {"tool_call": {"mcpToolCall": {"args": {"serverIdentifier": "plugin-figma-figma", "toolName": "get_design"}}}}
+        log.write_text(json.dumps(allowed) + "\n" + json.dumps(forbidden)[:20])
+        offset, violation = child_mcp.cursor_tripwire(log, 0)
+        self.assertEqual(violation, "")
+        self.assertLess(offset, log.stat().st_size)
+        with log.open("a") as stream:
+            stream.write(json.dumps(forbidden)[20:] + "\n")
+        _offset, violation = child_mcp.cursor_tripwire(log, offset)
+        self.assertIn("plugin-figma-figma", violation)
 
     def test_write_job_mcp_grok_does_not_pretend(self):
         spec = child_mcp.write_job_mcp(self.job_dir, self.job_id, self.repo, "grok")

@@ -20,7 +20,7 @@ import jobs as rig_jobs  # noqa: E402
 import route as rig_route  # noqa: E402
 
 JOB_ID_RE = re.compile(r"^[A-Za-z0-9._-]+$")
-LAUNCH_WORKERS = frozenset({"grok", "codex", "claude", "opencode", "omp", "pi", "agy", "devin", "mimo"})
+LAUNCH_WORKERS = frozenset({"grok", "codex", "claude", "cursor", "opencode", "omp", "pi", "agy", "devin", "mimo"})
 LAUNCH_KEYS = frozenset({
     "id", "case", "role", "worker", "model", "effort", "access", "files", "brief",
     "queue_id", "reservation_id", "attempt_id", "owner_token", "owner_session",
@@ -314,14 +314,12 @@ def launch(repo, **kwargs) -> dict:
             model, effort = choice.get("model") or "", choice.get("effort") or ""
         if picked_routing is None and isinstance(choice.get("routing"), dict):
             picked_routing = choice["routing"]
-    if worker == "cursor":
-        raise LaunchError(child_mcp.CURSOR_REASON)
     if worker not in LAUNCH_WORKERS:
-        raise LaunchError("worker must be grok|codex|claude|opencode|omp|pi|agy|devin|mimo")
+        raise LaunchError("worker must be grok|codex|claude|cursor|opencode|omp|pi|agy|devin|mimo")
     if worker == "mimo" and rig_route.classify(role, "") in {"hard", "review"}:
         raise LaunchError("MiMo does not support hard or review jobs")
     job_id = _job_id(_require_string(kwargs.get("id"), "id"))
-    ready, reason = child_mcp.worker_mcp_ready(worker)
+    ready, reason = child_mcp.worker_mcp_ready(worker, repo=repo)
     if not ready:
         raise LaunchError(reason)
     try:

@@ -39,7 +39,7 @@ Set the global Jev key once with `rig provider jev setup`; it is held in the mac
 
 Jev only receives a bounded task summary, role, assessment, trait labels, and the already hard-filtered canonical candidate IDs. It cannot enable a disabled worker, choose a banned model, bypass a catalog, or evade independent-review provider checks. Missing credentials, timeouts, transport/API errors, invalid answers, or more than 255 candidates fall back to the scored local picker. Routing evidence records the engine, selected ID, traits, scores, and fallback code without preserving the task text.
 
-Worker flags, binary availability, scoped MCP readiness and live-parent exclusion remain mandatory. Cursor remains excluded. Explore/review are read-only. A parent fallback preserves the actual observed model/effort or reports unknown: picking a cheaper suggestion never changes the live parent model. Direct-parent jobs use the same `rig_job_start` / authenticated `rig_job_finish` / parent acceptance lifecycle as other parent writes.
+Worker flags, binary availability, scoped MCP readiness and live-parent exclusion remain mandatory. Cursor runs with a job-scoped `--plugin-dir` Rig MCP and `--force`; other plugin MCPs stay visible, so the wrapper fails the job on any non-Rig MCP call (tripwire). Cursor is last resort in pick. Explore/review are read-only. A parent fallback preserves the actual observed model/effort or reports unknown: picking a cheaper suggestion never changes the live parent model. Direct-parent jobs use the same `rig_job_start` / authenticated `rig_job_finish` / parent acceptance lifecycle as other parent writes.
 
 ## CLI and MCP
 

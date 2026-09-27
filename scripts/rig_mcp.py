@@ -748,7 +748,7 @@ TOOLS = [
                 "role": {"type": "string", "description": "Pick kind or job role."},
                 "worker": {
                     "type": "string",
-                    "enum": ["grok", "codex", "claude", "opencode", "omp", "pi", "agy", "devin", "mimo"],
+                    "enum": ["grok", "codex", "claude", "cursor", "opencode", "omp", "pi", "agy", "devin", "mimo"],
                 },
                 "model": {"type": "string"},
                 "effort": {"type": "string"},

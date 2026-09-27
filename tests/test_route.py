@@ -293,22 +293,19 @@ class Pick(unittest.TestCase):
         self.assertEqual(c["native_agent"], "")
         self.assertTrue(c["parent_writes"])
 
-    def test_cursor_only_is_unavailable(self):
+    def test_cursor_only_is_last_resort(self):
         c = legacy_pick("", ["cursor"], "implement", "add a header")
-        self.assertEqual(c["worker"], "")
-        self.assertEqual(c["spawn"], "none")
-        self.assertIn("Cursor", c["reason"])
+        self.assertEqual(c["worker"], "cursor")
+        self.assertEqual(c["spawn"], "run-worker")
 
     def test_grok_still_beats_cursor(self):
         c = legacy_pick("codex", ["grok", "cursor"], "implement", "add a header")
         self.assertEqual(c["worker"], "grok")
 
-    def test_cursor_review_is_unavailable(self):
+    def test_cursor_review_is_available_when_independent(self):
         c = legacy_pick("grok", ["cursor"], "review", "review the writer diff")
-        self.assertEqual(c["spawn"], "none")
-        self.assertEqual(c["worker"], "")
-        self.assertEqual(c["independence"], "unavailable")
-        self.assertIn("Cursor", c["reason"])
+        self.assertEqual(c["spawn"], "run-worker")
+        self.assertEqual(c["worker"], "cursor")
 
     def test_cursor_explore_model(self):
         self.assertEqual(route.model_for("cursor", "explore"), ("composer-2.5-fast", ""))
@@ -398,8 +395,8 @@ class Pick(unittest.TestCase):
         self.assertFalse(c["parent_writes"])
         self.assertEqual(c["executor_kind"], "wrapper")
         stay = legacy_pick("opencode", ["cursor"], "explore", "trace remaining gates")
-        self.assertEqual(stay["spawn"], "stay")
-        self.assertEqual(stay["worker"], "opencode")
+        self.assertEqual(stay["spawn"], "run-worker")
+        self.assertEqual(stay["worker"], "cursor")
 
     def test_opencode_live_bulk_uses_mcp_child_when_available(self):
         c = legacy_pick("opencode", ["grok"], "bulk", "rename the helper")
@@ -436,8 +433,8 @@ class Pick(unittest.TestCase):
         self.assertEqual(c["native_agent"], "")
         self.assertFalse(c["parent_writes"])
         stay = legacy_pick("agy", ["cursor"], "explore", "trace remaining gates")
-        self.assertEqual(stay["spawn"], "stay")
-        self.assertEqual(stay["worker"], "agy")
+        self.assertEqual(stay["spawn"], "run-worker")
+        self.assertEqual(stay["worker"], "cursor")
 
     def test_agy_live_implement_is_native_when_grok_claude_off(self):
         c = legacy_pick("agy", ["cursor", "codex"], "implement", "add a header")
@@ -498,7 +495,7 @@ class Pick(unittest.TestCase):
         self.assertEqual(c["worker"], "pi")
         self.assertEqual(c["spawn"], "run-worker")
 
-    def test_exclude_leaving_only_cursor_is_none(self):
+    def test_exclude_leaving_cursor_keeps_last_resort(self):
         c = legacy_pick(
             "grok",
             ["cursor"],
@@ -506,16 +503,14 @@ class Pick(unittest.TestCase):
             "add a header",
             exclude="grok",
         )
-        self.assertEqual(c["spawn"], "none")
-        self.assertEqual(c["worker"], "")
+        self.assertEqual(c["spawn"], "run-worker")
+        self.assertEqual(c["worker"], "cursor")
         self.assertFalse(c["parent_writes"])
-        self.assertIn("Cursor", c["reason"])
 
     def test_first_pick_cursor_only_still_cursor(self):
         c = legacy_pick("", ["cursor"], "implement", "add a header")
-        self.assertEqual(c["worker"], "")
-        self.assertEqual(c["spawn"], "none")
-        self.assertIn("Cursor", c["reason"])
+        self.assertEqual(c["worker"], "cursor")
+        self.assertEqual(c["spawn"], "run-worker")
 
     def test_native_implement_parent_writes(self):
         c = legacy_pick("grok", ["cursor", "codex"], "implement", "add a header")
@@ -830,8 +825,8 @@ class ReviewProvenance(unittest.TestCase):
         choice = self.pick([], writer_provider="anthropic")
         self.assertEqual(choice["spawn"], "none")
         choice = self.pick(["claude", "cursor"], writer_provider="xai", exclude="claude")
-        self.assertEqual(choice["spawn"], "none")
-        self.assertIn("Cursor", choice["reason"])
+        self.assertEqual(choice["spawn"], "run-worker")
+        self.assertEqual(choice["worker"], "cursor")
 
     def test_legacy_parent_placeholder_does_not_conflict_with_actual_cli(self):
         self.writer.update(worker="parent", model="", model_source="unknown")

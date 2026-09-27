@@ -936,18 +936,29 @@ case "$WORKER" in
     ;;
   cursor)
     CURSOR_BIN="${BIN:-cursor-agent}"
+    CURSOR_WORKER_MD="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../adapters/cursor/CURSOR.worker.md"
+    CURSOR_PROMPT="$BRIEF_TEXT"
+    if [[ -f "$CURSOR_WORKER_MD" ]]; then
+      CURSOR_PROMPT="$(cat "$CURSOR_WORKER_MD")"$'\n\n'"$BRIEF_TEXT"
+    fi
     CMD=(
-      "$CURSOR_BIN" -p "$BRIEF_TEXT"
+      "$CURSOR_BIN" -p
       --workspace "$REPO"
       --output-format stream-json
       --stream-partial-output
       --force
       --trust
     )
+    CMD+=("${CHILD_MCP_ARGV[@]}")
     [[ -n "$MODEL" ]] && CMD+=(--model "$MODEL")
     case "$ROLE" in
       explore|mini) CMD+=(--mode=ask) ;;
     esac
+    if [[ "$SHOULD_RESUME" -eq 1 ]]; then
+      SESSION_ID="$CONTINUES_SESSION"
+      CMD+=(--resume "$SESSION_ID")
+    fi
+    CMD+=("$CURSOR_PROMPT")
     ;;
   opencode)
     CMD=(
@@ -1194,8 +1205,24 @@ TIMED_OUT=0
 CANCELLED=0
 ASK_NOTIFIED=0
 IN_ASK=0
+TRIP_OFFSET=0
+TRIPWIRE_VIOLATION=""
+TRIPWIRE_FAILED=0
 WAIT_ANCHOR=$SECONDS
 LAST_OBSERVE=$SECONDS
+cursor_tripwire_scan() {
+  local result
+  result="$(python3 "$CHILD_MCP_PY" cursor-tripwire "$LOG" "$TRIP_OFFSET")" || return 1
+  TRIP_OFFSET="$(printf '%s' "$result" | python3 -c 'import json,sys; print(json.load(sys.stdin)["offset"])')" || return 1
+  TRIPWIRE_VIOLATION="$(printf '%s' "$result" | python3 -c 'import json,sys; print(json.load(sys.stdin)["violation"])')" || return 1
+  [[ -n "$TRIPWIRE_VIOLATION" ]]
+}
+write_tripwire() {
+  python3 - "$JOB_DIR/mcp-tripwire.json" "$TRIPWIRE_VIOLATION" "$(iso_now)" <<'PY'
+import json, pathlib, sys
+pathlib.Path(sys.argv[1]).write_text(json.dumps({"violation": sys.argv[2], "at": sys.argv[3]}) + "\n")
+PY
+}
 while kill -0 "$CHILD" 2>/dev/null; do
   if cancel_requested; then
     CANCELLED=1
@@ -1207,6 +1234,14 @@ while kill -0 "$CHILD" 2>/dev/null; do
     LAST_OBSERVE=$SECONDS
     if ! admission_call observe >/dev/null; then
       echo "run-worker: could not observe child ownership; stopping execution" >&2
+      stop_child
+      wait_for_child_exit
+      break
+    fi
+    if [[ "$WORKER" == "cursor" ]] && cursor_tripwire_scan; then
+      TRIPWIRE_FAILED=1
+      write_tripwire
+      echo "run-worker: $TRIPWIRE_VIOLATION" >&2
       stop_child
       wait_for_child_exit
       break
@@ -1237,6 +1272,11 @@ while kill -0 "$CHILD" 2>/dev/null; do
   fi
   sleep 0.1
 done
+if [[ "$WORKER" == "cursor" ]] && [[ "$TRIPWIRE_FAILED" -eq 0 ]] && cursor_tripwire_scan; then
+  TRIPWIRE_FAILED=1
+  write_tripwire
+  echo "run-worker: $TRIPWIRE_VIOLATION" >&2
+fi
 CHILD_RC=130
 if ! kill -0 "$CHILD" 2>/dev/null; then
   wait "$CHILD" 2>/dev/null
@@ -1346,6 +1386,10 @@ SUMMARY="$(summary_from_log)"
 JOBS_PY="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/jobs.py"
 if [[ -f "$JOBS_PY" ]]; then
   python3 "$JOBS_PY" persist --dir "$JOB_DIR" || true
+fi
+if [[ "$TRIPWIRE_FAILED" == "1" ]]; then
+  write_json "fail" 1 "$TRIPWIRE_VIOLATION" "$ENDED"
+  exit 1
 fi
 if [[ "$CANCELLED" == "1" ]] || cancel_requested; then
   write_json "cancelled" 130 "${SUMMARY:-cancelled by parent}" "$ENDED"

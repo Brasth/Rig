@@ -171,6 +171,13 @@ class WorkerLaunchTests(unittest.TestCase):
         with self.assertRaisesRegex(worker_launch.LaunchError, "one Devin job at a time"):
             self._launch("devin-second", files=["b.py"], worker="devin", model="swe-2-high", effort="high")
 
+    def test_cursor_launches_when_guard_is_clean(self):
+        mcp_test_support.fake_bin(self.bins, "cursor-agent")
+        text = (self.repo / ".rig" / "harness.toml").read_text().replace("cursor = false", "cursor = true")
+        (self.repo / ".rig" / "harness.toml").write_text(text)
+        launched = self._launch("cursor-good", worker="cursor", model="composer-2.5", effort="")
+        self.assertEqual(launched["worker"], "cursor")
+
     def test_auto_and_explicit_worker_selection_keep_smart_sidecar(self):
         for worker in ("", "grok"):
             with self.subTest(worker=worker):
@@ -209,6 +216,7 @@ class WorkerLaunchTests(unittest.TestCase):
         self.assertNotIn("command", schema["properties"])
         self.assertNotIn("env", schema["properties"])
         self.assertNotIn("executable", schema["properties"])
+        self.assertEqual(set(schema["properties"]["worker"]["enum"]), set(worker_launch.LAUNCH_WORKERS))
         self.assertIn("rig_job_launch", rig_mcp.PARENT_TOOL_NAMES)
         self.assertNotIn("rig_job_launch", rig_mcp.CHILD_TOOL_NAMES)
         blocked = rig_mcp.call_tool("rig_job_launch", {

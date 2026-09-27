@@ -26,10 +26,8 @@ UNKNOWN = "unknown"
 LEGACY = "legacy"
 MISSING_REASON = "child MCP handshake missing"
 INBOX_FIRST = "first Rig operation must be rig_job_inbox"
-CURSOR_REASON = (
-    "Cursor CLI has no isolated job-scoped MCP; excluded until a safe --mcp-config exists"
-)
-SCOPED_WORKERS = frozenset({"grok", "codex", "claude", "opencode", "omp", "pi", "agy", "devin", "mimo"})
+SCOPED_WORKERS = frozenset({"grok", "codex", "claude", "cursor", "opencode", "omp", "pi", "agy", "devin", "mimo"})
+CURSOR_PLUGIN_NAME = "rigjob"
 DEVIN_MCP_REL = Path(".devin") / "mcp_config.local.json"
 DEVIN_LOCK_REL = Path(".rig") / "devin.lock"
 DEVIN_STATE = "devin-mcp-state.json"
@@ -319,14 +317,52 @@ def _pi_adapter_ready(mcp_path: Path) -> bool:
 
 
 def worker_binary(worker: str) -> str:
-    name = "cursor-agent" if worker == "cursor" else (worker or "").strip()
-    return shutil.which(name) or ""
+    name = (worker or "").strip()
+    if name != "cursor":
+        return shutil.which(name) or ""
+    path = shutil.which("cursor-agent")
+    if path:
+        return path
+    path = shutil.which("agent")
+    if not path:
+        return ""
+    try:
+        real = os.readlink(path)
+    except OSError:
+        real = ""
+    return path if "cursor-agent" in path or "cursor-agent" in real else ""
 
 
-def worker_mcp_ready(worker: str, *, home: Path | None = None) -> tuple[bool, str]:
+def cursor_allowed_servers() -> set[str]:
+    return {f"plugin-{CURSOR_PLUGIN_NAME}-rig", f"plugin-{CURSOR_PLUGIN_NAME}-rig-ask"}
+
+
+def cursor_mcp_guard(repo: Path | None, home: Path | None) -> str:
+    root = Path(home) if home is not None else _home()
+    paths = [root / ".cursor" / "mcp.json"]
+    if repo is not None:
+        paths.append(Path(repo) / ".cursor" / "mcp.json")
+    for path in paths:
+        try:
+            data = json.loads(path.read_text())
+        except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+            continue
+        servers = data.get("mcpServers") if isinstance(data, dict) else None
+        if not isinstance(servers, dict):
+            continue
+        for name in servers:
+            if name in FORBIDDEN_MCP_SERVERS:
+                return f"Cursor MCP guard forbids server '{name}' in {path}"
+    return ""
+
+
+def worker_mcp_ready(worker: str, *, home: Path | None = None, repo: Path | None = None) -> tuple[bool, str]:
     name = (worker or "").strip()
     if name == "cursor":
-        return False, CURSOR_REASON
+        if not worker_binary(name):
+            return False, "binary 'cursor' not on PATH"
+        reason = cursor_mcp_guard(repo, home)
+        return (not reason), reason
     if not name or name == "parent":
         return False, "parent work does not use child MCP"
     if name not in SCOPED_WORKERS:
@@ -427,13 +463,13 @@ def write_job_mcp(job_dir: Path, job_id: str, repo: Path, worker: str) -> dict:
     - grok: print-mode has no --mcp-config; inherits ~/.grok/config.toml. Do not pretend.
     - opencode: OPENCODE_CONFIG is the full app config, not an MCP-only overlay. Do not pretend.
     - pi: PI_CODING_AGENT_DIR is the whole agent dir (auth/skills). Do not hijack it.
-    - cursor: excluded until a safe --mcp-config exists
+    - cursor: job-scoped --plugin-dir with runtime MCP tripwire
     - devin: repo .devin/mcp_config.local.json
     - mimo: private MIMOCODE_CONFIG_DIR with only job-scoped Rig MCP servers
     """
     job_dir = Path(job_dir)
     job_dir.mkdir(parents=True, exist_ok=True)
-    ready, reason = worker_mcp_ready(worker)
+    ready, reason = worker_mcp_ready(worker, repo=repo)
     path = job_dir / "mcp.json"
     payload = mcp_payload(job_dir, job_id, repo)
     path.write_text(json.dumps(payload, indent=2) + "\n")
@@ -447,6 +483,15 @@ def write_job_mcp(job_dir: Path, job_id: str, repo: Path, worker: str) -> dict:
     elif name == "codex":
         argv = _codex_isolation_argv(_server(job_dir, job_id, repo))
         isolation = "ignore-user-config"
+    elif name == "cursor":
+        plugin_dir = job_dir / CURSOR_PLUGIN_NAME
+        plugin_meta = plugin_dir / ".cursor-plugin"
+        plugin_meta.mkdir(parents=True, exist_ok=True)
+        (plugin_meta / "plugin.json").write_text(json.dumps({"name": CURSOR_PLUGIN_NAME}, indent=2) + "\n")
+        path = plugin_dir / ".mcp.json"
+        path.write_text(json.dumps(payload, indent=2) + "\n")
+        argv = ["--plugin-dir", str(plugin_dir), "--approve-mcps"]
+        isolation = "cursor-plugin+guarded"
     elif name == "omp":
         env["OMP_MCP"] = str(path)
         isolation = "OMP_MCP"
@@ -478,6 +523,35 @@ def write_job_mcp(job_dir: Path, job_id: str, repo: Path, worker: str) -> dict:
         "env": env,
         "isolation": isolation,
     }
+
+
+def cursor_tripwire(log_path: Path, offset: int) -> tuple[int, str]:
+    """Return the next complete-line offset and any non-Rig Cursor MCP call."""
+    try:
+        raw = Path(log_path).read_bytes()
+    except OSError:
+        return offset, ""
+    start = max(0, min(int(offset), len(raw)))
+    chunk = raw[start:]
+    end = chunk.rfind(b"\n")
+    if end < 0:
+        return start, ""
+    complete, next_offset = chunk[:end + 1], start + end + 1
+    for line in complete.splitlines():
+        try:
+            event = json.loads(line)
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            continue
+        call = event.get("tool_call") if isinstance(event, dict) else None
+        mcp = call.get("mcpToolCall") if isinstance(call, dict) else None
+        args = mcp.get("args") if isinstance(mcp, dict) else None
+        if not isinstance(args, dict):
+            continue
+        server = args.get("serverIdentifier") or args.get("providerIdentifier")
+        if server and server not in cursor_allowed_servers():
+            tool = args.get("toolName") or args.get("name") or "unknown"
+            return next_offset, f"forbidden MCP server {server} (tool {tool}) in Cursor child"
+    return next_offset, ""
 
 
 def devin_mcp_path(repo: Path) -> Path:
@@ -724,7 +798,7 @@ def require_success(job_dir: Path) -> str | None:
 def main(argv: list[str]) -> int:
     if len(argv) < 2:
         print(
-            "usage: child_mcp.py prepare|require-success|install-devin|restore-devin|busy-devin "
+            "usage: child_mcp.py prepare|require-success|install-devin|restore-devin|busy-devin|cursor-tripwire "
             "<job-dir> [job-id repo worker]",
             file=sys.stderr,
         )
@@ -767,6 +841,17 @@ def main(argv: list[str]) -> int:
         if reason:
             print(reason, file=sys.stderr)
             return 1
+        return 0
+    if cmd == "cursor-tripwire":
+        if len(argv) < 4:
+            print("usage: child_mcp.py cursor-tripwire <log> <offset>", file=sys.stderr)
+            return 2
+        try:
+            offset, violation = cursor_tripwire(Path(argv[2]), int(argv[3]))
+        except ValueError:
+            print("offset must be an integer", file=sys.stderr)
+            return 2
+        print(json.dumps({"offset": offset, "violation": violation}))
         return 0
     print(f"unknown child_mcp command {cmd}", file=sys.stderr)
     return 2

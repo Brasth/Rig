@@ -141,7 +141,7 @@ NATIVE = {
 }
 
 NATIVE_PARENTS = frozenset({"codex", "grok", "opencode", "omp", "pi", "agy"})
-LAST_RESORT = ("opencode", "omp", "pi", "agy", "codex")
+LAST_RESORT = ("opencode", "omp", "pi", "agy", "codex", "cursor")
 WORKER_NAMES = frozenset(
     {"grok", "claude", "cursor", "opencode", "omp", "pi", "agy", "devin", "mimo", "codex", "native"}
 )
@@ -472,7 +472,7 @@ def choose_worker(
 ) -> tuple[str, str]:
     """Return (worker, spawn) where spawn is run-worker, native, stay, or none."""
     blocked = parse_exclude(exclude)
-    avail = [w for w in effective if w not in blocked and w != "cursor"]
+    avail = [w for w in effective if w not in blocked]
     skip_native = bool(live) and (live in blocked or "native" in blocked)
     if kind == "stay":
         return live, "stay"
@@ -627,21 +627,9 @@ def pick(
         remaining = [w for w in effective if w != live]
         while not reason:
             eligible = {w for w in remaining if w not in blocked}
-            if eligible <= {"cursor"} and "cursor" in remaining:
-                model, _effort = resolved_model_for("cursor", kind, catalogs)
-                _independence, rejection = _review_model(model, context)
-                if rejection:
-                    failures.append(f"cursor: {rejection}")
-                reason = "review needs a different vendor; Cursor has no isolated job-scoped MCP"
-                if failures:
-                    reason += ": " + "; ".join(failures)
-                break
             worker, spawn = choose_worker(kind, remaining, live, exclude=exclude)
             if not worker or spawn == "none":
-                if "cursor" in {str(x).strip().lower() for x in remaining}:
-                    reason = "review needs a different vendor; Cursor has no isolated job-scoped MCP"
-                else:
-                    reason = "review needs a different vendor; no eligible reviewer"
+                reason = "review needs a different vendor; no eligible reviewer"
                 if failures:
                     reason += ": " + "; ".join(failures)
                 break
@@ -698,19 +686,9 @@ def pick(
                 "review needs a different vendor; do not self-review. tell the user."
             )
         elif blocked:
-            leftover = [w for w in LAST_RESORT if w in effective and w not in blocked]
-            if not leftover and "cursor" in {str(x).strip().lower() for x in effective}:
-                reason = "Cursor CLI has no isolated job-scoped MCP; excluded until a safe --mcp-config exists"
-            else:
-                reason = (
-                    "no effective worker after exclude; do not unlock a disabled worker."
-                )
+            reason = "no effective worker after exclude; do not unlock a disabled worker."
         else:
-            names = {str(x).strip().lower() for x in effective}
-            if names and names <= {"cursor"}:
-                reason = "Cursor CLI has no isolated job-scoped MCP; excluded until a safe --mcp-config exists"
-            else:
-                reason = "no effective worker; use cheaper same-CLI workers. That is success."
+            reason = "no effective worker; use cheaper same-CLI workers. That is success."
         return _with_legacy_routing(
             _base_choice(kind, "", "none", classification=classification, reason=reason),
             assessed, fingerprint, required, explain, kind=kind, case=case,

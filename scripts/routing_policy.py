@@ -313,7 +313,7 @@ def _worker_unavailable(profile: rig_profiles.Profile, repo: Path | None) -> tup
         return "worker-cli-missing", f"install the {name} CLI, then rerun rig pick"
     import child_mcp
 
-    ready, reason = child_mcp.worker_mcp_ready(name)
+    ready, reason = child_mcp.worker_mcp_ready(name, repo=repo)
     if not ready:
         return "worker-mcp-unavailable", reason or f"{name} job-scoped MCP is unavailable"
     return "worker-not-effective", "worker is not in this run's effective worker set"
@@ -322,8 +322,6 @@ def _worker_unavailable(profile: rig_profiles.Profile, repo: Path | None) -> tup
 def _hard_filter(profile: rig_profiles.Profile, *, live: str, blocked: set[str], wrapper_names: list[str], kind: str, repo: Path | None = None) -> tuple[str, str] | None:
     import route as rig_route
 
-    if profile.worker == "cursor":
-        return "cursor-excluded", "Cursor CLI has no isolated job-scoped MCP"
     if profile.worker == live:
         return "worker-live-parent", f"{live} is the live parent; choose a different child CLI"
     if profile.worker in blocked:
@@ -813,7 +811,7 @@ def smart_pick(
             ),
             "direct-parent",
         )
-    wrapper_names = [w for w in effective if w not in blocked and w != "cursor"]
+    wrapper_names = [w for w in effective if w not in blocked]
     decisions: dict[str, dict] = {}
     session = CatalogSession(catalogs)
 
@@ -922,8 +920,6 @@ def smart_pick(
         )
     if kind == "review":
         reason = review_reason or "review needs a different vendor; no eligible reviewer"
-        if "cursor" in {str(x).strip().lower() for x in effective} and "Cursor" not in reason:
-            reason = "review needs a different vendor; Cursor has no isolated job-scoped MCP"
         routing["execution_strategy"] = "none"
         routing["parent_fit_limitations"] = "independent review unavailable without a different known provider"
         return finish(
@@ -952,10 +948,7 @@ def smart_pick(
             ),
             "parent-fallback",
         )
-    names = {str(x).strip().lower() for x in effective}
-    if names and names <= {"cursor"}:
-        reason = "Cursor CLI has no isolated job-scoped MCP; excluded until a safe --mcp-config exists"
-    elif blocked:
+    if blocked:
         reason = "no effective worker after exclude; do not unlock a disabled worker."
     else:
         reason = "no effective worker; use cheaper same-CLI workers. That is success."
@@ -992,9 +985,6 @@ def resolve_explicit_worker_choice(
     decisions: dict[str, dict] = {}
     for profile in cfg.profiles.values():
         if profile.worker != worker:
-            continue
-        if profile.worker == "cursor":
-            decisions[profile.id] = _decision(profile.id, "cursor-excluded", "Cursor CLI has no isolated job-scoped MCP")
             continue
         if profile.worker in blocked:
             decisions[profile.id] = _decision(profile.id, "worker-excluded")
