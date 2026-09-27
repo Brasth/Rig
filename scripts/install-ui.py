@@ -732,6 +732,11 @@ def install_agy_mcp(cfg: Path, script: Path) -> str:
     return install_mcp_servers_json(cfg, script, "agy")
 
 
+def install_cursor_parent_mcp(cfg: Path, script: Path) -> str:
+    """Parent Cursor Desktop MCP. Children must not inherit this as a callable server."""
+    return install_mcp_servers_json(cfg, script, "cursor")
+
+
 def refresh_codex_agents() -> str:
     agents = Path.home() / ".codex" / "agents"
     wanted = {
@@ -807,6 +812,7 @@ def main() -> int:
         or (Path.home() / ".gemini" / "config" / "mcp_config.json")
     )
     print(install_agy_mcp(agy, mcp))
+    print(install_cursor_parent_mcp(Path.home() / ".cursor" / "mcp.json", mcp))
     return 0
 
 

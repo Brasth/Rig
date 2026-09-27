@@ -38,7 +38,7 @@ def _load_hyphen_module(name: str, filename: str):
 cua_install = _load_hyphen_module("install_cua_driver", "install-cua-driver.py")
 install_ui = _load_hyphen_module("install_ui", "install-ui.py")
 
-PARENT_CLIS = frozenset({"grok", "codex", "opencode", "omp", "pi", "agy"})
+PARENT_CLIS = harness.PARENTS
 # Isolation that actually hides user MCP from wrapper children.
 ISOLATING = {
     "codex": "ignore-user-config",
@@ -147,6 +147,8 @@ def mcp_config_path(cli: str) -> Path:
         return Path(os.environ.get("AGY_MCP") or (home / ".gemini" / "config" / "mcp_config.json"))
     if cli == "pi":
         return home / ".pi" / "agent" / "mcp.json"
+    if cli == "cursor":
+        return home / ".cursor" / "mcp.json"
     return home / f".{cli}" / "mcp.json"
 
 
@@ -250,6 +252,88 @@ def tools_listed(repo: Path, *, child: bool) -> bool:
     return (not child) and is_effective(repo)
 
 
+def display_available() -> bool:
+    if sys.platform == "darwin":
+        return True
+    return bool(
+        (os.environ.get("DISPLAY") or "").strip()
+        or (os.environ.get("WAYLAND_DISPLAY") or "").strip()
+    )
+
+
+def existing_profile_granted() -> bool:
+    pref = cua_install.read_preference()
+    return isinstance(pref, dict) and pref.get("existing_profile_granted") is True
+
+
+def persist_existing_profile_grant(granted: bool) -> None:
+    pref = cua_install.read_preference() or {}
+    source = str(pref.get("source") or "unlock")
+    cua_install.write_preference(
+        pref.get("opt_in") is True, source, existing_profile_granted=bool(granted),
+    )
+
+
+def _status_guidance(
+    *,
+    machine: str,
+    binary: str,
+    project: str,
+    blockers: list[str],
+    probe: dict,
+) -> dict:
+    detail = " ".join(
+        str(probe.get(key) or "") for key in ("detail", "state")
+    ).lower()
+    daemon_ready = bool(probe.get("ready"))
+    if machine == "declined" or (not display_available() and not daemon_ready):
+        if machine == "declined":
+            code = "declined"
+            prompt = "Cua Driver was declined on this machine. Use chrome-devtools or send a screenshot."
+        else:
+            code = "no_display"
+            prompt = "This session has no display. Use chrome-devtools or send a screenshot."
+        return {
+            "state": "unavailable",
+            "blocker_code": code,
+            "user_prompt": prompt,
+            "exact_command": "",
+        }
+    if blockers:
+        if machine != "on":
+            code = "machine_opt_in"
+        elif not binary:
+            code = "missing_binary"
+        else:
+            code = "repo_disabled"
+        return {
+            "state": "needs_human",
+            "blocker_code": code,
+            "user_prompt": "Run `rig computer-use unlock` in a graphical terminal, then reply when done.",
+            "exact_command": "rig computer-use unlock",
+        }
+    if daemon_ready:
+        return {
+            "state": "ready",
+            "blocker_code": "",
+            "user_prompt": "",
+            "exact_command": "",
+        }
+    if "permission" in detail:
+        return {
+            "state": "needs_human",
+            "blocker_code": "permissions_pending",
+            "user_prompt": "Allow Accessibility and Screen Recording for Cua Driver, then reply when done.",
+            "exact_command": "cua-driver permissions grant",
+        }
+    return {
+        "state": "needs_human",
+        "blocker_code": "daemon_stopped",
+        "user_prompt": "",
+        "exact_command": "",
+    }
+
+
 def cu_status(repo: Path, *, status_runner=None) -> dict:
     """Read-only diagnostics, available even when action tools are hidden.
 
@@ -260,24 +344,30 @@ def cu_status(repo: Path, *, status_runner=None) -> dict:
     machine, binary, project = machine_state(), binary_path(), project_state(repo)
     blockers = []
     if machine != "on":
-        blockers.append("machine opt-in is " + machine + "; run rig computer-use setup")
+        blockers.append("machine opt-in is " + machine + "; run rig computer-use unlock")
     if not binary:
-        blockers.append("cua-driver is missing; run rig computer-use setup")
+        blockers.append("cua-driver is missing; run rig computer-use unlock")
     if project != "true":
-        blockers.append("project is disabled; run rig computer-use on in this repository")
+        blockers.append("project is disabled; run rig computer-use unlock")
     if binary:
         probe = _probe_daemon(binary, runner=status_runner)
     else:
         probe = {"state": "skipped", "ready": False, "detail": "", "recovery": "", "probed": False}
+    guidance = _status_guidance(
+        machine=machine, binary=binary, project=project, blockers=blockers, probe=probe,
+    )
     next_action = (
-        "Resolve blockers, then restart parent/MCP tool discovery" if blockers else
+        guidance["exact_command"] or guidance["user_prompt"]
+        if guidance["state"] != "ready" else
         "Use rig_cu_capture; if absent, restart parent/MCP tool discovery"
     )
+    if guidance.get("blocker_code") == "daemon_stopped":
+        next_action = "rig_cu_serve"
     recovery = str(probe.get("recovery") or "")
     if probe.get("probed") and not probe.get("ready") and recovery:
         if blockers:
             recovery = recovery + " Configured effective stays off until blockers are resolved."
-        else:
+        elif not next_action:
             next_action = recovery
     return {
         "machine": machine, "binary": binary, "project": project,
@@ -286,10 +376,11 @@ def cu_status(repo: Path, *, status_runner=None) -> dict:
         "daemon_ready": bool(probe.get("ready")),
         "daemon_detail": str(probe.get("detail") or ""),
         "recovery": recovery,
-        "transport": "Rig MCP rig_cu_capture/rig_cu_act/rig_cu_confirm/rig_cu_record",
+        "transport": "Rig MCP rig_cu_serve/rig_cu_capture/rig_cu_act/rig_cu_confirm/rig_cu_record",
         "next_action": next_action,
         "existing_profile": EXISTING_PROFILE_HINT,
         "note": "No install, opt-in, daemon or permission changes were made. Do not bypass Rig MCP.",
+        **guidance,
     }
 
 
@@ -457,12 +548,12 @@ def _unwrap_driver(data: dict) -> dict:
     return merged
 
 
-DAEMON_HINT = "cua-driver daemon is not running; start CuaDriver.app / cua-driver serve"
+DAEMON_HINT = "cua-driver daemon is not running; parent calls rig_cu_serve"
 DAEMON_RECOVERY = (
-    "Cua Driver daemon is not running. Start CuaDriver.app or run `cua-driver serve` "
-    "in the graphical session, then call rig_cu_status again. Rig does not start the "
-    "daemon, grant permissions, or change opt-in."
+    "Cua Driver daemon is not running. Parent calls rig_cu_serve, then rig_cu_status. "
+    "Rig does not silent-grant OS permissions or change opt-in."
 )
+SERVE_REPROBE_SECONDS = 0.4
 STATUS_PROBE_TIMEOUT = 5
 
 
@@ -777,7 +868,7 @@ def _interpret_daemon_status(
             "recovery": (
                 "cua-driver status timed out. This is not a missing binary. "
                 "Retry rig_cu_status, or run `cua-driver status` yourself. "
-                "Rig does not start the daemon."
+                "If the daemon is stopped, parent calls rig_cu_serve."
             ),
         }
     if missing_binary:
@@ -805,8 +896,7 @@ def _interpret_daemon_status(
             "detail": blob or f"exit {exit_code}",
             "recovery": (
                 "cua-driver status exited nonzero. Run `cua-driver status`. "
-                "If the daemon is stopped, start CuaDriver.app or `cua-driver serve`. "
-                "Rig will not start it."
+                "If the daemon is stopped, parent calls rig_cu_serve."
             ),
         }
     lowered = blob.lower()
@@ -838,7 +928,7 @@ def _interpret_daemon_status(
             "recovery": (
                 "cua-driver status did not report a running daemon. Help text, exit 0, "
                 "or non-JSON output is not success. Run `cua-driver status`. If the daemon "
-                "is stopped, start CuaDriver.app or `cua-driver serve`."
+                "is stopped, parent calls rig_cu_serve."
             ),
         }
     return {
@@ -848,8 +938,7 @@ def _interpret_daemon_status(
         "detail": blob or f"exit {exit_code}",
         "recovery": (
             "Could not tell whether the daemon is running. Run `cua-driver status`. "
-            "If it is stopped, start CuaDriver.app or `cua-driver serve`. "
-            "Rig will not start it."
+            "If it is stopped, parent calls rig_cu_serve."
         ),
     }
 
@@ -2156,7 +2245,7 @@ def cu_record(
         blob = _driver_blob(data)
         if "daemon is not running" in blob:
             effect = "hidden"
-            hint = "cua-driver daemon is not running; start CuaDriver.app / cua-driver serve"
+            hint = "cua-driver daemon is not running; parent calls rig_cu_serve"
         else:
             hint = str(data.get("last_error") or data.get("hint") or "")
             if effect in {"stale", "refused", "hidden"}:
@@ -2286,13 +2375,162 @@ def cmd_setup(repo: Path) -> int:
     return 0
 
 
+def _confirm(prompt: str) -> bool:
+    try:
+        reply = input(prompt + " [y/N] ").strip().lower()
+    except EOFError:
+        return False
+    return reply in {"y", "yes"}
+
+
+def serve_argv(binary: str) -> list[str]:
+    argv = [binary, "serve"]
+    if existing_profile_granted():
+        argv.extend(["--grant", "existing-profile"])
+    return argv
+
+
+def _spawn_detached_serve(argv: list[str]) -> int:
+    log_dir = _home() / ".rig"
+    logf = subprocess.DEVNULL
+    try:
+        log_dir.mkdir(parents=True, exist_ok=True)
+        logf = open(log_dir / "cua-driver-serve.log", "ab")
+    except OSError:
+        logf = subprocess.DEVNULL
+    proc = subprocess.Popen(
+        argv,
+        stdin=subprocess.DEVNULL,
+        stdout=logf,
+        stderr=logf,
+        start_new_session=True,
+    )
+    return proc.pid
+
+
+def cu_serve(repo: Path, *, runner=None, status_runner=None, sleeper=None) -> dict:
+    """Parent-only detached daemon start. Never silent-grants. Never execvp."""
+    exe = binary_path()
+    if not exe:
+        return {
+            "ok": False,
+            "already_running": False,
+            "pid": None,
+            "argv": [],
+            "daemon": "unknown",
+            "error": "missing_binary",
+            "hint": "cua-driver is missing; run rig computer-use unlock",
+        }
+    if not display_available():
+        return {
+            "ok": False,
+            "already_running": False,
+            "pid": None,
+            "argv": [],
+            "daemon": "unknown",
+            "error": "no_display",
+            "hint": "This session has no display. Use chrome-devtools or send a screenshot.",
+        }
+    if not is_effective(repo):
+        return {
+            "ok": False,
+            "already_running": False,
+            "pid": None,
+            "argv": [],
+            "daemon": "unknown",
+            "error": "not_effective",
+            "hint": "computer-use not effective; run rig computer-use unlock",
+        }
+    probe = _probe_daemon(exe, runner=status_runner)
+    if probe.get("ready"):
+        return {
+            "ok": True,
+            "already_running": True,
+            "pid": None,
+            "argv": [],
+            "daemon": probe.get("state") or "ready",
+            "error": "",
+            "hint": "",
+        }
+    argv = serve_argv(exe)
+    pid = None
+    try:
+        if runner is not None:
+            result = runner(argv)
+            if isinstance(result, int):
+                pid = result
+        else:
+            pid = _spawn_detached_serve(argv)
+    except OSError as error:
+        return {
+            "ok": False,
+            "already_running": False,
+            "pid": None,
+            "argv": argv,
+            "daemon": "stopped",
+            "error": "spawn_failed",
+            "hint": str(error),
+        }
+    wait = sleeper or time.sleep
+    wait(SERVE_REPROBE_SECONDS)
+    after = _probe_daemon(exe, runner=status_runner)
+    ready = bool(after.get("ready"))
+    return {
+        "ok": True,
+        "already_running": False,
+        "pid": pid,
+        "argv": argv,
+        "daemon": after.get("state") or "unknown",
+        "error": "",
+        "hint": "" if ready else "Started cua-driver serve. Call rig_cu_status again.",
+    }
+
+
+def cmd_serve(repo: Path, *, runner=None) -> int:
+    """Human attached daemon start. Agents use MCP rig_cu_serve, not this CLI."""
+    exe = binary_path()
+    if not exe:
+        print("cua-driver is missing; run rig computer-use unlock")
+        return 1
+    argv = serve_argv(exe)
+    print(" ".join(argv))
+    print("Rig does not silent-grant. This is a human daemon start.")
+    if runner is not None:
+        runner(argv)
+        return 0
+    os.execvp(exe, argv)
+    return 1
+
+
+def cmd_unlock(repo: Path, *, confirmer=None, has_tty=None, serve_runner=None) -> int:
+    """One human unlock. Never called from rig_cu_*. Graphical TTY only."""
+    tty = sys.stdin.isatty() if has_tty is None else bool(has_tty)
+    if not tty:
+        print("rig computer-use unlock needs a graphical TTY. Run it yourself, then retry.")
+        return 2
+    ask = confirmer or _confirm
+    if machine_state() != "on" or not binary_path():
+        cua_install.main(["--cua-driver"])
+    if project_state(repo) != "true" and ask("Enable [computer-use] for this repository?"):
+        set_project_enabled(repo, True)
+        print("computer-use enabled = true")
+    if ask("Remember existing-profile Chrome grant for later serve?"):
+        persist_existing_profile_grant(True)
+        print("existing_profile_granted = true")
+    print("If the OS asks, allow Accessibility and Screen Recording. Rig never silent-grants.")
+    if ask("Start the Cua Driver daemon now?"):
+        return cmd_serve(repo, runner=serve_runner)
+    print("next: rig computer-use serve")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="rig computer-use")
     parser.add_argument(
         "command",
         nargs="?",
         default="status",
-        choices=("status", "setup", "on", "off", "doctor"),
+        choices=("status", "setup", "on", "off", "doctor", "unlock", "serve"),
     )
     parser.add_argument("--repo", default=".")
     args = parser.parse_args(argv)
@@ -2305,6 +2543,10 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_off(repo)
     if args.command == "doctor":
         return cmd_doctor(repo)
+    if args.command == "unlock":
+        return cmd_unlock(repo)
+    if args.command == "serve":
+        return cmd_serve(repo)
     return cmd_status(repo)
 
 

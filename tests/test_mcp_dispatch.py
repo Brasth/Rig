@@ -349,6 +349,9 @@ class McpDispatch(unittest.TestCase):
             status = result["structuredContent"]
             self.assertFalse(status["effective"])
             self.assertEqual(len(status["blockers"]), 3)
+            self.assertIn(status["state"], {"needs_human", "unavailable"})
+            self.assertIn("user_prompt", status)
+            self.assertIn("exact_command", status)
         with mock.patch.object(rig_mcp, "is_child", return_value=True):
             self.assertFalse(any(tool["name"].startswith("rig_cu_") for tool in rig_mcp.listed_tools()))
 
@@ -490,6 +493,7 @@ class McpDispatch(unittest.TestCase):
             self.assertNotIn("rig_cu_act", names)
             self.assertNotIn("rig_cu_confirm", names)
             self.assertNotIn("rig_cu_record", names)
+            self.assertNotIn("rig_cu_serve", names)
             self.assertNotIn("rig_job_wait", names)
             self.assertNotIn("rig_job_cancel", names)
             self.assertNotIn("rig_job_recover_cancelled", names)
@@ -1154,6 +1158,7 @@ class McpDispatch(unittest.TestCase):
         self.assertNotIn("rig_cu_act", names)
         self.assertNotIn("rig_cu_confirm", names)
         self.assertNotIn("rig_cu_record", names)
+        self.assertNotIn("rig_cu_serve", names)
 
     def test_parent_cu_tools_listed_when_effective(self):
         os.environ["RIG_REPO"] = str(self.repo)
@@ -1163,6 +1168,21 @@ class McpDispatch(unittest.TestCase):
         self.assertIn("rig_cu_act", names)
         self.assertIn("rig_cu_confirm", names)
         self.assertIn("rig_cu_record", names)
+        self.assertIn("rig_cu_serve", names)
+
+    def test_parent_cu_serve_forwards_when_effective(self):
+        os.environ["RIG_REPO"] = str(self.repo)
+        served = {
+            "ok": True, "already_running": False, "pid": 9,
+            "argv": ["/tmp/fake-cua-driver", "serve"], "daemon": "ready",
+            "error": "", "hint": "",
+        }
+        with mock.patch("computer_use.tools_listed", return_value=True), \
+             mock.patch("computer_use.cu_serve", return_value=served) as serve:
+            out = rig_mcp.call_tool("rig_cu_serve", {"repo": str(self.repo)})
+        self.assertNotIn("isError", out)
+        self.assertEqual(out["structuredContent"], served)
+        serve.assert_called_once()
 
     def test_listed_tools_survives_cu_helper_crash(self):
         os.environ["RIG_REPO"] = str(self.repo)
@@ -1173,6 +1193,7 @@ class McpDispatch(unittest.TestCase):
         self.assertNotIn("rig_cu_act", names)
         self.assertNotIn("rig_cu_confirm", names)
         self.assertNotIn("rig_cu_record", names)
+        self.assertNotIn("rig_cu_serve", names)
 
     def test_child_cu_call_refused_for_grok_codex_devin(self):
         for worker, job_id in (("grok", "child-grok-cu"), ("codex", "child-codex-cu"), ("devin", "child-devin-cu")):
@@ -1188,9 +1209,13 @@ class McpDispatch(unittest.TestCase):
                 names = [t["name"] for t in rig_mcp.listed_tools()]
                 self.assertNotIn("rig_cu_capture", names, worker)
                 self.assertNotIn("rig_cu_record", names, worker)
+                self.assertNotIn("rig_cu_serve", names, worker)
                 denied = rig_mcp.call_tool("rig_cu_capture", {"repo": str(self.repo)})
                 self.assertTrue(denied.get("isError"), worker)
                 self.assertIn("not a child tool", self._text(denied))
+                denied_serve = rig_mcp.call_tool("rig_cu_serve", {"repo": str(self.repo)})
+                self.assertTrue(denied_serve.get("isError"), worker)
+                self.assertIn("not a child tool", self._text(denied_serve))
             finally:
                 os.environ.pop("RIG_JOB_ID", None)
                 os.environ.pop("RIG_JOB_DIR", None)

@@ -2,6 +2,8 @@
 
 Stay. Real cookies, real profile. Isolated Driver Chrome is **not** this path.
 
+Website / localhost preview: chrome-devtools or BrowserSkill. Do not open Driver for a local HTML check.
+
 Prefer parent-only BrowserSkill for logged-in Chromium. Cua Driver stays desktop/canvas (AX / px). One backend per turn. Never run `bsk install-skill`. Children never receive `bsk` or `rig_bsk_*`.
 
 ## Bind (BrowserSkill)

@@ -24,9 +24,9 @@ cd your-repo
 rig init
 ```
 
-Configure workers in `.rig/harness.toml`, then open whichever supported parent CLI you use (Codex, Grok, OpenCode, OMP, Pi, or agy) and type a normal prompt, for example `fix the failing tests in tests/test_cli.py`. Do not use `rig run` for normal work.
+Configure workers in `.rig/harness.toml`, then open whichever agent has parent Rig MCP (Codex, Grok, OpenCode, OMP, Pi, agy, Cursor Desktop, or Claude Code) and type a normal prompt, for example `fix the failing tests in tests/test_cli.py`. Do not use `rig run` for normal work.
 
-**Parents:** Intended: Codex on Astra. Also supported: Grok, OpenCode, OMP, Pi, or agy (open that CLI). **Never the parent:** Claude Code, Cursor, Devin, and MiMo (a live Devin session is detected so the devin child is off). **Effective workers:** Grok, Claude, OpenCode, OMP, Pi, agy, Codex, opt-in Devin (SWE-2 only), opt-in MiMo Code, and Cursor. Cursor runs with a job-scoped `--plugin-dir` Rig MCP and `--force`; other plugin MCPs stay visible, so the wrapper fails the job on any non-Rig MCP call (tripwire). Cursor is last resort in pick. Missing worker binary → that worker is off. Smart routing scores eligible task fit by default; Jev can be enabled per project with a global Keychain key. If no eligible worker exists, parent fallback preserves its actual model. Never spawn Astra, Sol, or Fable as a child.
+**Parents:** Live process + parent Rig MCP (no `RIG_JOB_ID`). Intended: Codex on Astra. Also supported: Grok, OpenCode, OMP, Pi, agy, Cursor Desktop, and Claude Code when Rig MCP is wired. The same binary with `RIG_JOB_ID` is a child. A live Devin session is detected so the devin child is off. MiMo is worker-only. **Effective workers:** Grok, Claude, OpenCode, OMP, Pi, agy, Codex, opt-in Devin (SWE-2 only), opt-in MiMo Code, and Cursor. Cursor jobs run with a job-scoped `--plugin-dir` Rig MCP and `--force`; other plugin MCPs stay visible, so the wrapper fails the job on any non-Rig MCP call (tripwire). Cursor is last resort in pick. Missing worker binary → that worker is off. Smart routing scores eligible task fit by default; Jev can be enabled per project with a global Keychain key. If no eligible worker exists, parent fallback preserves its actual model. Never spawn Astra, Sol, or Fable as a child.
 
 **Try the demo:** [failing tests through parent verify](https://youtu.be/KuhHMH--oGk).
 
@@ -49,6 +49,8 @@ Every legal parent then uses Rig MCP `rig_cu_capture` / `rig_cu_act` / `rig_cu_c
 
 ```bash
 rig computer-use              # machine + this-repo + MCP + effective
+rig computer-use unlock       # one human TTY path: opt-in, repo on, remember Chrome grant
+rig computer-use serve        # human daemon start; --grant existing-profile if remembered
 rig computer-use setup        # install/upgrade binary; parents use Rig MCP
 rig computer-use on           # this repo [computer-use] enabled=true
 rig computer-use off          # this repo enabled=false; does not uninstall the binary

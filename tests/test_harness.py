@@ -273,6 +273,17 @@ class ComputerUseFlag(unittest.TestCase):
 
 
 class LiveParent(unittest.TestCase):
+    def test_cursor_desktop_comm_is_cursor(self):
+        self.assertEqual(harness._comm_parent("cursor-agent", 1), "cursor")
+        self.assertEqual(harness._comm_parent("Cursor", 1), "cursor")
+        self.assertEqual(harness._comm_parent("cursor", 1), "cursor")
+        self.assertEqual(harness._comm_parent("cursorx", 1), "")
+        proc = subprocess.run(
+            ["bash", "-c", f'source "{ROOT}/scripts/detect-binaries.sh"; live_parent'],
+            capture_output=True, text=True, env={**os.environ, "RIG_PARENT": "cursor"},
+        )
+        self.assertEqual(proc.stdout.strip(), "cursor")
+
     def test_pi_prefix_is_pi(self):
         self.assertEqual(harness._comm_parent("pi", 1), "pi")
         self.assertEqual(harness._comm_parent("pi-foo", 1), "pi")

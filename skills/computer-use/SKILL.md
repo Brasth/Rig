@@ -16,20 +16,32 @@ user-invocable: true
 
 Stay. Do not spawn a clicker. Do not call `computer_use(...)`. Children never click. Children never receive `bsk` or `rig_bsk_*`. Never run `bsk install-skill`.
 
+## Pick the backend
+
+- Website / localhost preview → chrome-devtools or BrowserSkill (`rig_bsk_*`). Do not open Driver for a local HTML check.
+- Native app / canvas / Figma artboard px → Cua Driver after `rig_cu_status` is `ready`.
+
 ## When Driver is effective
 
-First call parent-only `rig_cu_status` when action tools are absent or recently failed. It reports machine opt-in, binary availability, and the repository flag without changing them. Resolve the reported blocker with `rig computer-use setup` / `rig computer-use on`, then restart parent/MCP discovery if the client cached the tool list. If status itself is absent, the running Rig MCP is outdated: update it after safely completing active jobs and restart the parent. Do not bypass a failed or missing Rig tool with raw Driver shell/MCP, native CU, or another browser tool. Report the blocker; use the documented chrome-devtools fallback only when Driver is not effective.
+First call parent-only `rig_cu_status` when action tools are absent or recently failed. It reports `state` (`ready` | `needs_human` | `unavailable`), `blocker_code`, `user_prompt`, and `exact_command` without changing opt-in or starting the daemon.
+
+- `ready` → `rig_cu_capture` / `rig_cu_act` / `rig_cu_confirm`.
+- `blocker_code=daemon_stopped` → parent calls `rig_cu_serve`, then `rig_cu_status` again. Do **not** ask the user to run `rig computer-use serve`.
+- `needs_human` with a nonempty `user_prompt` → ask the user **once** with `user_prompt` plus `exact_command` (unlock TTY or OS permission sheets only), then stop. No retry loop. No native CU. No chrome-devtools until they say skip Driver.
+- `unavailable` → chrome-devtools or ask for a screenshot. Do not ask them to unlock Driver.
+
+If status itself is absent, the running Rig MCP is outdated: update it after safely completing active jobs and restart the parent. Do not bypass a failed or missing Rig tool with raw Driver shell/MCP, native CU, or another browser tool.
 
 Logged-in Chromium (real cookies) uses parent-only BrowserSkill when this repo `[browser-skill] enabled=true`, machine `~/.rig/browser-skill.json` opt_in=true, `bsk` on PATH, and the extension is connected: `rig_bsk_status` (always listed) then `rig_bsk_session` (`bsk session start --json`, optional `--no-focus`; retain `session_id`) → `rig_bsk_navigate` or explicit tab list/borrow/return → `rig_bsk_observe` → one `rig_bsk_act` (`click`/`fill`/`press` on a fresh `@eN` ref) → `rig_bsk_confirm`. `--session` on every scoped command; `session stop` with positional ID. nonempty `status.browsers` is connected. Never run `bsk install-skill`. Children never receive `bsk` or `rig_bsk_*`. Native / canvas px stays Cua Driver. One backend per turn.
 
-This repo `[computer-use] enabled=true` **and** `cua-driver` is on PATH. Every legal parent (Grok, Codex, OpenCode, OMP, Pi, agy) uses the **same** Rig MCP tools — not raw cua-driver MCP, not `computer_use(...)`. Do not shell cua-driver for capture, act, confirm, or recording:
+This repo `[computer-use] enabled=true` **and** `cua-driver` is on PATH. Every parent (live process + Rig MCP, including Cursor Desktop and Claude Code when wired) uses the **same** Rig MCP tools — not raw cua-driver MCP, not `computer_use(...)`. Do not shell cua-driver for capture, act, confirm, or recording. Parent starts the daemon with `rig_cu_serve` (passes `--grant existing-profile` only after a remembered unlock grant). CLI `rig computer-use serve` is a human attached fallback:
 
 1. `rig_cu_capture` — snapshot (fresh, 30s). Inspect the text summary, `rig.cu.v1` receipt, and image content when present. Record `snapshot_id`. For a logged-in site (Figma), pass `profile_key` + `url`. Parent `chrome-profile open --json --no-activate` materializes that Chrome mapping; Driver binds the exact window (`existing_profile`). Isolated Driver profile is not the Figma path.
 2. `rig_cu_act` — **one** action on that fresh snapshot. Prefer a fresh `element_token` (AX) or browser `ref` (`click` / `type` / `key`). A valid act consumes the snapshot; a second act is `capture_required` / stale and does not call Driver.
 3. `rig_cu_confirm` — **mandatory** after a successful act, before the next action or the report. Confirm is the only `confirmed` outcome and yields a fresh successor snapshot. Confirm before act, expired, consumed, or unknown snapshots return `capture_required` / stale and do not call Driver.
 4. `rig_cu_record` — GUI-test video (`action=start` then `action=stop`). Output under `.rig/cu-evidence`. Structured/text only unless an image is actually returned. See `skills/computer-test/references/record-video.md`.
 5. Px (`x`,`y`) only after that snapshot is `degraded` or the last act/confirm is `escalate_px`. Token/ref and `x,y` are mutually exclusive. Native PNG is window-local; browser PNG is `viewport_css_px` (Driver scale). Foreground only if Driver says `escalate_foreground`.
-6. Existing-profile CDP requires a **human** `cua-driver serve --grant existing-profile`. Rig never silent-grants. Missing grant → refuse with that hint. Human daemon start is the only cua-driver CLI.
+6. Existing-profile CDP requires a **remembered** unlock grant. `rig_cu_serve` may pass `--grant existing-profile` only after that. Rig never silent-grants. Missing grant → refuse with that hint. Do not tell the user to type `rig computer-use serve`.
 7. Semantic Astra parity: the parent gets a visual observation (MCP image when the local PNG is readable) plus a Rig-owned `rig.cu.v1` receipt (operation, status, snapshot id/freshness/coord space, observation, target, effect/next_action, image metadata, redacted `brief_block`). This is **not** Astra wire-format cloning and does **not** give CUA to workers. Image bytes are response-only.
 8. Paste `brief_block` into the worker brief (including Devin). Tell the child not to click.
 

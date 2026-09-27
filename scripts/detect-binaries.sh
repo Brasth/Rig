@@ -225,6 +225,10 @@ live_parent() {
         printf '%s\n' "cursor"
         return 0
         ;;
+      Cursor|cursor)
+        printf '%s\n' "cursor"
+        return 0
+        ;;
       opencode|opencode-*)
         printf '%s\n' "opencode"
         return 0

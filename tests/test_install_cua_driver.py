@@ -89,6 +89,15 @@ class InstallCuaDriver(unittest.TestCase):
             prompt.assert_not_called()
             upstream.assert_called_once()
 
+    def test_write_preference_keeps_existing_profile_grant(self):
+        mod.write_preference(True, "unlock", existing_profile_granted=True)
+        pref = self.pref()
+        self.assertEqual(pref["schema"], 2)
+        self.assertTrue(pref["existing_profile_granted"])
+        self.assertTrue(pref["existing_profile_granted_at"])
+        mod.write_preference(True, "prompt")
+        self.assertTrue(self.pref()["existing_profile_granted"])
+
     def test_skip_env_wins_this_run_without_rewriting_opt_in(self):
         mod.write_preference(True, "prompt")
         os.environ["RIG_SKIP_CUA_DRIVER"] = "1"

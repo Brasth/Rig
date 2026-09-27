@@ -8,15 +8,15 @@ In this file: [terminal companion](#optional-terminal-companion) · [diagram pre
 
 The point is to stop you being the tired reviewer of one agent. You talk to a **parent** (intended: Codex on Astra). The parent assigns work to a **child**, then checks and sends feedback — allow/deny, another prompt — the loop you used to do yourself.
 
-You stay in **one parent**: Codex, Grok, OpenCode, OMP, Pi, or agy. You talk to that parent. The parent picks **kind** and assesses complexity, risk, and uncertainty. `rig pick` selects an eligible model+effort profile at the minimum sufficient tier. Never spawn Astra, Sol, or Fable as a child.
+You stay in **one parent**: whichever agent you opened with parent Rig MCP (no `RIG_JOB_ID`). Codex, Grok, OpenCode, OMP, Pi, agy, Cursor Desktop, and Claude Code are all valid when that MCP is wired. The parent picks **kind** and assesses complexity, risk, and uncertainty. `rig pick` selects an eligible model+effort profile at the minimum sufficient tier. Never spawn Astra, Sol, or Fable as a child.
 
-- **Parent** (you open this): Codex, Grok, OpenCode, OMP, Pi, or agy. It plans, checks, talks to you, does vision / computer-use / chrome-profile, and watches jobs. It does **not** sit on write/review/SSH when a worker is effective.
-- **Workers** (the parent may spawn these): Grok, Claude Code, Cursor CLI, OpenCode, OMP, Pi, agy, Devin, Codex. They write code, fix bugs, review, SSH/debug, and gather facts.
-- **Never the parent:** Claude Code, Cursor, and Devin. Opening those CLIs does not make them the Rig parent. The Antigravity IDE/GUI is not a parent or worker; the CLI is `agy`. Devin is a child-only SWE-2 worker; a live Devin session is detected so the devin child is off. Devin children get a job-scoped `--config` allowlist (read-only git, `python3 -m unittest`, `bash -n`, read-only shell, Rig MCP).
-- **Live parent** is whichever Codex, Grok, OpenCode, OMP, Pi, or agy you actually opened (`rig status`). The `parent =` key in `.rig/harness.toml` is only the preferred default (`rig use grok|codex|opencode|omp|pi|agy`). Opening the CLI is what makes it live.
+- **Parent** (you open this): live process + parent Rig MCP. It plans, checks, talks to you, does vision / computer-use / chrome-profile, and watches jobs. It does **not** sit on write/review/SSH when a worker is effective.
+- **Workers** (the parent may spawn these): Grok, Claude Code, Cursor CLI, OpenCode, OMP, Pi, agy, Devin, Codex. They write code, fix bugs, review, SSH/debug, and gather facts. The same binary with `RIG_JOB_ID` is a child.
+- **Devin** is normally a child-only SWE-2 worker; a live Devin session is detected so the devin child is off. Devin children get a job-scoped `--config` allowlist (read-only git, `python3 -m unittest`, `bash -n`, read-only shell, Rig MCP). The Antigravity IDE/GUI is not a parent or worker; the CLI is `agy`.
+- **Live parent** is whichever CLI you actually opened with parent Rig MCP (`rig status`). The `parent =` key in `.rig/harness.toml` is only the preferred default (`rig use grok|codex|opencode|omp|pi|agy`). Opening the CLI is what makes it live. `rig use` does not admit Cursor or Claude as the preferred key.
 - **Missing binary is not a failure.** That worker is off. The parent uses a cheaper same-CLI worker. That is success.
 
-**You need** one parent CLI: Codex, Grok, OpenCode, OMP, Pi, or agy. Optional worker binaries: `grok`, `claude`, `cursor-agent`, `codex`, `opencode`, `omp`, `pi`, `agy`, `devin`.
+**You need** one parent with Rig MCP. Optional worker binaries: `grok`, `claude`, `cursor-agent`, `codex`, `opencode`, `omp`, `pi`, `agy`, `devin`.
 
 Grok Bot.app and Cursor.app are GUIs, **not** spawnable workers. `rig doctor` may list them under **Apps (not spawnable)** as a hint. The Cursor worker binary is `cursor-agent`, not the GUI.
 
@@ -65,10 +65,10 @@ Tmux package operations are noninteractive and time out after five minutes per o
 - Grok bottom status line (`[ui.status_line]` → `rig-statusline` with QUEUE; restart Grok once). agy `statusLine.command` in `~/.gemini/antigravity-cli/settings.json` (skip if you already have a custom line; `/statusline` if the row is hidden).
 - `[mcp_servers.rig]` in `~/.grok/config.toml` and `~/.codex/config.toml` **even if those files did not exist**
 - `mcp.rig` in `~/.config/opencode/opencode.json` (or `mcp.servers.rig` if that map already exists)
-- `mcpServers.rig` in `~/.omp/mcp.json`, `~/.pi/agent/mcp.json`, and `~/.gemini/config/mcp_config.json`
+- `mcpServers.rig` in `~/.omp/mcp.json`, `~/.pi/agent/mcp.json`, `~/.gemini/config/mcp_config.json`, and `~/.cursor/mcp.json` (Cursor Desktop parent; Cursor jobs still use the job-scoped plugin + tripwire)
 - Codex sandbox writable roots so Grok/Claude/Cursor/OpenCode/OMP/Pi/agy children can write sessions (`[sandbox_workspace_write]`)
 
-Setup does **not** write project `mcp.json` / `opencode.json`. Setup does **not** add `pi-mcp-adapter` to Pi `settings.json`. `rig setup --cua-driver` / `--no-cua-driver` forwards to the Cua Driver installer. `rig setup --browser-skill` / `--no-browser-skill` forwards to the BrowserSkill installer. `rig computer-use setup` installs/upgrades the binary. It does **not** write raw `cua-driver` MCP into parent or worker CLI configs; all parents use Rig MCP. Vendor skill installation is not required. Recovery stays manual: machine opt-in (`~/.rig/cua-driver.json`), repo `[computer-use] enabled=true`, daemon (`CuaDriver.app` / `cua-driver serve`), and OS permissions — no auto-grants, no silent config, no live daemon launch. `rig browser-skill setup` installs/upgrades `bsk` and reprints extension URLs. It does **not** flip `[browser-skill] enabled` and never runs `bsk install-skill`.
+Setup does **not** write project `mcp.json` / `opencode.json`. Setup does **not** add `pi-mcp-adapter` to Pi `settings.json`. `rig setup --cua-driver` / `--no-cua-driver` forwards to the Cua Driver installer. `rig setup --browser-skill` / `--no-browser-skill` forwards to the BrowserSkill installer. `rig computer-use setup` installs/upgrades the binary. It does **not** write raw `cua-driver` MCP into parent or worker CLI configs; all parents use Rig MCP. Vendor skill installation is not required. Humans still run `rig computer-use unlock` in a graphical TTY for machine opt-in, repo enable, OS permission sheets, and remembering existing-profile. The parent starts the daemon via `rig_cu_serve`. CLI `rig computer-use serve` is a human attached fallback. Machine opt-in (`~/.rig/cua-driver.json`), repo `[computer-use] enabled=true`, daemon, and OS permissions — no auto-grants, no silent config. `rig browser-skill setup` installs/upgrades `bsk` and reprints extension URLs. It does **not** flip `[browser-skill] enabled` and never runs `bsk install-skill`.
 
 MiMo Code is optional and remains off in new repos. `rig setup` asks before installing it; `rig setup --mimo` accepts the prompt and installs with MiMo's official installer when the `mimo` CLI is missing, then enables MiMo only in the current initialized repo. `rig setup --no-mimo` skips it. Piped or otherwise noninteractive setup skips and prints `rig setup --mimo` as the retry. Setup does not edit MiMo's global configuration. You can enable an already installed CLI for one repo with `rig workers mimo=on`.
 
@@ -80,7 +80,7 @@ Cua Driver is parent-only eyes and hands. Never a Rig worker. Never `[workers].c
 
 Effective on = machine `~/.rig/cua-driver.json` `opt_in=true` **and** `cua-driver` on PATH **and** this repo `[computer-use] enabled=true`. Anything else: **chrome-devtools** only. Never Figma MCP or Playwright as the computer-use fallback. Never the Hermes `computer_use` skill.
 
-When Driver is effective, every legal parent (Grok, Codex, OpenCode, OMP, Pi, agy) uses Rig MCP `rig_cu_capture` → `rig_cu_act` (one action on a fresh 30s `element_token`) → mandatory `rig_cu_confirm`, and `rig_cu_record` for session video. Rig keeps one Driver MCP connection and one unique Driver session for that sequence. If that connection fails, Rig invalidates the current snapshot and requires a new capture before any later action; it never replays an action on a replacement connection. Capture, act, and confirm return a concise summary, a Rig-owned `rig.cu.v1` receipt, and image content when the local PNG is readable. That is semantic Astra parity (visual observation + receipt), not Astra wire-format cloning, and not CUA for workers. Confirm is the only `confirmed` outcome and yields a fresh successor snapshot. Expired, consumed, unknown, or confirm-before-act operations return `capture_required` / stale and do not call Driver. Recording stays structured/text unless it actually returns an image. AX token first; px only after `degraded` / `escalate_px` on that snapshot. Named Chrome profile: parent `chrome-profile` open, then Driver existing-profile bind. Isolated profile is not the Figma path. Existing-profile grant is human (`cua-driver serve --grant existing-profile`); Rig never silent-grants. Figma MCP remains parent file/node, not a clicker. Put the returned `brief_block` in the worker brief. Do not spawn a clicker. Do not call raw cua-driver MCP or shell cua-driver for that loop.
+When Driver is effective, every parent (live process + Rig MCP, including Cursor Desktop and Claude Code when wired) uses Rig MCP `rig_cu_status`, `rig_cu_serve` when the daemon is stopped, then `rig_cu_capture` → `rig_cu_act` (one action on a fresh 30s `element_token`) → mandatory `rig_cu_confirm`, and `rig_cu_record` for session video. Rig keeps one Driver MCP connection and one unique Driver session for that sequence. If that connection fails, Rig invalidates the current snapshot and requires a new capture before any later action; it never replays an action on a replacement connection. Capture, act, and confirm return a concise summary, a Rig-owned `rig.cu.v1` receipt, and image content when the local PNG is readable. That is semantic Astra parity (visual observation + receipt), not Astra wire-format cloning, and not CUA for workers. Confirm is the only `confirmed` outcome and yields a fresh successor snapshot. Expired, consumed, unknown, or confirm-before-act operations return `capture_required` / stale and do not call Driver. Recording stays structured/text unless it actually returns an image. AX token first; px only after `degraded` / `escalate_px` on that snapshot. Named Chrome profile: parent `chrome-profile` open, then Driver existing-profile bind. Isolated profile is not the Figma path. Existing-profile grant is human (`cua-driver serve --grant existing-profile`); Rig never silent-grants. Figma MCP remains parent file/node, not a clicker. Put the returned `brief_block` in the worker brief. Do not spawn a clicker. Do not call raw cua-driver MCP or shell cua-driver for that loop.
 
 Real GUI tests (click the live UI, pass/fail, record `recording.mp4`) stay parent: `skills/computer-test/SKILL.md`. Desktop drive: `skills/computer-use/references/desktop-drive.md`. Logged-in Chrome: `logged-in-browser.md`. Video: `skills/computer-test/references/record-video.md` (`rig_cu_record` under `.rig/cu-evidence`). Never Playwright as computer-use.
 
@@ -88,6 +88,8 @@ Recreating a Figma, canvas, or screenshot as UI is still parent vision + CU. Web
 
 ```bash
 rig computer-use              # machine + this-repo + MCP + effective
+rig computer-use unlock       # one human TTY path: opt-in, repo on, remember Chrome grant
+rig computer-use serve        # human attached fallback; parent uses rig_cu_serve
 rig computer-use setup        # install/upgrade binary; parents use Rig MCP
 rig computer-use on           # this repo [computer-use] enabled=true
 rig computer-use off          # this repo enabled=false; does not uninstall the binary
@@ -220,7 +222,7 @@ How to read each section:
 | **harness** | `.rig/harness.toml` exists | `(missing — run: rig init)` |
 | **version** | `v1 <sha>` from `~/.rig/VERSION` | `(unknown — run: rig update)` |
 | **update** | `current` | `behind main — run: rig update` (omitted if offline or `RIG_SKIP_UPDATE_CHECK`) |
-| **Parent live** | `codex`, `grok`, `opencode`, `omp`, `pi`, or `agy` when you are inside that CLI; `(none)` in a plain terminal is normal | you expected a parent but opened Claude/Cursor |
+| **Parent live** | `codex`, `grok`, `opencode`, `omp`, `pi`, `agy`, `cursor`, or `claude` when you are inside that CLI with parent Rig MCP; `(none)` in a plain terminal is normal | you expected a parent but Rig MCP is not loaded — fully quit the CLI once after `rig setup` |
 | **Parent preferred** | `codex`, `grok`, `opencode`, `omp`, `pi`, or `agy` from `rig use` | — |
 | **Workers** | the ones you want show `effective=on` | see reasons below |
 | **Apps** | GUIs listed or `(missing)` | do **not** treat these as workers |
@@ -344,13 +346,13 @@ Effective worker = flag `true` **and** binary on PATH **and** not live parent. C
    rig workers cursor=on
    ```
 
-3. `rig doctor` until `cursor` shows `effective=on`. Cursor is never the parent, so "is live parent" will not apply to it.
+3. `rig doctor` until `cursor` shows `effective=on`. If you opened Cursor Desktop as the parent, `cursor` is `effective=off (is live parent)` and cannot also be a child this session.
 
 **Enable Claude as a worker**
 
 1. Install the `claude` binary (no URL here — use Anthropic’s CLI install).
 2. `rig workers claude=on`
-3. `rig doctor` until `claude` is `effective=on` (unless you opened Claude as… you cannot; Claude is never the parent).
+3. `rig doctor` until `claude` is `effective=on` (unless you opened Claude as the parent — then it is `effective=off (is live parent)`).
 
 **Enable OpenCode, OMP, Pi, or agy as a worker**
 

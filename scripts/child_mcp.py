@@ -469,7 +469,9 @@ def write_job_mcp(job_dir: Path, job_id: str, repo: Path, worker: str) -> dict:
     - grok: print-mode has no --mcp-config; inherits ~/.grok/config.toml. Do not pretend.
     - opencode: OPENCODE_CONFIG is the full app config, not an MCP-only overlay. Do not pretend.
     - pi: PI_CODING_AGENT_DIR is the whole agent dir (auth/skills). Do not hijack it.
-    - cursor: job-scoped --plugin-dir with runtime MCP tripwire
+    - cursor: job-scoped --plugin-dir with runtime MCP tripwire.
+      User ~/.cursor/mcp.json parent `rig` is not in cursor_allowed_servers;
+      a child call to that server fails the tripwire.
     - devin: repo .devin/mcp_config.local.json
     - mimo: private MIMOCODE_CONFIG_DIR with only job-scoped Rig MCP servers
     """

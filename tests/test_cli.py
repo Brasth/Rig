@@ -591,7 +591,8 @@ class InitPresence(unittest.TestCase):
         self.assertIn("rig_job_start", text)
         self.assertIn("Do not spawn Cursor/Codex/OpenCode/OMP/Pi/agy just because their CLI is on PATH", text)
         self.assertIn("rig use grok|codex|opencode|omp|pi|agy", text)
-        self.assertIn("Claude Code and Cursor CLI are never the parent", text)
+        self.assertIn("Live process + parent Rig MCP is the parent", text)
+        self.assertIn("the same binary with `RIG_JOB_ID` is a child", text)
         self.assertIn("OpenCode, OMP, Pi, and agy can be the parent", text)
         self.assertIn("When live parent is agy, do not use nested agy /agent dispatch", text)
         self.assertIn("openai/gpt-5.6-luna", text)
@@ -1154,6 +1155,12 @@ class ComputerUseCli(unittest.TestCase):
         self.assertIn("enabled=false", shown.stdout)
         self.assertIn("off (project)", shown.stdout)
         self.assertIn("chrome-devtools", shown.stdout)
+
+    def test_unlock_without_tty_exits_2(self):
+        proc = run_rig(self.repo, "computer-use", "unlock", env=self._env())
+        self.assertEqual(proc.returncode, 2, proc.stderr + proc.stdout)
+        self.assertIn("TTY", proc.stdout + proc.stderr)
+        self.assertRegex((self.repo / ".rig" / "harness.toml").read_text(), r"enabled\s*=\s*false")
 
     def test_on_off_round_trip_does_not_need_binary(self):
         on = run_rig(self.repo, "computer-use", "on", env=self._env())

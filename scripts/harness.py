@@ -167,6 +167,8 @@ def _comm_parent(comm: str, pid: int) -> str:
         return "claude"
     if comm == "cursor-agent" or comm.startswith("cursor-agent-"):
         return "cursor"
+    if comm in {"Cursor", "cursor"}:
+        return "cursor"
     if comm == "opencode" or comm.startswith("opencode-"):
         return "opencode"
     if comm == "omp" or comm.startswith("omp-"):

@@ -226,6 +226,14 @@ class ChildMcpIsolation(unittest.TestCase):
         payload = json.loads(Path(spec["path"]).read_text())
         self.assertEqual(set(child_mcp.payload_server_names(payload)), {"rig", "rig-ask"})
 
+    def test_cursor_tripwire_forbids_user_parent_rig_server(self):
+        log = self.job_dir / "cursor-user-rig.log"
+        parent = {"tool_call": {"mcpToolCall": {"args": {"serverIdentifier": "rig", "toolName": "rig_cu_capture"}}}}
+        log.write_text(json.dumps(parent) + "\n")
+        _offset, violation = child_mcp.cursor_tripwire(log, 0)
+        self.assertIn("forbidden MCP server rig", violation)
+        self.assertIn("rig_cu_capture", violation)
+
     def test_cursor_tripwire_reads_complete_lines_only(self):
         log = self.job_dir / "cursor.log"
         allowed = {"tool_call": {"mcpToolCall": {"args": {"serverIdentifier": "plugin-rigjob-rig", "toolName": "rig_job_inbox"}}}}

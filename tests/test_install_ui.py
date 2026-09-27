@@ -122,6 +122,17 @@ class InstallJsonMcp(unittest.TestCase):
         self.assertNotIn("//", text)
         self.assertNotIn("/*", text)
 
+    def test_cursor_parent_mcp_merges_without_clobber(self):
+        cfg = self.home / ".cursor" / "mcp.json"
+        cfg.parent.mkdir(parents=True)
+        cfg.write_text(json.dumps({"mcpServers": {"other": {"command": "x"}}}) + "\n")
+        msg = install_ui.install_cursor_parent_mcp(cfg, self.script)
+        data = json.loads(cfg.read_text())
+        self.assertEqual(data["mcpServers"]["other"]["command"], "x")
+        self.assertEqual(data["mcpServers"]["rig"]["command"], self.launcher)
+        self.assertNotIn("cua-driver", json.dumps(data))
+        self.assertIn("set cursor mcpServers.rig", msg)
+
     def test_omp_creates_when_missing(self):
         cfg = self.home / ".omp" / "mcp.json"
         msg = install_ui.install_omp_mcp(cfg, self.script)

@@ -1236,6 +1236,15 @@ TOOLS.extend([
      },
      "description": "Parent-only read-only Cua Driver readiness diagnostics. Always discoverable, even when action tools are hidden. Reports machine opt-in, binary, project flag and recovery steps. Does not enable, install or grant access.",
      "inputSchema": {"type": "object", "properties": {"repo": {"type": "string"}}}},
+    {"name": "rig_cu_serve",
+     "annotations": {
+         "readOnlyHint": False,
+         "destructiveHint": False,
+         "idempotentHint": True,
+         "openWorldHint": False,
+     },
+     "description": "Parent-only detached Cua Driver daemon start. Starts cua-driver serve in the background when gates are on and a display exists. Passes --grant existing-profile only after a remembered unlock grant. Never silent-grants OS permissions. Hidden unless computer-use is effective. Children never receive this tool.",
+     "inputSchema": {"type": "object", "properties": {"repo": {"type": "string"}}}},
     {"name": "rig_cu_capture",
      "annotations": {
          "readOnlyHint": False,
@@ -1395,6 +1404,7 @@ TOOL_ORDER = (
     "rig_jobs",
     "rig_pick",
     "rig_status",
+    "rig_cu_serve",
     "rig_cu_capture",
     "rig_cu_act",
     "rig_cu_confirm",
@@ -1481,7 +1491,7 @@ def is_child() -> bool:
     return bool(child_job_id() or (os.environ.get("RIG_JOB_DIR") or "").strip())
 
 
-CU_TOOL_NAMES = frozenset({"rig_cu_capture", "rig_cu_act", "rig_cu_confirm", "rig_cu_record"})
+CU_TOOL_NAMES = frozenset({"rig_cu_serve", "rig_cu_capture", "rig_cu_act", "rig_cu_confirm", "rig_cu_record"})
 BSK_TOOL_NAMES = frozenset({"rig_bsk_session", "rig_bsk_observe", "rig_bsk_act", "rig_bsk_confirm", "rig_bsk_navigate", "rig_bsk_tab"})
 
 
@@ -2441,6 +2451,10 @@ def call_tool(name: str, args: dict, on_tick=None, *, wait_paths: list[Path] | N
             import computer_use as cu
             status = cu.cu_status(repo)
             return {**_ok(json.dumps(status, indent=2)), "structuredContent": status}
+        if name == "rig_cu_serve":
+            import computer_use as cu
+            served = cu.cu_serve(repo)
+            return {**_ok(json.dumps(served, indent=2)), "structuredContent": served}
         if name == "rig_bsk_status":
             import browser_skill as bsk
             status = bsk.bsk_status(repo)

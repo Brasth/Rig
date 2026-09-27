@@ -155,6 +155,136 @@ class ComputerUseProxy(unittest.TestCase):
         self.assertTrue(computer_use.tools_listed(self.repo, child=False))
         self.assertFalse(computer_use.tools_listed(self.repo, child=True))
 
+    def test_status_ready_when_effective_and_daemon_up(self):
+        probe = {"state": "running", "ready": True, "detail": "", "recovery": "", "probed": True}
+        with mock.patch.object(computer_use, "display_available", return_value=True), \
+             mock.patch.object(computer_use, "_probe_daemon", return_value=probe):
+            status = computer_use.cu_status(self.repo)
+        self.assertTrue(status["effective"])
+        self.assertEqual(status["state"], "ready")
+        self.assertEqual(status["blocker_code"], "")
+        self.assertEqual(status["exact_command"], "")
+
+    def test_status_needs_human_unlock_when_repo_off(self):
+        (self.repo / ".rig" / "harness.toml").write_text("[computer-use]\nenabled = false\n")
+        with mock.patch.object(computer_use, "display_available", return_value=True):
+            status = computer_use.cu_status(self.repo)
+        self.assertFalse(status["effective"])
+        self.assertEqual(status["state"], "needs_human")
+        self.assertEqual(status["blocker_code"], "repo_disabled")
+        self.assertEqual(status["exact_command"], "rig computer-use unlock")
+        self.assertIn("unlock", status["user_prompt"])
+
+    def test_status_unavailable_without_display(self):
+        probe = {"state": "stopped", "ready": False, "detail": "", "recovery": "", "probed": True}
+        with mock.patch.object(computer_use, "display_available", return_value=False), \
+             mock.patch.object(computer_use, "_probe_daemon", return_value=probe):
+            status = computer_use.cu_status(self.repo)
+        self.assertEqual(status["state"], "unavailable")
+        self.assertEqual(status["blocker_code"], "no_display")
+        self.assertEqual(status["exact_command"], "")
+
+    def test_unlock_without_tty_does_not_change_flags(self):
+        (self.repo / ".rig" / "harness.toml").write_text("[computer-use]\nenabled = false\n")
+        with mock.patch.object(computer_use.cua_install, "main") as setup:
+            code = computer_use.cmd_unlock(self.repo, has_tty=False)
+        self.assertEqual(code, 2)
+        setup.assert_not_called()
+        self.assertIn("enabled = false", (self.repo / ".rig" / "harness.toml").read_text())
+
+    def test_unlock_remembers_grant_and_can_serve(self):
+        calls = []
+        with mock.patch.object(computer_use.cua_install, "main"), \
+             mock.patch.object(computer_use, "machine_state", return_value="on"), \
+             mock.patch.object(computer_use, "persist_existing_profile_grant") as grant:
+            code = computer_use.cmd_unlock(
+                self.repo,
+                has_tty=True,
+                confirmer=lambda _prompt: True,
+                serve_runner=calls.append,
+            )
+        self.assertEqual(code, 0)
+        grant.assert_called_once_with(True)
+        self.assertTrue(calls)
+
+    def test_serve_passes_remembered_existing_profile_grant(self):
+        seen = []
+        with mock.patch.object(computer_use, "binary_path", return_value="/tmp/fake-cua-driver"), \
+             mock.patch.object(computer_use, "existing_profile_granted", return_value=True):
+            code = computer_use.cmd_serve(self.repo, runner=seen.append)
+        self.assertEqual(code, 0)
+        self.assertEqual(seen[0], ["/tmp/fake-cua-driver", "serve", "--grant", "existing-profile"])
+
+    def test_cu_serve_refuses_missing_binary(self):
+        with mock.patch.object(computer_use, "binary_path", return_value=""), \
+             mock.patch.object(computer_use, "_spawn_detached_serve") as spawn:
+            ev = computer_use.cu_serve(self.repo)
+        self.assertFalse(ev["ok"])
+        self.assertEqual(ev["error"], "missing_binary")
+        spawn.assert_not_called()
+
+    def test_cu_serve_refuses_no_display(self):
+        seen = []
+        with mock.patch.object(computer_use, "display_available", return_value=False), \
+             mock.patch.object(computer_use, "_spawn_detached_serve") as spawn:
+            ev = computer_use.cu_serve(self.repo, runner=seen.append)
+        self.assertFalse(ev["ok"])
+        self.assertEqual(ev["error"], "no_display")
+        self.assertEqual(seen, [])
+        spawn.assert_not_called()
+
+    def test_cu_serve_already_ready_does_not_spawn(self):
+        seen = []
+        probe = {"state": "ready", "ready": True, "detail": "", "recovery": "", "probed": True}
+        with mock.patch.object(computer_use, "display_available", return_value=True), \
+             mock.patch.object(computer_use, "_probe_daemon", return_value=probe), \
+             mock.patch.object(computer_use, "_spawn_detached_serve") as spawn:
+            ev = computer_use.cu_serve(self.repo, runner=seen.append, sleeper=lambda _s: None)
+        self.assertTrue(ev["ok"])
+        self.assertTrue(ev["already_running"])
+        self.assertEqual(seen, [])
+        spawn.assert_not_called()
+
+    def test_cu_serve_starts_detached_with_remembered_grant(self):
+        seen = []
+        stopped = {"state": "stopped", "ready": False, "detail": "", "recovery": "", "probed": True}
+        ready = {"state": "ready", "ready": True, "detail": "", "recovery": "", "probed": True}
+        probes = [stopped, ready]
+        with mock.patch.object(computer_use, "display_available", return_value=True), \
+             mock.patch.object(computer_use, "existing_profile_granted", return_value=True), \
+             mock.patch.object(computer_use, "_probe_daemon", side_effect=probes), \
+             mock.patch.object(computer_use, "_spawn_detached_serve") as spawn:
+            ev = computer_use.cu_serve(self.repo, runner=seen.append, sleeper=lambda _s: None)
+        self.assertTrue(ev["ok"])
+        self.assertFalse(ev["already_running"])
+        self.assertEqual(seen[0], ["/tmp/fake-cua-driver", "serve", "--grant", "existing-profile"])
+        spawn.assert_not_called()
+        self.assertNotIn("execvp", ev)
+
+    def test_cu_serve_omits_grant_when_not_remembered(self):
+        seen = []
+        stopped = {"state": "stopped", "ready": False, "detail": "", "recovery": "", "probed": True}
+        with mock.patch.object(computer_use, "display_available", return_value=True), \
+             mock.patch.object(computer_use, "existing_profile_granted", return_value=False), \
+             mock.patch.object(computer_use, "_probe_daemon", return_value=stopped):
+            ev = computer_use.cu_serve(self.repo, runner=seen.append, sleeper=lambda _s: None)
+        self.assertTrue(ev["ok"])
+        self.assertEqual(seen[0], ["/tmp/fake-cua-driver", "serve"])
+
+    def test_status_daemon_stopped_asks_parent_serve_not_user(self):
+        probe = {"state": "stopped", "ready": False, "detail": "daemon is not running",
+                 "recovery": computer_use.DAEMON_RECOVERY, "probed": True}
+        with mock.patch.object(computer_use, "display_available", return_value=True), \
+             mock.patch.object(computer_use, "_probe_daemon", return_value=probe), \
+             mock.patch.object(computer_use, "cu_serve") as serve:
+            status = computer_use.cu_status(self.repo)
+        self.assertEqual(status["blocker_code"], "daemon_stopped")
+        self.assertEqual(status["exact_command"], "")
+        self.assertEqual(status["user_prompt"], "")
+        self.assertEqual(status["next_action"], "rig_cu_serve")
+        self.assertIn("rig_cu_serve", status["recovery"])
+        serve.assert_not_called()
+
     def test_type_secret_is_refused(self):
         runner = self._runner({"get_window_state": _capture_payload()})
         cap = computer_use.cu_capture(self.repo, runner=runner)

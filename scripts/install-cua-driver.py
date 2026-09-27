@@ -16,7 +16,7 @@ from pathlib import Path
 
 UPSTREAM = "https://cua.ai/driver/install.sh"
 PREFERENCE_NAME = "cua-driver.json"
-SCHEMA = 1
+SCHEMA = 2
 INSTALL_TIMEOUT = 120
 
 
@@ -48,15 +48,26 @@ def read_preference() -> dict | None:
     return data
 
 
-def write_preference(opt_in: bool, source: str) -> None:
+def write_preference(opt_in: bool, source: str, **extra) -> None:
     path = preference_path()
     path.parent.mkdir(parents=True, exist_ok=True)
+    prev = read_preference() or {}
     payload = {
         "schema": SCHEMA,
         "opt_in": bool(opt_in),
         "source": str(source or "prompt"),
         "updated_at": iso_now(),
     }
+    granted = extra.get("existing_profile_granted", prev.get("existing_profile_granted"))
+    if granted is True:
+        payload["existing_profile_granted"] = True
+        payload["existing_profile_granted_at"] = str(
+            extra.get("existing_profile_granted_at")
+            or prev.get("existing_profile_granted_at")
+            or iso_now()
+        )
+    elif granted is False:
+        payload["existing_profile_granted"] = False
     tmp = path.with_name(path.name + ".tmp")
     tmp.write_text(json.dumps(payload, indent=2) + "\n")
     os.chmod(tmp, 0o600)
