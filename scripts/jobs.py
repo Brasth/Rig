@@ -1535,6 +1535,9 @@ def _normalize_wait_ids(
     return out
 
 
+STALE_GRACE_S = 15.0
+
+
 def wait_job(
     repo: Path, job_id: str | None, timeout: float | None = None,
     on_tick: Callable | None = None, ids: str | list | tuple | set | None = None,
@@ -1553,6 +1556,11 @@ def wait_job(
     pinned = targets if targets is not None else [cancellation.capture(path) for path in paths]
     last_tick = {}
     unknown_since = {}
+    stale_since = {}
+    # A wrapper job shows stale while the child has exited but run-worker.sh is
+    # still writing result.json/meta.json; keep it live briefly so wait does not
+    # report a false failure from that finalize window.
+    stale_grace_s = STALE_GRACE_S
     try:
         while True:
             if stop.is_set():
@@ -1577,6 +1585,16 @@ def wait_job(
             if asks:
                 return 2, format_wait(asks[0], others=listing)
             live = [job for job in listing if job.get("effective") == "running"]
+            waiting = bool(live) or deadline is None or time.monotonic() < deadline
+            stale_graced = set()
+            for job in listing:
+                if job.get("effective") == "stale" and waiting:
+                    started = stale_since.setdefault(job["job_id"], time.monotonic())
+                    if time.monotonic() - started < stale_grace_s:
+                        live.append(job)
+                        stale_graced.add(job["job_id"])
+                else:
+                    stale_since.pop(job["job_id"], None)
             if not live:
                 cancelled = any(job.get("effective") == "cancelled" for job in listing)
                 # Unknown/nonterminal metadata is never a successful completion.
@@ -1587,6 +1605,8 @@ def wait_job(
                 return 124, format_wait(live[0], others=listing)
             for job in live:
                 jid = job["job_id"]
+                if jid in stale_graced:
+                    continue
                 if job.get("executor_kind") in {"native_child", "parent"}:
                     return 1, (f"NEEDS_RECONCILIATION {jid}: native observation required; use the owning host to wait on "
                                f"agent {job.get('native_agent_id') or 'unknown'} and submit authenticated completion. "

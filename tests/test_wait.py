@@ -288,6 +288,82 @@ class WaitContract(unittest.TestCase):
         self.assertIn("wait-job", text)
         self.assertIn("doing", text.lower())
 
+    def test_blocking_wait_stale_finalize_window_until_ok(self):
+        # Child pid is dead while run-worker still finalizes meta/result:
+        # wait must not report stale-fail during the grace window.
+        grace = self.repo / ".rig" / "jobs" / "grace-job"
+        grace.mkdir(parents=True)
+        (grace / "brief.md").write_text("finalize\n")
+        meta = {
+            "job_id": "grace-job",
+            "worker": "cursor",
+            "role": "explore",
+            "status": "running",
+            "pid": 2 ** 22 - 1,
+            "model": "composer-2.5",
+        }
+        (grace / "meta.json").write_text(json.dumps(meta))
+
+        def later():
+            time.sleep(0.4)
+            meta.update(status="ok", summary="done")
+            (grace / "meta.json").write_text(json.dumps(meta))
+            (grace / "result.json").write_text('{"status": "ok"}')
+
+        threading.Thread(target=later, daemon=True).start()
+        code, text = _alarm_run(
+            5, lambda: jobs.wait_job(self.repo, "grace-job", timeout=None)
+        )
+        self.assertEqual(code, 0)
+        self.assertIn("grace-job", text)
+
+    def test_stale_orphan_still_fails_after_grace(self):
+        orphan = self.repo / ".rig" / "jobs" / "orphan-job"
+        orphan.mkdir(parents=True)
+        (orphan / "brief.md").write_text("gone\n")
+        (orphan / "meta.json").write_text(
+            json.dumps(
+                {
+                    "job_id": "orphan-job",
+                    "worker": "cursor",
+                    "role": "explore",
+                    "status": "running",
+                    "pid": 2 ** 22 - 1,
+                    "model": "composer-2.5",
+                }
+            )
+        )
+        old = jobs.STALE_GRACE_S
+        jobs.STALE_GRACE_S = 0.5
+        try:
+            t0 = time.time()
+            code, text = _alarm_run(
+                5, lambda: jobs.wait_job(self.repo, "orphan-job", timeout=None)
+            )
+            elapsed = time.time() - t0
+        finally:
+            jobs.STALE_GRACE_S = old
+        self.assertEqual(code, 1)
+        self.assertIn("stale", text)
+        self.assertGreaterEqual(elapsed, 0.4)
+
+    def test_timeout_0_stale_snapshot_is_terminal(self):
+        (self.d / "meta.json").write_text(
+            json.dumps(
+                {
+                    "job_id": "wait-job",
+                    "worker": "claude",
+                    "role": "implement",
+                    "status": "running",
+                    "pid": 2 ** 22 - 1,
+                    "model": "claude-sonnet-5",
+                }
+            )
+        )
+        code, text = jobs.wait_job(self.repo, "wait-job", timeout=0)
+        self.assertEqual(code, 1)
+        self.assertIn("stale", text)
+
     def test_wait_brief_only_never_started(self):
         orphan = self.repo / ".rig" / "jobs" / "orphan-brief"
         orphan.mkdir()
