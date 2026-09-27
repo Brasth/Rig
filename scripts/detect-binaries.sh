@@ -191,12 +191,9 @@ _ps_command() {
 live_parent() {
   local forced="${RIG_PARENT:-}"
   case "$forced" in
-    grok|codex|claude|cursor|opencode|omp|pi|agy)
+    grok|codex|claude|cursor|opencode|omp|pi|agy|devin)
       printf '%s\n' "$forced"
       return 0
-      ;;
-    devin)
-      # Devin is child-only; never treat it as the live parent.
       ;;
   esac
 
@@ -242,6 +239,10 @@ live_parent() {
         ;;
       agy|agy-*)
         printf '%s\n' "agy"
+        return 0
+        ;;
+      devin|devin-*)
+        printf '%s\n' "devin"
         return 0
         ;;
       agent|agent-*)

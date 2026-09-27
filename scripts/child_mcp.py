@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -32,6 +33,11 @@ DEVIN_MCP_REL = Path(".devin") / "mcp_config.local.json"
 DEVIN_LOCK_REL = Path(".rig") / "devin.lock"
 DEVIN_STATE = "devin-mcp-state.json"
 DEVIN_BACKUP = "devin-mcp_config.local.json.bak"
+DEVIN_JOB_ALLOW = (
+    "Exec(git status)", "Exec(git diff)", "Exec(git log)", "Exec(git show)",
+    "Exec(python3 -m unittest)", "Exec(bash -n)", "Exec(rg)", "Exec(ls)", "Exec(cat)",
+    "Exec(head)", "Exec(tail)", "Exec(wc)", "Exec(sed -n)", "mcp__rig__*", "mcp__rig-ask__*",
+)
 DEVIN_LIVE = frozenset(
     {
         "reserved",
@@ -499,6 +505,7 @@ def write_job_mcp(job_dir: Path, job_id: str, repo: Path, worker: str) -> dict:
         env["AGY_MCP"] = str(path)
         isolation = "AGY_MCP"
     elif name == "devin":
+        argv = ["--config", str(write_devin_job_config(job_dir))]
         isolation = "job-devin-mcp"
     elif name == "mimo":
         config_dir = job_dir / "mimo-config"
@@ -525,15 +532,18 @@ def write_job_mcp(job_dir: Path, job_id: str, repo: Path, worker: str) -> dict:
     }
 
 
-def cursor_tripwire(log_path: Path, offset: int) -> tuple[int, str]:
-    """Return the next complete-line offset and any non-Rig Cursor MCP call."""
+def cursor_tripwire(log_path: Path, offset: int, final: bool = False) -> tuple[int, str]:
+    """Return the next complete-line offset and any non-Rig Cursor MCP call.
+
+    final=True treats a trailing line without a newline as complete (child exited).
+    """
     try:
         raw = Path(log_path).read_bytes()
     except OSError:
         return offset, ""
     start = max(0, min(int(offset), len(raw)))
     chunk = raw[start:]
-    end = chunk.rfind(b"\n")
+    end = len(chunk) - 1 if final else chunk.rfind(b"\n")
     if end < 0:
         return start, ""
     complete, next_offset = chunk[:end + 1], start + end + 1
@@ -552,6 +562,27 @@ def cursor_tripwire(log_path: Path, offset: int) -> tuple[int, str]:
             tool = args.get("toolName") or args.get("name") or "unknown"
             return next_offset, f"forbidden MCP server {server} (tool {tool}) in Cursor child"
     return next_offset, ""
+
+
+def write_devin_job_config(job_dir: Path) -> Path:
+    """User Devin config plus a scoped Exec allowlist; print mode rejects unlisted shell."""
+    try:
+        config = json.loads((_home() / ".config" / "devin" / "config.json").read_text())
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+        config = {}
+    if not isinstance(config, dict):
+        config = {}
+    permissions = config.get("permissions")
+    if not isinstance(permissions, dict):
+        permissions = config["permissions"] = {}
+    allow = permissions.get("allow")
+    allow = [rule for rule in allow if isinstance(rule, str)] if isinstance(allow, list) else []
+    permissions["allow"] = allow + [rule for rule in DEVIN_JOB_ALLOW if rule not in allow]
+    path = Path(job_dir) / "devin-config.json"
+    fd = os.open(str(path), os.O_CREAT | os.O_TRUNC | os.O_WRONLY, 0o600)
+    with os.fdopen(fd, "w") as stream:
+        stream.write(json.dumps(config, indent=2) + "\n")
+    return path
 
 
 def devin_mcp_path(repo: Path) -> Path:
@@ -596,6 +627,33 @@ def _lock_holder(repo: Path) -> str:
         return ""
 
 
+def _run_quiet(argv: list[str]) -> str:
+    try:
+        proc = subprocess.run(argv, capture_output=True, text=True, check=False, timeout=1.0)
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return proc.stdout or ""
+
+
+def live_devin_sessions(repo: Path) -> list[int]:
+    """Devin processes whose cwd is inside repo. Unknown is never busy."""
+    root = Path(repo).resolve()
+    out: list[int] = []
+    for row in _run_quiet(["ps", "-axo", "pid=,comm="]).splitlines():
+        raw, _, comm = row.strip().partition(" ")
+        name = comm.strip().rsplit("/", 1)[-1]
+        if not raw.isdigit() or not (name == "devin" or name.startswith("devin-")):
+            continue
+        for line in _run_quiet(["lsof", "-a", "-d", "cwd", "-p", raw, "-Fn"]).splitlines():
+            if not line.startswith("n"):
+                continue
+            cwd = Path(line[1:])
+            if cwd == root or root in cwd.parents:
+                out.append(int(raw))
+                break
+    return out
+
+
 def devin_busy_reason(repo: Path, *, skip_id: str = "") -> str:
     live = live_devin_job_ids(repo, skip_id=skip_id)
     if live:
@@ -606,6 +664,12 @@ def devin_busy_reason(repo: Path, *, skip_id: str = "") -> str:
         job_dir = Path(repo) / ".rig" / "jobs" / holder
         if _devin_job_live(job_dir):
             return f"devin already running in this repo ({holder}); one Devin job at a time"
+    sessions = live_devin_sessions(repo)
+    if sessions:
+        return (
+            f"a Devin session is open in this repo (pid {sessions[0]}); "
+            "a devin child would hijack its rig MCP"
+        )
     return ""
 
 
@@ -844,10 +908,10 @@ def main(argv: list[str]) -> int:
         return 0
     if cmd == "cursor-tripwire":
         if len(argv) < 4:
-            print("usage: child_mcp.py cursor-tripwire <log> <offset>", file=sys.stderr)
+            print("usage: child_mcp.py cursor-tripwire <log> <offset> [final]", file=sys.stderr)
             return 2
         try:
-            offset, violation = cursor_tripwire(Path(argv[2]), int(argv[3]))
+            offset, violation = cursor_tripwire(Path(argv[2]), int(argv[3]), final=argv[4:5] == ["final"])
         except ValueError:
             print("offset must be an integer", file=sys.stderr)
             return 2

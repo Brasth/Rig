@@ -1034,6 +1034,7 @@ case "$WORKER" in
       --permission-mode accept-edits
       --respect-workspace-trust true
     )
+    CMD+=("${CHILD_MCP_ARGV[@]}")
     ;;
   mimo)
     # MiMo Code runs in JSON mode and inherits job-scoped RIG_JOB_* values for
@@ -1212,7 +1213,7 @@ WAIT_ANCHOR=$SECONDS
 LAST_OBSERVE=$SECONDS
 cursor_tripwire_scan() {
   local result
-  result="$(python3 "$CHILD_MCP_PY" cursor-tripwire "$LOG" "$TRIP_OFFSET")" || return 1
+  result="$(python3 "$CHILD_MCP_PY" cursor-tripwire "$LOG" "$TRIP_OFFSET" ${1:+"$1"})" || return 1
   TRIP_OFFSET="$(printf '%s' "$result" | python3 -c 'import json,sys; print(json.load(sys.stdin)["offset"])')" || return 1
   TRIPWIRE_VIOLATION="$(printf '%s' "$result" | python3 -c 'import json,sys; print(json.load(sys.stdin)["violation"])')" || return 1
   [[ -n "$TRIPWIRE_VIOLATION" ]]
@@ -1272,7 +1273,7 @@ while kill -0 "$CHILD" 2>/dev/null; do
   fi
   sleep 0.1
 done
-if [[ "$WORKER" == "cursor" ]] && [[ "$TRIPWIRE_FAILED" -eq 0 ]] && cursor_tripwire_scan; then
+if [[ "$WORKER" == "cursor" ]] && [[ "$TRIPWIRE_FAILED" -eq 0 ]] && cursor_tripwire_scan final; then
   TRIPWIRE_FAILED=1
   write_tripwire
   echo "run-worker: $TRIPWIRE_VIOLATION" >&2
@@ -1416,6 +1417,9 @@ if [[ "$CHILD_RC" -eq 0 ]]; then
     rm -f "$LOG"
   fi
   exit 0
+fi
+if [[ "$WORKER" == "cursor" ]] && grep -q "WritableIterable is closed" "$LOG" 2>/dev/null; then
+  SUMMARY="Cursor transport error (see rig doctor): ${SUMMARY:-child exited $CHILD_RC}"
 fi
 write_json "fail" "$CHILD_RC" "${SUMMARY:-child exited $CHILD_RC}" "$ENDED"
 exit "$CHILD_RC"

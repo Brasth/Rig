@@ -12,7 +12,7 @@ You stay in **one parent**: Codex, Grok, OpenCode, OMP, Pi, or agy. You talk to 
 
 - **Parent** (you open this): Codex, Grok, OpenCode, OMP, Pi, or agy. It plans, checks, talks to you, does vision / computer-use / chrome-profile, and watches jobs. It does **not** sit on write/review/SSH when a worker is effective.
 - **Workers** (the parent may spawn these): Grok, Claude Code, Cursor CLI, OpenCode, OMP, Pi, agy, Devin, Codex. They write code, fix bugs, review, SSH/debug, and gather facts.
-- **Never the parent:** Claude Code, Cursor, and Devin. Opening those CLIs does not make them the Rig parent. The Antigravity IDE/GUI is not a parent or worker; the CLI is `agy`. Devin is a child-only SWE-2 worker.
+- **Never the parent:** Claude Code, Cursor, and Devin. Opening those CLIs does not make them the Rig parent. The Antigravity IDE/GUI is not a parent or worker; the CLI is `agy`. Devin is a child-only SWE-2 worker; a live Devin session is detected so the devin child is off. Devin children get a job-scoped `--config` allowlist (read-only git, `python3 -m unittest`, `bash -n`, read-only shell, Rig MCP).
 - **Live parent** is whichever Codex, Grok, OpenCode, OMP, Pi, or agy you actually opened (`rig status`). The `parent =` key in `.rig/harness.toml` is only the preferred default (`rig use grok|codex|opencode|omp|pi|agy`). Opening the CLI is what makes it live.
 - **Missing binary is not a failure.** That worker is off. The parent uses a cheaper same-CLI worker. That is success.
 

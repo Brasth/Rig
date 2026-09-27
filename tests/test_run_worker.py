@@ -459,6 +459,8 @@ class OpenCodeOmpPiWorkerArgv(unittest.TestCase):
         self.assertIn("--model swe-2-high", out)
         self.assertIn("--permission-mode accept-edits", out)
         self.assertIn("--respect-workspace-trust true", out)
+        self.assertIn("--config", out)
+        self.assertIn("devin-config.json", out)
         self.assertNotIn("dangerous", out)
         self.assertNotIn("fusion", out.lower())
 

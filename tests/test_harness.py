@@ -280,6 +280,24 @@ class LiveParent(unittest.TestCase):
         self.assertEqual(harness._comm_parent("node", 1), "")
         self.assertEqual(harness._comm_parent("pip", 1), "")
 
+    def test_devin_session_is_detected_so_devin_child_is_off(self):
+        self.assertEqual(harness._comm_parent("devin", 1), "devin")
+        self.assertEqual(harness._comm_parent("/Users/x/.local/bin/devin", 1), "devin")
+        self.assertEqual(harness._comm_parent("devinx", 1), "")
+        with mock.patch.dict(os.environ, {"RIG_PARENT": "devin"}):
+            self.assertEqual(harness.live_parent(), "devin")
+        with mock.patch.object(harness, "parse_harness", return_value={"workers": {"devin": "true", "grok": "true"}}), \
+                mock.patch.object(harness, "find_worker_bin", return_value="/bin/x"), \
+                mock.patch.object(harness, "worker_mcp_reason", return_value=""):
+            effective = harness.effective_workers(Path("/tmp"), "devin")
+        self.assertNotIn("devin", effective)
+        self.assertIn("grok", effective)
+        proc = subprocess.run(
+            ["bash", "-c", f'source "{ROOT}/scripts/detect-binaries.sh"; live_parent'],
+            capture_output=True, text=True, env={**os.environ, "RIG_PARENT": "devin"},
+        )
+        self.assertEqual(proc.stdout.strip(), "devin")
+
 
 class StatusSnapshot(unittest.TestCase):
     def test_status_uses_supplied_empty_snapshot_and_effective_set(self):

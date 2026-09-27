@@ -239,6 +239,20 @@ class ChildMcpIsolation(unittest.TestCase):
         _offset, violation = child_mcp.cursor_tripwire(log, offset)
         self.assertIn("plugin-figma-figma", violation)
 
+    def test_cursor_tripwire_final_scans_trailing_line_without_newline(self):
+        log = self.job_dir / "cursor-final.log"
+        forbidden = {"tool_call": {"mcpToolCall": {"args": {"serverIdentifier": "plugin-figma-figma", "toolName": "get_design"}}}}
+        log.write_text(json.dumps(forbidden))
+        self.assertEqual(child_mcp.cursor_tripwire(log, 0), (0, ""))
+        offset, violation = child_mcp.cursor_tripwire(log, 0, final=True)
+        self.assertIn("plugin-figma-figma", violation)
+        self.assertEqual(offset, log.stat().st_size)
+        proc = subprocess.run(
+            [sys.executable, str(ROOT / "scripts" / "child_mcp.py"), "cursor-tripwire", str(log), "0", "final"],
+            capture_output=True, text=True, check=True,
+        )
+        self.assertIn("plugin-figma-figma", json.loads(proc.stdout)["violation"])
+
     def test_write_job_mcp_grok_does_not_pretend(self):
         spec = child_mcp.write_job_mcp(self.job_dir, self.job_id, self.repo, "grok")
         self.assertEqual(spec["argv"], [])
@@ -493,6 +507,57 @@ class DevinRepoMcp(unittest.TestCase):
             lock.write_text("other-job\n")
             child_mcp.release_devin_lock(repo, "")
             self.assertTrue(lock.exists())
+
+    def test_live_devin_session_in_repo_blocks_child(self):
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp).resolve()
+            with mock.patch.object(child_mcp, "live_devin_sessions", return_value=[4242]):
+                self.assertIn("pid 4242", child_mcp.devin_busy_reason(repo))
+            with mock.patch.object(child_mcp, "live_devin_sessions", return_value=[]):
+                self.assertEqual(child_mcp.devin_busy_reason(repo), "")
+
+    def test_live_devin_sessions_matches_cwd_inside_repo_only(self):
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp).resolve()
+            outputs = {
+                ("ps", "-axo", "pid=,comm="): "   11 devin\n   22 /Users/x/.local/bin/devin\n   33 devin\n   44 devinx\n",
+                ("lsof", "-a", "-d", "cwd", "-p", "11", "-Fn"): f"p11\nfcwd\nn{repo}\n",
+                ("lsof", "-a", "-d", "cwd", "-p", "22", "-Fn"): f"p22\nfcwd\nn{repo}/sub\n",
+                ("lsof", "-a", "-d", "cwd", "-p", "33", "-Fn"): "p33\nfcwd\nn/elsewhere\n",
+            }
+            with mock.patch.object(child_mcp, "_run_quiet", side_effect=lambda argv: outputs.get(tuple(argv), "")):
+                self.assertEqual(child_mcp.live_devin_sessions(repo), [11, 22])
+            with mock.patch.object(child_mcp, "_run_quiet", return_value=""):
+                self.assertEqual(child_mcp.live_devin_sessions(repo), [])
+
+    def test_devin_job_config_adds_scoped_allowlist_and_keeps_user_keys(self):
+        with tempfile.TemporaryDirectory() as temp:
+            home, job_dir, repo = Path(temp) / "home", Path(temp) / "job", Path(temp) / "repo"
+            (home / ".config" / "devin").mkdir(parents=True)
+            job_dir.mkdir()
+            repo.mkdir()
+            (home / ".config" / "devin" / "config.json").write_text(json.dumps({
+                "hooks": {"keep": True}, "permissions": {"allow": ["Exec(wc)"], "deny": ["Exec(sudo)"]},
+            }))
+            with mock.patch.object(child_mcp, "_home", return_value=home):
+                spec = child_mcp.write_job_mcp(job_dir, "devin-job", repo, "devin")
+            self.assertEqual(spec["argv"][0], "--config")
+            path = Path(spec["argv"][1])
+            config = json.loads(path.read_text())
+            self.assertEqual(config["hooks"], {"keep": True})
+            self.assertEqual(config["permissions"]["deny"], ["Exec(sudo)"])
+            allow = config["permissions"]["allow"]
+            self.assertEqual(allow[0], "Exec(wc)")
+            for rule in child_mcp.DEVIN_JOB_ALLOW:
+                self.assertEqual(allow.count(rule), 1, rule)
+            self.assertFalse([r for r in allow if r.startswith(("Exec(rm", "Exec(git push", "Exec(git commit"))])
+            self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+
+    def test_devin_job_config_tolerates_missing_user_config(self):
+        with tempfile.TemporaryDirectory() as temp:
+            with mock.patch.object(child_mcp, "_home", return_value=Path(temp) / "nohome"):
+                path = child_mcp.write_devin_job_config(Path(temp))
+            self.assertEqual(json.loads(path.read_text())["permissions"]["allow"], list(child_mcp.DEVIN_JOB_ALLOW))
 
 
 if __name__ == "__main__":

@@ -8,7 +8,7 @@ import subprocess
 from pathlib import Path
 
 WORKERS = ("grok", "claude", "codex", "cursor", "opencode", "omp", "pi", "agy", "devin", "mimo")
-PARENTS = frozenset({"grok", "codex", "claude", "cursor", "opencode", "omp", "pi", "agy"})
+PARENTS = frozenset({"grok", "codex", "claude", "cursor", "opencode", "omp", "pi", "agy", "devin"})
 
 # Missing harness file and missing keys are all false so pick cannot
 # invent a Grok/Claude child. `rig init` still writes PATH-based flags.
@@ -175,6 +175,8 @@ def _comm_parent(comm: str, pid: int) -> str:
         return "pi"
     if comm == "agy" or comm.startswith("agy-"):
         return "agy"
+    if comm == "devin" or comm.startswith("devin-"):
+        return "devin"
     if comm == "agent" or comm.startswith("agent-"):
         if "cursor-agent" in _ps_command(pid):
             return "cursor"
