@@ -32,6 +32,32 @@ def run_rig(repo: Path, *args: str, env: dict | None = None, stdin: str | None =
     )
 
 
+class ProjectLifecycleCli(unittest.TestCase):
+    def setUp(self):
+        self.td = tempfile.TemporaryDirectory()
+        self.repo = Path(self.td.name)
+        (self.repo / ".git").mkdir()
+        self.assertEqual(run_rig(self.repo, "init").returncode, 0)
+
+    def tearDown(self):
+        self.td.cleanup()
+
+    def test_off_on_preserves_harness_and_managed_block(self):
+        harness = self.repo / ".rig" / "harness.toml"
+        before = harness.read_text()
+        off = run_rig(self.repo, "off")
+        self.assertEqual(off.returncode, 0, off.stderr)
+        self.assertIn("enabled = false", harness.read_text())
+        self.assertNotIn("<!-- rig:start -->", (self.repo / "AGENTS.md").read_text())
+        self.assertEqual(run_rig(self.repo, "queue", "add", "blocked").returncode, 1)
+        self.assertEqual(run_rig(self.repo, "queue", "list").returncode, 0)
+        on = run_rig(self.repo, "on")
+        self.assertEqual(on.returncode, 0, on.stderr)
+        self.assertIn("enabled = true", harness.read_text())
+        self.assertIn("<!-- rig:start -->", (self.repo / "AGENTS.md").read_text())
+        self.assertIn("[workers]", before)
+
+
 class CliMemoryAndThread(unittest.TestCase):
     def setUp(self):
         self.td = tempfile.TemporaryDirectory()

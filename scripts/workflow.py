@@ -160,6 +160,9 @@ def main(argv=None) -> int:
     parser.add_argument("--include-terminal", action=argparse.BooleanOptionalAction, default=True)
     args = parser.parse_args(argv)
     repo = rig_jobs.repo_root(args.repo)
+    if args.cmd not in {"list", "show", "report"}:
+        import harness
+        harness.assert_project_enabled(repo)
     owner_session = args.owner_session
     token = args.owner_token
     try:

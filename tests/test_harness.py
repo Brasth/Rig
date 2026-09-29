@@ -140,6 +140,20 @@ class ParseAndPick(unittest.TestCase):
         self.assertTrue(flags)
         self.assertTrue(all(v == "false" for v in flags.values()))
 
+    def test_project_state_is_uninitialized_without_harness(self):
+        self.assertEqual(harness.project_state(self.repo)["state"], "uninitialized")
+
+    def test_legacy_harness_is_enabled_and_invalid_value_fails_closed(self):
+        path = harness.harness_path(self.repo)
+        _write_harness(self.repo, "[workers]\ngrok = true\n")
+        self.assertEqual(harness.project_state(self.repo)["state"], "enabled")
+        path.write_text("[project]\nenabled = false\n")
+        self.assertEqual(harness.project_state(self.repo)["state"], "disabled")
+        path.write_text("[project]\nenabled = invalid\n")
+        state = harness.project_state(self.repo)
+        self.assertEqual(state["state"], "disabled")
+        self.assertTrue(state["error"])
+
     def test_existing_file_missing_key_is_false(self):
         _write_harness(self.repo, 'parent = "pi"\n\n[workers]\npi = true\n')
         flags = harness.parse_harness(harness.harness_path(self.repo))["workers"]

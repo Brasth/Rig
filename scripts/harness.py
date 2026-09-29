@@ -37,9 +37,11 @@ def parse_harness(path: Path) -> dict:
         "routing": {"mode": "smart", "engine": "", "local_policy": "", "objective": ""},
         "orchestration": {"mode": "adaptive", "max_nodes": 12},
         "computer_use": {"enabled": False},
+        "project": {"state": "uninitialized", "enabled": False, "error": ""},
     }
     if not path.is_file():
         return out
+    out["project"] = {"state": "enabled", "enabled": True, "error": ""}
     try:
         text = path.read_text(errors="replace")
     except OSError:
@@ -60,6 +62,16 @@ def parse_harness(path: Path) -> dict:
         val = val.split("#", 1)[0].strip()
         if section == "computer-use" and key == "enabled":
             out["computer_use"]["enabled"] = _toml_exact_true(val)
+            continue
+        if section == "project" and key == "enabled":
+            raw_enabled = val.strip()
+            if raw_enabled == "true":
+                out["project"] = {"state": "enabled", "enabled": True, "error": ""}
+            elif raw_enabled == "false":
+                out["project"] = {"state": "disabled", "enabled": False, "error": ""}
+            else:
+                out["project"] = {"state": "disabled", "enabled": False,
+                                  "error": "invalid [project] enabled value"}
             continue
         val = val.strip('"')
         if section == "" and key == "parent":
@@ -96,6 +108,23 @@ def parse_harness(path: Path) -> dict:
                 n = 12
             out["orchestration"]["max_nodes"] = max(1, n)
     return out
+
+
+DISABLED_MESSAGE = "Rig is disabled for this project; run rig on"
+
+
+def project_state(repo_or_path) -> dict:
+    path = Path(repo_or_path)
+    return parse_harness(path if path.name == "harness.toml" else harness_path(path))["project"]
+
+
+def assert_project_enabled(repo_or_path) -> None:
+    state = project_state(repo_or_path)
+    if state["state"] == "uninitialized":
+        raise ValueError("Rig is uninitialized for this project; run rig init")
+    if not state["enabled"]:
+        detail = f" ({state['error']})" if state.get("error") else ""
+        raise ValueError(f"{DISABLED_MESSAGE}{detail}")
 
 
 def preferred_parent(repo: Path) -> str:

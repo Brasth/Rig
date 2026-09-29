@@ -1,3 +1,7 @@
+[project]
+# Repository-shared Rig lifecycle. Existing harnesses without this section remain enabled.
+enabled = true
+
 [routing]
 # Smart is also the default when this section is omitted. Legacy restores the old ladder.
 mode = "smart"

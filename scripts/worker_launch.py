@@ -258,6 +258,8 @@ def _spawn_wrapper(argv: list[str], *, cwd: str, env: dict[str, str], log) -> su
 
 
 def launch(repo, **kwargs) -> dict:
+    import harness
+    harness.assert_project_enabled(repo)
     unknown = sorted(set(kwargs) - LAUNCH_KEYS)
     if unknown:
         raise LaunchError(f"unknown launch argument: {unknown[0]}")

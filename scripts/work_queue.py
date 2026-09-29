@@ -755,6 +755,9 @@ def main() -> int:
     parser.add_argument("--worker", default="")
     args = parser.parse_args()
     repo = rig_jobs.repo_root(args.repo)
+    if args.cmd != "list":
+        import harness
+        harness.assert_project_enabled(repo)
     try:
         files = json.loads(args.files_json) if args.files_json is not None else args.files
         auth = {"reservation_id": args.reservation_id or os.environ.get("RIG_RESERVATION_ID", ""),

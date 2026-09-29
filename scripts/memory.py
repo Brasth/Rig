@@ -11,6 +11,7 @@ if str(HERE) not in sys.path:
     sys.path.insert(0, str(HERE))
 
 import jobs as rig_jobs  # noqa: E402
+import harness  # noqa: E402
 
 MAX_LINES = 120
 MAX_FACT = 240
@@ -90,6 +91,7 @@ def read_memory(repo: Path) -> str:
 
 
 def write_memory(repo: Path, text: str) -> None:
+    harness.assert_project_enabled(repo)
     path = memory_path(repo)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(path.name + ".tmp")
@@ -144,8 +146,12 @@ def main() -> int:
     if not normalize_fact(fact):
         print("usage: rig memory add \"standing fact\"", file=sys.stderr)
         return 2
-    print(add_memory(repo, fact))
-    return 0
+    try:
+        print(add_memory(repo, fact))
+        return 0
+    except ValueError as error:
+        print(str(error), file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":

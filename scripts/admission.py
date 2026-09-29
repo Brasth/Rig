@@ -1183,6 +1183,7 @@ def reserve(repo, *, job_id="", worker="", role="worker", model="", files=None,
 
 def activate(repo, *, reservation_id, attempt_id, owner_token, job_id, worker, files,
              access, owner=None, owner_session="", process=None, native_agent_id=""):
+    harness.assert_project_enabled(repo)
     with transaction(repo) as root:
         record, actor = _auth(root, reservation_id, attempt_id, owner_token, owner, owner_session)
         _, canonical = canonical_files(root, files)

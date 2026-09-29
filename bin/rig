@@ -482,6 +482,65 @@ ensure_harness() {
   fi
 }
 
+project_state() {
+  local harness="$(harness_path)"
+  if [[ ! -f "$harness" ]]; then printf '%s\n' uninitialized; return; fi
+  python3 "$(py_script harness.py)" >/dev/null 2>&1 || true
+  local value
+  value="$(awk 'BEGIN{s=""} /^\[project\]/{s="project";next} /^\[/{s=""} s=="project" && $0 ~ /^[[:space:]]*enabled[[:space:]]*=/ {sub(/^[^=]*=/,""); sub(/[[:space:]]*#.*/,""); gsub(/^[[:space:]]+|[[:space:]]+$/,""); print; exit}' "$harness")"
+  case "$value" in ""|true) printf '%s\n' enabled ;; false) printf '%s\n' disabled ;; *) printf '%s\n' disabled ;; esac
+}
+
+project_guard() {
+  local state="$(project_state)"
+  if [[ "$state" == "uninitialized" ]]; then echo "Rig is uninitialized for this project; run rig init" >&2; return 1; fi
+  if [[ "$state" != "enabled" ]]; then echo "Rig is disabled for this project; run rig on" >&2; return 1; fi
+}
+
+cmd_project_toggle() {
+  local want="$1" root harness agents state
+  root="$(repo_root)"; harness="$root/.rig/harness.toml"; agents="$root/AGENTS.md"
+  [[ -f "$harness" ]] || { echo "Rig is uninitialized for this project; run rig init" >&2; return 1; }
+  state="$(project_state)"
+  if [[ "$want" == off && "$state" == disabled ]]; then echo "Rig is already disabled for this project. Start a new parent thread."; return; fi
+  if [[ "$want" == on && "$state" == enabled ]]; then echo "Rig is already enabled for this project. Start a new parent thread."; return; fi
+  if [[ "$want" == off ]]; then
+    if python3 "$(py_script admission.py)" list --repo "$root" 2>/dev/null | grep -Eq '"(stage|status)": "(reserved|running|verifying|reviewing|unconfirmed|cancel)' ; then
+      echo "rig off: active ownership blocks disabling" >&2; return 1
+    fi
+    python3 - "$harness" <<'PY'
+import os,sys,tempfile
+p=sys.argv[1]; s=open(p).read();
+if '[project]' not in s: s='[project]\nenabled = false\n\n'+s
+elif 'enabled' in s[s.index('[project]'):s.find('\n[',s.index('[project]')) if s.find('\n[',s.index('[project]'))>=0 else len(s)]:
+ a=s.index('[project]'); b=s.find('\n[',a+1); b=len(s) if b<0 else b; part=s[a:b]; import re; s=s[:a]+re.sub(r'(?m)^\s*enabled\s*=.*$', 'enabled = false', part)+s[b:]
+else: s=s.replace('[project]','[project]\nenabled = false',1)
+fd,tmp=tempfile.mkstemp(dir=os.path.dirname(p)); os.write(fd,s.encode()); os.close(fd); os.replace(tmp,p)
+PY
+    if [[ -f "$agents" ]]; then python3 - "$agents" <<'PY'
+import os,re,sys,tempfile
+p=sys.argv[1]; s=open(p).read(); s=re.sub(r'<!-- rig:start -->.*?<!-- rig:end -->\n?', '', s, count=1, flags=re.S)
+fd,tmp=tempfile.mkstemp(dir=os.path.dirname(p)); os.write(fd,s.encode()); os.close(fd); os.replace(tmp,p)
+PY
+    fi
+    echo "Rig disabled for this project. Start a new parent thread."; return
+  fi
+  cmd_init --patch-agents
+  python3 - "$harness" <<'PY'
+import os,re,sys,tempfile
+p=sys.argv[1]; s=open(p).read();
+if '[project]' not in s: s='[project]\nenabled = true\n\n'+s
+else:
+ a=s.index('[project]'); b=s.find('\n[',a+1); b=len(s) if b<0 else b; part=s[a:b]; s=s[:a]+re.sub(r'(?m)^\s*enabled\s*=.*$', 'enabled = true', part)+s[b:]
+fd,tmp=tempfile.mkstemp(dir=os.path.dirname(p)); os.write(fd,s.encode()); os.close(fd); os.replace(tmp,p)
+PY
+  rig_set_toml_key "$harness" "project" "enabled" "true"
+  # The first init intentionally preserves a disabled project's missing block.
+  # Re-run after committing enabled=true so the canonical block is restored.
+  cmd_init --patch-agents
+  echo "Rig enabled for this project. Start a new parent thread."
+}
+
 cmd_init() {
   local patch_agents=1 patch_claude=0 arg
   for arg in "$@"; do
@@ -602,7 +661,7 @@ cmd_init() {
     done < "$frag_file"
   fi
 
-  if [[ "$patch_agents" -eq 1 ]]; then
+  if [[ "$patch_agents" -eq 1 && "$(project_state)" != "disabled" ]]; then
     local agents="$root/AGENTS.md"
     local block action
     IFS= read -r -d '' block <<'EOF' || true
@@ -685,6 +744,8 @@ EOF
       action="wrote"
     fi
     echo "$action $agents"
+  elif [[ "$patch_agents" -eq 1 ]]; then
+    echo "keep $root/AGENTS.md (Rig project disabled)"
   fi
 
   if [[ "$patch_claude" -eq 1 ]]; then
@@ -782,6 +843,7 @@ cmd_doctor() {
   echo "Rig doctor"
   echo "  RIG_HOME: $dest"
   echo "  repo:     $root"
+  echo "  project:  $(project_state)"
   if [[ -f "$harness" ]]; then
     echo "  harness:  $harness"
   else
@@ -966,6 +1028,7 @@ cmd_doctor() {
 cmd_status() {
   local live pref name effs jobs
   parse_harness "$(harness_path)"
+  echo "project: $(project_state)"
   live="$(live_parent)"
   pref="$HARNESS_PARENT"
   effs=""
@@ -1490,6 +1553,11 @@ main() {
     python3 "$(rig_source_root)/scripts/ui_install.py" transaction "$(rig_home)" "$(rig_source_root)" "$repo_arg" bash "${BASH_SOURCE[0]}" "$cmd" "$@"
     return $?
   fi
+  case "$cmd" in
+    on) cmd_project_toggle on; return ;;
+    off) cmd_project_toggle off; return ;;
+  esac
+  case "$cmd" in init|setup|status|doctor|jobs|tui|memory|workflows|workflow|queue|routing|billing|help|-h|--help|"") ;; *) project_guard || return ;; esac
   case "$cmd" in
     ui) python3 "$(py_script rig_ui.py)" "$@" ;;
     uninstall) python3 "$(py_script ui_install.py)" "$@" ;;

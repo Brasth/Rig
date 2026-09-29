@@ -1886,6 +1886,15 @@ def call_tool(name: str, args: dict, on_tick=None, *, wait_paths: list[Path] | N
             who = "child" if child else "parent"
             return _err(f"{name} is not a {who} tool")
         repo = _bound_child_repo(args) if child else _repo(args)
+        if not child:
+            state = rig_harness.project_state(repo)
+            readonly = {"rig_status", "rig_jobs", "rig_job_show", "rig_job_log", "rig_memory",
+                        "rig_queue_list", "rig_workflows", "rig_workflow_show", "rig_workflow_report",
+                        "rig_routing_report", "rig_billing_report"}
+            if state["state"] == "uninitialized" and name not in readonly:
+                return _err("Rig is uninitialized for this project; run rig init")
+            if not state["enabled"] and name not in readonly:
+                return _err(rig_harness.DISABLED_MESSAGE)
         if child:
             job_dir = child_job_dir(repo)
             blocked = rig_child_mcp.require_inbox(job_dir, name)

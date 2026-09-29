@@ -981,3 +981,6 @@ Terminal companion: `rig setup --shell-ui`, `rig ui enable|disable|sessions`, `r
 Setup/configuration remains `rig setup`, `rig update`, `rig init`, `rig doctor`, `rig status`, `rig use`, `rig workers`, `rig prune`. Memory: `rig memory` / `rig memory add "standing fact"`. Queue: `rig queue add|list|cancel|claim|unclaim|spawned`. Diagram: `rig diagram PATH [--ascii] [--popup] [--output PATH]` (terminal Mermaid text; see [diagram preview](#diagram-preview) and [diagram-preview.md](diagram-preview.md)).
 
 `rig run "prompt"` exists for diagnostics; normal work starts with a prompt in the parent CLI. Never spawn Sol, Astra, or Fable as a child. Opus is allowed.
+# Repository lifecycle
+
+`rig on` and `rig off` are repository-shared lifecycle switches stored in `.rig/harness.toml` as `[project] enabled = true|false`. Older harnesses without this key remain enabled. Off is idempotent, preserves jobs, workflows, queue, memory, evidence, skills and worker/routing settings, and refuses if active ownership exists. Pending queue entries do not block it. On restores the managed Rig instructions and is idempotent. Start a new parent thread after either command. This is not the same as worker flags, computer-use/BrowserSkill capability flags, or machine-wide uninstall.

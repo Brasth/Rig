@@ -998,6 +998,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--repo", default=".")
     args = parser.parse_args(argv)
     repo = Path(args.repo).resolve()
+    if args.command not in {"status", "doctor"}:
+        import harness
+        harness.assert_project_enabled(repo)
     if args.command == "setup":
         return cmd_setup(repo)
     if args.command == "on":
