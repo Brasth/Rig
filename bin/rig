@@ -24,7 +24,8 @@ usage: rig <command> [args]
   uninstall [--dry-run] [--repo PATH]
   update
   init [--patch-agents|--no-patch-agents] [--patch-claude]
-  doctor
+  doctor [--task coding|research|browser|computer-use] [--parent NAME] [--model MODEL] [--json] [--smoke]
+    Task doctor is offline; --smoke checks only a temporary child MCP fixture.
   computer-use [status|setup|on|off|doctor|unlock|serve]
   browser-skill [status|setup|on|off|doctor]
   status
@@ -855,6 +856,10 @@ doctor_print_update() {
 }
 
 cmd_doctor() {
+  if [[ "$#" -gt 0 ]]; then
+    PYTHONDONTWRITEBYTECODE=1 python3 "$(py_script doctor.py)" --repo "$(repo_root)" "$@"
+    return $?
+  fi
   local dest root harness live pref runw ver
   dest="$(rig_home)"
   root="$(repo_root)"

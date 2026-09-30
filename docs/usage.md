@@ -213,6 +213,81 @@ Install already ran `rig setup`. Re-run `rig setup` after you update Rig (`rig u
 3. After setup, Grok gets a **bottom status line** with QUEUE. Restart Grok once if you do not see it. agy: `/statusline` if the row is hidden. OMP/Pi: widget under the editor. OpenCode: sidebar/footer from `tui.json` (file-path plugin). Codex: no native Rig HUD panel; `/plugins` install **Rig Queue**, then `/hooks` trust for parking. The optional [terminal companion](#optional-terminal-companion) adds the status row and F8/F9 controls.
 4. Pi `/rig` also needs `pi install npm:pi-mcp-adapter` (setup writes `mcp.json` but does not install the package).
 
+### Task-aware doctor
+
+Use `rig doctor --task coding --parent codex` for a concise, offline readiness
+report, or `--json` for the versioned structured report. Bare `rig doctor`
+retains its existing full installation inventory (including its existing update
+and optional backend checks). Task doctor does not run those probes.
+
+```sh
+rig doctor --task coding --parent codex
+rig doctor --task research --research-source docs/background.md --json
+rig doctor --task browser --parent codex
+rig doctor --task computer-use --parent codex
+rig doctor --task coding --parent opencode --model openai/gpt-6-luna --json
+rig doctor --task coding --smoke
+```
+
+`--capability` is an alias for `--task`; `--json` alone defaults to coding.
+The parent is selected by `--parent`, then detected live parent, then the
+preferred harness value. Selecting a parent does not start or switch it.
+An observed Cursor Desktop parent does not need the separate `cursor-agent`
+worker CLI; offline Desktop presence stays unverified.
+Research source flags are repeatable and validate existing readable,
+repository-contained files without retaining their contents. This research
+check covers delegation and requires smart routing; acquiring new sources
+remains parent work.
+
+The parent-only MCP tool `rig_doctor` accepts `repo`, `task`, `parent`, `model`,
+`research_sources`, and `smoke`, and returns the same `schema_version: 1` report
+in `structuredContent` plus concise text. It remains available to diagnose
+uninitialized or disabled projects, and is never exposed to children.
+
+Read evidence per check:
+
+- `ready`: that particular local check passed. `local_prerequisites: ready`
+  does not certify provider execution or the user's task
+- `configured-host-unverified`: the selected parent MCP entry/launcher or
+  optional backend is configured, but the actual host has not been verified
+- `optional-disabled`: machine opt-in was unset/declined or the project backend
+  is off. Neither browser nor computer-use is required for coding
+- `restart-needed`: this loaded MCP server sees changed runtime sources or its
+  selected parent's MCP entry since startup; fully restart the parent/MCP
+- `missing` / `disabled`: a required executable, project, MCP wiring, routing
+  configuration, or research source needs attention
+- `missing-evidence`: model/auth evidence is unavailable, empty, failed, stale,
+  or expired. Cache freshness is explicit; no catalog refresh is attempted
+- `unavailable`: the requested exact model selector is absent from a fresh,
+  successful cached catalog. A selector in that cache still does not prove auth
+
+Static MCP checks use Rig's installed config paths (including `GROK_HOME`),
+[Cursor project/global configuration](https://cursor.com/docs/sdk/typescript),
+and [Claude CLI local/project/user precedence](https://code.claude.com/docs/en/mcp#scope-hierarchy-and-precedence).
+Host-only command-line overrides, managed config and approval/trust state are
+not inspected. A request for a different repo than this server's startup repo
+keeps config freshness unverified rather than inventing a matching snapshot.
+
+Calling `rig_doctor` from the matching detected parent proves that Rig MCP
+handled the call. A CLI config check cannot prove this. Neither route claims
+that provider credentials work: auth stays `missing-evidence`, so an otherwise
+healthy report remains `configured-host-unverified`. No credential stores are probed and no credential values are printed. Worker flags are preserved; configured workers are reported without
+launching them, and their failures do not block a parent-only coding setup.
+
+`--smoke` (MCP `smoke: true`) explicitly opts into a local fixture only: an
+8-second-bounded Python child MCP process performs initialize, scoped tools/list,
+and the existing inbox handshake, then checks the persisted handshake evidence.
+Its isolated temporary repo/home are removed afterward. It does not call a
+provider, run a selected CLI, edit the user's project, open a browser, connect an
+extension, grant permissions, log in, install anything, or change opt-in.
+A passing fixture does not upgrade the real host or provider to ready.
+
+Task doctor exits 0 when only unverified evidence remains; it is not a
+live-execution success code. It exits 1 for a required missing, disabled,
+unavailable, restart-needed, optional-disabled, or failed smoke check; malformed
+arguments exit 2. JSON `checks` and `status` preserve the reason. MCP uses
+`isError` only for invalid calls; readiness findings are in the report.
+
 ### What `rig doctor` should look like
 
 `rig doctor` reports the installed root/version, repository configuration, live/preferred parent, effective workers, skill links, cached model catalogs, and MCP setup. Missing model catalog output is not a model probe or a worker failure.

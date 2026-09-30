@@ -32,6 +32,9 @@ import child_mcp as rig_child_mcp  # noqa: E402
 import workflow as rig_workflow  # noqa: E402
 import coordination as rig_coordination  # noqa: E402
 import routing_domains  # noqa: E402
+import doctor as rig_doctor  # noqa: E402
+
+_DOCTOR_HOST_SNAPSHOT = rig_doctor.runtime_snapshot()
 
 PICK_ROLES = ("explore", "mini", "bulk", "implement", "hard", "review", "verify", "stay")
 JOB_WORKERS = ("grok", "codex", "claude", "cursor", "opencode", "omp", "pi", "agy", "devin", "mimo", "parent")
@@ -482,6 +485,20 @@ TOOLS = [
             "job_id": {"type": "string"}, "task": {"type": "string"},
             "arm": {"type": "string", "enum": ["rig", "baseline"]},
         }, "required": ["id", "job_id", "task", "arm"]},
+    },
+    {
+        "name": "rig_doctor",
+        "annotations": {"readOnlyHint": True, "destructiveHint": False,
+                        "idempotentHint": True, "openWorldHint": False},
+        "description": "Parent-only task readiness. Offline config/cache evidence, missing auth evidence and stale MCP detection. Optional smoke only tests a temporary child inbox fixture; never invokes providers, browsers, installers, grants or user repo writes.",
+        "inputSchema": {"type": "object", "properties": {
+            "repo": {"type": "string"},
+            "task": {"type": "string", "enum": list(rig_doctor.TASKS), "default": "coding"},
+            "parent": {"type": "string", "enum": sorted(rig_harness.PARENTS)},
+            "model": {"type": "string", "description": "Exact selector to check against cached model evidence only."},
+            "research_sources": {"type": "array", "items": {"type": "string"}},
+            "smoke": {"type": "boolean", "default": False},
+        }},
     },
     {
         "name": "rig_status",
@@ -1419,6 +1436,7 @@ TOOL_ORDER = (
     "rig_jobs",
     "rig_pick",
     "rig_status",
+    "rig_doctor",
     "rig_cu_serve",
     "rig_cu_capture",
     "rig_cu_act",
@@ -1917,7 +1935,7 @@ def call_tool(name: str, args: dict, on_tick=None, *, wait_paths: list[Path] | N
         repo = _bound_child_repo(args) if child else _repo(args)
         if not child:
             state = rig_harness.project_state(repo)
-            readonly = {"rig_status", "rig_jobs", "rig_job_show", "rig_job_log", "rig_memory",
+            readonly = {"rig_doctor", "rig_status", "rig_jobs", "rig_job_show", "rig_job_log", "rig_memory",
                         "rig_queue_list", "rig_workflows", "rig_workflow_show", "rig_workflow_report",
                         "rig_routing_report", "rig_billing_report"}
             if state["state"] == "uninitialized" and name not in readonly:
@@ -2133,6 +2151,14 @@ def call_tool(name: str, args: dict, on_tick=None, *, wait_paths: list[Path] | N
                     **_review_args(args), **_assessment_args(args), **_domain_args(args),
                 )
             )
+        if name == "rig_doctor":
+            report = rig_doctor.build_report(repo, task=_optional_string(args, "task") or "coding",
+                                            parent=_optional_string(args, "parent"),
+                                            model=_optional_string(args, "model"),
+                                            research_sources=args.get("research_sources"),
+                                            smoke=args.get("smoke", False),
+                                            host_snapshot=_DOCTOR_HOST_SNAPSHOT)
+            return {**_ok(rig_doctor.format_report(report)), "structuredContent": report}
         if name == "rig_status":
             return _ok(rig_harness.format_status(repo, live=rig_harness.live_parent()))
         if name == "rig_routing_report":
