@@ -282,7 +282,7 @@ def _load_owner_credentials_artifact(path):
 
 
 def resolve_owner_credentials(repo, credentials_path, *, job_id=""):
-    """Load a private owner-credentials.json path into the ownership triple.
+    """Load a private receipt's credentials and validated initiating session.
 
     Validates the canonical job artifact in this repository. Never prints the token.
     """
@@ -300,21 +300,37 @@ def resolve_owner_credentials(repo, credentials_path, *, job_id=""):
     if not reservation_id or not attempt_id or not owner_token:
         raise AdmissionError("owner credentials artifact is malformed")
     record = match_credentials(root, reservation_id, attempt_id, owner_token, job_id=job)
+    saved_owner, current_owner = payload.get("owner"), record.get("owner")
+    if not isinstance(saved_owner, dict) or not isinstance(current_owner, dict):
+        raise AdmissionError("owner credentials artifact has no initiating owner context")
+    if not _same_actor(saved_owner, current_owner):
+        raise AdmissionError("owner credentials artifact initiating owner context is stale or mismatched")
+    for owner in (saved_owner, current_owner):
+        identity = initiating_identity(owner)
+        if not identity or owner.get("initiating_identity") not in (None, "", identity):
+            raise AdmissionError("owner credentials artifact initiating identity is inconsistent")
     return {
         "job_id": job,
         "reservation_id": record.get("reservation_id") or reservation_id,
         "attempt_id": record.get("attempt_id") or attempt_id,
         "owner_token": owner_token,
         "credentials_path": str(path),
+        "owner_session": current_owner.get("session_id") or "",
     }
 
 
 def resolve_ownership(repo, *, reservation_id="", attempt_id="", owner_token="", owner_session="",
-                      credentials_path="", job_id=""):
-    """Accept either a raw ownership triple or a validated credentials_path."""
+                      credentials_path="", job_id="", restore_owner_session=True):
+    """Resolve credentials; ordinary operations also resume the saved session.
+
+    Replacement-parent recovery opts out of session restoration: its separate
+    host-evidence gate authenticates the receipt but audits the replacement actor.
+    """
     path = credentials_path if isinstance(credentials_path, str) else ""
     if path.strip():
         loaded = resolve_owner_credentials(repo, path, job_id=job_id)
+        if restore_owner_session and owner_session and owner_session != loaded["owner_session"]:
+            raise AdmissionError("credentials_path does not match supplied owner_session; use the original saved owner context")
         supplied = {
             "reservation_id": reservation_id if isinstance(reservation_id, str) else "",
             "attempt_id": attempt_id if isinstance(attempt_id, str) else "",
@@ -331,7 +347,7 @@ def resolve_ownership(repo, *, reservation_id="", attempt_id="", owner_token="",
             "reservation_id": loaded["reservation_id"],
             "attempt_id": loaded["attempt_id"],
             "owner_token": loaded["owner_token"],
-            "owner_session": owner_session or "",
+            "owner_session": loaded["owner_session"] if restore_owner_session else owner_session or "",
         }
     return {
         "reservation_id": reservation_id or "",
@@ -502,7 +518,10 @@ def _auth(root, reservation_id, attempt_id, owner_token, owner=None, owner_sessi
     record = match_credentials(root, reservation_id, attempt_id, owner_token)
     actor = _owner(owner, owner_session, record["owner"]["kind"])
     if not _same_actor(record["owner"], actor):
-        raise AdmissionError("initiating owner session mismatch")
+        raise AdmissionError(
+            "initiating owner session mismatch; use the saved credentials_path to restore its validated session, "
+            "or the original owner's exact credentials and session. Do not substitute a different owner"
+        )
     return record, actor
 
 
@@ -1569,6 +1588,74 @@ def mutation_guard(repo, job_dir, operation, *, reservation_id="", attempt_id=""
                                 rationale=accepted.get("rationale") or "parent accepted completion")
 
 
+def ownership_next_action(record, *, execution_status="", executor_kind="", verification=None):
+    """Read-only guidance, not recovery authority or proof of completion.
+
+    Keep the required evidence explicit so reporting held scope is not mistaken
+    for releasing it. Every suggested mutation still goes through normal gates.
+    """
+    if not record or record.get("stage") == "released":
+        return None
+    kind = executor_kind or (record.get("owner") or {}).get("kind") or "unknown"
+    status = execution_status or record.get("execution_status") or "unknown"
+    assessment = verification or {}
+    if status == "ask":
+        return None
+    if record.get("operation") or assessment.get("active_check"):
+        return {"kind": "inspect_verification", "tool": "rig_job_show", "report_only": True,
+                "requires": ["verification executor completion"],
+                "instruction": "Inspect the active or interrupted verification operation with rig_job_show; "
+                               "confirm it stopped before authenticated check recovery. Files remain held"}
+    if record.get("legacy") and not record.get("reservation_id"):
+        queue = bool(record.get("queue_id"))
+        return {"kind": "reconcile_legacy", "tool": "rig_job_reconcile", "report_only": False,
+                "action": "release" if queue else "adopt",
+                "requires": ["confirmed stopped or absent execution", "rationale", "declared worker/access/files for adoption"],
+                "instruction": ("After confirming the legacy execution stopped or never started, use rig_job_reconcile "
+                                "with apply=true, action=release, queue_id and rationale. " if queue else
+                                "After confirming the legacy execution stopped, use rig_job_reconcile with apply=true, "
+                                "action=adopt, job id, worker/access/files and rationale; then close with the returned credentials. ")
+                               + "No protected attempt exists to authenticate rig_job_finish; never infer completion from age"}
+    if record.get("stage") == "reserved" and not record.get("launch_started") and not record.get("process"):
+        return {"kind": "resolve_unlaunched_owner", "tool": "rig_job_reconcile", "report_only": True,
+                "requires": ["original owner credentials or proof the unlaunched owner is dead"],
+                "instruction": "Inspect the unlaunched owner once with rig_job_reconcile. The owning parent may "
+                               + ("return the unconsumed claim with rig_queue_unclaim" if record.get("queue_id") else
+                                  "explicitly close the unlaunched attempt with rig_job_close")
+                               + " using its exact credentials; apply reconciliation only for a provably dead unlaunched owner. "
+                               "No task completion is available for rig_job_finish; unknown ownership stays protected"}
+    if record.get("stopped"):
+        if status in {"fail", "timeout", "cancelled"} or record.get("legacy"):
+            return {"kind": "close_unverified", "tool": "rig_job_close", "report_only": False,
+                    "requires": ["saved credentials_path or exact owner credentials", "rationale"],
+                    "instruction": "Use rig_job_close with saved credentials_path and rationale to release "
+                                   "this confirmed-stopped scope without acceptance. If the receipt is lost, "
+                                   + ("rig_job_recover_wrapper_receipt can recover an intact wrapper receipt"
+                                      if kind == "wrapper" else "the original owner context or supported recovery is required; do not guess credentials")}
+        if status == "ok":
+            if (assessment.get("state") == "verified" and assessment.get("acceptance") == "accepted" and assessment.get("next") == "review"
+                    and assessment.get("freshness") == "current"):
+                return {"kind": "independent_review", "tool": "rig_pick", "report_only": True,
+                        "requires": ["current accepted writer snapshot", "writer ownership credentials"],
+                        "instruction": "Pick an independent reviewer using the accepted writer snapshot and "
+                                       "saved ownership credentials; the retained scope protects the review handoff"}
+            return {"kind": "verify_and_accept", "tool": "rig_job_show", "report_only": True,
+                    "requires": ["saved credentials_path or exact owner credentials", "current snapshot", "complete check manifest"],
+                    "instruction": "Inspect the current snapshot with rig_job_show, then use rig_job_requirements, "
+                                   "rig_job_check and rig_job_accept with saved credentials_path. Execution success alone does not release files"}
+        return {"kind": "inspect_execution", "tool": "rig_job_show", "report_only": True,
+                "requires": ["recorded terminal outcome"],
+                "instruction": "Inspect this stopped attempt's recorded outcome with rig_job_show before choosing acceptance or explicit close"}
+    if record.get("needs_reconciliation") or status in {"unconfirmed", "cancelled", "cancel_requested"}:
+        source = "owning host's terminal task result" if kind in {"parent", "native_child"} else "observed isolated worker and descendant termination"
+        return {"kind": "confirm_completion", "tool": "rig_job_finish", "report_only": False,
+                "requires": ["saved credentials_path or exact owner credentials", source],
+                "instruction": "Obtain the " + source + ", then authenticate rig_job_finish. "
+                               "rig_job_reconcile is report-only by default; do not repeat it without new evidence. "
+                               "If completion or ownership is unavailable, keep protection and use the owning host or a supported recovery path"}
+    return None
+
+
 def reconcile(repo, *, job_id="", queue_id="", apply=False, action="report", owner=None,
               owner_session="", worker="", access="write", files=None, rationale="", completion=None,
               reservation_id="", attempt_id="", owner_token=""):
@@ -1603,7 +1690,9 @@ def reconcile(repo, *, job_id="", queue_id="", apply=False, action="report", own
             elif _process_state(record.get("owner")) == "unknown":
                 record.update(needs_reconciliation=True,
                               reconciliation_reason="unlaunched owner liveness is unknown; protection remains held")
-        return {"items": rows, "applied": 0}
+        for record in rows:
+            record["next_action"] = ownership_next_action(record)
+        return {"items": rows, "applied": 0, "report_only": True}
     with transaction(root):
         if action == "report":
             if (completion or {}).get("checks_stopped") is True:
@@ -1625,6 +1714,7 @@ def reconcile(repo, *, job_id="", queue_id="", apply=False, action="report", own
                     _save(root, record)
             result = reconcile(root, job_id=job_id, queue_id=queue_id)
             result["applied"] = before - sum(row.get("stage") != "released" for row in _records(root))
+            result["report_only"] = False
             return result
         if not (queue_id or job_id) or not rationale.strip():
             raise AdmissionError("legacy adoption/release requires job or queue id and rationale")

@@ -969,6 +969,10 @@ _JOB_REF_PROPERTIES = {"id": {"type": "string"}, "repo": {"type": "string"}}
 _OWNERSHIP_PROPERTIES = {key: {"type": "string"} for key in
                          ("reservation_id", "attempt_id", "owner_token", "owner_session",
                           "credentials_path")}
+_OWNERSHIP_PROPERTIES["credentials_path"]["description"] = (
+    "Saved canonical private receipt. Restores its validated original owner session as well as "
+    "attempt credentials; an explicitly conflicting owner_session is rejected. Does not transfer ownership."
+)
 TOOLS.extend([
     {
         "name": "rig_job_requirements",
@@ -1057,6 +1061,8 @@ TOOLS.extend([
      "inputSchema": {"type": "object", "properties": {
          **_JOB_REF_PROPERTIES, **_OWNERSHIP_PROPERTIES, "rationale": {"type": "string"},
          "apply": {"type": "boolean", "default": False},
+         "credentials_path": {"type": "string", "description": "Validates the original owner's saved receipt without replacing the current recovery caller's identity."},
+         "owner_session": {"type": "string", "description": "Replacement caller session for the recovery audit; defaults to the current caller, not the original receipt owner."},
      }, "required": ["id", "rationale"]}},
     {"name": "rig_job_recover_parent_write",
      "annotations": {
@@ -1616,7 +1622,7 @@ def _workflow_response(obj, *, include_secrets=False) -> dict:
     return {**_ok(json.dumps(safe, indent=2, default=str)), "structuredContent": obj if include_secrets else safe}
 
 
-def _ownership_args(args: dict, repo: Path, *, job_id: str = "") -> dict:
+def _ownership_args(args: dict, repo: Path, *, job_id: str = "", restore_owner_session: bool = True) -> dict:
     import admission as rig_admission
 
     return rig_admission.resolve_ownership(
@@ -1627,6 +1633,7 @@ def _ownership_args(args: dict, repo: Path, *, job_id: str = "") -> dict:
         owner_session=_optional_string(args, "owner_session"),
         credentials_path=_optional_string(args, "credentials_path"),
         job_id=job_id,
+        restore_owner_session=restore_owner_session,
     )
 
 
@@ -1727,7 +1734,7 @@ def _compact_rows(listing: list[dict], terminal_limit: int, *, repo: Path, cache
     for job in active + terminal[:terminal_limit]:
         row = {key: job.get(key, False if key == "model_inferred" else "") for key in keys}
         projection = rig_jobs.project_job(job, repo, refresh=True, cache=cache)
-        for key in ("verification_summary", "display_state", "display_reason", "display_action", "display_model", "independence", "review_completed"):
+        for key in ("verification_summary", "display_state", "display_reason", "display_action", "display_model", "independence", "review_completed", "ownership_next_action"):
             row[key] = projection[key]
         if job.get("reservation"):
             row["reservation"] = {key: job["reservation"].get(key) for key in
@@ -2242,7 +2249,8 @@ def call_tool(name: str, args: dict, on_tick=None, *, wait_paths: list[Path] | N
                 return _err("rig_job_recover_cancelled needs id")
             result = rig_jobs.recover_cancelled_job(
                 repo, job_id, rationale=_optional_string(args, "rationale"),
-                apply=args.get("apply", False), **_job_ownership_args(args, repo),
+                apply=args.get("apply", False),
+                **_ownership_args(args, repo, job_id=job_id, restore_owner_session=False),
             )
             return {**_ok(json.dumps(result, indent=2)), "structuredContent": result}
         if name == "rig_job_recover_parent_write":

@@ -692,6 +692,59 @@ class AdmissionTests(unittest.TestCase):
             rationale=options.pop("rationale", "audited break-glass close of stopped wrapper"),
             **options)
 
+    def test_receipt_restores_saved_session_without_transferring_owner(self):
+        lease, path, original = self.stopped_wrapper()
+        before = admission.get_reservation(self.repo, lease["reservation_id"])
+        with mock.patch.dict(os.environ, {"RIG_OWNER_SESSION": "replacement-session"}):
+            loaded = admission.resolve_ownership(self.repo, credentials_path=str(path), job_id="wrap")
+            self.assertEqual(loaded["owner_session"], original["session_id"])
+            owned = admission.assert_owned(self.repo, **loaded)
+            self.assertEqual(owned, before)
+            closed = admission.release(self.repo, rationale="Close confirmed-stopped work", **loaded)
+        self.assertEqual(closed["stage"], "released")
+        self.assertEqual(closed["owner"], before["owner"])
+        self.assertNotIn(lease["owner_token"], json.dumps(closed))
+
+    def test_receipt_rejects_explicit_session_conflict_and_stale_owner_context(self):
+        lease, path, original = self.stopped_wrapper()
+        before = admission.get_reservation(self.repo, lease["reservation_id"])
+        with self.assertRaisesRegex(admission.AdmissionError, "supplied owner_session") as mismatch:
+            admission.resolve_ownership(self.repo, credentials_path=str(path), job_id="wrap",
+                                        owner_session="different-explicit-owner")
+        self.assertNotIn(lease["owner_token"], str(mismatch.exception))
+        payload = json.loads(path.read_text())
+        for saved_owner in (None, {}, {**payload["owner"], "session_id": "stale-owner"},
+                            {**payload["owner"], "initiating_identity": "session:stale-owner"}):
+            with self.subTest(owner=saved_owner):
+                path.write_text(json.dumps({**payload, "owner": saved_owner}))
+                with self.assertRaisesRegex(admission.AdmissionError, "initiating") as invalid:
+                    admission.resolve_ownership(self.repo, credentials_path=str(path), job_id="wrap")
+                self.assertNotIn(lease["owner_token"], str(invalid.exception))
+        self.assertEqual(admission.get_reservation(self.repo, lease["reservation_id"]), before)
+
+    def test_receipt_restoration_does_not_release_live_execution(self):
+        lease = self.reserve("live-writer")
+        self.activate(lease)
+        path = admission.write_credentials(self.repo, lease)
+        before = admission.get_reservation(self.repo, lease["reservation_id"])
+        with mock.patch.dict(os.environ, {"RIG_OWNER_SESSION": "replacement-session"}):
+            loaded = admission.resolve_ownership(self.repo, credentials_path=str(path), job_id="live-writer")
+            with self.assertRaisesRegex(admission.AdmissionError, "cannot release execution"):
+                admission.release(self.repo, rationale="Must not unlock a live writer", **loaded)
+        self.assertEqual(admission.get_reservation(self.repo, lease["reservation_id"]), before)
+        with self.assertRaisesRegex(admission.AdmissionError, "overlap"):
+            self.reserve("contender")
+
+    def test_stale_receipt_attempt_never_restores_owner_context(self):
+        lease, path, original = self.stopped_wrapper()
+        payload = json.loads(path.read_text())
+        payload["attempt_id"] = "obsolete-attempt"
+        path.write_text(json.dumps(payload))
+        before = admission.get_reservation(self.repo, lease["reservation_id"])
+        with self.assertRaisesRegex(admission.AdmissionError, "credentials mismatch"):
+            admission.resolve_ownership(self.repo, credentials_path=str(path), job_id="wrap")
+        self.assertEqual(admission.get_reservation(self.repo, lease["reservation_id"]), before)
+
     def test_breakglass_close_stopped_wrapper_success_and_idempotency(self):
         lease, path, _wrapper = self.stopped_wrapper()
         caller = _owner("parent", "breakglass-caller")

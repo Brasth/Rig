@@ -89,6 +89,8 @@ rig job cancel <id>
 
 ## Interpreting completion
 
+A saved job credentials_path restores the original owner_session only after its owner context matches the current reservation; an explicitly conflicting owner_session is rejected. This resumes authenticated operations without transferring ownership or proving completion. Held-job ownership_next_action and reconciliation next_action describe required evidence; report-only reconciliation does not release scope, so do not repeat it without new evidence.
+
 Execution `ok` means the process/task ended successfully. It is completed-unverified until the parent inspects evidence, declares all requirements, deliberately runs required checks or addresses manual criteria, and accepts the current snapshot. A later content change invalidates acceptance. Only active checks/review justify “verifying”; held files alone do not. A different CLI is not proof of a different model provider.
 
 Register native/parent writes with `rig_job_start` before editing. Preserve `structuredContent` credentials (`reservation_id`, `attempt_id`, `owner_token`, initiating owner/session) and the returned private `credentials_path`. CLI `--json` gives the same explicit launch response; shell token transport is `RIG_OWNER_TOKEN`. Never load credentials just from a guessed job ID or HUD thread cache, and never show tokens to the user.

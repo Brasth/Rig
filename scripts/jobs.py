@@ -993,6 +993,7 @@ def job_display_state(job: dict, reservation: dict | None = None, verification: 
 
 def project_job(job: dict, repo: Path | None = None, *, refresh: bool = False, cache: dict | None = None) -> dict:
     """Validate only chosen subjects; callers share one hash cache per request."""
+    import admission
     import verification
 
     row = dict(job)
@@ -1054,9 +1055,17 @@ def project_job(job: dict, repo: Path | None = None, *, refresh: bool = False, c
         if assessment.get("state") == "verified" and assessment.get("freshness") != "current":
             reason = "Accepted content has not been checked in this view"
     if held and reservation.get("stopped") and not action:
-        reason = str(reason) + "; files held"
+        if "files held" not in str(reason):
+            reason = str(reason) + "; files held"
+    next_action = admission.ownership_next_action(
+        reservation, execution_status=row.get("effective") or "",
+        executor_kind=row.get("executor_kind") or "", verification=assessment,
+    )
+    if next_action and row.get("effective") != "ask" and row.get("cancellation_state") != "native-cancel-required":
+        action = next_action["instruction"]
     row["display_reason"] = str(reason or "")
     row["display_action"] = action
+    row["ownership_next_action"] = next_action
     # Provider provenance describes independence, never whether findings passed.
     independence = "unknown"
     if row.get("writer_job_id") or row.get("writer_job_ids"):
@@ -2918,7 +2927,9 @@ def main() -> int:
     parser.add_argument("--access", choices=["read", "write"], default="")
     parser.add_argument("--reservation-id", default=os.environ.get("RIG_RESERVATION_ID", ""))
     parser.add_argument("--attempt-id", default=os.environ.get("RIG_ATTEMPT_ID", ""))
-    parser.add_argument("--owner-session", default=os.environ.get("RIG_OWNER_SESSION", ""))
+    # The owner resolver reads the environment for raw callers. Only an explicit
+    # flag may conflict with a saved receipt's session during context restoration.
+    parser.add_argument("--owner-session", default="")
     parser.add_argument("--queue-id", default="")
     parser.add_argument("--native-agent-id", default="")
     parser.add_argument("--completion-json")
@@ -2945,6 +2956,13 @@ def main() -> int:
         common = {"worker": args.worker, "role": args.role, "summary": args.summary,
                   "model": args.model, "effort": args.effort, "executor_kind": args.executor_kind}
         try:
+            if args.credentials_path and args.cmd in {"finish", "close", "reconcile", "recover-cancelled"}:
+                import admission
+
+                ownership = admission.resolve_ownership(
+                    repo, **ownership, credentials_path=args.credentials_path, job_id=job_id or "",
+                    restore_owner_session=args.cmd != "recover-cancelled",
+                )
             files = json.loads(args.files_json) if args.files_json is not None else None
             completion = json.loads(args.completion_json) if args.completion_json is not None else None
             token_usage = json.loads(args.token_usage_json) if args.token_usage_json else None

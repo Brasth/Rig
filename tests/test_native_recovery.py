@@ -208,6 +208,26 @@ class NativeRecovery(unittest.TestCase):
         self.assertEqual((self.repo / ".rig" / "jobs" / "writer" / "meta.json").read_bytes(), meta)
         self.assertFalse((self.repo / ".rig" / "jobs" / "writer" / "recovery-audit.json").exists())
 
+    def test_receipt_recovery_preserves_replacement_identity_in_audit(self):
+        for explicit in (False, True):
+            with self.subTest(explicit=explicit):
+                name = "path-explicit" if explicit else "path-current"
+                lease = self.start_native(name, files=[name + ".txt"])
+                self.cancel(name)
+                self.mark_original_dead(lease)
+                self.registry(job=name)
+                args = {"owner_session": "explicit-replacement"} if explicit else {}
+                with patch.dict(os.environ, {"RIG_OWNER_SESSION": "current-replacement"}):
+                    out = self.call("rig_job_recover_cancelled", id=name,
+                        credentials_path=lease["credentials_path"], rationale="Original parent died after cancellation",
+                        apply=True, **args)
+                self.assertFalse(out.get("isError"), out)
+                audit = json.loads((self.repo / ".rig" / "jobs" / name / "recovery-audit.json").read_text())
+                self.assertEqual(audit["original"]["session_id"], self.thread)
+                self.assertEqual(audit["replacement"]["session_id"],
+                                 "explicit-replacement" if explicit else "current-replacement")
+                self.assertNotIn(lease["owner_token"], json.dumps(out))
+
     def test_empty_session_old_owner_uses_parent_pid_start(self):
         lease = self.start_native()
         self.cancel("writer")
@@ -403,13 +423,16 @@ class NativeRecovery(unittest.TestCase):
         self.assertEqual(json.loads(dry.stdout)["applied"], 0)
         applied = subprocess.run(
             [sys.executable, str(ROOT / "scripts" / "jobs.py"), "recover-cancelled", "writer",
-             "--reservation-id", lease["reservation_id"], "--attempt-id", lease["attempt_id"],
+             "--credentials-path", lease["credentials_path"],
              "--rationale", "cli apply", "--apply", "--repo", str(self.repo)],
             text=True, capture_output=True, env=env,
         )
         self.assertEqual(applied.returncode, 0, applied.stderr)
         self.assertEqual(json.loads(applied.stdout)["applied"], 1)
         self.assertEqual(jobs.resolve_job(self.repo, "writer")["status"], "cancelled")
+        audit = json.loads((self.repo / ".rig" / "jobs" / "writer" / "recovery-audit.json").read_text())
+        self.assertEqual(audit["original"]["session_id"], self.thread)
+        self.assertEqual(audit["replacement"]["session_id"], "replacement-parent")
 
     def test_active_check_blocks_recovery(self):
         lease = self.start_native()

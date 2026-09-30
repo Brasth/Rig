@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 from benchmark_normal_prompt import Fixture, seed_job
 import change_evidence
+import admission
 import jobs
 import rig_mcp
 
@@ -41,8 +42,86 @@ class DisplayPrecedence(unittest.TestCase):
         row["reservation"]["needs_reconciliation"] = True
         row = jobs.project_job(row)
         self.assertEqual(row["display_state"], "cancelled")
-        self.assertEqual(row["display_action"], "rig job reconcile task")
+        self.assertIn("report-only", row["display_action"])
+        self.assertIn("rig_job_finish", row["display_action"])
+        self.assertEqual(row["ownership_next_action"]["kind"], "confirm_completion")
         self.assertIn("stopping; files held", row["display_reason"])
+
+    def test_stopped_held_jobs_have_actionable_credentialed_next_steps(self):
+        for status, expected in (("fail", "close_unverified"), ("timeout", "close_unverified"),
+                                 ("cancelled", "close_unverified"), ("ok", "verify_and_accept")):
+            with self.subTest(status=status):
+                record = {"stage": "verifying", "stopped": True, "execution_status": status}
+                before = dict(record)
+                row = jobs.project_job({"job_id": "task", "effective": status, "reservation": record})
+                self.assertEqual(row["ownership_next_action"]["kind"], expected)
+                self.assertIn("credentials_path", row["display_action"])
+                self.assertEqual(row["display_reason"].count("files held"), 1)
+                self.assertEqual(record, before)
+
+    def test_live_or_released_jobs_do_not_offer_close(self):
+        for record in ({"stage": "running", "stopped": False}, {"stage": "released", "stopped": True}):
+            row = jobs.project_job({"job_id": "task", "effective": "running", "reservation": record})
+            self.assertIsNone(row["ownership_next_action"])
+            self.assertNotIn("rig_job_close", row["display_action"])
+
+    def test_active_checks_override_stopped_scope_close_guidance(self):
+        record = {"stage": "verifying", "stopped": True, "execution_status": "fail",
+                  "operation": {"operation": "check"}}
+        row = jobs.project_job({"job_id": "task", "effective": "fail", "reservation": record})
+        self.assertEqual(row["ownership_next_action"]["kind"], "inspect_verification")
+        self.assertNotIn("rig_job_close", row["display_action"])
+
+    def test_compact_session_keeps_typed_ownership_action(self):
+        job = {"job_id": "task", "effective": "fail", "reservation": {
+            "stage": "verifying", "stopped": True, "execution_status": "fail"}}
+        rows = rig_mcp._compact_rows([job], 10, repo=Path("/synthetic"))
+        self.assertEqual(rows[0]["ownership_next_action"]["kind"], "close_unverified")
+        self.assertIn("credentials_path", rows[0]["display_action"])
+
+    def test_only_current_review_acceptance_selects_review_handoff(self):
+        record = {"stage": "verifying", "stopped": True, "execution_status": "ok"}
+        assessment = {"state": "verified", "acceptance": "accepted", "next": "review", "freshness": "current"}
+        self.assertEqual(admission.ownership_next_action(record, verification=assessment)["kind"], "independent_review")
+        self.assertEqual(admission.ownership_next_action(record,
+            verification={**assessment, "freshness": "unavailable"})["kind"], "verify_and_accept")
+        self.assertEqual(admission.ownership_next_action(record,
+            verification={**assessment, "state": "pending", "reason": "content_changed"})["kind"], "verify_and_accept")
+
+    def test_ask_priority_cannot_be_overridden_by_stale_reconciliation(self):
+        row = jobs.project_job({"job_id": "ask-first", "effective": "ask", "reservation": {
+            "stage": "running", "stopped": False, "needs_reconciliation": True}})
+        self.assertIn("rig job allow ask-first", row["display_action"])
+        self.assertIsNone(row["ownership_next_action"])
+
+    def test_legacy_and_unlaunched_attempts_do_not_suggest_finish(self):
+        for record, expected in (({"job_id": "legacy", "legacy": True, "stage": "running"}, "reconcile_legacy"),
+                ({"queue_id": "legacy-queue", "legacy": True, "stage": "claimed"}, "reconcile_legacy"),
+                ({"queue_id": "claim", "stage": "reserved", "needs_reconciliation": True}, "resolve_unlaunched_owner")):
+            with self.subTest(record=record):
+                action = admission.ownership_next_action(record)
+                self.assertEqual(action["kind"], expected)
+                self.assertEqual(action["tool"], "rig_job_reconcile")
+                self.assertNotEqual(action["tool"], "rig_job_finish")
+        adopted = {"legacy": True, "reservation_id": "owned", "stopped": True, "stage": "verifying"}
+        self.assertEqual(admission.ownership_next_action(adopted)["kind"], "close_unverified")
+
+    def test_report_only_reconcile_explains_missing_evidence_without_mutating(self):
+        from copy import deepcopy
+        record = {"job_id": "task", "stage": "running", "stopped": False, "launch_started": True,
+                  "owner": {"kind": "native_child", "owner_token": "not-for-display"}}
+        before = deepcopy(record)
+        with patch.object(admission, "_root", return_value=Path("/synthetic")), \
+             patch.object(admission, "list_reservations", return_value=[deepcopy(record)]):
+            report = admission.reconcile("/synthetic", job_id="task")
+        action = report["items"][0]["next_action"]
+        self.assertTrue(report["report_only"])
+        self.assertEqual(report["applied"], 0)
+        self.assertEqual(action["kind"], "confirm_completion")
+        self.assertIn("owning host", action["instruction"])
+        self.assertIn("do not repeat", action["instruction"])
+        self.assertNotIn("not-for-display", json.dumps(action))
+        self.assertEqual(record, before)
 
     def test_provider_independence_does_not_claim_review_completion(self):
         row = {"effective": "running", "role": "review", "writer_job_id": "writer",

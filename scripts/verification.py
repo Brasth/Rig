@@ -377,7 +377,7 @@ def assessment(repo, job, refresh=False, cache=None):
     folder = Path(job.get("dir") or root / ".rig" / "jobs" / str(job.get("job_id", ""))) if isinstance(job, dict) else Path(job)
     stored = evidence.read_json(folder / "verification.json")
     result = {"state": "unknown", "acceptance": "pending", "reason": "missing_verification",
-              "freshness": "not_checked", "snapshot_id": "", "method": "", "accepted_at": ""}
+              "freshness": "not_checked", "snapshot_id": "", "method": "", "accepted_at": "", "next": ""}
     meta = job if isinstance(job, dict) and not refresh else evidence.read_json(folder / "meta.json") or {}
     if stored is None:
         if (folder / "verification.json").exists():
