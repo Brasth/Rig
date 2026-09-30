@@ -96,6 +96,25 @@ class WorkerLaunchTests(unittest.TestCase):
         for pid in self.pids:
             self._stop(pid)
 
+    def test_acceptance_contract_is_frozen_before_wrapper_spawn(self):
+        contract = {"schema_version": 1, "contract_id": "wrapper-contract", "revision": 1,
+                    "criteria": [{"id": "inspect", "description": "Inspect scoped changes",
+                                  "scope": ["a.py"], "evidence_type": "review_assertion",
+                                  "verifier_role": "parent", "artifact_kind": "review-note"}]}
+        original = worker_launch._spawn_wrapper
+        observed = []
+        def spawn(*args, **kwargs):
+            folder = self.repo / ".rig/jobs/job-a"
+            import acceptance_contract
+            observed.append(acceptance_contract.load(self.repo, folder))
+            self.assertTrue((folder / "requirements.json").is_file())
+            return original(*args, **kwargs)
+        with mock.patch.object(worker_launch, "_spawn_wrapper", side_effect=spawn):
+            result = self._launch(acceptance_contract=contract)
+        self.assertEqual(len(observed), 1)
+        self.assertEqual(result["contract_fingerprint"], observed[0]["contract_fingerprint"])
+        self.assertEqual(observed[0]["attempt_id"], result["attempt_id"])
+
     def test_bare_shell_workflow_launch_preserves_observed_initiator(self):
         import workflow_state as wf
         empty = {key: "" for key in ("RIG_OWNER_SESSION", "RIG_THREAD", "CODEX_THREAD_ID", "CODEX_SESSION_ID", "GROK_SESSION_ID")}

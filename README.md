@@ -92,6 +92,8 @@ Parent orchestration is MCP (`rig_session`, `rig_job_launch`, `rig_workflow_crea
 
 ## Verification and cancellation
 
+Optional [acceptance contracts](docs/acceptance-contracts.md) freeze required checks and review criteria before a job starts, with per-criterion evidence bound to the job attempt and current content.
+
 Execution `ok` means the worker exited successfully. **Verified** means the parent accepted the current scoped content against declared requirements.
 
 Esc / Stop on **this wait** records durable cancellation for attached attempts and returns promptly. After explicit cancellation, do not re-wait, re-pick, or drain automatically.

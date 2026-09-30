@@ -1404,14 +1404,14 @@ cmd_job() {
   local sub="${1:-}"
   shift || true
   case "$sub" in
-    requirements|check|accept)
+    requirements|check|criterion|accept)
       python3 "$(py_script verification.py)" --repo "$(repo_root)" "$sub" "$@"
       ;;
     start|finish|record|close|reconcile|recover-parent-write|break-glass-close|show|log|allow|deny|cancel|wait|message)
       python3 "$(py_script jobs.py)" "$sub" "$@" --repo "$(repo_root)"
       ;;
     *)
-      echo "usage: rig job start|finish|record|close|reconcile|recover-parent-write|break-glass-close|requirements|check|accept|show|log|allow|deny|cancel|wait|message [arguments]" >&2
+      echo "usage: rig job start|finish|record|close|reconcile|recover-parent-write|break-glass-close|requirements|check|criterion|accept|show|log|allow|deny|cancel|wait|message [arguments]" >&2
       return 2
       ;;
   esac

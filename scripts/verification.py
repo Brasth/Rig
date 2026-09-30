@@ -20,6 +20,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 import change_evidence as evidence
+import acceptance_contract as contracts
 from admission import mutation_guard
 
 
@@ -92,6 +93,7 @@ def _manifest(repo, folder):
         raise VerificationError("manual criteria are malformed")
     if not value["requirements"] and not criteria:
         raise VerificationError("declare at least one required check or manual criterion")
+    contracts.validate_manifest(contracts.load(repo, folder), value)
     return value
 
 
@@ -147,6 +149,12 @@ def record_requirements(repo, job_dir, requirements, manual_criteria, *,
         _meta(folder)
         _scope(root, folder)
         _idle(folder)
+        frozen = contracts.load(root, folder)
+        if frozen is not None:
+            previous = _manifest(root, folder)
+            if previous["requirements"] != required or previous["manual_criteria"] != criteria:
+                raise VerificationError("requirements are frozen by acceptance contract; revisions require a fresh attempt")
+            return previous
         previous = evidence.read_json(folder / "requirements.json")
         if (folder / "requirements.json").exists() and previous is None:
             raise VerificationError("requirements manifest is malformed")
@@ -185,6 +193,7 @@ def run_check(repo, job_dir, name, argv, cwd=None, on_tick=None, *,
         with _lock(folder):
             _idle(folder)
             manifest = _manifest(root, folder)
+            frozen = contracts.load(root, folder)
             wanted = next((row for row in manifest["requirements"] if row["id"] == name), None)
             if wanted != {"id": name, "argv": command, "cwd": directory}:
                 raise VerificationError("check name, argv, and cwd must match its declared requirement exactly")
@@ -197,6 +206,8 @@ def run_check(repo, job_dir, name, argv, cwd=None, on_tick=None, *,
                       "argv": command, "cwd": directory, "started_at": evidence.now(), "status": "running",
                       "sequence": max((row.get("sequence", 0) for row in rows), default=0) + 1,
                       "before_snapshot_id": subject["snapshot_id"], "after_snapshot_id": "", "exit_code": None}
+            if frozen is not None:
+                record.update({key: frozen[key] for key in contracts.BINDING_KEYS})
             evidence.write_json(checks / (check_id + ".json"), record)
             active = {"version": 1, "job_id": folder.name, "check_id": check_id, "name": name,
                       "pid": os.getpid(), "started_at": record["started_at"]}
@@ -304,8 +315,55 @@ def _required_passes(repo, folder, manifest, snapshot_id):
         if row.get("before_snapshot_id") != snapshot_id or row.get("after_snapshot_id") != snapshot_id:
             raise VerificationError("required check did not observe unchanged current content: " + requirement["id"])
         _validate_artifacts(folder, row)
+        if manifest.get("contract_fingerprint") and any(
+            row.get(key) != manifest.get(key) for key in contracts.BINDING_KEYS
+        ):
+            raise VerificationError("required check belongs to another contract or attempt: " + requirement["id"])
         selected.append(row["check_id"])
     return selected
+
+
+def record_criterion(repo, job_dir, criterion_id, contract_fingerprint, snapshot_id,
+                     result, rationale, evidence_refs, *, reservation_id="", attempt_id="",
+                     owner_token="", owner_session=""):
+    """Explicit parent review assertion, never an objective check execution."""
+    _parent_only()
+    root, folder = evidence.repository(repo), evidence.job_directory(repo, job_dir)
+    criterion_id = contracts.name(criterion_id, "criterion ID")
+    rationale = contracts.text(rationale, "review rationale")
+    if result not in {"pass", "fail"}:
+        raise VerificationError("review result must be pass or fail")
+    with mutation_guard(root, folder, "criterion", reservation_id=reservation_id,
+                        attempt_id=attempt_id, owner_token=owner_token, owner_session=owner_session) as reservation, _lock(folder):
+        _idle(folder)
+        frozen = contracts.load(root, folder)
+        if not frozen or frozen["contract_fingerprint"] != contract_fingerprint:
+            raise VerificationError("review assertion requires this attempt's frozen contract fingerprint")
+        _manifest(root, folder)
+        criterion = next((row for row in frozen["contract"]["criteria"] if row["id"] == criterion_id), None)
+        if not criterion or criterion["evidence_type"] != "review_assertion":
+            raise VerificationError("criterion is not a declared review assertion; checks require actual execution")
+        current = evidence.snapshot(root, _scope(root, folder))
+        if not snapshot_id or current["snapshot_id"] != snapshot_id:
+            raise VerificationError("content_changed: review assertion requires the current subject snapshot")
+        refs = contracts.artifact_refs(folder, evidence_refs, criterion["artifact_kind"])
+        value = {"schema_version": 1, **{key: frozen[key] for key in contracts.BINDING_KEYS},
+                 "criterion_id": criterion_id, "assertion_id": uuid.uuid4().hex,
+                 "snapshot_id": snapshot_id, "result": result, "rationale": rationale,
+                 "evidence_refs": refs, "recorded_at": evidence.now(),
+                 "provenance": {"kind": "parent_assertion", "verifier_role": criterion["verifier_role"],
+                                "owner_session": owner_session or reservation.get("owner", {}).get("session_id", ""),
+                                "cli": os.environ.get("RIG_PARENT", ""), "pid": os.getpid()}}
+        # Keep immutable receipts for timeline/history, plus one current pointer.
+        target = folder / "criteria"
+        if target.is_symlink() or (target / "history").is_symlink():
+            raise VerificationError("criterion artifact directories cannot be symlinks")
+        evidence.write_json(target / "history" / (value["assertion_id"] + ".json"), value)
+        evidence.write_json(target / (criterion_id + ".json"), value)
+        _save_assessment(folder, {"state": "failed" if result == "fail" else "pending", "acceptance": "pending",
+                                  "reason": "review_assertion_failed" if result == "fail" else "parent_acceptance_required",
+                                  "snapshot_id": snapshot_id, "contract_fingerprint": contract_fingerprint})
+        return value
 
 
 def accept(repo, job_dir, decision, snapshot_id, check_ids=None, rationale="", next="complete", *,
@@ -322,6 +380,7 @@ def accept(repo, job_dir, decision, snapshot_id, check_ids=None, rationale="", n
                         attempt_id=attempt_id, owner_token=owner_token, owner_session=owner_session) as reservation, _lock(folder):
         _idle(folder)
         meta, manifest = _meta(folder), _manifest(root, folder)
+        frozen = contracts.load(root, folder, meta)
         current = evidence.snapshot(root, _scope(root, folder))
         if not snapshot_id or current["snapshot_id"] != snapshot_id:
             raise VerificationError("content_changed: acceptance requires the current subject snapshot")
@@ -329,11 +388,13 @@ def accept(repo, job_dir, decision, snapshot_id, check_ids=None, rationale="", n
         known = {row["check_id"] for row in _check_rows(folder)}
         if selected - known:
             raise VerificationError("unknown check evidence reference")
+        criterion_outcomes = []
         if decision == "accept":
             problem = _execution_problem(meta)
             if problem:
                 raise VerificationError(problem + ": execution cannot be verified")
             selected.update(_required_passes(root, folder, manifest, snapshot_id))
+            criterion_outcomes = contracts.outcomes(root, folder, frozen, snapshot_id, _check_rows(folder))
         method = "mixed" if manifest["requirements"] and manifest["manual_criteria"] else "checks" if manifest["requirements"] else "manual"
         values = {"state": "verified" if decision == "accept" else "failed",
                   "acceptance": "accepted" if decision == "accept" else "rejected",
@@ -341,6 +402,10 @@ def accept(repo, job_dir, decision, snapshot_id, check_ids=None, rationale="", n
                   "method": method, "snapshot_id": snapshot_id, "check_ids": sorted(selected),
                   "rationale": rationale.strip(), "manual_criteria": manifest["manual_criteria"], "next": next,
                   "reservation_id": reservation_id, "attempt_id": attempt_id}
+        if frozen is not None:
+            values.update(contract_fingerprint=frozen["contract_fingerprint"],
+                          contract_id=frozen["contract"]["contract_id"], contract_revision=frozen["contract"]["revision"],
+                          criterion_outcomes=criterion_outcomes)
         previous = evidence.read_json(folder / "verification.json") or {}
         if all(previous.get(key) == value for key, value in values.items()):
             return previous
@@ -422,6 +487,17 @@ def assessment(repo, job, refresh=False, cache=None):
     if (folder / "check-running.json").exists():
         result.update(state="pending", reason="malformed_check_activity")
         return result
+    try:
+        frozen = contracts.load(root, folder, meta)
+        if frozen is not None:
+            result["contract_fingerprint"] = frozen["contract_fingerprint"]
+            result["contract_id"] = frozen["contract"]["contract_id"]
+            result["contract_revision"] = frozen["contract"]["revision"]
+            if stored.get("state") == "verified" and stored.get("contract_fingerprint") != frozen["contract_fingerprint"]:
+                raise VerificationError("acceptance contract changed")
+    except (OSError, ValueError) as error:
+        result.update(state="pending", reason=str(error), freshness="unavailable")
+        return result
     if not refresh:
         return result
     try:
@@ -436,6 +512,11 @@ def assessment(repo, job, refresh=False, cache=None):
         elif stored.get("state") == "verified" and stored.get("acceptance") == "accepted":
             manifest = _manifest(root, folder)
             required_ids = _required_passes(root, folder, manifest, current["snapshot_id"])
+            criterion_outcomes = contracts.outcomes(root, folder, frozen, current["snapshot_id"], _check_rows(folder))
+            if frozen is not None:
+                if stored.get("criterion_outcomes") != criterion_outcomes:
+                    raise VerificationError("accepted criterion evidence changed")
+                result["criterion_outcomes"] = criterion_outcomes
             if not set(required_ids) <= set(stored["check_ids"]):
                 raise VerificationError("required_checks_changed")
             method = "mixed" if manifest["requirements"] and manifest["manual_criteria"] else "checks" if manifest["requirements"] else "manual"
@@ -464,7 +545,10 @@ def main():
     accepted.add_argument("--checks", default="")
     accepted.add_argument("--rationale", required=True)
     accepted.add_argument("--next", choices=("complete", "review"), default="complete")
-    for command in (required, check, accepted):
+    criterion = commands.add_parser("criterion")
+    criterion.add_argument("id")
+    criterion.add_argument("--file", required=True, help="Review assertion JSON")
+    for command in (required, check, accepted, criterion):
         command.add_argument("--reservation-id", default="")
         command.add_argument("--attempt-id", default="")
         command.add_argument("--owner-session", default="")
@@ -488,6 +572,15 @@ def main():
             if manifest is None:
                 raise VerificationError("manifest file is malformed")
             result = record_requirements(args.repo, folder, manifest.get("requirements", []), manifest.get("manual_criteria", []), **ownership)
+        elif args.command == "criterion":
+            path = Path(args.file)
+            if path.stat().st_size > contracts.MAX_CONTRACT_BYTES:
+                raise VerificationError("review assertion exceeds 256 KiB")
+            assertion = evidence.read_json(path)
+            fields = {"criterion_id", "contract_fingerprint", "snapshot_id", "result", "rationale", "evidence_refs"}
+            if not assertion or set(assertion) != fields:
+                raise VerificationError("review assertion has missing or unsupported fields")
+            result = record_criterion(args.repo, folder, **assertion, **ownership)
         elif args.command == "check":
             result = run_check(args.repo, folder, args.name, command_argv, cwd=args.cwd, **ownership)
         else:
