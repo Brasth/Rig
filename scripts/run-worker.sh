@@ -102,6 +102,23 @@ FLAG="$(worker_flag "$WORKER")"
 BIN="$(find_worker_bin "$WORKER")"
 STARTED="$(iso_now)"
 
+# Shell command substitutions spawn different Python parents. Freeze one
+# invocation-local fallback before admission; never adopt a saved job's owner.
+# Existing initiating sessions retain their exact precedence and value.
+if [[ -z "${RIG_OWNER_SESSION:-}${RIG_THREAD:-}${CODEX_THREAD_ID:-}${CODEX_SESSION_ID:-}${GROK_SESSION_ID:-}" ]]; then
+  RIG_OWNER_SESSION="$(python3 - "$ADMISSION_PY" "$$" <<'PY'
+import pathlib, sys
+sys.path.insert(0, str(pathlib.Path(sys.argv[1]).parent))
+import admission
+identity = admission.process_identity(int(sys.argv[2]))
+if not identity.get("start_id"):
+    raise SystemExit("run-worker: cannot establish wrapper invocation identity")
+print(f"wrapper:{identity['pid']}:{identity['start_id']}")
+PY
+)"
+  export RIG_OWNER_SESSION
+fi
+
 admission_call() {
   python3 - "$ADMISSION_PY" "$1" "$REPO" "$JOB_ID" "$WORKER" "$ROLE" "${MODEL:-}" \
     "$JOB_FILES_JSON" "$$" "$OWNER_CREDENTIALS" "$EXECUTION_MODE" "${PROVENANCE_JSON:-\{\}}" "${2:-}" <<'PY'
@@ -223,7 +240,7 @@ wait_for_child_exit() {
 cancel_requested() {
   # Cheap existence check so the wait loop can poll cancel.json without a Python
   # process every tick. Confirm identity with cancellation.requested when present.
-  if [[ ! -f "$JOB_DIR/cancel.json" ]] && ! compgen -G "$JOB_DIR/cancellation/*.json" >/dev/null; then
+  if [[ ! -f "$JOB_DIR/cancel.json" && ! -f "$REPO/.rig/workflows/${RIG_WORKFLOW_ID:-}/cancel.json" ]] && ! compgen -G "$JOB_DIR/cancellation/*.json" >/dev/null; then
     return 1
   fi
   python3 - "$ADMISSION_PY" "$JOB_DIR" "$OWNER_CREDENTIALS" <<'PY_CANCEL'

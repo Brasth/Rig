@@ -43,7 +43,7 @@ class Runtime:
         if key is None:
             return {"jsonrpc": "2.0", "id": rid,
                     "error": {"code": -32600, "message": "request id must be a string or integer"}}
-        lane = "wait" if name in {"rig_job_wait", "rig_job_check", "rig_job_ask", "permission_prompt"} else "cancel" if name == "rig_job_cancel" else "tool"
+        lane = "wait" if name in {"rig_job_wait", "rig_workflow_wait", "rig_job_check", "rig_job_ask", "permission_prompt"} else "cancel" if name in {"rig_job_cancel", "rig_workflow_cancel"} else "tool"
         limit = self.limits[lane]
         with self.lock:
             if self.closed or key in self.requests or not limit.acquire(blocking=False):
@@ -81,7 +81,7 @@ class Runtime:
                 return
             request.cancelled = True
             request.stop.set()
-            if request.name != "rig_job_wait":
+            if request.name not in {"rig_job_wait", "rig_workflow_wait"}:
                 return
             # Each wait has at most one cancellation worker; ordinary saturation
             # cannot consume this capacity. The number is bounded by active waits.

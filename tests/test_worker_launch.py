@@ -96,6 +96,37 @@ class WorkerLaunchTests(unittest.TestCase):
         for pid in self.pids:
             self._stop(pid)
 
+    def test_bare_shell_workflow_launch_preserves_observed_initiator(self):
+        import workflow_state as wf
+        empty = {key: "" for key in ("RIG_OWNER_SESSION", "RIG_THREAD", "CODEX_THREAD_ID", "CODEX_SESSION_ID", "GROK_SESSION_ID")}
+        with mock.patch.dict(os.environ, empty):
+            created = wf.create_workflow(self.repo, {"nodes": [{"id": "w1", "role": "implement", "files": ["a.py"]}]})
+            spec, state = wf.load_pair(self.repo, created["workflow_id"], required=True)
+            original = admission.initiating_identity(state["owner"])
+            self.assertTrue(original.startswith("parent:"))
+            wf.mark_launched(state, "w1")
+            wf.save_state(self.repo, state)
+            result = self._launch(owner_session="", workflow_id=created["workflow_id"], workflow_node_id="w1",
+                                  workflow_spec_hash=spec["spec_hash"], workflow_attempt=1)
+            record = admission.get_reservation(self.repo, result["reservation_id"])
+            self.assertEqual(record["owner"]["initiating_identity"], original)
+            self.assertEqual(record["owner"]["session_id"], "launch-job-a")
+
+    def test_bare_shell_workflow_launch_refuses_different_initiator(self):
+        import workflow_state as wf
+        empty = {key: "" for key in ("RIG_OWNER_SESSION", "RIG_THREAD", "CODEX_THREAD_ID", "CODEX_SESSION_ID", "GROK_SESSION_ID")}
+        with mock.patch.dict(os.environ, empty):
+            created = wf.create_workflow(self.repo, {"nodes": [{"id": "w1", "role": "implement", "files": ["a.py"]}]})
+            spec, state = wf.load_pair(self.repo, created["workflow_id"], required=True)
+            state["owner"]["parent_start_id"] = "different-start"
+            state["owner"]["initiating_identity"] = admission.initiating_identity(state["owner"])
+            wf.mark_launched(state, "w1")
+            wf.save_state(self.repo, state)
+            with self.assertRaisesRegex(worker_launch.LaunchError, "initiating owner mismatch"):
+                self._launch(owner_session="", workflow_id=created["workflow_id"], workflow_node_id="w1",
+                             workflow_spec_hash=spec["spec_hash"], workflow_attempt=1)
+            self.assertEqual(admission._records(self.repo), [])
+
     def configure(self, cap=3):
         (self.repo / ".rig" / "harness.toml").write_text(
             'parent = "codex"\n[workers]\ngrok = true\nclaude = true\ncodex = true\n'
