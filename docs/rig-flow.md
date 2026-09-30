@@ -132,7 +132,7 @@ Parking, refreshing the status row, and opening a popup **never dispatch workers
 | `native-cancel-required` | The owning host must interrupt its native agent and report authenticated completion. |
 | Confirmed stopped | Execution slot is free; explicitly close cancelled work to release held files. |
 
-Closing a popup does not undo a submitted action. If an action receipt becomes uncertain after an observer restart, inspect the item before retrying. After explicit cancellation, the parent must not automatically re-wait, re-pick, or drain pending work. Combined rollout with wait-cancel: stop new admissions, finish or cancel, confirm stopped, accept or close scopes, preserve data, update every launcher and protocol, then fully restart. Rollback sets `[orchestration] mode = "single"` and never deletes data. See [recovery](usage.md#queue-ownership-and-recovery) and [safe upgrade](usage.md#safe-upgrade-and-rollback).
+Closing a popup does not undo a submitted action. If an action receipt becomes uncertain after an observer restart, inspect the item before retrying. After explicit cancellation, the parent must not automatically re-wait, re-pick, or drain pending work. Combined rollout with wait-cancel: stop new admissions, finish or cancel, confirm stopped, accept or close scopes, preserve data, update every launcher and protocol, then fully restart. Compatible controller rollback preserves `[orchestration] mode` and all data; incompatible versions require a separate reviewed migration. See [recovery](usage.md#queue-ownership-and-recovery) and [safe upgrade](usage.md#safe-upgrade-and-rollback).
 
 ## Session-local mouse (companion)
 

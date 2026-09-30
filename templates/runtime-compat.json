@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "update_protocol": 1,
+  "admission_protocol": 1,
+  "child_mcp_protocol": 1,
+  "job_data_protocol": 1,
+  "workflow_data_protocol": 1,
+  "managed_guidance_protocol": 1
+}

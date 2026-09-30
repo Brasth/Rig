@@ -249,7 +249,7 @@ Queue lifecycle when bound to a workflow: claimed on create from a parked pendin
 
 UI (`rig tui` Tab Jobs/Queue/Workflows): workflow id, status, accepted/required, running, ASK, blocker, next parent action, title. No estimated progress, savings, or ETA.
 
-Combined rollout with wait-cancel: stop new admissions, finish or cancel existing work, confirm stopped, accept or close scopes, preserve data, update every launcher and managed protocol, then fully restart all parent/MCP sessions. Rollback sets `[orchestration] mode = "single"` and never deletes data.
+Combined rollout with wait-cancel: stop new admissions, finish or cancel existing work, confirm stopped, accept or close scopes, preserve data, update every launcher and managed protocol, then fully restart all parent/MCP sessions. Compatible controller rollback preserves `[orchestration] mode` and all data; incompatible versions require a separate reviewed migration.
 <!-- rig:endsection -->
 
 <!-- rig:section queue -->
@@ -340,7 +340,9 @@ If there is one standing fact, MCP `rig_memory_add`. Do not edit MEMORY.md by ha
 
 Skip if there is no fact. The command drops duplicates and caps the file at about 120 lines. No transcripts.
 
-Upgrade/rollback: stop new admissions, finish or cancel existing work, confirm stopped, accept or close scopes, preserve data (queue text, credentials, workflow spec/state/events, reservations). Update every launcher and managed source skill/protocol, then fully restart all parent/MCP sessions before admitting work. Never run mixed-version admission writers. Combined rollout with wait-cancel follows that sequence. Rollback sets `[orchestration] mode = "single"` and never deletes data.
+Upgrade/rollback: stop new admissions, finish or cancel existing work, confirm stopped, accept or close scopes, preserve data (queue text, credentials, workflow spec/state/events, reservations). Update every launcher and managed source skill/protocol, then fully restart all parent/MCP sessions before admitting work. Never run mixed-version admission writers. Combined rollout with wait-cancel follows that sequence. Compatible controller rollback preserves `[orchestration] mode` and all data; incompatible versions require a separate reviewed migration.
 
-Preserve worker/cap values, memory, custom agent overrides and unrelated AGENTS content. Prior-revision jobdata remains readable after rollback.
+Preserve worker/cap values, memory, custom agent overrides and unrelated AGENTS content. Prior-revision jobdata remains readable after rollback. Runtime rollback never deletes data.
+
+Safe runtime updates are explicit: `rig update --revision FULL_COMMIT_SHA --dry-run`, then the same revision without `--dry-run`. Bare `rig update` is usage only. The controller checks versioned compatibility and owned-file hashes, never runs setup/optional installers, and never migrates data or changes configuration. `rig update --rollback` restores only the previous successful controller transaction. Legacy/unversioned installs require an explicit manual-backup/bootstrap transition, not fabricated provenance. A pending update blocks new admissions and leases; use `rig update --status`, then `rig update --recover`. Never delete the marker or kill processes to bypass checks; fully restart parent/MCP sessions afterward.
 <!-- rig:endsection -->

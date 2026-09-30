@@ -52,9 +52,9 @@ What that does:
 
 From a checkout you already have: `./install.sh` (same copy + `rig setup`, no clone). That is the **dev** path; it copies the local tree, not GitHub `main`.
 
-Before updating an active repository, follow [safe upgrade and rollback](#safe-upgrade-and-rollback). Update an existing machine: `rig update`. That fetches GitHub `main` through the same `install.sh` (not your checkout). The same `curl | bash` still works (idempotent). An older `rig` without `update` still needs the curl once. It updates the skill and scripts. It does **not** overwrite project `.rig/harness.toml` or `.rig/MEMORY.md`. It already runs `rig setup`.
+Before updating an active repository, follow [safe upgrade and rollback](#safe-upgrade-and-rollback). Use `rig update --revision FULL_COMMIT_SHA --dry-run`, then the same pinned revision without `--dry-run`. The controller fetches only that official repository commit, stages and validates owned runtime/integration assets, and never runs `install.sh`, `rig setup`, optional installers or migrations. Bare `rig update` prints usage. See [pinned updates, recovery, rollback and the explicit legacy transition](safe-updates.md); older/unversioned installations cannot claim a rollback baseline.
 
-Tmux package operations are noninteractive and time out after five minutes per operation. Linux needs root or passwordless sudo. Missing package managers, permissions, or a suitable package produce manual recovery instructions and allow Rig installation to continue. Set `RIG_SKIP_TMUX_INSTALL=1 ./install.sh` or `RIG_SKIP_TMUX_INSTALL=1 rig update` to manage tmux yourself; for the piped installer, use `curl -fsSL https://raw.githubusercontent.com/Brasth/Rig/main/install.sh | RIG_SKIP_TMUX_INSTALL=1 bash`. The companion remains opt-in; explicit `--shell-ui` still fails if tmux 3.3+ is unavailable.
+Tmux package operations are noninteractive and time out after five minutes per operation. Linux needs root or passwordless sudo. Missing package managers, permissions, or a suitable package produce manual recovery instructions and allow Rig installation to continue. Set `RIG_SKIP_TMUX_INSTALL=1 ./install.sh` to manage tmux yourself; safe updates never install tmux; for the piped installer, use `curl -fsSL https://raw.githubusercontent.com/Brasth/Rig/main/install.sh | RIG_SKIP_TMUX_INSTALL=1 bash`. The companion remains opt-in; explicit `--shell-ui` still fails if tmux 3.3+ is unavailable.
 
 **`rig setup` writes:**
 
@@ -206,7 +206,7 @@ Project `.rig` jobs, queue, memory, reservations, and history remain. Host binar
 
 ## First-time machine
 
-Install already ran `rig setup`. Re-run `rig setup` after you update Rig (`rig update` or the curl install does this for you).
+Install already ran `rig setup`. Safe `rig update` refreshes owned assets without setup or configuration changes. Re-run `rig setup` only when you explicitly want its installation/configuration behavior.
 
 1. Fully quit Grok, Codex, OpenCode, OMP, Pi, and/or agy **once** so MCP tools, `/queue` adapters, and HUDs load (quit the apps, then reopen).
 2. Run `rig doctor`. MCP lines should show `[mcp_servers.rig]` for grok and/or codex, plus OpenCode/OMP/Pi/agy JSON MCP when those files exist. Devin uses a job-scoped `.devin/mcp_config.local.json` (restored after the job).
@@ -296,11 +296,11 @@ How to read each section:
 
 | Section | Good | Bad |
 | --- | --- | --- |
-| **RIG_HOME** | `$HOME/.rig` | empty / missing — `rig update` or re-run the curl install or `rig setup` |
+| **RIG_HOME** | `$HOME/.rig` | empty / missing — review installation/setup; safe update requires an installed baseline |
 | **repo** | the git repo you `cd`’d into | wrong directory |
 | **harness** | `.rig/harness.toml` exists | `(missing — run: rig init)` |
-| **version** | `v1 <sha>` from `~/.rig/VERSION` | `(unknown — run: rig update)` |
-| **update** | `current` | `behind main — run: rig update` (omitted if offline or `RIG_SKIP_UPDATE_CHECK`) |
+| **version** | `v1 <sha>` from `~/.rig/VERSION` | `(unknown — run: rig update --status)` |
+| **update** | `current` | `behind main — review the shown full commit with `rig update --revision SHA --dry-run`` (omitted if offline or `RIG_SKIP_UPDATE_CHECK`) |
 | **Parent live** | `codex`, `grok`, `opencode`, `omp`, `pi`, `agy`, `cursor`, or `claude` when you are inside that CLI with parent Rig MCP; `(none)` in a plain terminal is normal | you expected a parent but Rig MCP is not loaded — fully quit the CLI once after `rig setup` |
 | **Parent preferred** | `codex`, `grok`, `opencode`, `omp`, `pi`, or `agy` from `rig use` | — |
 | **Workers** | the ones you want show `effective=on` | see reasons below |
@@ -393,7 +393,7 @@ Effective worker = flag `true` **and** binary on PATH **and** not live parent. C
 
 - **`[queue].max_running`** — max reserved/running/ASK executions per repo (default 3). Slot cap, not “run the next 3.” Parent claims a disjoint subset **by id** (required when more than one pending). `job start` / `rig_job_launch` / `run-worker.sh` refuse a new job at cap or when requested access conflicts with a held file scope. `rig queue list` shows occupied files. Set to `1` to restore one-child. Existing values are never flipped on init. Queue and worker caps remain authoritative when adaptive workflows run.
 - **`[queue].max_per_worker`** — extra cap per worker name (default `0` = off). `[queue.workers].grok = 2` overrides for that worker. Fair drain is highest `priority` (0–9) then oldest pending.
-- **`[orchestration].mode`** — `adaptive` (default) or `single`. Adaptive decomposes eligible work into a DAG of at most `max_nodes` (default 12). `single` keeps one-job behavior. Rollback sets `mode = "single"` and never deletes data.
+- **`[orchestration].mode`** — `adaptive` (default) or `single`. Adaptive decomposes eligible work into a DAG of at most `max_nodes` (default 12). `single` keeps one-job behavior. Compatible controller rollback preserves the configured mode and never deletes data.
 
 **Binaries:**
 
@@ -851,9 +851,11 @@ Repeated allow/approve is not completion. If a Codex or Pi parent write turn was
 
 ## Safe upgrade and rollback
 
+See [the complete pinned-update, recovery, rollback and legacy-transition guide](safe-updates.md). Use `rig update --revision FULL_COMMIT_SHA [--dry-run]`; rollback is `rig update --rollback [--dry-run]`. Neither runs setup nor changes project configuration.
+
 Combined rollout with wait-cancel: stop new admissions, finish or cancel existing work, confirm stopped, accept or close scopes, preserve data (pending queue text, credentials, workflow spec/state/events, reservations), update **every** launcher and managed protocol, then fully restart all parent/MCP sessions before admitting new work. Concurrent mixed-version admission writers are unsupported. Existing worker/cap values, memory, unrelated AGENTS content, and custom agent overrides must remain intact; inspect a custom native agent's write capability before using it for mini work.
 
-Test rollout in temporary homes/repos. Rollback uses the same stopped-admission, confirmed-stopped, accept/close, and preserve-data sequence. Adaptive-workflow rollback sets `[orchestration] mode = "single"` and never deletes data. Restore one compatible set of launchers and protocol, then restart all sessions before resuming. Terminal HUD expiry is presentation only and never releases ownership. No estimated progress, savings, or ETA.
+Test rollout in temporary homes/repos. Rollback uses the same stopped-admission, confirmed-stopped, accept/close, and preserve-data sequence. Compatible controller rollback preserves `[orchestration] mode` and all data; incompatible versions require a separate reviewed migration. Restore one compatible set of launchers and protocol, then restart all sessions before resuming. Terminal HUD expiry is presentation only and never releases ownership. No estimated progress, savings, or ETA.
 
 ## Watch, jobs, memory
 
@@ -976,7 +978,7 @@ Re-run the install if `~/.local/bin/rig` itself is missing:
 curl -fsSL https://raw.githubusercontent.com/Brasth/Rig/main/install.sh | bash
 ```
 
-If `rig` is already on PATH: `rig update`.
+If `rig` is already on PATH: inspect `rig update --status`, then follow [pinned safe updates](safe-updates.md).
 
 **MCP missing in Grok, Codex, OpenCode, OMP, Pi, or agy** (`rig doctor` MCP lines do not show `[mcp_servers.rig]` / `mcp.rig` / `mcpServers.rig`, or `/rig` / tools are absent)
 
@@ -995,7 +997,7 @@ Read the reason in `rig doctor`:
 
 **Claude child `timeout` right after you allow**
 
-The work clock used to keep counting the minutes spent waiting for allow. It now pauses during `ask` and restarts after allow. Update Rig (`rig update`, or `./install.sh` from a checkout, or the same curl install) so `~/.rig/scripts/run-worker.sh` has that restart. Do not kill an asking job; allow/deny and wait.
+The work clock used to keep counting the minutes spent waiting for allow. It now pauses during `ask` and restarts after allow. Update Rig through the [pinned controller or explicit legacy transition](safe-updates.md) so `~/.rig/scripts/run-worker.sh` has that restart. Do not kill an asking job; allow/deny and wait.
 
 **Parent not spawning / ignoring Rig**
 

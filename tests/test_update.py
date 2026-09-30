@@ -115,45 +115,29 @@ class RigUpdate(unittest.TestCase):
                 self.assertNotIn("install-ok", proc.stdout)
                 self.assertFalse((self.repo / ".rig").exists())
 
-    def test_update_runs_stub_installer(self):
+    def test_bare_update_requires_explicit_operation_and_never_runs_installer(self):
         proc = _run(self.repo, "update", env=self.base_env)
-        self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertIn("install-ok", proc.stdout)
-        self.assertIn(str(self.rig_home), proc.stdout)
-        self.assertIn("fully quit the parent CLI once", proc.stdout)
-        self.assertTrue((self.rig_home / "install-ran").exists())
-        self.assertFalse((self.repo / ".rig" / "harness.toml").exists())
+        self.assertEqual(proc.returncode, 2, proc.stdout + proc.stderr)
+        self.assertIn("--revision", proc.stderr)
+        self.assertFalse((self.rig_home / "install-ran").exists())
+        self.assertFalse((self.repo / ".rig").exists())
 
-    def test_update_disabled_project_preserves_gate_and_configuration(self):
+    def test_legacy_update_refuses_before_network_or_installer(self):
+        proc = _run(self.repo, "update", "--revision", "a" * 40, env=self.base_env)
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("Legacy/unversioned", proc.stderr)
+        self.assertFalse((self.rig_home / "install-ran").exists())
+
+    def test_disabled_project_preserves_gate_on_refused_update(self):
         folder = self.repo / ".rig"
         folder.mkdir()
         harness = folder / "harness.toml"
         before = '[project]\nenabled = false\n[workers]\ngrok = false\n'
         harness.write_text(before)
-        proc = _run(self.repo, "update", env=self.base_env)
-        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        proc = _run(self.repo, "update", "--revision", "a" * 40, env=self.base_env)
+        self.assertNotEqual(proc.returncode, 0)
         self.assertEqual(harness.read_text(), before)
         self.assertFalse((self.repo / "AGENTS.md").exists())
-        blocked = _run(self.repo, "workers", "grok=on", env=self.base_env)
-        self.assertNotEqual(blocked.returncode, 0)
-        self.assertIn("Rig is disabled", blocked.stderr)
-        self.assertEqual(harness.read_text(), before)
-
-    def test_update_does_not_enable_uninitialized_project_commands(self):
-        proc = _run(self.repo, "update", env=self.base_env)
-        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
-        blocked = _run(self.repo, "workers", "grok=on", env=self.base_env)
-        self.assertNotEqual(blocked.returncode, 0)
-        self.assertIn("Rig is uninitialized", blocked.stderr)
-        self.assertFalse((self.repo / ".rig").exists())
-
-    def test_update_curl_failure(self):
-        env = dict(self.base_env)
-        env["RIG_INSTALL_SH"] = str(self.root / "missing-install.sh")
-        proc = _run(self.repo, "update", env=env)
-        self.assertNotEqual(proc.returncode, 0, proc.stdout)
-        self.assertIn("could not fetch installer", proc.stderr)
-        self.assertFalse((self.rig_home / "install-ran").exists())
 
     def test_doctor_prints_version(self):
         (self.rig_home / "VERSION").write_text("v1 abc1234\n")
@@ -164,7 +148,7 @@ class RigUpdate(unittest.TestCase):
     def test_doctor_unknown_version_when_missing(self):
         proc = _run(self.repo, "doctor", env=self.base_env)
         self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertIn("version:  (unknown — run: rig update)", proc.stdout)
+        self.assertIn("version:  (unknown — run: rig update --status)", proc.stdout)
 
     def test_doctor_skip_omits_update_line(self):
         (self.rig_home / "VERSION").write_text("v1 abc1234\n")

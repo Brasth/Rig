@@ -10,55 +10,124 @@ from pathlib import Path
 import subprocess
 import sys
 import time
+import threading
+import stat
 
 
 def runtime_home(value=None):
     return Path(value or os.environ.get('RIG_HOME', Path.home() / '.rig')).absolute()
 
+_lifecycle_pid = os.getpid()
+_lifecycle_mutex = threading.RLock()
+_lifecycle_held = threading.local()
+
+
+def _ancestor(pid):
+    """Only inherited installer descriptors from a live ancestor may nest."""
+    current, seen = os.getppid(), set()
+    while current > 1 and current not in seen:
+        if current == pid:
+            return True
+        seen.add(current)
+        try:
+            path = Path(f'/proc/{current}/stat')
+            if path.is_file():
+                current = int(path.read_text().rsplit(')', 1)[1].split()[1])
+            else:
+                current = int(subprocess.check_output(['ps', '-o', 'ppid=', '-p', str(current)], text=True, timeout=1).strip())
+        except (OSError, ValueError, IndexError, subprocess.SubprocessError):
+            return False
+    return False
+
+
 @contextmanager
 def lifecycle_lock(rig_home=None):
-    root = runtime_home(rig_home)
-    root.mkdir(parents=True, exist_ok=True)
-    # A child installer inherits this descriptor while the controller holds it.
-    inherited = os.environ.get('RIG_LIFECYCLE_FD')
-    if inherited:
-        try:
-            if os.fstat(int(inherited)).st_ino == (root / '.lifecycle.lock').stat().st_ino:
-                yield
-                return
-        except (OSError, ValueError):
-            pass
-    with (root / '.lifecycle.lock').open('a+') as handle:
-        deadline = time.monotonic() + 5
-        while True:
-            try:
-                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                break
-            except BlockingIOError:
-                if time.monotonic() >= deadline:
-                    raise TimeoutError('Rig lifecycle busy; retry after installation or UI startup finishes')
-                time.sleep(0.025)
-        old = os.environ.get('RIG_LIFECYCLE_FD')
-        os.environ['RIG_LIFECYCLE_FD'] = str(handle.fileno())
-        try:
+    global _lifecycle_pid, _lifecycle_mutex, _lifecycle_held
+    if _lifecycle_pid != os.getpid():
+        _lifecycle_pid = os.getpid()
+        _lifecycle_mutex, _lifecycle_held = threading.RLock(), threading.local()
+    if not _lifecycle_mutex.acquire(timeout=5):
+        raise TimeoutError('Rig lifecycle busy; retry after installation or UI startup finishes')
+    try:
+        root = runtime_home(rig_home)
+        held = getattr(_lifecycle_held, 'roots', set())
+        if str(root) in held:
             yield
+            return
+        root.mkdir(parents=True, exist_ok=True)
+        path = root / '.lifecycle.lock'
+        inherited = os.environ.get('RIG_LIFECYCLE_FD')
+        try:
+            owner = int(os.environ.get('RIG_LIFECYCLE_OWNER_PID', '0'))
+            fd = int(inherited) if inherited else -1
+            expected, actual = path.stat(), os.fstat(fd)
+            inherited_ok = (owner != os.getpid() and _ancestor(owner)
+                            and not path.is_symlink() and stat.S_ISREG(actual.st_mode)
+                            and (actual.st_dev, actual.st_ino) == (expected.st_dev, expected.st_ino))
+            if inherited_ok:
+                # An inherited open-file-description already owns this lock;
+                # a merely same-inode descriptor cannot bypass another holder.
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except (OSError, ValueError):
+            inherited_ok = False
+        if inherited_ok:
+            _lifecycle_held.roots = held | {str(root)}
+            try:
+                yield
+            finally:
+                _lifecycle_held.roots = held
+            return  # only the originating process unlocks the inherited lock
+        fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+        try:
+            info = os.fstat(fd)
+            if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid():
+                raise ValueError('Unsafe lifecycle lock')
+            deadline = time.monotonic() + 5
+            while True:
+                try:
+                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    if time.monotonic() >= deadline:
+                        raise TimeoutError('Rig lifecycle busy; retry after installation or UI startup finishes')
+                    time.sleep(0.025)
+            old = {k: os.environ.get(k) for k in ('RIG_LIFECYCLE_FD', 'RIG_LIFECYCLE_OWNER_PID')}
+            os.environ['RIG_LIFECYCLE_FD'] = str(fd)
+            os.environ['RIG_LIFECYCLE_OWNER_PID'] = str(os.getpid())
+            _lifecycle_held.roots = held | {str(root)}
+            try:
+                yield
+            finally:
+                _lifecycle_held.roots = held
+                for key, value in old.items():
+                    if value is None: os.environ.pop(key, None)
+                    else: os.environ[key] = value
+                fcntl.flock(fd, fcntl.LOCK_UN)
         finally:
-            if old is None:
-                os.environ.pop('RIG_LIFECYCLE_FD', None)
-            else:
-                os.environ['RIG_LIFECYCLE_FD'] = old
-            fcntl.flock(handle, fcntl.LOCK_UN)
+            os.close(fd)
+    finally:
+        _lifecycle_mutex.release()
 
 
 def register_lease(session, repo, pid, start_id=None, rig_home=None):
-    """Caller may hold lifecycle_lock; registration itself is atomic."""
+    """Publish a lease under update-SH → lifecycle, before releasing either."""
+    from update_gate import lock
+    with lock(rig_home), lifecycle_lock(rig_home):
+        return _register_lease_locked(session, repo, pid, start_id, rig_home)
+
+
+def _register_lease_locked(session, repo, pid, start_id=None, rig_home=None):
+    """Internal: caller holds update shared gate and lifecycle lock."""
     import hashlib
     root = runtime_home(rig_home)
+    from update_gate import assert_ready
+    assert_ready(root)
     directory = root / 'ui/leases'
     directory.mkdir(parents=True, exist_ok=True)
     path = directory / (hashlib.sha256(str(session).encode()).hexdigest() + '.json')
     tmp = path.with_suffix('.tmp')
     tmp.write_text(json.dumps({'session': str(session), 'repo': str(repo), 'pid': pid, 'start_id': start_id}))
+    assert_ready(root)
     tmp.replace(path)
     return path
 
@@ -143,6 +212,8 @@ def install_paths(root, source, repo=None):
 
 def transaction(command, root, source, repo=None):
     with lifecycle_lock(root):
+        from update_gate import assert_ready
+        assert_ready(root)
         paths = install_paths(root, source, repo)
         manifest = Manifest(root)
         started = {path: snapshot(path) for path in paths}
@@ -159,8 +230,10 @@ def transaction(command, root, source, repo=None):
         env = os.environ.copy()
         env['RIG_INSTALL_TRANSACTION'] = '1'
         fd = int(env['RIG_LIFECYCLE_FD'])
+        rc = None
         try:
-            return subprocess.call(command, env=env, pass_fds=(fd,))
+            rc = subprocess.call(command, env=env, pass_fds=(fd,))
+            return rc
         finally:
             # Enumerating a possible destination is not ownership. Optional
             # skips and preserved user edits must not become installed assets.
@@ -175,6 +248,9 @@ def transaction(command, root, source, repo=None):
                     # (e.g. a user's manual symlink into the bundled skills).
                     entry['after'] = started[path]
             finished.save()
+            if repo is None and rc == 0 and (source / 'scripts/runtime_update.py').is_file():
+                from runtime_update import record_install
+                record_install(root, source, finished.data)
 
 
 def restore(path, state):
@@ -190,8 +266,8 @@ def restore(path, state):
         path.chmod(state['mode'])
 
 
-def runtime_blocker(root, entries, ignored=(), repos=()):
-    """Fail closed on process inspection errors and changed external references."""
+def active_runtime_blocker(root, repos=()):
+    """Fail closed on active processes, leases and repository reservations."""
     for repo in repos:
         try:
             if not Path(repo).is_dir():
@@ -202,10 +278,6 @@ def runtime_blocker(root, entries, ignored=(), repos=()):
                     return 'registered repository has active or unreconciled reservations'
         except (OSError, ValueError):
             return 'registered repository reservation state uncertain'
-    for name, entry in entries.items():
-        path = Path(name)
-        if path.is_relative_to(root) and '/ui/' not in name and entry.get('after') != snapshot(path):
-            return 'modified runtime files'
     for lease in (root / 'ui/leases').glob('*.json'):
         try:
             pid = int(json.loads(lease.read_text())['pid'])
@@ -213,10 +285,10 @@ def runtime_blocker(root, entries, ignored=(), repos=()):
             return 'active runtime lease'
         except ProcessLookupError:
             pass
-        except (OSError, ValueError, KeyError):
+        except (OSError, ValueError, KeyError, TypeError):
             return 'uncertain runtime lease'
     try:
-        output = subprocess.check_output(['ps', '-axo', 'pid=,ppid=,args='], text=True)
+        output = subprocess.check_output(['ps', '-axo', 'pid=,ppid=,args='], text=True, timeout=5)
         rows = [line.strip().split(None, 2) for line in output.splitlines()]
         parents = {int(row[0]): int(row[1]) for row in rows if len(row) >= 2}
         own = {os.getpid()}
@@ -229,6 +301,18 @@ def runtime_blocker(root, entries, ignored=(), repos=()):
                 return 'active process references runtime'
     except (OSError, ValueError, subprocess.SubprocessError):
         return 'process inspection unavailable'
+    return None
+
+
+def runtime_blocker(root, entries, ignored=(), repos=()):
+    """Uninstall additionally refuses retained runtime references/user edits."""
+    blocker = active_runtime_blocker(root, repos)
+    if blocker:
+        return blocker
+    for name, entry in entries.items():
+        path = Path(name)
+        if path.is_relative_to(root) and '/ui/' not in name and entry.get('after') != snapshot(path):
+            return 'modified runtime files'
     for name, entry in entries.items():
         if name in ignored:
             continue
@@ -273,6 +357,8 @@ def remove_legacy_repo_blocks(repos, entries, dry_run):
 def uninstall(root=None, dry_run=False, repos=()):
     root = runtime_home(root)
     with lifecycle_lock(root):
+        from update_gate import assert_ready
+        assert_ready(root)
         manifest = Manifest(root)
         entries = manifest.data['entries']
         restored = set()

@@ -53,12 +53,12 @@ fi
         path.write_text("#!/bin/bash\n" + text)
         path.chmod(0o755)
 
-    def run_rig(self, *args, installer=False, **env):
+    def run_rig(self, *args, installer=False, expected_code=0, **env):
         command = ["bash", str(ROOT / "install.sh")] if installer else [str(ROOT / "bin/rig")]
         result = subprocess.run(command + list(args), cwd=self.repo, env={**self.env, **env},
                                 stdin=subprocess.DEVNULL, capture_output=True, text=True,
                                 start_new_session=True, timeout=90)
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(result.returncode, expected_code, result.stdout + result.stderr)
         return result
 
     def pref(self, name, value):
@@ -166,16 +166,18 @@ fi
                         self.assertEqual(entry["before"]["kind"], "missing")
                         self.assertEqual(entry["after"]["kind"], "link")
 
-    def test_decline_is_remembered_across_installer_update_and_init(self):
+    def test_decline_survives_refused_implicit_update_and_init(self):
         self.run_rig("--no-cua-driver", "--no-browser-skill", "--no-mimo", installer=True)
         for name in optional_skills.PREFERENCES:
             self.assertIs(json.loads((self.kit / name).read_text())["opt_in"], False)
-        # The update path invokes install.sh from a downloaded temporary file.
-        # A local wrapper keeps this integration test entirely offline.
+        # Bare update is now usage-only and must never invoke an installer.
+        # Accepted/declined consent through pinned A→B→A is covered by the
+        # real controller fixtures in test_runtime_update.py.
         wrapper = self.base / "install-wrapper.sh"
         wrapper.write_text(f'#!/bin/bash\nexec bash "{ROOT / "install.sh"}" --no-mimo\n')
         self.run_rig("init")
-        self.run_rig("update", RIG_INSTALL_SH=str(wrapper))
+        result = self.run_rig("update", expected_code=2, RIG_INSTALL_SH=str(wrapper))
+        self.assertIn("--revision", result.stderr)
         self.run_rig("init")
         self.assert_global(False)
         self.assert_project(False)
