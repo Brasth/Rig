@@ -6,6 +6,7 @@ from pathlib import Path
 
 import catalog as rig_catalog
 import routing_profiles as rig_profiles
+import routing_domains as domains
 from routing_config import (  # noqa: F401
     POLICY_VERSION,
     ROUTING_JSON,
@@ -72,6 +73,7 @@ CODES = (
     "review-unavailable",
     "outscored",
     "collapsed-transport",
+    "domain-not-preferred",
 )
 _ROLE_TRAITS = {
     "implement": ("implementation",),
@@ -691,6 +693,41 @@ def _select_jev_candidate(
     return profile, str(model or profile.selector), _offered_tier(profile, need), meta
 
 
+def _domain_traits(kind: str, case: str, domain: dict) -> list[str]:
+    traits = set(_ROLE_TRAITS.get(kind, ("general",))) if domain["source"] == "explicit" else set(task_traits(kind, case))
+    traits.update(domains.DOMAIN_TRAITS.get(domain["name"], ()))
+    if traits - {"general"}:
+        traits.discard("general")
+    return [name for name in rig_profiles.TRAITS if name in traits]
+
+
+def _select_domain_preferred(cfg, kind, need, decisions, session, review_ctx, domain, worker=""):
+    """Ordered domain preferences operate strictly inside all existing gates."""
+    for pid in domain["preferred_profiles"]:
+        profile = cfg.profiles[pid]
+        if pid in decisions or (worker and profile.worker != worker):
+            continue
+        tier = _offered_tier(profile, need)
+        if not tier:
+            decisions[pid] = _decision(pid, "tier-insufficient", need)
+            continue
+        if profile.catalog_required:
+            model, meta, failure = _catalog_model(profile, session)
+            if failure:
+                decisions[pid] = _decision(pid, failure[0], failure[1])
+                continue
+        else:
+            model, meta = profile.selector, {"source": "pin", "freshness": "unverified"}
+        if kind == "review":
+            failure = _review_failure(model, review_ctx)
+            if failure:
+                decisions[pid] = _decision(pid, failure[0], failure[1])
+                continue
+        decisions[pid] = _decision(pid, "selected", "domain preference")
+        return profile, tier, model, meta, []
+    return None, "", "", {"source": "none", "freshness": "n/a"}, []
+
+
 def smart_pick(
     live: str,
     effective: list[str],
@@ -719,6 +756,8 @@ def smart_pick(
     assessment_reason: str = "",
     policy_mode: str | None = None,
     harness: dict | None = None,
+    task_domain: str = "",
+    research_sources=None,
 ) -> dict:
     import route as rig_route
 
@@ -728,6 +767,8 @@ def smart_pick(
     fingerprint = config_fingerprint(cfg)
     classification = rig_route.classify_details(role, case)
     kind = classification["kind"]
+    domain = domains.context(cfg, kind, case, task_domain, research_sources, repo)
+    domain_managed = domain["name"] in cfg.domains
     assessed = normalize_assessment(
         kind, assessment, complexity=complexity, risk=risk, uncertainty=uncertainty, reason=assessment_reason,
     )
@@ -748,17 +789,40 @@ def smart_pick(
     def base(**kwargs):
         return rig_route._base_choice(kind, kwargs.pop("worker", ""), kwargs.pop("spawn", ""), classification=classification, **kwargs)
 
-    traits = task_traits(kind, case)
+    traits = _domain_traits(kind, case, domain)
     # jev is a declared engine with no local runtime; selection stays on the local policy.
-    fallback = "jev-unavailable" if cfg.engine == "jev" else ""
+    fallback = ("domain-policy-local" if domain_managed else "jev-unavailable") if cfg.engine == "jev" else ""
     routing = empty_routing(mode="smart", fingerprint=fingerprint, assessment=assessed)
+    routing["task_domain"] = domain
 
     def finish(choice, source: str, selected_id: str = "", canonical=None):
+        choice["task_domain"] = domain["name"]
+        if domain["selection"] == "pending":
+            domain["selection"] = "builtin" if not domain_managed else source
         _stamp_picker(
             routing, cfg, source=source, traits=traits, fallback=fallback,
             selected_id=selected_id, canonical=canonical,
         )
         return _finish_choice(choice, routing)
+
+    if domain["parent_only"] and kind != "stay":
+        unavailable_review = kind == "review"
+        unavailable = unavailable_review or (domain_managed and domain["fallback"] == "none")
+        routing["execution_strategy"] = "none" if unavailable else "stay"
+        domain["selection"] = "none-fallback" if unavailable and not unavailable_review else "parent-boundary"
+        if unavailable and not unavailable_review:
+            domain["reason"] += "; fallback=none prohibits parent substitution"
+        routing["parent_fit_limitations"] = domain["reason"]
+        return finish(base(
+            worker="" if unavailable else live,
+            spawn="none" if unavailable else "stay",
+            model="" if unavailable else actual_model,
+            effort="" if unavailable else actual_effort,
+            executor_kind="" if unavailable else "parent",
+            model_source="observed" if actual_model and not unavailable else "unknown",
+            reason=domain["reason"] + ("; independent worker review unavailable" if unavailable_review else "; verify parent tool access before acting"),
+            review={**(review_ctx or {}), "independence": "unavailable"} if unavailable_review else None,
+        ), "none" if unavailable else "stay")
 
     if kind == "stay":
         routing["execution_strategy"] = "stay"
@@ -786,7 +850,7 @@ def smart_pick(
     need = required_tier(kind, assessed)
     routing["required_tier"] = need
     routing["review_recommendation"] = "independent" if assessed.get("risk") == "high" else "none"
-    if direct_parent_eligible(kind, assessed, cfg, live, blocked):
+    if not domain_managed and direct_parent_eligible(kind, assessed, cfg, live, blocked):
         routing["execution_strategy"] = "direct-parent"
         routing["catalog"] = {"source": "none", "freshness": "n/a"}
         routing["parent_fit_limitations"] = (
@@ -833,7 +897,17 @@ def smart_pick(
             "none",
         )
 
-    if cfg.local_policy == "ordered-v1":
+    selected, selected_tier, selected_model, catalog_meta, canonical = _select_domain_preferred(
+        cfg, kind, need, decisions, session, review_ctx, domain,
+    )
+    selection_source = "domain-preferred" if selected else ""
+    if selected:
+        domain["selection"] = "preferred"
+        domain["reason"] = "first eligible preferred profile: " + selected.id
+    elif domain_managed and domain["fallback"] != "scored":
+        domain["selection"] = domain["fallback"] + "-fallback"
+        domain["reason"] = "preferred profiles unavailable; configured fallback=" + domain["fallback"]
+    elif cfg.local_policy == "ordered-v1" and not domain_managed:
         selected, selected_tier, selected_model, catalog_meta, canonical = _select_ordered(
             cfg, kind, need, decisions, session, review_ctx,
         )
@@ -843,8 +917,11 @@ def smart_pick(
             cfg, kind, need, decisions, session, review_ctx, traits,
         )
         selection_source = "scored"
+        if domain_managed:
+            domain["selection"] = "scored-fallback"
+            domain["reason"] = "preferred profiles unavailable; scored fallback among eligible profiles"
 
-    if selected and cfg.engine == "jev" and canonical:
+    if selected and cfg.engine == "jev" and canonical and not domain_managed:
         jev_id, jev_fallback = _jev_choice(case, kind, assessed, traits, canonical)
         if jev_id:
             jev_profile, jev_model, jev_tier, jev_catalog = _select_jev_candidate(
@@ -902,6 +979,10 @@ def smart_pick(
             selected.id,
             canonical,
         )
+
+    if domain_managed and domain["fallback"] == "none":
+        routing["execution_strategy"] = "none"
+        return finish(base(worker="", spawn="none", reason=domain["reason"]), "none")
 
     if kind in {"explore", "verify"}:
         routing["execution_strategy"] = "stay"
@@ -972,67 +1053,24 @@ def resolve_explicit_worker_choice(
     """Pick an eligible smart profile restricted to one caller worker. No silent substitution."""
     import route as rig_route
 
-    del live, kwargs
-    worker = str(worker or "").strip()
-    classification = rig_route.classify_details(role, case)
-    kind = classification["kind"]
-    cfg = load_config(repo, policy_mode="smart")
-    fingerprint = config_fingerprint(cfg)
-    assessed = normalize_assessment(kind, assessment)
-    need = "" if kind == "stay" else required_tier(kind, assessed)
-    blocked = rig_route.parse_exclude(exclude)
-    session = CatalogSession(catalogs)
-    decisions: dict[str, dict] = {}
-    for profile in cfg.profiles.values():
-        if profile.worker != worker:
-            continue
-        if profile.worker in blocked:
-            decisions[profile.id] = _decision(profile.id, "worker-excluded")
-            continue
-        banned = rig_route.assert_child_model(profile.selector)
-        if not banned:
-            for allowed_role in profile.roles:
-                banned = rig_route.assert_devin_model(profile.worker, profile.selector, allowed_role)
-                if banned:
-                    break
-        if banned:
-            decisions[profile.id] = _decision(profile.id, "banned-model", banned)
-            continue
-        if kind and kind != "stay" and not profile.allows_role(kind):
-            decisions[profile.id] = _decision(profile.id, "role-incompatible")
-    traits = task_traits(kind, case)
-    fallback = "jev-unavailable" if cfg.engine == "jev" else ""
-    if cfg.local_policy == "ordered-v1":
-        selected, selected_tier, selected_model, catalog_meta, canonical = _select_ordered(
-            cfg, kind, need, decisions, session, None, worker=worker,
-        )
-        source = "ordered"
-    else:
-        selected, selected_tier, selected_model, catalog_meta, canonical = _select_scored(
-            cfg, kind, need, decisions, session, None, traits, worker=worker,
-        )
-        source = "scored"
-    if selected is None:
-        raise ValueError(f"no eligible smart profile for worker '{worker}'; re-pick")
-    routing = empty_routing(mode="smart", fingerprint=fingerprint, assessment=assessed, required=need)
-    routing["execution_strategy"] = "wrapper"
-    routing["selected_profile"] = selected_profile_dict(selected, model=selected_model, tier=selected_tier)
-    routing["catalog"] = catalog_meta
-    routing["candidate_decisions"] = [decisions[pid] for pid in sorted(decisions)]
-    _stamp_picker(
-        routing, cfg, source=source, traits=traits, fallback=fallback,
-        selected_id=selected.id, canonical=canonical,
+    task_domain = kwargs.pop("task_domain", "")
+    research_sources = kwargs.pop("research_sources", None)
+    # Native host children may use the same CLI as their parent. The wrapper
+    # launch path separately forbids nesting its live parent transport. Keep
+    # domain/role/provider gates here; admission verifies runtime binary/MCP/
+    # flags, and never silently substitute another worker.
+    choice = smart_pick(
+        "", [worker], role, case, repo=repo, assessment=assessment,
+        catalogs=catalogs, exclude=exclude, task_domain=task_domain,
+        research_sources=research_sources,
+        **{key: value for key, value in kwargs.items() if key in {
+            "writer_job_id", "writer_cli", "writer_model", "writer_provider", "review_mode",
+            "writer_job_ids", "writer_snapshot_ids", "writer_providers",
+        }},
     )
-    return {
-        "worker": selected.worker,
-        "model": selected_model,
-        "effort": selected.effort,
-        "spawn": "run-worker",
-        "executor_kind": "wrapper",
-        "parent_writes": False,
-        "execution_strategy": "wrapper",
-        "routing": routing,
-    }
+    if choice.get("spawn") != "run-worker" or choice.get("worker") != worker:
+        raise ValueError(f"no eligible smart profile for worker '{worker}'; re-pick ({choice.get('reason', '')})")
+    return choice
 
 
 def main() -> int:

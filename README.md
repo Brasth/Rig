@@ -38,7 +38,7 @@ Configure workers in `.rig/harness.toml`, then open whichever agent has parent R
 
 - [Overall flow](docs/rig-flow.md)
 - [Install](docs/usage.md#install) · [Per project](docs/usage.md#per-project-setup) · [Configure](docs/usage.md#configure-agents) · [Computer-use](#computer-use) · [BrowserSkill](#browserskill)
-- [Smart routing](docs/smart-routing.md)
+- [Smart routing](docs/smart-routing.md) · [Task domains and model preferences](docs/smart-routing.md#task-domains)
 - [Adaptive workflows](#adaptive-workflows)
 - [Everyday prompts](docs/usage.md#how-your-prompt-is-handled) · [Queue](docs/usage.md#how-the-queue-works)
 - [Terminal companion](docs/usage.md#optional-terminal-companion) · [Watch](docs/usage.md#watch-jobs-memory)

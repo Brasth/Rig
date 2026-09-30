@@ -8,6 +8,7 @@ from pathlib import Path
 
 import catalog as rig_catalog
 import routing_profiles as rig_profiles
+import routing_domains as domains
 from routing_config import POLICY_VERSION
 
 SIDECAR_NAME = "routing.json"
@@ -79,6 +80,8 @@ def read_sidecar(job_dir: Path, expected_attempt_id: str | None = None) -> dict 
         if any(key in profile and not isinstance(profile[key], str)
                for key in ("id", "worker", "model", "effort", "tier", "provider", "selector")):
             return None
+    if "task_domain" in routing and not domains.evidence_ok(routing["task_domain"]):
+        return None
     if "picker" in routing and not picker_evidence_ok(routing.get("picker")):
         return None
     if expected_attempt_id is not None:
@@ -294,6 +297,10 @@ def explain_lines(choice: dict) -> list[str]:
     lines.append(f"review_recommendation={rec} (not a completion gate)")
     if routing.get("parent_fit_limitations"):
         lines.append(f"parent_fit={routing['parent_fit_limitations']}")
+    domain = routing.get("task_domain")
+    if domains.evidence_ok(domain):
+        lines.append(f"task_domain={domain['name']} source={domain['source']} policy={domain['policy']} fallback={domain['fallback']}")
+        lines.append(f"domain_selection={domain['selection']} reason={domain['reason']}")
     picker = routing.get("picker") or {}
     if picker:
         lines.append(
@@ -437,6 +444,8 @@ def validate_launch_tuple(
     catalogs: dict | None = None,
     case: str = "",
     live: str = "",
+    task_domain: str = "",
+    research_sources=None,
 ) -> dict:
     """Rebuild trusted launch routing. Fingerprint is not an admission credential."""
     import route as rig_route
@@ -451,11 +460,15 @@ def validate_launch_tuple(
     access_value = str(access or "").strip().lower()
     live_parent = str(live or "").strip()
     if routing in (None, "", {}):
+        if domains.normalize_domain(task_domain) or research_sources is not None:
+            raise ValueError("task domains require smart routing metadata; re-pick")
         return manual_routing(worker=worker, model=model, effort=effort, mode="manual")
     if not isinstance(routing, dict):
         raise ValueError("routing metadata must be an object; re-pick")
     mode = str(routing.get("policy_mode") or "").strip().lower()
     if mode in {"", "manual", "legacy"}:
+        if domains.normalize_domain(task_domain) or research_sources is not None or "task_domain" in routing:
+            raise ValueError("task domains require smart routing metadata; re-pick")
         sanitized = mode if mode in {"manual", "legacy"} else "manual"
         return manual_routing(worker=worker, model=model, effort=effort, mode=sanitized)
     if mode != "smart":
@@ -476,6 +489,22 @@ def validate_launch_tuple(
     raw_assessment = routing.get("assessment")
     if raw_assessment not in (None, "") and not isinstance(raw_assessment, dict):
         raise ValueError("routing.assessment must be an object; re-pick")
+    if not domains.evidence_ok(routing.get("task_domain")):
+        raise ValueError("smart routing requires task domain evidence; re-pick")
+    name, sources = domains.resolve_inputs(task_domain, research_sources, routing)
+    domain = domains.context(cfg, kind, case, name, sources, repo)
+    recorded_domain = routing.get("task_domain")
+    if recorded_domain is not None:
+        for field in ("name", "policy", "preferred_profiles", "fallback", "requirements", "research_sources", "parent_only"):
+            if recorded_domain.get(field) != domain[field]:
+                raise ValueError("task domain policy/evidence changed; re-pick")
+        domain["source"] = recorded_domain["source"]
+        domain["rule"] = recorded_domain["rule"]
+    if domain["parent_only"] and (exec_kind != "parent" or access_value == "write"):
+        raise ValueError("task domain is parent-only/read-only; no child capability grant; re-pick")
+    if domain["name"] == "research" and exec_kind != "parent":
+        if kind != "explore" or access_value != "read" or not domain["research_sources"]:
+            raise ValueError("research child requires role=explore, access=read and verified local sources; re-pick")
     assessed = policy.normalize_assessment(kind, raw_assessment if isinstance(raw_assessment, dict) else None)
     if assessment not in (None, "", {}):
         if not isinstance(assessment, dict):
@@ -493,7 +522,12 @@ def validate_launch_tuple(
             raise ValueError("assessment conflicts with routing metadata; re-pick")
     need = "" if kind == "stay" else policy.required_tier(kind, assessed)
     selected = routing.get("selected_profile")
+    read_only_stay = kind == "stay" and access_value == "read"
+    if not read_only_stay and domain["name"] in cfg.domains and domain["fallback"] == "none" and selected in (None, "", {}):
+        raise ValueError("domain fallback=none cannot launch parent work; re-pick")
     if selected in (None, "", {}):
+        if kind == "review":
+            raise ValueError("review cannot launch a parent fallback; independent reviewer unavailable")
         if exec_kind != "parent":
             raise ValueError("smart routing without a selected profile requires executor_kind=parent; re-pick")
         out = empty_routing(mode="smart", fingerprint=fingerprint, assessment=assessed, required=need)
@@ -513,11 +547,11 @@ def validate_launch_tuple(
             kind, assessed, cfg, claimed_cli,
         )
         identity_mismatch = bool(live_parent and claimed_cli and claimed_cli != live_parent)
-        if kind == "stay":
+        if kind == "stay" or domain["parent_only"]:
             out["execution_strategy"] = "stay"
         elif identity_mismatch and (claimed_direct or live_eligible or claimed_eligible):
             raise ValueError("direct-parent live parent mismatch; re-pick")
-        elif live_eligible:
+        elif live_eligible and domain["name"] not in cfg.domains:
             out["execution_strategy"] = "direct-parent"
             out["catalog"] = {"source": "none", "freshness": "n/a"}
             if out["parent_fit_limitations"] in {"", "no eligible wrapper; parent writes"}:
@@ -527,6 +561,8 @@ def validate_launch_tuple(
         else:
             out["execution_strategy"] = "parent-fallback"
         _require_smart_access(kind, access_value, profile=None)
+        domain["selection"] = "parent-boundary" if domain["parent_only"] else out["execution_strategy"]
+        out["task_domain"] = domain
         return _accept_recorded_picker(out, routing, cfg, case)
     if not isinstance(selected, dict):
         raise ValueError("routing.selected_profile must be an object; re-pick")
@@ -536,6 +572,8 @@ def validate_launch_tuple(
     profile = cfg.profiles.get(profile_id)
     if profile is None:
         raise ValueError("routing profile is not in the current policy; re-pick")
+    if domain["name"] in cfg.domains and profile_id not in domain["preferred_profiles"] and domain["fallback"] != "scored":
+        raise ValueError("profile is not allowed by the domain fallback policy; re-pick")
     if profile.worker != worker:
         raise ValueError("worker does not match the approved routing profile; re-pick")
     if profile.effort != (effort or "") and (profile.effort or effort):
@@ -573,6 +611,9 @@ def validate_launch_tuple(
     if isinstance(limits, str):
         out["parent_fit_limitations"] = limits
     _require_smart_access(kind, access_value, profile=profile)
+    domain["selection"] = "preferred" if profile_id in domain["preferred_profiles"] else ("scored-fallback" if domain["name"] in cfg.domains else "builtin")
+    domain["reason"] = "validated eligible domain profile: " + profile_id
+    out["task_domain"] = domain
     return _accept_recorded_picker(out, routing, cfg, case)
 
 

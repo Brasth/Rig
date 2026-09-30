@@ -31,6 +31,7 @@ import worker_launch as rig_launch  # noqa: E402
 import child_mcp as rig_child_mcp  # noqa: E402
 import workflow as rig_workflow  # noqa: E402
 import coordination as rig_coordination  # noqa: E402
+import routing_domains  # noqa: E402
 
 PICK_ROLES = ("explore", "mini", "bulk", "implement", "hard", "review", "verify", "stay")
 JOB_WORKERS = ("grok", "codex", "claude", "cursor", "opencode", "omp", "pi", "agy", "devin", "mimo", "parent")
@@ -45,6 +46,12 @@ REVIEW_PROPERTIES = {
     "writer_snapshot_ids": {"type": "array", "items": {"type": "string"}},
     "writer_providers": {"type": "array", "items": {"type": "string"}},
     "review_mode": {"type": "string", "enum": ["standalone", "independent"], "default": "standalone"},
+}
+TASK_DOMAIN_PROPERTIES = {
+    "task_domain": {"type": "string", "enum": list(routing_domains.DOMAINS),
+                    "description": "Task domain, separate from role and capability tier. Explicit domain is authoritative."},
+    "research_sources": {"type": "array", "items": {"type": "string"},
+                         "description": "Repository-contained research source files. Research delegation requires role explore and verified files."},
 }
 ASSESSMENT_LEVELS = ["low", "medium", "high"]
 RAW_ASSESSMENT_SCHEMA = {
@@ -944,6 +951,8 @@ TOOLS = [
 ]
 
 for _tool in TOOLS:
+    if _tool["name"] in {"rig_pick", "rig_session", "rig_job_start", "rig_job_launch"}:
+        _tool["inputSchema"]["properties"].update(TASK_DOMAIN_PROPERTIES)
     if _tool["name"] in {"rig_pick", "rig_session"}:
         _tool["inputSchema"]["properties"].update(REVIEW_PROPERTIES)
     if _tool["name"] == "rig_job_start":
@@ -1563,7 +1572,7 @@ LAUNCH_ARG_NAMES = frozenset({
     "queue_id", "reservation_id", "attempt_id", "owner_token", "owner_session",
     "credentials_path",
     "writer_job_id", "writer_snapshot_id", "writer_cli", "writer_model",
-    "writer_provider", "review_mode", "routing", "assessment",
+    "writer_provider", "review_mode", "routing", "assessment", "task_domain", "research_sources",
     "continues_job_id",
 })
 _LAUNCH_PUBLIC_KEYS = (
@@ -1646,6 +1655,17 @@ def _review_args(args: dict) -> dict:
             raise ValueError(f"{name} must be an array of strings")
         values[name] = raw
     return values
+
+
+def _domain_args(args: dict) -> dict:
+    domain = routing_domains.normalize_domain(_optional_string(args, "task_domain"))
+    sources = args.get("research_sources")
+    if sources is not None and (
+        not isinstance(sources, list)
+        or any(not isinstance(item, str) or not item.strip() for item in sources)
+    ):
+        raise ValueError("research_sources must be an array of nonempty file paths")
+    return {"task_domain": domain, "research_sources": sources}
 
 
 def _assessment_args(args: dict) -> dict:
@@ -1739,6 +1759,8 @@ def format_session(
     assessment_reason: str = "",
     policy_mode: str | None = None,
     explain: bool = False,
+    task_domain: str = "",
+    research_sources: list[str] | None = None,
 ) -> str:
     if type(compact) is not bool:
         raise ValueError("rig_session: compact must be a boolean")
@@ -1765,7 +1787,7 @@ def format_session(
             writer_provider=writer_provider, review_mode=review_mode, repo=repo, jobs_snapshot=listing,
             hash_cache=hash_cache, assessment=assessment, complexity=complexity, risk=risk,
             uncertainty=uncertainty, assessment_reason=assessment_reason, policy_mode=policy_mode,
-            explain=explain,
+            explain=explain, task_domain=task_domain, research_sources=research_sources,
         )
         choice = {key: value for key, value in choice.items() if not str(key).startswith("_")}
     shown = _compact_rows(listing, terminal_limit, repo=repo, cache=hash_cache) if compact else listing
@@ -2077,7 +2099,7 @@ def call_tool(name: str, args: dict, on_tick=None, *, wait_paths: list[Path] | N
                 live, effective, role, case, exclude=exclude,
                 parent_model=_optional_string(args, "parent_model"),
                 parent_effort=_optional_string(args, "parent_effort"),
-                repo=repo, **_review_args(args), **_assessment_args(args),
+                repo=repo, **_review_args(args), **_assessment_args(args), **_domain_args(args),
             )
             choice = {key: value for key, value in choice.items() if not str(key).startswith("_")}
             return _ok(json.dumps(choice, indent=2))
@@ -2101,7 +2123,7 @@ def call_tool(name: str, args: dict, on_tick=None, *, wait_paths: list[Path] | N
                     terminal_limit=args.get("terminal_limit", 10),
                     parent_model=_optional_string(args, "parent_model"),
                     parent_effort=_optional_string(args, "parent_effort"),
-                    **_review_args(args), **_assessment_args(args),
+                    **_review_args(args), **_assessment_args(args), **_domain_args(args),
                 )
             )
         if name == "rig_status":
@@ -2292,7 +2314,7 @@ def call_tool(name: str, args: dict, on_tick=None, *, wait_paths: list[Path] | N
                         writer_snapshot_id=_optional_string(args, "writer_snapshot_id"),
                         access=_optional_string(args, "access"), queue_id=_optional_string(args, "queue_id"),
                         native_agent_id=_optional_string(args, "native_agent_id"), return_details=True,
-                        routing=args.get("routing"), assessment=args.get("assessment"),
+                        routing=args.get("routing"), assessment=args.get("assessment"), **_domain_args(args),
                         **_job_ownership_args(args, repo),
                 )
                 return {**_ok(result["job_id"]), "structuredContent": result}
@@ -2571,7 +2593,7 @@ def call_tool(name: str, args: dict, on_tick=None, *, wait_paths: list[Path] | N
                     writer_provider=_optional_string(args, "writer_provider"),
                     review_mode=review_mode if review_mode is not None else "standalone",
                     routing=args.get("routing"),
-                    assessment=args.get("assessment"),
+                    assessment=args.get("assessment"), **_domain_args(args),
                     **_job_ownership_args(args, repo),
                 )
             except rig_launch.LaunchError as exc:
@@ -2715,6 +2737,8 @@ def run_session_cli(argv: list[str]) -> int:
     parser.add_argument("--session", action="store_true")
     parser.add_argument("--case", default="")
     parser.add_argument("--role", default="")
+    parser.add_argument("--task-domain", default="")
+    parser.add_argument("--research-source", action="append", dest="research_sources")
     parser.add_argument("--exclude", default="")
     parser.add_argument("--parent-model", default="")
     parser.add_argument("--parent-effort", default="")
@@ -2751,7 +2775,7 @@ def run_session_cli(argv: list[str]) -> int:
             review_mode=args.review_mode,
             complexity=args.complexity, risk=args.risk, uncertainty=args.uncertainty,
             assessment_reason=args.assessment_reason, policy_mode=args.policy_mode or None,
-            explain=args.explain,
+            explain=args.explain, task_domain=args.task_domain, research_sources=args.research_sources,
         )
     )
     return 0

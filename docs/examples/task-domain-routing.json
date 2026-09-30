@@ -1,0 +1,33 @@
+{
+  "schema_version": 4,
+  "domains": {
+    "frontend": {
+      "preferred_profiles": ["claude-sonnet-5-medium", "codex-luna-low"],
+      "fallback": "scored"
+    },
+    "backend": {
+      "preferred_profiles": ["codex-luna-low", "grok-4.7-high"],
+      "fallback": "scored"
+    },
+    "debugging": {
+      "preferred_profiles": ["grok-4.7-high"],
+      "fallback": "parent"
+    },
+    "research": {
+      "preferred_profiles": ["grok-4.5-low", "codex-explorer-low"],
+      "fallback": "scored"
+    },
+    "review": {
+      "preferred_profiles": ["claude-opus-5-high", "grok-4.7-high"],
+      "fallback": "none"
+    },
+    "ui-design": {
+      "preferred_profiles": [],
+      "fallback": "parent"
+    },
+    "ui-verification": {
+      "preferred_profiles": [],
+      "fallback": "parent"
+    }
+  }
+}

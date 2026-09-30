@@ -2262,6 +2262,21 @@ def job_files_input(files: list | None = None) -> list[str]:
     return list(dict.fromkeys(files))
 
 
+def research_source_instructions(routing: dict) -> str:
+    """Prompt contract for validated local-source research; grants no new tools."""
+    domain = routing.get("task_domain") or {}
+    sources = domain.get("research_sources") or []
+    if domain.get("name") != "research" or not sources or domain.get("parent_only"):
+        return ""
+    return (
+        "Research source contract:\n"
+        "Read-only analysis. Use only these declared local files as research sources: "
+        + json.dumps(sources, ensure_ascii=False)
+        + "\nIf a needed source is missing or remote, ask the parent to acquire it. "
+        "This contract grants no browser, vision, Figma, computer-use, or new network permissions."
+    )
+
+
 def _native_parent_only() -> None:
     if os.environ.get("RIG_JOB_ID") or os.environ.get("RIG_JOB_DIR"):
         raise SystemExit("rig job: native lifecycle and acceptance are parent-only")
@@ -2301,6 +2316,8 @@ def start_job(
     workflow_spec_hash: str = "",
     workflow_attempt: int = 0,
     allow_read_overlap_reservations=None,
+    task_domain: str = "",
+    research_sources: list[str] | None = None,
 ) -> str | dict:
     """Write a running job. Does not launch a worker. Returns the job id."""
     _require_harness(repo)
@@ -2330,11 +2347,22 @@ def start_job(
         raise SystemExit("rig job: assessment must be an object")
     assessment_obj = assessment if isinstance(assessment, dict) else None
     picked_routing = routing if isinstance(routing, dict) else None
+    import routing_domains
+    try:
+        task_domain, research_sources = routing_domains.resolve_inputs(
+            task_domain=task_domain, research_sources=research_sources, routing=picked_routing,
+        )
+    except ValueError as error:
+        raise SystemExit(f"rig job: {error}") from error
     if not model and kind != "parent":
         if routing_policy.resolve_mode(repo, None) == "smart":
             try:
                 choice = routing_policy.resolve_explicit_worker_choice(
                     live, worker, role, "", repo=repo, assessment=assessment_obj,
+                    task_domain=task_domain, research_sources=research_sources,
+                    writer_job_id=writer_job_id, writer_job_ids=writer_job_ids,
+                    writer_snapshot_ids=writer_snapshot_ids, writer_providers=writer_providers,
+                    review_mode="independent" if writer_job_id or writer_job_ids else "standalone",
                 )
             except (ValueError, routing_policy.ConfigError) as error:
                 raise SystemExit(f"rig job: {error}") from error
@@ -2353,10 +2381,14 @@ def start_job(
         routing_obj = routing_policy.validate_launch_tuple(
             repo, worker=worker, model=model, effort=effort, role=role,
             routing=picked_routing, assessment=assessment_obj,
+            task_domain=task_domain, research_sources=research_sources,
             executor_kind=kind, access=access, live=live,
         )
     except (ValueError, routing_policy.ConfigError) as error:
         raise SystemExit(f"rig job: {error}") from error
+    if access == "read":
+        domain = routing_obj.get("task_domain") or {}
+        listed = list(dict.fromkeys([*listed, *domain.get("research_sources", [])]))
     owner = admission.caller_owner(kind, owner_session=owner_session, native_agent_id=native_agent_id)
     owner["parent_cli"] = live
     now = iso_now()
@@ -2429,6 +2461,9 @@ def start_job(
                                       owner=owner, owner_session=owner_session, mode="launch_failed")
             raise
     details = {**lease, **credentials, "job_id": job_id, "credentials_path": str(artifact)}
+    instructions = research_source_instructions(routing_obj)
+    if instructions:
+        details["research_source_instructions"] = instructions
     return details if return_details else job_id
 
 
@@ -2872,6 +2907,8 @@ def main() -> int:
     parser.add_argument("--reason", default="")
     parser.add_argument("--worker", default="")
     parser.add_argument("--role", default="")
+    parser.add_argument("--task-domain", default="")
+    parser.add_argument("--research-source", action="append", dest="research_sources")
     parser.add_argument("--status", default="ok")
     parser.add_argument("--summary", default="")
     parser.add_argument("--model", default="")
@@ -2919,6 +2956,7 @@ def main() -> int:
                                    writer_job_id=args.writer_job_id, continues_job_id=args.continues_job_id,
                                    writer_snapshot_id=args.writer_snapshot_id,
                                    routing=routing, assessment=assessment,
+                                   task_domain=args.task_domain, research_sources=args.research_sources,
                                    return_details=True, **common, **ownership)
                 print(json.dumps(result) if args.json else result["job_id"])
                 print(f"job {result['job_id']} status=running\ncredentials {result['credentials_path']}", file=sys.stderr)

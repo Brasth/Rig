@@ -582,6 +582,8 @@ def pick(
     assessment_reason: str = "",
     policy_mode: str | None = None,
     explain: bool = False,
+    task_domain: str = "",
+    research_sources: list[str] | None = None,
 ) -> dict:
     import routing_policy
 
@@ -600,7 +602,7 @@ def pick(
             writer_job_id=writer_job_id, writer_cli=writer_cli, writer_model=writer_model,
             writer_provider=writer_provider, review_mode=review_mode, repo=repo,
             jobs_snapshot=jobs_snapshot, hash_cache=hash_cache, assessment=assessed,
-            policy_mode="smart",
+            policy_mode="smart", task_domain=task_domain, research_sources=research_sources,
             writer_job_ids=writer_job_ids, writer_snapshot_ids=writer_snapshot_ids,
             writer_providers=writer_providers,
         )
@@ -610,6 +612,8 @@ def pick(
         if cid:
             choice["continues_job_id"] = cid
         return choice
+    import routing_domains
+    routing_domains.reject_legacy(task_domain, research_sources)
     cfg = routing_policy.load_config(repo, policy_mode="legacy")
     fingerprint = routing_policy.config_fingerprint(cfg)
     required = "" if kind == "stay" else routing_policy.required_tier(kind, assessed)
@@ -814,6 +818,8 @@ def main() -> int:
     parser.add_argument("--live", default="")
     parser.add_argument("--effective", default="")
     parser.add_argument("--role", default="")
+    parser.add_argument("--task-domain", default="")
+    parser.add_argument("--research-source", action="append", dest="research_sources")
     parser.add_argument("--case", default="")
     parser.add_argument("--worker", default="")
     parser.add_argument("--model", default="")
@@ -879,7 +885,7 @@ def main() -> int:
             continues_job_id=args.continues_job_id,
             complexity=args.complexity, risk=args.risk, uncertainty=args.uncertainty,
             assessment_reason=args.assessment_reason, policy_mode=args.policy_mode or None,
-            explain=args.explain,
+            explain=args.explain, task_domain=args.task_domain, research_sources=args.research_sources,
         )
     except ValueError as exc:
         parser.error(str(exc))
