@@ -90,7 +90,15 @@ class Manifest:
     def before(self, paths):
         for path in paths:
             key = str(path.absolute())
-            self.data['entries'].setdefault(key, {'before': snapshot(path)})
+            entry = self.data['entries'].get(key)
+            if entry is None:
+                self.data['entries'][key] = {'before': snapshot(path)}
+            elif entry.get('after') == entry['before']:
+                # An earlier no-op never acquired ownership. A later real
+                # install must restore the user's current asset, not that old
+                # (possibly missing) preimage.
+                entry['before'] = snapshot(path)
+                entry.pop('after', None)
         self.save()
     def after(self, paths):
         for path in paths:
@@ -107,7 +115,9 @@ def install_paths(root, source, repo=None):
         for item in (source / folder).rglob('*'):
             if item.is_file():
                 paths.add(root / item.relative_to(source))
-    skills = ('delegate-harness', 'rig-jobs', 'rig-queue')
+    # Include optional destinations before setup asks for consent. Unchanged
+    # missing/existing snapshots are harmless; later opt-in keeps the preimage.
+    skills = tuple(item.name for item in (source / 'skills').glob('*') if item.is_dir())
     for directory in ('.agents/skills', '.grok/skills', '.codex/skills', '.config/opencode/skill', '.omp/agent/skills', '.pi/agent/skills', '.gemini/antigravity-cli/skills'):
         paths.update(h / directory / skill for skill in skills)
     fixed = ['.codex/config.toml', '.codex/hooks.json', '.codex/prompts/queue.md', '.grok/config.toml', '.grok/rig-statusline.sh', '.grok/hooks/rig-queue-submit.json', '.agents/plugins/marketplace.json', '.config/opencode/commands/queue.md', '.config/opencode/plugins/rig-queue.js', '.config/opencode/plugin/rig-queue.js', '.config/opencode/tui-plugins/rig-hud.tsx', '.config/opencode/tui-plugins/rig-hud.js', '.config/opencode/tui.json', '.omp/agent/extensions/rig-queue.js', '.pi/agent/extensions/rig-queue.js', '.gemini/config/hooks.json', '.gemini/antigravity-cli/settings.json']
@@ -123,8 +133,11 @@ def install_paths(root, source, repo=None):
     pi = Path(os.environ.get('PI_CODING_AGENT_DIR') or os.environ.get('PI_AGENT_DIR') or h / '.pi/agent')
     paths.add(pi / 'mcp.json')
     if repo:
+        # Match cmd_init's installed-runtime-first source selection.
+        skill_source = root / 'skills' if (root / 'skills').is_dir() else source / 'skills'
         paths = {repo / 'AGENTS.md', repo / 'CLAUDE.md', repo / '.gitignore'}
-        paths.update(repo / '.agents/skills' / skill / 'SKILL.md' for skill in skills)
+        paths.update(repo / '.agents/skills' / item.relative_to(skill_source)
+                     for item in skill_source.rglob('*') if item.is_file())
     return paths
 
 
@@ -132,6 +145,11 @@ def transaction(command, root, source, repo=None):
     with lifecycle_lock(root):
         paths = install_paths(root, source, repo)
         manifest = Manifest(root)
+        started = {path: snapshot(path) for path in paths}
+        unowned = {path for path in paths
+                   if str(path.absolute()) not in manifest.data['entries']
+                   or manifest.data['entries'][str(path.absolute())].get('after')
+                   == manifest.data['entries'][str(path.absolute())]['before']}
         manifest.before(paths)
         if repo:
             manifest.data['repos'] = sorted(set(manifest.data.get('repos', [])) | {str(repo.absolute())})
@@ -144,7 +162,19 @@ def transaction(command, root, source, repo=None):
         try:
             return subprocess.call(command, env=env, pass_fds=(fd,))
         finally:
-            Manifest(root).after(paths)
+            # Enumerating a possible destination is not ownership. Optional
+            # skips and preserved user edits must not become installed assets.
+            finished = Manifest(root)
+            changed = {path for path in paths if snapshot(path) != started[path]}
+            finished.after(changed)
+            for path in unowned - changed:
+                key = str(path.absolute())
+                entry = finished.data['entries'].get(key)
+                if entry and 'after' not in entry:
+                    # Retain a no-ownership census for runtime-reference checks
+                    # (e.g. a user's manual symlink into the bundled skills).
+                    entry['after'] = started[path]
+            finished.save()
 
 
 def restore(path, state):
@@ -207,8 +237,13 @@ def runtime_blocker(root, entries, ignored=(), repos=()):
             return 'modified repository integration retained'
         if path.is_relative_to(root):
             continue
-        if path.is_symlink() and str(root) in os.readlink(path):
-            return 'remaining symlink references runtime'
+        try:
+            if path.resolve().is_relative_to(root.resolve()):
+                # A project skill can have an ordinary leaf file under a
+                # user-owned directory symlink into the runtime.
+                return 'remaining path references runtime'
+        except (OSError, RuntimeError):
+            return 'path reference uncertain'
         if path.is_file():
             try:
                 if str(root).encode() in path.read_bytes():

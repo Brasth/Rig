@@ -9,6 +9,40 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
 import ui_install
 
 class OwnershipTests(unittest.TestCase):
+    def test_manual_runtime_links_block_cleanup_including_relative_and_uncertain(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d) / 'runtime'; root.mkdir()
+            link = Path(d) / 'manual-link'
+            for target in (str(root / 'skills'), 'runtime/skills', 'manual-link'):
+                with self.subTest(target=target):
+                    link.symlink_to(target)
+                    state = ui_install.snapshot(link)
+                    with patch('ui_install.subprocess.check_output', return_value=''):
+                        reason = ui_install.runtime_blocker(root, {str(link): {'before': state, 'after': state}})
+                    self.assertIn(reason, ('remaining path references runtime', 'path reference uncertain'))
+                    link.unlink()
+
+    def test_old_noop_preimage_rebases_before_later_owned_change(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d) / 'runtime'; target = Path(d) / 'setting'
+            m = ui_install.Manifest(root); m.before([target]); m.after([target])
+            target.write_text('user created after skipped install')
+            m = ui_install.Manifest(root); m.before([target])
+            target.write_text('installed'); m.after([target])
+            ui_install.uninstall(root)
+            self.assertEqual(target.read_text(), 'user created after skipped install')
+
+    def test_project_manifest_matches_installed_skill_sources_including_references(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d) / 'runtime'; source = Path(d) / 'source'; repo = Path(d) / 'repo'
+            reference = root / 'skills/computer-use/references/new-reference.md'
+            reference.parent.mkdir(parents=True); reference.write_text('runtime reference')
+            old = source / 'skills/computer-use/SKILL.md'
+            old.parent.mkdir(parents=True); old.write_text('older checkout')
+            paths = ui_install.install_paths(root, source, repo)
+            self.assertIn(repo / '.agents/skills/computer-use/references/new-reference.md', paths)
+            self.assertNotIn(repo / '.agents/skills/computer-use/SKILL.md', paths)
+
     def test_original_preimage_survives_updates(self):
         with tempfile.TemporaryDirectory() as d:
             root = Path(d) / 'runtime'

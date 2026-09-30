@@ -848,13 +848,13 @@ class InitPresence(unittest.TestCase):
         self.assertTrue((home / ".pi" / "agent" / "skills" / "delegate-harness").exists())
         self.assertTrue((home / ".gemini" / "antigravity-cli" / "skills" / "delegate-harness").exists())
         self.assertTrue((home / ".grok" / "skills" / "rig-queue").exists())
-        self.assertTrue((home / ".grok" / "skills" / "computer-use").exists())
+        self.assertFalse((home / ".grok" / "skills" / "computer-use").exists())
         self.assertTrue((home / ".grok" / "skills" / "style-guide").exists())
-        self.assertTrue((home / ".grok" / "skills" / "computer-test").exists())
+        self.assertFalse((home / ".grok" / "skills" / "computer-test").exists())
         self.assertTrue((home / ".codex" / "skills" / "rig-queue").exists())
-        self.assertTrue((home / ".codex" / "skills" / "computer-use").exists())
+        self.assertFalse((home / ".codex" / "skills" / "computer-use").exists())
         self.assertTrue((home / ".codex" / "skills" / "style-guide").exists())
-        self.assertTrue((home / ".codex" / "skills" / "computer-test").exists())
+        self.assertFalse((home / ".codex" / "skills" / "computer-test").exists())
         self.assertTrue((home / ".config" / "opencode" / "skill" / "rig-queue").exists())
         self.assertTrue((home / ".codex" / "prompts" / "queue.md").is_file())
         self.assertTrue((home / ".config" / "opencode" / "commands" / "queue.md").is_file())
@@ -972,7 +972,7 @@ class InitPresence(unittest.TestCase):
         self.assertNotIn("profile=", doc.stdout)
         self.assertNotRegex(doc.stdout, r"(?m)^\s*profile:")
 
-    def test_init_syncs_all_kit_skills(self):
+    def test_init_syncs_core_skills_without_optional_consent(self):
         proc = run_rig(self.repo, "init", env={"PATH": _stub_path()})
         self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
         skills = self.repo / ".agents" / "skills"
@@ -980,14 +980,11 @@ class InitPresence(unittest.TestCase):
             "delegate-harness",
             "rig-jobs",
             "rig-queue",
-            "computer-use",
-            "computer-test",
             "style-guide",
         ):
             self.assertTrue((skills / name / "SKILL.md").is_file(), name)
-        self.assertTrue(
-            (skills / "computer-use" / "references" / "desktop-drive.md").is_file()
-        )
+        for name in ("computer-use", "computer-test"):
+            self.assertFalse((skills / name).exists(), name)
 
     def test_init_backfills_computer_use_on_existing_harness(self):
         rig_dir = self.repo / ".rig"

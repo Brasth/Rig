@@ -79,6 +79,10 @@ def write_preference(opt_in: bool, source: str, **extra) -> None:
 
 
 def has_tty() -> bool:
+    # A captured/redirected prompt is not interactive, even if /dev/tty exists.
+    # curl | bash still prompts normally when its output goes to the terminal.
+    if not sys.stdout.isatty():
+        return False
     if sys.stdin.isatty():
         return True
     try:
@@ -97,6 +101,8 @@ def parse_args(argv: list[str]) -> dict:
             force_yes = True
         elif item == "--no-cua-driver":
             force_no = True
+    if force_yes and force_no:
+        raise ValueError("use only one of --cua-driver or --no-cua-driver")
     return {"force_yes": force_yes, "force_no": force_no}
 
 
@@ -150,7 +156,7 @@ def print_success() -> None:
 
 
 def prompt_tty() -> bool:
-    print("Install Cua Driver for parent computer-use?")
+    print("Install Cua Driver and Rig's desktop/browser skills (computer-use, computer-test)?")
     print("Desktop click/type for this parent only. Not a Rig worker. Default No.")
     print("[y/N]", flush=True)
     try:
@@ -171,12 +177,12 @@ def prompt_tty() -> bool:
 def decide(argv: list[str]) -> tuple[str, bool | None, str]:
     """Return (action, opt_in_to_write, source). action is skip|install|upgrade."""
     flags = parse_args(argv)
+    if flags["force_no"]:
+        return "skip", False, "flag"
     if os.environ.get("RIG_SKIP_CUA_DRIVER") == "1":
         return "skip", None, "env"
     if os.environ.get("RIG_INSTALL_CUA_DRIVER") == "1" or flags["force_yes"]:
-        return "install", True, "env" if os.environ.get("RIG_INSTALL_CUA_DRIVER") == "1" else "flag"
-    if flags["force_no"]:
-        return "skip", False, "flag"
+        return "install", True, "flag" if flags["force_yes"] else "env"
     pref = read_preference()
     if pref is not None and pref.get("opt_in") is True:
         return "upgrade", True, "preference"
@@ -191,7 +197,11 @@ def decide(argv: list[str]) -> tuple[str, bool | None, str]:
 
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
-    action, opt_in, source = decide(argv)
+    try:
+        action, opt_in, source = decide(argv)
+    except ValueError as error:
+        print(f"cua-driver setup: {error}", file=sys.stderr)
+        return 2
     if action == "skip":
         if source == "env" and os.environ.get("RIG_SKIP_CUA_DRIVER") == "1":
             print("cua-driver setup: skipped (RIG_SKIP_CUA_DRIVER=1)")
