@@ -124,6 +124,9 @@ def _required_check_summary(folder, requirements):
 
 
 def _save_assessment(folder, value):
+    meta = evidence.read_json(folder / "meta.json") or {}
+    # Preserve exact attempt provenance for pending and failed history as well.
+    value = {**{key: meta[key] for key in ("reservation_id", "attempt_id") if meta.get(key)}, **value}
     previous = evidence.read_json(folder / "verification.json") or {}
     history = list(previous.get("history", []))
     if previous:
@@ -176,6 +179,7 @@ def record_requirements(repo, job_dir, requirements, manual_criteria, *,
 
 
 def _artifact(path, folder):
+    path, folder = Path(path).resolve(), Path(folder).resolve()
     digest = hashlib.sha256()
     with path.open("rb") as stream:
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
@@ -206,6 +210,7 @@ def run_check(repo, job_dir, name, argv, cwd=None, on_tick=None, *,
                       "argv": command, "cwd": directory, "started_at": evidence.now(), "status": "running",
                       "sequence": max((row.get("sequence", 0) for row in rows), default=0) + 1,
                       "before_snapshot_id": subject["snapshot_id"], "after_snapshot_id": "", "exit_code": None}
+            record.update(reservation_id=reservation_id, attempt_id=attempt_id)
             if frozen is not None:
                 record.update({key: frozen[key] for key in contracts.BINDING_KEYS})
             evidence.write_json(checks / (check_id + ".json"), record)
@@ -438,8 +443,9 @@ def _alive(pid):
 
 
 def assessment(repo, job, refresh=False, cache=None):
-    root = Path(repo)
-    folder = Path(job.get("dir") or root / ".rig" / "jobs" / str(job.get("job_id", ""))) if isinstance(job, dict) else Path(job)
+    root = Path(repo).resolve()
+    folder = (Path(job.get("dir") or root / ".rig" / "jobs" / str(job.get("job_id", "")))
+              if isinstance(job, dict) else Path(job)).resolve()
     stored = evidence.read_json(folder / "verification.json")
     result = {"state": "unknown", "acceptance": "pending", "reason": "missing_verification",
               "freshness": "not_checked", "snapshot_id": "", "method": "", "accepted_at": "", "next": ""}

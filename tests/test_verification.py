@@ -107,6 +107,24 @@ class ParentVerification(unittest.TestCase):
         projected = verification.assessment(self.repo, self.meta, refresh=True)
         self.assertEqual((projected["state"], projected["acceptance"], projected["freshness"]), ("verified", "accepted", "current"))
 
+    def test_acceptance_through_repository_alias_and_dict_projection(self):
+        self.requirements()
+        self.check("tests", self.command())
+        self.accept(next="review")
+        with tempfile.TemporaryDirectory() as temporary:
+            alias = Path(temporary) / "repo-alias"
+            alias.symlink_to(self.repo, target_is_directory=True)
+            alias_job = alias / ".rig/jobs/writer"
+            for job in (alias_job, {**self.meta, "dir": str(alias_job)}):
+                with self.subTest(job_type=type(job).__name__):
+                    result = verification.assessment(alias, job, refresh=True)
+                    self.assertEqual(result["state"], "verified", result)
+            stdout = next((self.job / "checks").glob("*.stdout.log"))
+            stdout.write_text("changed output")
+            result = verification.assessment(alias, alias_job, refresh=True)
+            self.assertEqual(result["state"], "pending")
+            self.assertIn("artifact changed", result["reason"])
+
     def test_missing_or_failed_required_check_cannot_be_omitted(self):
         passing, failing = self.command(), self.command("import sys; sys.exit(7)")
         self.requirements([{"id": "lint", "argv": passing}, {"id": "tests", "argv": failing}])

@@ -708,6 +708,11 @@ def report(repo, workflow_id, *, now=None):
         blocked["coverage"] = "partial" if blocked["observed_wall_s"] is not None else "unknown"
         blocked["known_zero"] = False
         blocked["persistence_gap"] = True
+    import outcome_metrics
+    outcome = outcome_metrics.workflow_report(repo, spec, current, events, list(recorded_jobs.values()))
+    if missing_attempts:
+        outcome["workflow"]["first_pass"] = None
+        outcome["missing_attempts"] = missing_attempts
     return {
         "workflow_id": workflow_id,
         "status": current.get("status"),
@@ -720,5 +725,6 @@ def report(repo, workflow_id, *, now=None):
         "required": wf.summary_counts(spec, current)["required"],
         "events": events,
         "runtime_metrics": runtime,
+        "outcome_metrics": outcome,
         "report_freshness": "recorded state; use workflow advance/wait for lifecycle reconciliation",
     }

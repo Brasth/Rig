@@ -12,6 +12,7 @@ import jobs as rig_jobs
 import routing_policy
 import routing_domains
 import runtime_metrics
+import outcome_metrics
 import token_usage as rig_tokens
 import verification
 
@@ -206,6 +207,7 @@ def build_report(repo: Path, *, days: int = 30, now: float | None = None) -> dic
         return groups[key]
 
     cache = {}
+    outcome_jobs = []
     for job in listing:
         folder = _job_folder(root, job)
         job_attempt = str(job.get("attempt_id") or "").strip()
@@ -216,6 +218,7 @@ def build_report(repo: Path, *, days: int = 30, now: float | None = None) -> dic
             continue
         if stamp < cutoff:
             continue
+        outcome_jobs.append(job)
         totals["attempts"] += 1
         routing = (sidecar or {}).get("routing") if sidecar else None
         origin = _provenance(job, sidecar)
@@ -380,6 +383,7 @@ def build_report(repo: Path, *, days: int = 30, now: float | None = None) -> dic
             ),
         },
         "definitions": dict(runtime_metrics.DEFINITIONS),
+        "outcome_metrics": outcome_metrics.report(root, outcome_jobs),
         "domains": {name: finish(bucket) for name, bucket in sorted(domains.items())},
         "strategies": {name: finish(bucket) for name, bucket in strategies.items()},
         "groups": grouped,

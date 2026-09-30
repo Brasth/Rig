@@ -1091,3 +1091,29 @@ Parents can assemble already captured, privacy-reviewed CUA/BrowserSkill receipt
 ## Recorded task timeline
 
 Use `rig_task_timeline` or `rig timeline --workflow ID` / `rig timeline --job ID` for a bounded read-only view of persisted workflow events, exact job attempts, checks and parent assertion/acceptance records. Missing/legacy evidence and limits stay explicit; Stop intent never proves termination. No refresh or current acceptance revalidation occurs. See [ordering, provenance and coverage](task-timeline.md).
+
+## Replace outdated project memory
+
+`rig_memory` retains its text response and additionally returns structured
+`sha256` (raw file bytes) and `facts`. Read it before an exact edit. Parent tools
+`rig_memory_replace(old, new, expected_sha256)` and
+`rig_memory_remove(fact, expected_sha256)` edit one existing fact. Optional `repo`
+selects the initialized enabled project. Children cannot call either tool.
+
+Human CLI equivalents:
+
+```sh
+rig memory replace --old "Outdated fact" --new "Current verified fact" --expected-sha256 HASH
+rig memory remove --fact "Obsolete fact" --expected-sha256 HASH
+```
+
+`HASH` is the digest returned by `rig_memory` (or SHA256 of the exact MEMORY.md
+bytes). A stale hash refuses the edit: reread and reconsider it. Matching uses
+normalized whitespace and case-insensitive exact equality, never fuzzy matching.
+Missing or ambiguous facts, empty/oversized replacements and duplicates are
+refused. Replacement preserves its position. Existing add/show/count behavior
+and the 120-line cap remain. Add, replace and remove serialize through an update
+barrier and a memory lock before unique atomic writes. No contradiction detection
+or automatic rewriting occurs.
+
+For legacy runtime transition, see [the migration runbook](legacy-runtime-migration.md).

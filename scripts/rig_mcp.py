@@ -1004,6 +1004,15 @@ for _operation in ("preview", "build"):
             "required": ["selection"], "additionalProperties": False},
     })
 
+for _name, _fields in (("rig_memory_replace", ("old", "new", "expected_sha256")),
+                        ("rig_memory_remove", ("fact", "expected_sha256"))):
+    TOOLS.append({"name": _name,
+                  "description": "Parent-only exact memory edit guarded by the SHA256 returned by rig_memory.",
+                  "annotations": {"readOnlyHint": False, "destructiveHint": False,
+                                  "idempotentHint": False, "openWorldHint": False},
+                  "inputSchema": {"type": "object", "properties": {
+                      **{key: {"type": "string"} for key in _fields}, "repo": {"type": "string"}},
+                      "required": list(_fields)}})
 for _tool in TOOLS:
     if _tool["name"] in {"rig_job_start", "rig_job_launch"}:
         _tool["inputSchema"]["properties"]["acceptance_contract"] = ACCEPTANCE_CONTRACT_SCHEMA
@@ -1569,6 +1578,8 @@ TOOL_ORDER = (
     "rig_job_accept",
     "rig_memory",
     "rig_memory_add",
+    "rig_memory_replace",
+    "rig_memory_remove",
     "rig_job_message",
     "rig_queue_add",
     "rig_queue_list",
@@ -2210,7 +2221,14 @@ def call_tool(name: str, args: dict, on_tick=None, *, wait_paths: list[Path] | N
             result["structuredContent"] = {"jobs": results}
             return result
         if name == "rig_memory":
-            return _ok(rig_memory.show_memory(repo))
+            view = rig_memory.memory_view(repo)
+            return {**_ok(view["text"]), "structuredContent": {key: view[key] for key in ("sha256", "facts")}}
+        if name in {"rig_memory_replace", "rig_memory_remove"}:
+            selected = args.get("old") if name == "rig_memory_replace" else args.get("fact")
+            if not isinstance(selected, str) or (name == "rig_memory_replace" and not isinstance(args.get("new"), str)):
+                return _err("Specify the exact fact and replacement")
+            return _ok(rig_memory.edit_memory(repo, selected, args.get("expected_sha256"),
+                       args.get("new") if name == "rig_memory_replace" else None))
         if name == "rig_memory_add":
             fact = str(args.get("fact") or "")
             if not rig_memory.normalize_fact(fact):

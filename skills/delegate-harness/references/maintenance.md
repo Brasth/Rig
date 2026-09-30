@@ -4,6 +4,8 @@
 Overwrite `.rig/STATE.md` with job id, worker, status, summary.
 If there is one standing fact, MCP `rig_memory_add`. Do not edit MEMORY.md by hand. Bash fallback if MCP is missing: `rig memory add "one standing fact"`.
 
+For an outdated fact, parent reads `rig_memory` structured sha256/facts, then uses `rig_memory_replace` or `rig_memory_remove` with that expected_sha256 and the exact selected fact. Stale hashes require rereading; never silently retry against changed memory. These two tools are parent-only.
+
 Skip if there is no fact. The command drops duplicates and caps the file at about 120 lines. No transcripts.
 
 Upgrade/rollback: stop new admissions, finish or cancel existing work, confirm stopped, accept or close scopes, preserve data (queue text, credentials, workflow spec/state/events, reservations). Update every launcher and managed source skill/protocol, then fully restart all parent/MCP sessions before admitting work. Never run mixed-version admission writers. Combined rollout with wait-cancel follows that sequence. Compatible controller rollback preserves `[orchestration] mode` and all data; incompatible versions require a separate reviewed migration.

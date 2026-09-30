@@ -123,3 +123,5 @@ it appear fresh, or rerun setup expecting it to prove legacy rollback support.
 A successful clean, fresh setup records the baseline. The first later compatible
 controller update creates the first rollback snapshot. If baseline creation fails,
 setup prints why; `rig update --status` explains that safe updates are unavailable.
+
+Detailed legacy cutover: [runtime migration runbook](legacy-runtime-migration.md).

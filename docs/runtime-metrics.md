@@ -123,3 +123,28 @@ baseline. A missing scenario has absolute measurements only. Keep environments,
 fixtures and source provenance comparable before interpreting differences;
 shared-host contention can distort results. There is no invented baseline or
 savings claim, and this benchmark never changes runtime policy automatically.
+
+## Accepted-outcome metrics
+
+Routing and workflow reports add `outcome_metrics` without changing existing
+fields. Attempt latency starts at the exact admission reservation `created_at`
+and ends at the earliest bound parent acceptance. This includes post-admission
+work and verification, but excludes earlier parent thinking and queue time.
+Workflow latency starts at creation and ends at the first recorded verified
+transition. Explicit continuation chains start at root admission and end at their
+first recorded acceptance; later linked corrections are counted separately.
+
+Distributions include eligible/measured/missing/pending counts and p50/p90/p95.
+Historical first acceptance is independent of current content freshness: later
+source changes do not erase it, and metrics do not revalidate artifacts.
+First pass means an initial accepted attempt with complete bound local history,
+without earlier failed checks, failed criteria, rejection, retry or continuation.
+`first_pass.rate` uses known assessed outcomes only; unknown coverage is explicit.
+New verification writes bind pending/failed history and all check records to their
+attempt. Legacy incomplete records remain unknown; they are never backfilled.
+
+These are local observed outcomes, not provider latency, model rankings or proof
+of defect-free code. Reports perform no lifecycle refresh or writes. Malformed,
+missing, oversized and linked evidence remains unknown. Replaced attempts cannot
+borrow timing from their successors. Chain traversal is bounded and cycles fail
+closed. Preserve recorded history when retaining timing evidence.

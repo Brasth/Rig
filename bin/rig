@@ -1048,6 +1048,9 @@ cmd_memory() {
     shift
   fi
   case "$sub" in
+    replace|remove)
+      python3 "$(py_script memory.py)" "$sub" "$@"
+      ;;
     show|count)
       python3 "$(py_script memory.py)" "$sub"
       ;;
