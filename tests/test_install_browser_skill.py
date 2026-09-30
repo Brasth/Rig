@@ -46,6 +46,12 @@ class InstallBrowserSkill(unittest.TestCase):
         self.assertIsNone(self.pref())
         self.assertIn("RIG_SKIP_BROWSER_SKILL=1", self.output.getvalue())
 
+    def test_redirected_output_never_prompts_via_controlling_tty(self):
+        with patch.object(mod.sys.stdin, "isatty", return_value=True), \
+             patch("builtins.open") as tty_open:
+            self.assertFalse(mod.has_tty())
+            tty_open.assert_not_called()
+
     def test_no_tty_skips_without_declining(self):
         with patch.object(mod, "has_tty", return_value=False), patch.object(mod, "run_upstream") as upstream:
             self.assertEqual(mod.main([]), 0)
@@ -71,6 +77,20 @@ class InstallBrowserSkill(unittest.TestCase):
         pref = self.pref()
         self.assertFalse(pref["opt_in"])
         self.assertEqual(pref["source"], "flag")
+
+    def test_explicit_decline_overrides_install_and_skip_environment(self):
+        os.environ["RIG_INSTALL_BROWSER_SKILL"] = "1"
+        os.environ["RIG_SKIP_BROWSER_SKILL"] = "1"
+        with patch.object(mod, "run_upstream") as upstream:
+            self.assertEqual(mod.main(["--no-browser-skill"]), 0)
+            upstream.assert_not_called()
+        self.assertFalse(self.pref()["opt_in"])
+
+    def test_conflicting_flags_fail_without_install_or_preference(self):
+        with patch.object(mod, "run_upstream") as upstream:
+            self.assertEqual(mod.main(["--browser-skill", "--no-browser-skill"]), 2)
+            upstream.assert_not_called()
+        self.assertIsNone(self.pref())
 
     def test_declined_preference_skips_without_prompt(self):
         mod.write_preference(False, "prompt")
