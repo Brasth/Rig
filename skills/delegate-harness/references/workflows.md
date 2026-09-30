@@ -19,4 +19,6 @@ Queue lifecycle when bound to a workflow: claimed on create from a parked pendin
 
 UI (`rig tui` Tab Jobs/Queue/Workflows): workflow id, status, accepted/required, running, ASK, blocker, next parent action, title. No estimated progress, savings, or ETA.
 
+Read-only `rig_task_timeline` (human `rig timeline --workflow ID` or `--job ID`) joins bounded persisted evidence with exact attempt binding. It never refreshes state, accepts work, reconstructs latest-only ASK/inbox history, or infers failure causes. Recorded acceptance is historical, Stop intent is not termination, timestamps are not causal proof, and missing/partial/untimed coverage stays explicit. Reuse the returned selected attempt ID for later reads of the same job attempt. See docs/task-timeline.md.
+
 Combined rollout with wait-cancel: stop new admissions, finish or cancel existing work, confirm stopped, accept or close scopes, preserve data, update every launcher and managed protocol, then fully restart all parent/MCP sessions. Compatible controller rollback preserves `[orchestration] mode` and all data; incompatible versions require a separate reviewed migration.
