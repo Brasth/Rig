@@ -89,7 +89,7 @@ prepare_brief() {
   source="$(mktemp "$JOB_DIR/brief.src.XXXXXX")"
   cp "$BRIEF_IN" "$source"
   {
-    if ! command grep -q "You are a worker, not the orchestrator" "$source" 2>/dev/null; then
+    if ! (command grep -q "You are a worker, not the orchestrator" "$source" 2>/dev/null); then
       printf '%s\n\n' "$WORKER_PREAMBLE"
     fi
     cat "$source"

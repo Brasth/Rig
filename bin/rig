@@ -235,11 +235,13 @@ ensure_skill_link() {
   fi
 }
 
+# Bash 3.2 can apply errexit inside guarded `command` calls. Keep their
+# failure inside a subshell so the surrounding condition handles it normally.
 maybe_copy_codex_agent() {
   local src="$1" dest="$2"
   mkdir -p "$(dirname "$dest")"
   if [[ -e "$dest" ]]; then
-    if command grep -q "You are a Rig" "$dest" 2>/dev/null; then
+    if (command grep -q "You are a Rig" "$dest" 2>/dev/null); then
       install_file "$src" "$dest"
       printf 'refreshed %s\n' "$dest"
       return 0
@@ -255,7 +257,7 @@ maybe_copy_queue_adapter() {
   local src="$1" dest="$2"
   mkdir -p "$(dirname "$dest")"
   if [[ -e "$dest" ]]; then
-    if command grep -q "Park a Rig" "$dest" 2>/dev/null || command grep -q "rig queue" "$dest" 2>/dev/null; then
+    if (command grep -q "Park a Rig" "$dest" 2>/dev/null) || (command grep -q "rig queue" "$dest" 2>/dev/null); then
       install_file "$src" "$dest"
       printf 'refreshed %s\n' "$dest"
       return 0
@@ -279,8 +281,9 @@ cmd_setup() {
       *) echo "rig setup: unknown flag $1" >&2; return 2 ;;
     esac
   done
-  if [[ " ${cua_flags[*]} " == *" --cua-driver "* && " ${cua_flags[*]} " == *" --no-cua-driver "* ]] ||
-     [[ " ${bsk_flags[*]} " == *" --browser-skill "* && " ${bsk_flags[*]} " == *" --no-browser-skill "* ]]; then
+  # Bash 3.2 treats empty arrays as unset under nounset.
+  if [[ " ${cua_flags[*]-} " == *" --cua-driver "* && " ${cua_flags[*]-} " == *" --no-cua-driver "* ]] ||
+     [[ " ${bsk_flags[*]-} " == *" --browser-skill "* && " ${bsk_flags[*]-} " == *" --no-browser-skill "* ]]; then
     echo "rig setup: choose either the install or skip flag for each optional component" >&2
     return 2
   fi
@@ -298,13 +301,13 @@ cmd_setup() {
   local optional_py
   optional_py="$(py_script install-cua-driver.py)"
   if [[ -f "$optional_py" ]]; then
-    python3 "$optional_py" "${cua_flags[@]}" || true
+    python3 "$optional_py" ${cua_flags[@]+"${cua_flags[@]}"} || true
   else
     echo "cua-driver setup: installer missing; skip. Enable later: rig computer-use setup"
   fi
   optional_py="$(py_script install-browser-skill.py)"
   if [[ -f "$optional_py" ]]; then
-    python3 "$optional_py" "${bsk_flags[@]}" || true
+    python3 "$optional_py" ${bsk_flags[@]+"${bsk_flags[@]}"} || true
   else
     echo "browser-skill setup: installer missing; skip. Enable later: rig browser-skill setup"
   fi
@@ -352,7 +355,7 @@ cmd_setup() {
   if [[ -f "$hook_py" ]]; then
     mkdir -p "$HOME/.grok/hooks"
     hook_dest="$HOME/.grok/hooks/rig-queue-submit.json"
-    if [[ -e "$hook_dest" ]] && ! command grep -q "queue_submit_hook" "$hook_dest" 2>/dev/null; then
+    if [[ -e "$hook_dest" ]] && ! (command grep -q "queue_submit_hook" "$hook_dest" 2>/dev/null); then
       printf 'skip %s (exists, not a Rig queue hook)\n' "$hook_dest"
     else
       py_bin="$(command -v python3 || true)"
@@ -429,7 +432,7 @@ PY
     ln -sfn "$dest/bin/rig" "$HOME/.local/bin/rig"
   fi
   if [[ "$shell_ui" -eq 1 ]]; then
-    python3 "$dest/scripts/ui_shell.py" enable "${shell_args[@]}"
+    python3 "$dest/scripts/ui_shell.py" enable ${shell_args[@]+"${shell_args[@]}"}
   fi
   echo "setup ok  RIG_HOME=$dest"
   echo "watch: rig tui   |   rig jobs   |   /rig /queue in Grok, Codex, OpenCode, OMP, Pi, or agy"
@@ -452,7 +455,7 @@ cmd_update() {
     exit 1
   fi
   tmp="$(mktemp)"
-  if ! command curl -fsSL "$url" -o "$tmp"; then
+  if ! (command curl -fsSL "$url" -o "$tmp"); then
     rm -f "$tmp"
     echo "rig update: could not fetch installer from $url" >&2
     exit 1
@@ -665,7 +668,7 @@ cmd_init() {
   if [[ -f "$frag_file" ]]; then
     while IFS= read -r frag || [[ -n "$frag" ]]; do
       [[ -n "$frag" ]] || continue
-      if [[ -f "$gi" ]] && command grep -qxF "$frag" "$gi" 2>/dev/null; then
+      if [[ -f "$gi" ]] && (command grep -qxF "$frag" "$gi" 2>/dev/null); then
         printf 'keep %s (%s)\n' "$gi" "$frag"
       else
         if [[ -s "$gi" ]]; then
