@@ -1588,7 +1588,7 @@ def mutation_guard(repo, job_dir, operation, *, reservation_id="", attempt_id=""
                                 rationale=accepted.get("rationale") or "parent accepted completion")
 
 
-def ownership_next_action(record, *, execution_status="", executor_kind="", verification=None):
+def _ownership_next_action(record, *, execution_status="", executor_kind="", verification=None):
     """Read-only guidance, not recovery authority or proof of completion.
 
     Keep the required evidence explicit so reporting held scope is not mistaken
@@ -1654,6 +1654,46 @@ def ownership_next_action(record, *, execution_status="", executor_kind="", veri
                                "rig_job_reconcile is report-only by default; do not repeat it without new evidence. "
                                "If completion or ownership is unavailable, keep protection and use the owning host or a supported recovery path"}
     return None
+
+
+def ownership_next_action(record, *, execution_status="", executor_kind="", verification=None):
+    """Attach display metadata to the existing guidance; never authorize an action."""
+    action = _ownership_next_action(record, execution_status=execution_status,
+                                   executor_kind=executor_kind, verification=verification)
+    if action is None:
+        return None
+    reasons = {
+        "inspect_verification": "Verification completion needs inspection",
+        "reconcile_legacy": "Legacy work has no authenticated protected attempt",
+        "resolve_unlaunched_owner": "Unlaunched work still holds its scope",
+        "close_unverified": "Stopped work still holds files without acceptance",
+        "independent_review": "Accepted writer scope is held for independent review",
+        "verify_and_accept": "Execution succeeded; current content needs parent acceptance",
+        "inspect_execution": "Stopped work needs a recorded terminal outcome",
+        "confirm_completion": "Execution stop is unconfirmed; protection remains held",
+    }
+    kind = executor_kind or (record.get("owner") or {}).get("kind") or "unknown"
+    actor = "owning host, then parent" if action["kind"] == "confirm_completion" and kind in {
+        "parent", "native_child",
+    } else "parent"
+    return {**action, "actor": actor, "reason": reasons.get(action["kind"], "")}
+
+
+def ownership_action_details(action):
+    """Human display of known evidence fields, never credentials or executable args."""
+    if not isinstance(action, dict):
+        return []
+    fields = []
+    if action.get("actor"):
+        fields.append("Actor: " + str(action["actor"]))
+    if action.get("tool"):
+        mode = ("diagnostic" if action["report_only"] else "mutating; requires evidence") if isinstance(
+            action.get("report_only"), bool) else ""
+        fields.append("Tool: " + str(action["tool"]) + (" (" + mode + ")" if mode else ""))
+    required = action.get("requires")
+    if isinstance(required, list) and required:
+        fields.append("Requires: " + "; ".join(str(item) for item in required))
+    return fields
 
 
 def reconcile(repo, *, job_id="", queue_id="", apply=False, action="report", owner=None,

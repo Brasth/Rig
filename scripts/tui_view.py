@@ -1,6 +1,8 @@
 """Render already-collected board state. No filesystem access or actions."""
 from __future__ import annotations
 
+from admission import ownership_action_details
+
 import curses
 import json
 import textwrap
@@ -294,6 +296,7 @@ def _workflow_detail_lines(row: dict) -> list[str]:
         f"blocker {row.get('blocker') or 'none'}",
         f"next parent action {format_parent_action(action)}",
     ]
+    detail.extend(ownership_action_details(row.get("next_parent_action")))
     if row.get("title"):
         detail.append(f"title  {row['title']}")
     return detail
@@ -304,6 +307,7 @@ def _detail_lines(job: dict) -> list[str]:
     detail = [str(job.get("job_id") or "unknown"), f"status {state}"]
     if job.get("display_action"):
         detail.extend(str(job["display_action"]).split(" | "))
+        detail.extend(ownership_action_details(job.get("ownership_next_action")))
     if job.get("display_reason"):
         detail.append(str(job["display_reason"]))
     model = job.get("model") if job.get("model_source") in {"selected", "observed"} and not job.get("model_inferred") else ""

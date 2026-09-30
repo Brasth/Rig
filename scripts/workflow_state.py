@@ -569,26 +569,55 @@ def _deps_accepted(spec, state, node):
     return True
 
 
+def _with_job_guidance(action, state, node_id):
+    """Keep workflow action kinds compatible while exposing the job's next step."""
+    row = (state.get("nodes") or {}).get(node_id) or {}
+    guidance = row.get("ownership_next_action")
+    if not isinstance(guidance, dict) or not guidance.get("kind"):
+        return action
+    # This is presentation only. The named tool still checks ownership/evidence.
+    return {**action, "node_id": node_id, "job_id": row.get("job_id"),
+            "ownership_next_action": copy.deepcopy(guidance),
+            **{key: copy.deepcopy(guidance[key]) for key in
+               ("tool", "report_only", "requires", "instruction", "actor", "reason") if key in guidance}}
+
+
 def next_parent_action(spec, state):
     status = state.get("status") or "planned"
-    action = state.get("parent_action")
-    if isinstance(action, dict) and action.get("kind"):
-        return action
     if state.get("cancel_requested") and status != "cancelled":
         return {"kind": "confirm_stop"}
+    asking = [nid for nid, row in (state.get("nodes") or {}).items()
+              if row.get("guidance_ask", row.get("status") == "ask") and not row.get("guidance_blocker")]
+    if asking:
+        return {"kind": "allow_or_deny", "node_id": asking[0], "job_id": (state["nodes"][asking[0]] or {}).get("job_id")}
+    for node_id, row in (state.get("nodes") or {}).items():
+        if row.get("guidance_blocker"):
+            return {"kind": "reconcile", "node_id": node_id, "job_id": row.get("job_id"),
+                    "tool": "rig_job_show", "actor": "parent", "report_only": True,
+                    "reason": row["guidance_blocker"], "requires": ["current job and ownership evidence"],
+                    "instruction": "Inspect the job and its attempt evidence with rig_job_show. "
+                                   "Current evidence is unavailable or mismatched; do not approve, accept, or recover "
+                                   "from saved workflow guidance. Do not repeat reconciliation without new evidence"}
+    action = state.get("parent_action")
+    if isinstance(action, dict) and action.get("kind"):
+        return _with_job_guidance(action, state, action.get("node_id"))
     failure = state.get("failure") or {}
     if failure.get("node_id"):
-        return {"kind": "resolve", "node_id": failure["node_id"]}
+        return _with_job_guidance({"kind": "resolve", "node_id": failure["node_id"]}, state, failure["node_id"])
     pending = [item for item in (state.get("coordination") or []) if item.get("status") == "pending"]
     if pending:
         return {"kind": "coordination_reply", "request_id": pending[0].get("id")}
-    asking = [nid for nid, row in (state.get("nodes") or {}).items() if row.get("status") == "ask"]
-    if asking:
-        return {"kind": "allow_or_deny", "node_id": asking[0], "job_id": (state["nodes"][asking[0]] or {}).get("job_id")}
     unconfirmed = [nid for nid, row in (state.get("nodes") or {}).items() if row.get("status") == "unconfirmed"]
     if unconfirmed:
         row = state["nodes"][unconfirmed[0]] or {}
-        return {"kind": "reconcile", "node_id": unconfirmed[0], "job_id": row.get("job_id")}
+        action = _with_job_guidance({"kind": "reconcile", "node_id": unconfirmed[0],
+                                     "job_id": row.get("job_id")}, state, unconfirmed[0])
+        if "ownership_next_action" not in action:
+            action.update(tool="rig_job_show", actor="parent", report_only=True,
+                          requires=["current job and ownership evidence"],
+                          instruction="Inspect the job and its ownership evidence with rig_job_show. "
+                                      "Do not repeat reconciliation without new evidence; unknown ownership stays protected")
+        return action
     gated = [
         node["id"] for node in spec.get("nodes") or []
         if node.get("effects") in GATED_EFFECTS
@@ -602,7 +631,11 @@ def next_parent_action(spec, state):
     if status in {"planned", "running"}:
         return {"kind": "advance"}
     if status == "completed-unverified":
-        return {"kind": "accept", "reason": "final parent acceptance required"}
+        action = {"kind": "accept", "reason": "final parent acceptance required"}
+        for node_id, row in (state.get("nodes") or {}).items():
+            if row.get("status") == "completed-unverified":
+                return _with_job_guidance(action, state, node_id)
+        return action
     if status == "attention":
         return {"kind": "accept", "reason": "parent acceptance required"}
     if status == "cancel-requested":
@@ -733,6 +766,44 @@ def list_ids(repo):
     return out
 
 
+def project_guidance(repo, state):
+    """Read current job evidence into a display copy; never refresh workflow state."""
+    import jobs
+
+    projected = copy.deepcopy(state)
+    for node_id, row in (projected.get("nodes") or {}).items():
+        row.pop("ownership_next_action", None)
+        row.pop("guidance_blocker", None)
+        row.pop("guidance_ask", None)
+        if row.get("status") == "skipped" or not row.get("job_id"):
+            continue
+        row["guidance_ask"] = False
+        try:
+            folder = jobs._job_path(Path(repo), row["job_id"])
+            job = jobs.load_job(folder, include_activity=False)
+            if not job:
+                row["guidance_blocker"] = "Current job metadata is unavailable"
+                continue
+            if row.get("attempt_id") and row["attempt_id"] != job.get("attempt_id"):
+                row["guidance_blocker"] = "Workflow job attempt changed"
+                continue
+            reservation = admission.get_reservation(repo, job.get("reservation_id")) if job.get("reservation_id") else None
+            if (reservation and reservation.get("job_id") == job["job_id"]
+                    and reservation.get("attempt_id") == job.get("attempt_id")):
+                job["reservation"] = reservation
+            elif job.get("reservation_id"):
+                row["guidance_blocker"] = "Current reservation is unavailable or mismatched"
+                continue
+            job = jobs.project_job(job)
+            row["ownership_next_action"] = job.get("ownership_next_action")
+            row["guidance_ask"] = job.get("effective") == "ask"
+        except (OSError, ValueError, TypeError, SystemExit):
+            # Missing or malformed current evidence cannot revive saved guidance.
+            row["guidance_blocker"] = "Current job evidence is unavailable"
+            continue
+    return projected
+
+
 def list_workflows(repo, *, include_terminal=True):
     rows = []
     for wid in list_ids(repo):
@@ -741,7 +812,7 @@ def list_workflows(repo, *, include_terminal=True):
             continue
         if not include_terminal and (state.get("status") in TERMINAL):
             continue
-        rows.append(summary_row(spec, state))
+        rows.append(summary_row(spec, project_guidance(repo, state)))
     rows.sort(key=lambda row: (0 if row["status"] in ACTIVE else 1, row.get("updated_at") or "", row["workflow_id"]))
     return rows
 
@@ -1004,10 +1075,16 @@ def refresh_locked(root, spec, state):
     asking = False
     running = 0
     live = 0
+    current_guidance = project_guidance(root, state).get("nodes") or {}
     for node in spec.get("nodes") or []:
         row = state.setdefault("nodes", {}).setdefault(node["id"], _empty_node_state(node))
         job_id = row.get("job_id") or ""
         meta = _job_row(root, job_id)
+        # Use exactly the same read-only job projection as list/session/UI.
+        for field in ("ownership_next_action", "guidance_blocker", "guidance_ask"):
+            row.pop(field, None)
+            if field in current_guidance.get(node["id"], {}):
+                row[field] = current_guidance[node["id"]][field]
         if meta:
             if row.get("status") == "skipped":
                 continue
@@ -1018,6 +1095,7 @@ def refresh_locked(root, spec, state):
                 import ask as rig_ask
                 if rig_ask.load_ask(root / ".rig" / "jobs" / job_id):
                     effective = "ask"
+            same_attempt = not row.get("attempt_id") or row["attempt_id"] == meta.get("attempt_id")
             if already_accepted:
                 accepted, snap = _job_acceptance(root, job_id, node.get("files") or [])
                 if accepted:
@@ -1029,9 +1107,9 @@ def refresh_locked(root, spec, state):
                     if status == "running":
                         live += 1
                         running += 1
-                    if meta.get("reservation_id"):
+                    if same_attempt and meta.get("reservation_id"):
                         row["reservation_id"] = meta.get("reservation_id")
-                    if meta.get("attempt_id"):
+                    if same_attempt and meta.get("attempt_id"):
                         row["attempt_id"] = meta.get("attempt_id")
                     continue
                 row["accepted"] = False
@@ -1071,9 +1149,9 @@ def refresh_locked(root, spec, state):
             elif status == "cancelled":
                 row["status"] = "cancelled"
                 row["ended_at"] = row.get("ended_at") or meta.get("ended_at") or _now()
-            if meta.get("reservation_id"):
+            if same_attempt and meta.get("reservation_id"):
                 row["reservation_id"] = meta.get("reservation_id")
-            if meta.get("attempt_id"):
+            if same_attempt and meta.get("attempt_id"):
                 row["attempt_id"] = meta.get("attempt_id")
         elif row.get("status") == "launching":
             live += 1
