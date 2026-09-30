@@ -230,3 +230,5 @@ Legacy restores the previous ladder and catalog resolver; `--policy-mode legacy`
 Orchestration is separate from routing: `[orchestration] mode = "adaptive"` (default) or `"single"`; `max_nodes` is 12. Queue and worker caps remain authoritative. Adaptive decomposes eligible work into a DAG; `single` keeps one-job behavior. Children never spawn or message children. No estimated progress, savings, or ETA.
 
 For runtime upgrades or rollback: stop new admissions, finish or cancel existing work, confirm stopped, accept or close scopes, preserve data, update all launchers and managed protocols, then fully restart parent/MCP sessions before admitting work. Mixed-version admission writers are unsupported. Adaptive-workflow rollback sets `[orchestration] mode = "single"` and never deletes data. A tested checkout is not an installed or live-runtime-accepted upgrade.
+
+Runtime reports add domain slices, explicit execution-latency and token coverage, and forward-only workflow blocked-time evidence. See [local runtime metrics](runtime-metrics.md) for definitions, unknown/partial coverage and the opt-in offline performance benchmark.

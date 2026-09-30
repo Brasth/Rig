@@ -293,6 +293,50 @@ class RoutingReport(unittest.TestCase):
         self.assertIsNone(result["totals"]["token_components"]["total"]["sum"])
         self.assertIsNone(result["groups"][0]["token_components"]["input"]["median"])
 
+    def test_domain_slices_latency_samples_and_cancellation(self):
+        domain = {"name": "backend", "source": "explicit", "rule": "explicit:backend",
+                  "policy": "builtin:backend", "fallback": "scored", "reason": "fixture",
+                  "selection": "selected", "parent_only": False,
+                  "preferred_profiles": [], "requirements": [], "research_sources": []}
+        sidecar = {"schema_version": 1, "attempt_id": "att-1", "routing": {
+            "policy_mode": "smart", "policy_version": 2, "required_tier": "standard",
+            "selected_profile": {"id": "grok-4.6-high"}, "task_domain": domain}}
+        jobs = [_job(token_usage={"input": 0}),
+                _job(job_id="j2", ended_at="bad", elapsed_s=float("nan")),
+                _job(job_id="j3", status="cancelled", continues_job_id="prior")]
+        result = self._build(jobs, sidecar=sidecar)
+        row = result["domains"]["backend"]
+        self.assertEqual(row["attempts"], 3)
+        self.assertEqual(row["execution_failures"], 0)
+        self.assertEqual(row["cancels"], 1)
+        self.assertEqual(row["continuations"], 1)
+        self.assertEqual(row["execution_latency"]["eligible_count"], 2)
+        self.assertEqual(row["execution_latency"]["sample_count"], 1)
+        self.assertEqual(row["execution_latency"]["missing_count"], 1)
+        self.assertEqual(result["totals"]["execution_latency"], row["execution_latency"])
+        self.assertEqual(row["token_components"]["input"]["known"], 1)
+        self.assertEqual(row["token_components"]["input"]["unknown"], 2)
+        self.assertEqual(row["token_components"]["input"]["sum"], 0)
+        self.assertEqual(row["token_components"]["total"]["unknown"], 3)
+        self.assertIsNone(row["token_components"]["total"]["sum"])
+        self.assertIn("domain=backend", report.format_report(result))
+
+    def test_domain_absence_is_unknown_not_retrospectively_inferred(self):
+        result = self._build([_job(task="backend API", role="review")])
+        self.assertEqual(set(result["domains"]), {"unknown"})
+        self.assertEqual(result["domains"]["unknown"]["attempts"], 1)
+
+    def test_invalid_duration_samples_are_never_zero_filled(self):
+        jobs = [_job(ended_at="", elapsed_s=value, job_id=str(index))
+                for index, value in enumerate([-1, float("nan"), float("inf"), True, None])]
+        result = self._build(jobs)
+        row = result["totals"]["execution_latency"]
+        self.assertEqual(row["eligible_count"], 5)
+        self.assertEqual(row["sample_count"], 0)
+        self.assertIsNone(row["p50_s"])
+        self.assertIsNone(result["totals"]["median_duration_s"])
+
+
 
 if __name__ == "__main__":
     unittest.main()

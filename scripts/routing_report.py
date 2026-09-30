@@ -6,11 +6,12 @@ import json
 import statistics
 import sys
 import time
-from datetime import datetime, timezone
 from pathlib import Path
 
 import jobs as rig_jobs
 import routing_policy
+import routing_domains
+import runtime_metrics
 import token_usage as rig_tokens
 import verification
 
@@ -18,18 +19,7 @@ STRATEGIES = routing_policy.EXECUTION_STRATEGIES
 
 
 def _parse_stamp(raw: str) -> float | None:
-    text = (raw or "").strip()
-    if not text:
-        return None
-    for fmt in ("%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%dT%H:%M:%S.%fZ"):
-        try:
-            return datetime.strptime(text, fmt).replace(tzinfo=timezone.utc).timestamp()
-        except ValueError:
-            continue
-    try:
-        return datetime.fromisoformat(text.replace("Z", "+00:00")).timestamp()
-    except ValueError:
-        return None
+    return runtime_metrics.parse_stamp(raw)
 
 
 def _job_stamp(job: dict, sidecar: dict | None) -> float | None:
@@ -43,7 +33,7 @@ def _job_stamp(job: dict, sidecar: dict | None) -> float | None:
             return stamp
     mtime = job.get("mtime")
     try:
-        return float(mtime) if mtime else None
+        return runtime_metrics.nonnegative(mtime) if mtime else None
     except (TypeError, ValueError):
         return None
 
@@ -121,6 +111,8 @@ def _empty_bucket() -> dict:
         "stale": 0,
         "exit0": 0,
         "durations": [],
+        "continuations": 0,
+        "assessed": 0,
         "token_known": 0,
         "token_unknown": 0,
         "token_values": {field: [] for field in rig_tokens.FIELDS},
@@ -192,7 +184,9 @@ def build_report(repo: Path, *, days: int = 30, now: float | None = None) -> dic
         "token_unknown": 0,
         "token_values": {field: [] for field in rig_tokens.FIELDS},
     }
+    totals.update(durations=[], completed=0, continuations=0)
     strategies = {name: _empty_bucket() for name in STRATEGIES}
+    domains = {}
 
     def ensure(key: tuple) -> dict:
         if key not in groups:
@@ -246,15 +240,19 @@ def build_report(repo: Path, *, days: int = 30, now: float | None = None) -> dic
             totals["missing_provenance"] += 1
             missing["missing_provenance"] += 1
         strategy_bucket = strategies.get(strategy) if origin == "smart" else None
-        targets = [bucket]
+        domain_evidence = (routing or {}).get("task_domain") if isinstance(routing, dict) else None
+        domain_name = domain_evidence["name"] if routing_domains.evidence_ok(domain_evidence) else "unknown"
+        domain_bucket = domains.setdefault(domain_name, _empty_bucket())
+        targets = [bucket, domain_bucket]
         if strategy_bucket is not None:
             targets.append(strategy_bucket)
         for target in targets:
             target["attempts"] += 1
         usage = rig_tokens.load_token_usage(job.get("token_usage"))
-        usage_buckets = [bucket, totals]
-        if strategy_bucket is not None:
-            usage_buckets.append(strategy_bucket)
+        usage_buckets = [*targets, totals]
+        if job.get("continues_job_id"):
+            for target in (*targets, totals):
+                target["continuations"] += 1
         if usage:
             for target in usage_buckets:
                 target["token_known"] += 1
@@ -283,14 +281,8 @@ def build_report(repo: Path, *, days: int = 30, now: float | None = None) -> dic
             for target in targets:
                 target["execution_failures"] += 1
         if status in {"ok", "fail", "timeout"} and execution_mode != "not_started":
-            elapsed = None
-            raw_elapsed = job.get("elapsed_s")
-            if raw_elapsed is not None:
-                try:
-                    elapsed = float(raw_elapsed)
-                except (TypeError, ValueError):
-                    elapsed = None
-            for target in targets:
+            elapsed = runtime_metrics.execution_latency(job)
+            for target in (*targets, totals):
                 target["completed"] += 1
                 if elapsed is not None:
                     target["durations"].append(elapsed)
@@ -303,7 +295,8 @@ def build_report(repo: Path, *, days: int = 30, now: float | None = None) -> dic
         freshness = assessed.get("freshness")
         stale = _is_stale(assessed)
         if acceptance in {"accepted", "rejected"}:
-            totals["assessed"] += 1
+            for target in (*targets, totals):
+                target["assessed"] += 1
             if acceptance == "accepted" and state == "verified" and freshness == "current":
                 for target in (*targets, totals):
                     target["accepted"] += 1
@@ -328,12 +321,15 @@ def build_report(repo: Path, *, days: int = 30, now: float | None = None) -> dic
                 target["pending"] += 1
                 target["unverified"] += 1
 
-    def _token_stats(values: dict) -> dict:
+    def _token_stats(values: dict, attempts: int) -> dict:
         out = {}
         for field in rig_tokens.FIELDS:
             series = list(values.get(field) or [])
             out[field] = {
                 "n": len(series),
+                "known": len(series),
+                "unknown": attempts - len(series),
+                "coverage": len(series) / attempts if attempts else None,
                 "sum": int(sum(series)) if series else None,
                 "median": _median([float(item) for item in series]),
             }
@@ -344,6 +340,9 @@ def build_report(repo: Path, *, days: int = 30, now: float | None = None) -> dic
         token_values = bucket.pop("token_values", {field: [] for field in rig_tokens.FIELDS})
         out = dict(bucket)
         out["median_duration_s"] = _median(durations)
+        out["execution_latency"] = runtime_metrics.distribution(durations, eligible=out.get("completed", 0))
+        out["accepted_numerator"] = out.get("accepted", 0)
+        out["accepted_denominator"] = out.get("assessed", 0)
         known = int(out.get("token_known") or 0)
         unknown = int(out.get("token_unknown") or 0)
         out["token_coverage"] = {
@@ -351,7 +350,7 @@ def build_report(repo: Path, *, days: int = 30, now: float | None = None) -> dic
             "unknown": unknown,
             "note": "unknown usage is not zero and is excluded from token aggregates",
         }
-        out["token_components"] = _token_stats(token_values)
+        out["token_components"] = _token_stats(token_values, out.get("attempts", 0))
         return out
 
     grouped = [finish(item) for item in groups.values()]
@@ -380,6 +379,8 @@ def build_report(repo: Path, *, days: int = 30, now: float | None = None) -> dic
                 "missing/malformed sidecar evidence is never accepted"
             ),
         },
+        "definitions": dict(runtime_metrics.DEFINITIONS),
+        "domains": {name: finish(bucket) for name, bucket in sorted(domains.items())},
         "strategies": {name: finish(bucket) for name, bucket in strategies.items()},
         "groups": grouped,
         "legacy": finish(legacy),
@@ -410,6 +411,12 @@ def format_report(report: dict) -> str:
         ),
         totals["note"],
     ]
+    latency = totals.get("execution_latency") or {}
+    lines.append(f"execution_latency n={latency.get('sample_count', 0)}/{latency.get('eligible_count', 0)} "
+                 f"p50_s={latency.get('p50_s')} p95_s={latency.get('p95_s')}")
+    for name, row in (report.get("domains") or {}).items():
+        lines.append(f"  domain={name} n={row['attempts']} accepted={row['accepted_numerator']}/{row['accepted_denominator']} "
+                     f"fail_exec={row['execution_failures']} cancel={row['cancels']}")
     for name in STRATEGIES:
         row = (report.get("strategies") or {}).get(name) or {}
         if not row.get("attempts"):

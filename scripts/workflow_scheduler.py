@@ -5,12 +5,15 @@ from __future__ import annotations
 import copy
 import inspect
 import json
+import time
+from datetime import datetime, timezone
 
 import admission
 import harness
 import jobs as rig_jobs
 import route as rig_route
 import workflow_state as wf
+import runtime_metrics
 
 SchedulerError = wf.WorkflowError
 
@@ -459,6 +462,7 @@ def advance(repo, workflow_id, *, owner=None, owner_session="", owner_token="",
             wf.save_state(root, state)
             payload = {
                 "node_id": node["id"], "job_id": job.get("job_id") or "",
+                "attempt_id": job.get("attempt_id") or "",
                 "worker": choice.get("worker") or "", "routing": choice.get("routing"),
             }
             if is_parent:
@@ -640,9 +644,9 @@ def wait_workflow(repo, workflow_id, timeout=None, *, on_tick=None, cancel_event
         stop.wait(remaining)
 
 
-def report(repo, workflow_id):
-    spec, state = wf.load_pair(repo, workflow_id, required=True)
-    state = wf.refresh(repo, workflow_id)
+def report(repo, workflow_id, *, now=None):
+    """Read recorded evidence only; never refresh, accept, or emit transitions."""
+    observed_at = time.time() if now is None else now
     spec, current = wf.load_pair(repo, workflow_id, required=True)
     metrics = current.get("metrics") or {}
     node_times = []
@@ -652,14 +656,54 @@ def report(repo, workflow_id):
         started, ended = row.get("started_at") or "", row.get("ended_at") or ""
         elapsed = None
         if started:
-            elapsed = rig_jobs.elapsed_seconds(started, ended, live=row.get("status") in {"running", "ask"})
+            end = ended or ("" if row.get("status") not in {"running", "ask"} else
+                            datetime.fromtimestamp(observed_at, timezone.utc).isoformat())
+            elapsed = runtime_metrics.duration(started, end)
         node_times.append({"node_id": node["id"], "elapsed_s": elapsed, "status": row.get("status")})
         outcomes.append({
             "node_id": node["id"], "role": node.get("role"), "status": row.get("status"),
             "accepted": bool(row.get("accepted")), "job_id": row.get("job_id") or "",
         })
-    wall = rig_jobs.elapsed_seconds(metrics.get("started_at") or current.get("created_at") or "",
-                                    metrics.get("ended_at") or "", live=current.get("status") in wf.ACTIVE)
+    wall_end = metrics.get("ended_at") or (current.get("updated_at") if current.get("status") in wf.TERMINAL else
+                                           datetime.fromtimestamp(observed_at, timezone.utc).isoformat())
+    wall = runtime_metrics.duration(metrics.get("started_at") or current.get("created_at") or "", wall_end)
+    events = wf.list_events(repo, workflow_id)
+    identities = {(str(row.get("job_id") or ""), str(row.get("attempt_id") or ""))
+                  for row in (current.get("nodes") or {}).values() if row.get("job_id")}
+    for event in events:
+        if event.get("job_id"):
+            identities.add((str(event["job_id"]), str(event.get("attempt_id") or "")))
+        for row in event.get("attempts") or []:
+            if isinstance(row, dict) and row.get("job_id"):
+                identities.add((str(row["job_id"]), str(row.get("attempt_id") or "")))
+    recorded_jobs = {}
+    missing_attempts = 0
+    scoped_job_ids = {job_id for job_id, attempt_id in identities if attempt_id}
+    for job_id, attempt_id in sorted(identities):
+        if not attempt_id:
+            # Old launch events cannot bind a later incarnation of a job ID.
+            # A separate scoped reference may still account for the current job.
+            if job_id not in scoped_job_ids:
+                missing_attempts += 1
+            continue
+        if not admission._ID.fullmatch(job_id) or job_id in {".", ".."}:
+            missing_attempts += 1
+            continue
+        job = wf._job_row(wf._root(repo), job_id)
+        if not job or (attempt_id and job.get("attempt_id") != attempt_id):
+            missing_attempts += 1
+            continue
+        recorded_jobs[(job_id, str(job.get("attempt_id") or ""))] = {**job, "job_id": job_id}
+    runtime = runtime_metrics.workflow_metrics(spec, current, events, list(recorded_jobs.values()), now=observed_at)
+    runtime["attempt_coverage"]["missing"] = missing_attempts
+    if missing_attempts:
+        runtime["blocked_time"]["coverage"] = "partial" if runtime["blocked_time"]["observed_wall_s"] is not None else "unknown"
+        runtime["blocked_time"]["known_zero"] = False
+    if (wf.workflow_dir(repo, workflow_id) / "runtime-gap.json").exists():
+        blocked = runtime["blocked_time"]
+        blocked["coverage"] = "partial" if blocked["observed_wall_s"] is not None else "unknown"
+        blocked["known_zero"] = False
+        blocked["persistence_gap"] = True
     return {
         "workflow_id": workflow_id,
         "status": current.get("status"),
@@ -670,5 +714,7 @@ def report(repo, workflow_id):
         "outcomes": outcomes,
         "accepted": wf.summary_counts(spec, current)["accepted"],
         "required": wf.summary_counts(spec, current)["required"],
-        "events": wf.list_events(repo, workflow_id),
+        "events": events,
+        "runtime_metrics": runtime,
+        "report_freshness": "recorded state; use workflow advance/wait for lifecycle reconciliation",
     }

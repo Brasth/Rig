@@ -114,6 +114,60 @@ def parse_prompt_args(args: dict | None) -> tuple[str, dict, str]:
     return tool, inp if isinstance(inp, dict) else {}, uid
 
 
+def _record_transition(job_dir: Path, request: dict, phase: str, at: str) -> None:
+    """Append content-free, attempt-scoped workflow evidence after releasing ASK lock.
+
+    Never changes a permission answer or propagates a metrics persistence failure.
+    Standalone jobs retain their existing latest-ASK semantics (no invented history).
+    """
+    gap_path = None
+    try:
+        folder = Path(job_dir).resolve()
+        if folder.parent.name != "jobs" or folder.parent.parent.name != ".rig":
+            return
+        root = folder.parent.parent.parent
+        meta = _read_json(folder / "meta.json") or {}
+        wid, nid = meta.get("workflow_id"), meta.get("workflow_node_id")
+        if not wid or not nid or not request.get("attempt_id"):
+            return
+        if any((meta.get(key) or "") != (request.get(key) or "")
+               for key in ("attempt_id", "reservation_id")):
+            return
+        import admission
+        import workflow_state as wf
+
+        workflow_folder = wf.workflow_dir(root, wid)
+        if not (workflow_folder / "spec.json").is_file():
+            return
+        gap_path = workflow_folder / "runtime-gap.json"
+        # Metrics never hold up an ASK on the admission lock. Contention is a
+        # coverage gap, not a reason to delay or alter a permission answer.
+        with admission.transaction(root, timeout=0):
+            spec, state = wf.load_pair(root, wid)
+            row = ((state or {}).get("nodes") or {}).get(nid) or {}
+            if not spec or not row:
+                return
+            # A launch may write its first ASK before the scheduler binds the
+            # returned job identity. Otherwise require the exact bound attempt.
+            if not (row.get("status") == "launching" and not row.get("job_id")):
+                if row.get("job_id") != folder.name or row.get("attempt_id") != request["attempt_id"]:
+                    return
+            wf.append_event(root, wid, "runtime-ask", {
+                "schema_version": 1, "node_id": nid, "job_id": folder.name,
+                "attempt_id": request["attempt_id"], "ask_id": request["ask_id"],
+                "replaces_ask_id": request.get("replaces_ask_id") or "",
+                "phase": phase, "observed_at": at,
+            })
+    except (OSError, ValueError):
+        if gap_path is not None:
+            try:
+                # An independent monotonic gap marker needs no admission lock
+                # and cannot overwrite workflow state or acceptance evidence.
+                admission._write(gap_path, {"version": 1})
+            except (OSError, ValueError):
+                pass
+
+
 def write_ask(
     job_dir: Path,
     tool_name: str,
@@ -137,8 +191,13 @@ def write_ask(
     with _locked(job_dir):
         meta = _read_json(Path(job_dir) / "meta.json") or {}
         obj.update({key: str(meta.get(key) or "") for key in ("attempt_id", "reservation_id")})
+        previous = _pending(job_dir)
+        if (previous and previous.get("attempt_id") == obj.get("attempt_id")
+                and not _matches(_read_json(reply_path(job_dir)), previous)):
+            obj["replaces_ask_id"] = previous["ask_id"]
         reply_path(job_dir).unlink(missing_ok=True)
         _write_json(ask_path(job_dir), obj)
+    _record_transition(job_dir, obj, "open", obj["asked_at"])
     _owned_requests()[str(Path(job_dir).resolve())] = obj
     return obj
 
@@ -179,7 +238,8 @@ def write_reply(job_dir: Path, behavior: str, message: str = "", tool_use_id: st
                ("ask_id", "attempt_id", "reservation_id", "tool_use_id")}
         obj.update(behavior=behavior, message=message, answered_at=iso_now())
         _write_json(reply_path(job_dir), obj)
-        return obj
+    _record_transition(job_dir, obj, "close", obj["answered_at"])
+    return obj
 
 
 def wait_reply(job_dir: Path, timeout: float | None = None, *, expected: dict | None = None) -> dict:
