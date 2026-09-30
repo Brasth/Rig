@@ -1067,3 +1067,7 @@ Setup/configuration remains `rig setup`, `rig update`, `rig init`, `rig doctor`,
 # Repository lifecycle
 
 `rig on` and `rig off` are repository-shared lifecycle switches stored in `.rig/harness.toml` as `[project] enabled = true|false`. Older harnesses without this key remain enabled. Off is idempotent, preserves jobs, workflows, queue, memory, evidence, skills and worker/routing settings, and refuses if active ownership exists. Pending queue entries do not block it. On restores the managed Rig instructions and is idempotent. Start a new parent thread after either command. This is not the same as worker flags, computer-use/BrowserSkill capability flags, or machine-wide uninstall.
+
+### Runtime evidence reports
+
+Routing and workflow reports expose local execution-latency distributions, sample/token coverage, recorded domain outcomes, retries and continuations, and forward-only blocked-time observations. Workflow report reads do not refresh state or affect acceptance. See [runtime metrics](runtime-metrics.md) for exact definitions, legacy/partial coverage, and the opt-in offline startup/routing/status benchmark.

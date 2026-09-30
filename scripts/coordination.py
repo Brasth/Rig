@@ -64,6 +64,7 @@ def request(repo, job_id, kind, text, payload=None):
             "kind": kind,
             "status": "pending",
             "job_id": job_id,
+            "attempt_id": meta.get("attempt_id") or "",
             "node_id": nid,
             "text": text.strip(),
             "payload": extra,

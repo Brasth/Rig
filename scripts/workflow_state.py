@@ -15,6 +15,7 @@ from pathlib import Path
 import admission
 import harness
 import routing_domains
+import runtime_metrics
 
 WorkflowError = admission.AdmissionError
 
@@ -472,7 +473,8 @@ def _new_state(spec, *, owner):
         "cancel_requested": False,
         "parent_action": None,
         "advance_generation": 0,
-        "metrics": {"started_at": "", "ended_at": "", "max_concurrency": 0, "launches": 0},
+        "metrics": {"started_at": "", "ended_at": "", "max_concurrency": 0, "launches": 0,
+                    "runtime_from_creation": True},
         "owner": admission._public_owner(owner) if hasattr(admission, "_public_owner") else {
             key: value for key, value in (owner or {}).items() if key != "owner_token"
         },
@@ -726,7 +728,28 @@ def save_state(repo, state):
     state = copy.deepcopy(state)
     state["updated_at"] = _now()
     state.pop("owner_token", None)
-    admission._write(_state_path(workflow_dir(repo, state["workflow_id"])), state)
+    path = _state_path(workflow_dir(repo, state["workflow_id"]))
+    previous = _read_legacy(path) or {}
+    old_metrics = previous.get("metrics") or {}
+    metrics = state.setdefault("metrics", {})
+    snapshot = runtime_metrics.blocked_snapshot(state)
+    changed = old_metrics.get("runtime_snapshot") != snapshot
+    revision = old_metrics.get("runtime_revision")
+    revision = revision if type(revision) is int and revision >= 0 else 0
+    metrics["runtime_from_creation"] = bool(metrics.get("runtime_from_creation"))
+    metrics["runtime_revision"] = revision + int(changed)
+    metrics["runtime_snapshot"] = snapshot
+    admission._write(path, state)
+    if changed:
+        # Evidence must not become admission/acceptance authority. A missing
+        # event leaves a revision gap that reports expose as partial coverage.
+        try:
+            append_event(repo, state["workflow_id"], "runtime-state", {
+                "schema_version": 1, "runtime_revision": metrics["runtime_revision"],
+                "observed_at": state["updated_at"], **snapshot,
+            })
+        except (OSError, ValueError):
+            pass
     return state
 
 
@@ -945,6 +968,7 @@ def create_workflow(repo, raw, *, owner=None, owner_session="", queue_id=""):
             _bind_queue(root, spec, state, "claimed")
         admission._write(_state_path(folder), state)
         append_event(root, wid, "created", {"spec_hash": spec["spec_hash"], "nodes": [n["id"] for n in spec["nodes"]]})
+        state = save_state(root, state)
         public = public_record(spec, state)
         return {
             **public,

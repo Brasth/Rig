@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
-"""Measure session and workflow-list overhead for synthetic historical workflows.
+"""Measure opt-in local runtime overhead with synthetic historical workflows.
 
 Never launches vendor processes or networks. Runs in a temporary repo and cleans up.
 Does not invent a baseline or savings; comparison requires an explicit recorded file.
+Defaults remain session,workflows. Opt in to status,jobs,routing,startup with
+--surfaces. Startup launches only guarded local Python, never a worker.
 """
 from __future__ import annotations
 
@@ -32,15 +34,52 @@ import harness
 import jobs
 import mcp_test_support
 import rig_mcp
+import route
+import run_tests
 import workflow
 import workflow_state as wf
 
 PRODUCTION = (
     "scripts/workflow.py", "scripts/workflow_state.py", "scripts/workflow_scheduler.py",
     "scripts/rig_mcp.py", "scripts/jobs.py", "scripts/harness.py", "bin/rig",
+    "scripts/route.py", "scripts/routing_policy.py", "scripts/routing_profiles.py",
+    "scripts/routing_config.py", "scripts/routing_evidence.py", "scripts/routing_domains.py",
+    "scripts/mcp_runtime.py", "scripts/ui_runtime_lease.py", "scripts/catalog.py",
+    "scripts/runtime_metrics.py",
 )
 STATUS_MIX = ("verified", "cancelled", "planned", "blocked", "completed-unverified")
 DEFAULT_THRESHOLD = 0.20
+SURFACES = ("session", "workflows", "status", "jobs", "routing", "startup")
+RUNTIME_SURFACES = frozenset(SURFACES[2:])
+MAX_RUNTIME_HISTORY = 10_000
+MAX_RUNTIME_HISTORY_SIZES = 10
+MAX_RUNTIME_ITERATIONS = 1_000
+MAX_RUNTIME_CALLS = 10_000
+STARTUP_TIMEOUT = 15
+STARTUP_REQUEST = json.dumps({
+    "jsonrpc": "2.0", "id": 1, "method": "initialize",
+    "params": {"protocolVersion": "2024-11-05", "capabilities": {},
+               "clientInfo": {"name": "local-runtime-benchmark", "version": "1"}},
+}) + "\n"
+# Installed before importing production modules. The outer subprocess is the
+# only allowed child; the existing runner also supplies its offline audit hook.
+STARTUP_GUARD = '''import socket, subprocess, sys
+def forbidden(*args, **kwargs):
+    raise RuntimeError("benchmark setup error: a process/network call escaped isolation")
+def offline(event, args):
+    if event in {"subprocess.Popen", "os.system", "os.posix_spawn", "os.fork",
+                 "os.exec", "socket.__new__", "socket.getaddrinfo"}:
+        forbidden()
+sys.addaudithook(offline)
+subprocess.Popen = forbidden
+socket.getaddrinfo = forbidden
+'''
+STARTUP_BOOTSTRAP = STARTUP_GUARD + f'''
+import runpy
+sys.path.insert(0, {str(ROOT / "scripts")!r})
+sys.argv = [{str(ROOT / "scripts" / "rig_mcp.py")!r}]
+runpy.run_path(sys.argv[0], run_name="__main__")
+'''
 
 
 def nearest_rank(values, percentile=95):
@@ -62,6 +101,7 @@ class Fixture:
 
     def __init__(self, repo):
         repo = repo.resolve()
+        repo.mkdir(parents=True, exist_ok=True)
         self.repo = repo
         self.bins = repo / "bins"
         self.home = repo / "home"
@@ -119,27 +159,59 @@ class Fixture:
             "status": "ok", "task": "Synthetic session row",
         }) + "\n")
 
+    def seed_jobs(self, history):
+        """Additional terminal jobs for the opt-in runtime surfaces only."""
+        for index in range(history):
+            name = f"history-job-{index:06d}"
+            folder = self.repo / ".rig" / "jobs" / name
+            folder.mkdir()
+            (folder / "meta.json").write_text(json.dumps({
+                "job_id": name, "worker": "grok", "role": "implement",
+                "status": ("ok", "fail", "cancelled")[index % 3],
+                "task": f"Synthetic historical job {index}",
+            }) + "\n")
+
+    def environment(self):
+        return {
+            "PATH": str(self.bins), "HOME": str(self.home),
+            "RIG_HOME": str(self.home / "rig"), "RIG_PARENT": "codex",
+            "RIG_THREAD": "benchmark-workflows", "RIG_SKIP_MODEL_CATALOG": "1",
+            "RIG_SKIP_UPDATE_CHECK": "1", "RIG_REFRESH_MODELS": "0",
+            "RIG_MODEL_CATALOG_CACHE": str(self.home / "model-catalogs.json"),
+            "XDG_CONFIG_HOME": str(self.home / ".config"),
+            "XDG_CACHE_HOME": str(self.home / ".cache"),
+            "XDG_DATA_HOME": str(self.home / ".local/share"),
+            "LANG": "C", "LC_ALL": "C", "TZ": "UTC",
+            "PYTHONUTF8": "1", "PYTHONDONTWRITEBYTECODE": "1", "PYTHONNOUSERSITE": "1",
+        }
+
     @contextmanager
     def isolated(self):
         def forbidden(*args, **kwargs):
             raise RuntimeError("benchmark setup error: a process/network call escaped isolation")
 
-        env = {
-            "PATH": str(self.bins), "HOME": str(self.home), "RIG_PARENT": "codex",
-            "RIG_THREAD": "benchmark-workflows", "RIG_SKIP_MODEL_CATALOG": "1",
-            "RIG_REFRESH_MODELS": "0", "RIG_JOB_ID": "", "RIG_JOB_DIR": "",
-            "CLAUDECODE": "", "CLAUDE_CODE": "",
-            "OPENCODE_CONFIG": "", "OMP_MCP": "", "PI_CODING_AGENT_DIR": "",
-            "PI_AGENT_DIR": "", "AGY_MCP": "",
-        }
         with ExitStack() as stack:
-            stack.enter_context(patch.dict(os.environ, env))
+            stack.enter_context(patch.dict(os.environ, self.environment(), clear=True))
             stack.enter_context(patch.object(subprocess, "Popen", forbidden))
             stack.enter_context(patch.object(socket, "socket", forbidden))
+            stack.enter_context(patch.object(socket, "getaddrinfo", forbidden))
             stack.enter_context(patch.object(jobs.time, "sleep", forbidden))
             if hasattr(catalog, "probe_worker"):
                 stack.enter_context(patch.object(catalog, "probe_worker", forbidden))
             yield self
+
+
+def distribution(timings, sizes, warmup):
+    return {
+        "sample_count": len(timings), "warmup_count": warmup,
+        "median_ms": statistics.median(timings),
+        "p95_ms": nearest_rank(timings),
+        "min_ms": min(timings),
+        "max_ms": max(timings),
+        "payload_bytes": {"median": statistics.median(sizes), "min": min(sizes), "max": max(sizes)},
+        "samples_ms": timings,
+        "samples_payload_bytes": sizes,
+    }
 
 
 def measure(fixture, function, warmup, samples):
@@ -154,15 +226,53 @@ def measure(fixture, function, warmup, samples):
             if index >= warmup:
                 timings.append(elapsed)
                 sizes.append(len(payload.encode("utf-8")))
-    return {
-        "median_ms": statistics.median(timings),
-        "p95_ms": nearest_rank(timings),
-        "min_ms": min(timings),
-        "max_ms": max(timings),
-        "payload_bytes": {"median": statistics.median(sizes), "min": min(sizes), "max": max(sizes)},
-        "samples_ms": timings,
-        "samples_payload_bytes": sizes,
-    }
+    return distribution(timings, sizes, warmup)
+
+
+def startup_environment(fixture):
+    """Reuse the test runner's clean HOME/PATH and offline Python guard."""
+    base = fixture.repo / "startup-isolation"
+    base.mkdir()
+    env = run_tests.isolated_environment(base)
+    env.update(fixture.environment())
+    return env
+
+
+def measure_startup(fixture, warmup, samples):
+    # Guard construction, fixtures and response validation are outside timing.
+    env = startup_environment(fixture)
+    timings, sizes = [], []
+    for index in range(warmup + samples):
+        started = time.perf_counter_ns()
+        result = subprocess.run(
+            [sys.executable, "-B", "-s", "-c", STARTUP_BOOTSTRAP], cwd=fixture.repo,
+            env=env, input=STARTUP_REQUEST, text=True, encoding="utf-8",
+            capture_output=True, check=True, timeout=STARTUP_TIMEOUT,
+        )
+        elapsed = (time.perf_counter_ns() - started) / 1_000_000
+        payload = json.loads(result.stdout)
+        if (payload.get("id") != 1 or
+                payload.get("result", {}).get("serverInfo", {}).get("name") != "rig"):
+            raise RuntimeError("startup benchmark did not receive the Rig initialize response")
+        if index >= warmup:
+            timings.append(elapsed)
+            sizes.append(len(result.stdout.encode("utf-8")))
+    return distribution(timings, sizes, warmup)
+
+
+def runtime_function(fixture, surface):
+    if surface == "status":
+        return lambda: harness.format_status(fixture.repo, live="codex")
+    if surface == "jobs":
+        return lambda: jobs.list_jobs(fixture.repo)
+    if surface == "routing":
+        # A read-only decision with fixed eligibility/catalog inputs. No launch,
+        # telemetry, provider discovery, or automatic policy adaptation.
+        return lambda: route.pick(
+            "codex", ["grok"], "explore", "Inspect the synthetic fixture",
+            catalogs={}, repo=fixture.repo, policy_mode="smart", task_domain="general",
+        )
+    raise ValueError(f"not an in-process runtime surface: {surface}")
 
 
 def provenance():
@@ -175,7 +285,8 @@ def provenance():
         "working_tree_status": dirty,
         "production_sha256": {name: hashlib.sha256((ROOT / name).read_bytes()).hexdigest()
                               for name in PRODUCTION if (ROOT / name).is_file()},
-        "evaluation_sha256": {str(Path(__file__).relative_to(ROOT)): hashlib.sha256(Path(__file__).read_bytes()).hexdigest()},
+        "evaluation_sha256": {name: hashlib.sha256((ROOT / name).read_bytes()).hexdigest()
+                              for name in ("tests/benchmark_workflows.py", "tests/run_tests.py")},
         "python": sys.version,
         "python_executable": sys.executable,
         "os": platform.platform(),
@@ -210,22 +321,32 @@ def comparison(current, baseline, threshold):
     return rows, regressions
 
 
-def main():
+def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--history-sizes", type=csv_ints, default=[0, 100, 1000])
     parser.add_argument("--warmup", type=int, default=2)
     parser.add_argument("--samples", type=int, default=11)
-    parser.add_argument("--surfaces", default="session,workflows")
+    parser.add_argument("--surfaces", default="session,workflows",
+                        help="Comma-separated surfaces: " + ",".join(SURFACES))
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--compare", type=Path)
     parser.add_argument("--threshold", type=float, default=DEFAULT_THRESHOLD,
                         help="Max allowed p95 increase vs an explicit recorded baseline (default 0.20).")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     surfaces = list(dict.fromkeys(part.strip() for part in args.surfaces.split(",") if part.strip()))
-    if args.samples < 1 or args.warmup < 0 or not set(surfaces) <= {"session", "workflows"}:
-        parser.error("samples must be positive, warmup nonnegative; surfaces: session,workflows")
-    if args.threshold < 0:
-        parser.error("threshold must be nonnegative")
+    if args.samples < 1 or args.warmup < 0 or not surfaces or not set(surfaces) <= set(SURFACES):
+        parser.error("samples must be positive, warmup nonnegative; surfaces: " + ",".join(SURFACES))
+    if not math.isfinite(args.threshold) or args.threshold < 0:
+        parser.error("threshold must be finite and nonnegative")
+    if set(surfaces) & RUNTIME_SURFACES:
+        calls = len(args.history_sizes) * len(surfaces) * (args.warmup + args.samples)
+        if (len(args.history_sizes) > MAX_RUNTIME_HISTORY_SIZES or
+                max(args.history_sizes) > MAX_RUNTIME_HISTORY or
+                args.warmup + args.samples > MAX_RUNTIME_ITERATIONS or calls > MAX_RUNTIME_CALLS):
+            parser.error(f"runtime surfaces require <= {MAX_RUNTIME_HISTORY_SIZES} history sizes, "
+                         f"history <= {MAX_RUNTIME_HISTORY}, "
+                         f"warmup + samples <= {MAX_RUNTIME_ITERATIONS}, "
+                         f"and total calls <= {MAX_RUNTIME_CALLS}")
     if args.compare is not None and not args.compare.is_file():
         parser.error(f"baseline file not found: {args.compare}")
 
@@ -236,32 +357,73 @@ def main():
             "history_sizes": args.history_sizes, "warmup": args.warmup, "samples": args.samples,
             "surfaces": surfaces, "threshold": args.threshold,
         },
+        "runtime_limits": {
+            "max_history_size": MAX_RUNTIME_HISTORY,
+            "max_history_sizes": MAX_RUNTIME_HISTORY_SIZES,
+            "max_iterations_per_scenario": MAX_RUNTIME_ITERATIONS,
+            "max_total_calls": MAX_RUNTIME_CALLS,
+            "startup_timeout_seconds": STARTUP_TIMEOUT,
+        },
         "fixture": {
             "status_cycle": STATUS_MIX,
             "ownership": "synthetic historical workflows on disk; no vendor spawn",
             "timing": "perf_counter_ns; nearest-rank p95; setup excluded; temp repo cleaned up",
             "baseline": "optional --compare only; this script never invents a baseline or savings",
+            "job_history": "session/workflows retain one anchor job; status/jobs/routing add n terminal jobs",
+        },
+        "measurement_scope": {
+            "in_process": "function calls reusing loaded modules; setup and outer JSON serialization excluded",
+            "routing": "smart explore/general decision; fixed codex parent, grok eligibility, empty catalogs",
+            "startup": "fresh guarded Python process, module imports, MCP initialize response, EOF and teardown",
+            "startup_payload": "UTF-8 stdout bytes including the initialize response newline",
+            "startup_cache": "fresh interpreter each sample; filesystem/OS caches are not flushed, including after warmup",
+            "history": "synthetic workflow/job history only; startup and routing do not scan the full history",
+            "isolation": "temporary clean environment; subprocess/socket guards; startup also uses tests/run_tests.py guards",
+            "unmeasured": [
+                "bin/rig shell startup and installed-runtime lease acquisition",
+                "provider or worker startup, network latency, model inference, and token/cost telemetry",
+                "MCP transport for in-process surfaces, concurrent load, and automatic routing adaptation",
+                "cold filesystem/page-cache startup and end-to-end user-visible request latency",
+            ],
         },
         "scenarios": [],
     }
 
     for history in args.history_sizes:
         with tempfile.TemporaryDirectory(prefix="rig-workflow-benchmark-") as temporary:
-            fixture = Fixture(Path(temporary))
+            fixture = Fixture(Path(temporary) / "workflows")
             fixture.seed(history)
+            runtime_fixture = None
+            if set(surfaces) & {"status", "jobs", "routing"}:
+                runtime_fixture = Fixture(Path(temporary) / "runtime")
+                runtime_fixture.seed(history)
+                runtime_fixture.seed_jobs(history)
             for surface in surfaces:
+                selected_fixture = fixture
+                mode = "warm-in-process"
                 if surface == "session":
                     function = lambda: rig_mcp.format_session(
                         fixture.repo, "Report current work", "stay",
                         as_json=True, compact=True, terminal_limit=10,
                     )
                     identity = f"session/n={history}/compact-json"
-                else:
+                elif surface == "workflows":
                     function = lambda: workflow.listing(fixture.repo, include_terminal=True)
                     identity = f"workflows/n={history}"
+                elif surface == "startup":
+                    identity = f"startup/n={history}/fresh-python-mcp-initialize"
+                    mode = "fresh-process-initialize-and-teardown"
+                else:
+                    selected_fixture = runtime_fixture
+                    function = runtime_function(selected_fixture, surface)
+                    identity = f"{surface}/n={history}"
+                metrics = (measure_startup(fixture, args.warmup, args.samples) if surface == "startup" else
+                           measure(selected_fixture, function, args.warmup, args.samples))
                 row = {
                     "id": identity, "surface": surface, "history_size": history,
-                    **measure(fixture, function, args.warmup, args.samples),
+                    "measurement_mode": mode,
+                    "fixture_job_count": history + 1 if selected_fixture is runtime_fixture else 1,
+                    **metrics,
                 }
                 report["scenarios"].append(row)
                 print(f"{identity}: median={row['median_ms']:.3f}ms p95={row['p95_ms']:.3f}ms", file=sys.stderr)
