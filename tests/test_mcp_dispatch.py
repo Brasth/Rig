@@ -1432,7 +1432,7 @@ class McpDispatch(unittest.TestCase):
         closed = rig_mcp.call_tool(
             "rig_job_close",
             {"repo": str(self.repo), "id": "path-close", "rationale": "Close via credentials_path",
-             "credentials_path": path, "owner_session": lease["owner"].get("session_id", "")},
+             "credentials_path": path},
         )
         self.assertFalse(closed.get("isError"), closed)
         self.assertNotIn(token, self._text(closed))
@@ -1466,6 +1466,48 @@ class McpDispatch(unittest.TestCase):
         self.assertTrue(mismatched.get("isError"))
         self.assertNotIn(token, self._text(mismatched))
 
+    def test_saved_receipt_resumes_verification_after_session_change(self):
+        import change_evidence
+
+        (self.repo / "resume.txt").write_text("reviewable content\n")
+        start = rig_mcp.call_tool("rig_job_start", {
+            "repo": str(self.repo), "id": "resume", "worker": "grok", "role": "parent",
+            "files": ["resume.txt"], "owner_session": "original-resume-owner",
+        })
+        self.assertFalse(start.get("isError"), start)
+        lease = start["structuredContent"]
+        common = {"repo": str(self.repo), "id": "resume", "credentials_path": lease["credentials_path"]}
+        before = admission.get_reservation(self.repo, lease["reservation_id"])
+        conflict = rig_mcp.call_tool("rig_job_finish", {
+            **common, "owner_session": "conflicting-explicit-owner", "status": "ok",
+            "completion": {"kind": "parent_task", "completed": True},
+        })
+        self.assertTrue(conflict.get("isError"))
+        self.assertIn("supplied owner_session", self._text(conflict))
+        self.assertEqual(admission.get_reservation(self.repo, lease["reservation_id"]), before)
+        argv = [sys.executable, "-c", "print('checked')"]
+        with mock.patch.dict(os.environ, {"RIG_OWNER_SESSION": "replacement-resume-session"}):
+            finished = rig_mcp.call_tool("rig_job_finish", {
+                **common, "status": "ok", "completion": {"kind": "parent_task", "completed": True},
+            })
+            self.assertFalse(finished.get("isError"), finished)
+            requirements = rig_mcp.call_tool("rig_job_requirements", {
+                **common, "requirements": [{"id": "unit", "argv": argv}],
+            })
+            self.assertFalse(requirements.get("isError"), requirements)
+            checked = rig_mcp.call_tool("rig_job_check", {**common, "name": "unit", "argv": argv})
+            self.assertFalse(checked.get("isError"), checked)
+            accepted = rig_mcp.call_tool("rig_job_accept", {
+                **common, "decision": "accept", "rationale": "Required check passed on current content",
+                "snapshot_id": change_evidence.snapshot(self.repo, ["resume.txt"])["snapshot_id"],
+            })
+            self.assertFalse(accepted.get("isError"), accepted)
+        final = admission.get_reservation(self.repo, lease["reservation_id"])
+        self.assertEqual(final["stage"], "released")
+        self.assertEqual(final["owner"], before["owner"])
+        for result in (conflict, finished, requirements, checked, accepted):
+            self.assertNotIn(lease["owner_token"], json.dumps(result))
+
     def test_wrapper_receipt_recovery_is_read_only_and_redacted(self):
         lease, path, rec_path = self._wrapper_job("wrap-ok", stopped=True)
         token = lease["owner_token"]
@@ -1498,6 +1540,66 @@ class McpDispatch(unittest.TestCase):
         self.assertTrue(released.get("isError"))
         self.assertIn("released", self._text(released))
         self.assertNotIn(token, self._text(released))
+
+    def test_changed_accepted_content_requires_verification_before_review(self):
+        import change_evidence
+
+        subject = self.repo / "review-next.txt"
+        subject.write_text("original content\n")
+        start = rig_mcp.call_tool("rig_job_start", {
+            "repo": str(self.repo), "id": "review-next", "worker": "grok", "role": "parent",
+            "files": [subject.name], "owner_session": "review-owner",
+        })
+        self.assertFalse(start.get("isError"), start)
+        common = {"repo": str(self.repo), "id": "review-next",
+                  "credentials_path": start["structuredContent"]["credentials_path"]}
+        finished = rig_mcp.call_tool("rig_job_finish", {
+            **common, "status": "ok", "completion": {"kind": "parent_task", "completed": True},
+        })
+        self.assertFalse(finished.get("isError"), finished)
+        required = rig_mcp.call_tool("rig_job_requirements", {**common, "manual_criteria": ["Inspect content"]})
+        self.assertFalse(required.get("isError"), required)
+        accepted = rig_mcp.call_tool("rig_job_accept", {
+            **common, "decision": "accept", "next": "review", "rationale": "Inspected current content",
+            "snapshot_id": change_evidence.snapshot(self.repo, [subject.name])["snapshot_id"],
+        })
+        self.assertFalse(accepted.get("isError"), accepted)
+        row = jobs.project_job(jobs.resolve_job(self.repo, "review-next"), self.repo, refresh=True)
+        self.assertEqual(row["ownership_next_action"]["kind"], "independent_review")
+        subject.write_text("changed after acceptance\n")
+        row = jobs.project_job(jobs.resolve_job(self.repo, "review-next"), self.repo, refresh=True)
+        self.assertEqual(row["verification_summary"]["state"], "pending")
+        self.assertEqual(row["verification_summary"]["freshness"], "current")
+        self.assertEqual(row["ownership_next_action"]["kind"], "verify_and_accept")
+
+    def test_cli_explicit_receipt_resumes_finish_reconcile_and_close(self):
+        start = rig_mcp.call_tool("rig_job_start", {
+            "repo": str(self.repo), "id": "cli-receipt", "worker": "grok", "role": "parent",
+            "owner_session": "original-cli-owner",
+        })
+        self.assertFalse(start.get("isError"), start)
+        lease = start["structuredContent"]
+        env = {**os.environ, "RIG_OWNER_SESSION": "replacement-cli-owner", "RIG_OWNER_TOKEN": "",
+               "RIG_RESERVATION_ID": "", "RIG_ATTEMPT_ID": ""}
+        def run(command, *extra):
+            result = subprocess.run([str(ROOT / "bin" / "rig"), "job", command, "cli-receipt",
+                "--credentials-path", lease["credentials_path"], "--json", *extra],
+                cwd=self.repo, env=env, capture_output=True, text=True, timeout=15)
+            self.assertNotIn(lease["owner_token"], result.stdout + result.stderr)
+            return result
+        denied = run("finish", "--owner-session", "conflicting-owner", "--completion-json",
+                     json.dumps({"kind": "parent_task", "completed": True}))
+        self.assertNotEqual(denied.returncode, 0)
+        self.assertIn("supplied owner_session", denied.stderr)
+        finished = run("finish", "--completion-json", json.dumps({"kind": "parent_task", "completed": True}))
+        self.assertEqual(finished.returncode, 0, finished.stdout + finished.stderr)
+        reported = run("reconcile")
+        self.assertEqual(reported.returncode, 0, reported.stdout + reported.stderr)
+        self.assertTrue(json.loads(reported.stdout)["report_only"])
+        closed = run("close", "--rationale", "Close explicitly without acceptance")
+        self.assertEqual(closed.returncode, 0, closed.stdout + closed.stderr)
+        self.assertEqual(json.loads(closed.stdout)["stage"], "released")
+        self.assertEqual(admission.get_reservation(self.repo, lease["reservation_id"])["owner"], lease["owner"])
 
     def test_wrapper_receipt_recovery_rejects_active_parent_and_bad_artifacts(self):
         start = rig_mcp.call_tool(
