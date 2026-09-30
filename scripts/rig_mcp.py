@@ -1211,6 +1211,17 @@ TOOLS.extend([
          "owner_session": {"type": "string"},
      }, "required": ["id", "credentials_path", "confirmed_stopped", "rationale"]}},
 ])
+TOOLS.append({
+    "name": "rig_task_timeline",
+    "annotations": {"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False},
+    "description": "Parent-only read-only timeline of bounded persisted workflow/job-attempt evidence. Does not refresh lifecycle or revalidate acceptance, read logs/credentials, or reconstruct missing history. Exactly one workflow_id or job_id is required.",
+    "inputSchema": {"type": "object", "properties": {
+        "repo": {"type": "string"}, "workflow_id": {"type": "string"}, "job_id": {"type": "string"},
+        "attempt_id": {"type": "string", "description": "Optional exact job attempt. Omitted binds the persisted current attempt and returns that ID."},
+        "limit": {"type": "integer", "minimum": 1, "maximum": 200, "default": 100},
+    }},
+})
+
 _WORKFLOW_ID = {"id": {"type": "string", "description": "Workflow id."}, "repo": {"type": "string"}}
 _WORKFLOW_OWNER = {"owner_token": {"type": "string"}, "owner_session": {"type": "string"}}
 TOOLS.extend([
@@ -1559,6 +1570,7 @@ TOOL_ORDER = (
     "rig_workflow_approve",
     "rig_workflow_cancel",
     "rig_workflow_report",
+    "rig_task_timeline",
     "rig_job_coordination_reply",
     "rig_cu_status",
     "rig_bsk_status",
@@ -2006,7 +2018,7 @@ def call_tool(name: str, args: dict, on_tick=None, *, wait_paths: list[Path] | N
         if not child:
             state = rig_harness.project_state(repo)
             readonly = {"rig_doctor", "rig_status", "rig_jobs", "rig_job_show", "rig_job_log", "rig_memory",
-                        "rig_queue_list", "rig_workflows", "rig_workflow_show", "rig_workflow_report",
+                        "rig_queue_list", "rig_workflows", "rig_workflow_show", "rig_workflow_report", "rig_task_timeline",
                         "rig_routing_report", "rig_billing_report"}
             if state["state"] == "uninitialized" and name not in readonly:
                 return _err("Rig is uninitialized for this project; run rig init")
@@ -2572,6 +2584,12 @@ def call_tool(name: str, args: dict, on_tick=None, *, wait_paths: list[Path] | N
                 repo, wid, rationale=_optional_string(args, "rationale") or "parent",
                 **_workflow_owner_args(args),
             ))
+        if name == "rig_task_timeline":
+            import task_timeline
+            result = task_timeline.build(repo, workflow_id=_optional_string(args, "workflow_id"),
+                job_id=_optional_string(args, "job_id"), attempt_id=_optional_string(args, "attempt_id"),
+                limit=args.get("limit", 100))
+            return {**_ok(task_timeline.format_timeline(result)), "structuredContent": result}
         if name == "rig_workflow_report":
             wid = _optional_string(args, "id").strip()
             if not wid:

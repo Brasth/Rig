@@ -1085,3 +1085,7 @@ acceptance. [Bounds, screening, freshness, and explicit workflow rebind](context
 ## Private UI evidence packs
 
 Parents can assemble already captured, privacy-reviewed CUA/BrowserSkill receipts and PNGs with `rig_job_ui_evidence` or `rig job ui-evidence ID --file PACK.json`. Packs bind the current attempt, frozen contract criteria and content snapshot; a separate explicit criterion assertion and normal acceptance remain required. No capture, actions, uploads or child privileges are added. See [inputs, privacy, coverage and limits](ui-evidence.md).
+
+## Recorded task timeline
+
+Use `rig_task_timeline` or `rig timeline --workflow ID` / `rig timeline --job ID` for a bounded read-only view of persisted workflow events, exact job attempts, checks and parent assertion/acceptance records. Missing/legacy evidence and limits stay explicit; Stop intent never proves termination. No refresh or current acceptance revalidation occurs. See [ordering, provenance and coverage](task-timeline.md).

@@ -78,6 +78,7 @@ usage: rig <command> [args]
   queue claim [--files a,b] [id]   # id required if more than one pending
   queue unclaim <id>
   queue spawned <id> --job <job-id> [--files a,b]
+  timeline --workflow ID | --job ID [--attempt ID] [--limit 1..200] [--json]
   workflows [--json]
   context preview|build|show|validate --file PATH
   workflow create [--file PATH] [--json]    # JSON spec from --file or stdin
@@ -1018,6 +1019,10 @@ cmd_jobs() {
   python3 "$(py_script jobs.py)" list "$@"
 }
 
+cmd_timeline() {
+  python3 "$(py_script task_timeline.py)" "$@" --repo "$(repo_root)"
+}
+
 cmd_workflows() {
   python3 "$(py_script workflow.py)" list "$@" --repo "$(repo_root)"
 }
@@ -1516,7 +1521,7 @@ main() {
     on) cmd_project_toggle on; return ;;
     off) cmd_project_toggle off; return ;;
   esac
-  case "$cmd" in init|setup|update|status|doctor|jobs|tui|memory|workflows|workflow|queue|routing|billing|help|-h|--help|"") ;; *) project_guard || return ;; esac
+  case "$cmd" in init|setup|update|status|doctor|jobs|tui|memory|timeline|workflows|workflow|queue|routing|billing|help|-h|--help|"") ;; *) project_guard || return ;; esac
   case "$cmd" in
     ui) python3 "$(py_script rig_ui.py)" "$@" ;;
     uninstall) python3 "$(py_script ui_install.py)" "$@" ;;
@@ -1569,6 +1574,7 @@ main() {
     prune) cmd_prune "$@" ;;
     run) cmd_run "$@" ;;
     jobs) cmd_jobs "$@" ;;
+    timeline) cmd_timeline "$@" ;;
     workflows) cmd_workflows "$@" ;;
     workflow) cmd_workflow "$@" ;;
     context) python3 "$(py_script context_packages.py)" "$@" --repo "$(repo_root)" ;;
