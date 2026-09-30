@@ -194,6 +194,7 @@ def _default_launch(repo, *, node, spec, state, choice, owner, owner_session, re
             context_package=node.get("context_package"),
             routing=choice.get("routing"), assessment=node.get("assessment") or None,
             task_domain=node.get("task_domain", ""), research_sources=node.get("research_sources"),
+            acceptance_contract=node.get("acceptance_contract"),
             return_details=True,
             resources=resources, allow_read_overlap_reservations=allow_read, **identity,
             **_supported_kwargs(rig_jobs.start_job, handoff),
@@ -208,6 +209,7 @@ def _default_launch(repo, *, node, spec, state, choice, owner, owner_session, re
         context_package=node.get("context_package"),
         assessment=node.get("assessment") or None,
         task_domain=node.get("task_domain", ""), research_sources=node.get("research_sources"),
+        acceptance_contract=node.get("acceptance_contract"),
         resources=resources, allow_read_overlap_reservations=allow_read, **identity,
         **handoff,
     )

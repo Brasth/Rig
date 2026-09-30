@@ -88,6 +88,8 @@ Rig’s shared `computer-use` and `computer-test` skills are linked globally and
 
 When `[orchestration] mode = "adaptive"` (default), the parent decomposes eligible work into a DAG of at most `max_nodes` (default 12) and owns the graph, briefs, and acceptance. `single` keeps one-job behavior. Queue and worker caps remain authoritative. Writers must be file AND resource disjoint. Children never spawn children. Durable files live under `.rig/workflows/<id>/` with `owner-credentials.json` (mode 0600). The parent uses `rig_workflow_advance` / `rig_workflow_wait`. Independent review unavailable stays explicit. In `rig tui`, Tab Jobs/Queue/Workflows. No estimated progress, savings, or ETA.
 
+[Built-in workflow recipes](docs/workflow-recipes.md) preview bounded bugfix, research → implementation, or parent UI validation workflows without launching work.
+
 Parent orchestration is MCP (`rig_session`, `rig_job_launch`, `rig_workflow_create` / `rig_workflow_advance` / `rig_workflow_wait`, allow/deny, requirements/check/accept). Shell `run-worker.sh` is human/internal fallback. Children never spawn or message children.
 
 ## Verification and cancellation

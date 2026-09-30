@@ -10,7 +10,7 @@ Pass `acceptance_contract` to `rig_job_start` or `rig_job_launch`. The native CL
 uses `rig job start --acceptance-contract contract.json` with its normal scope,
 executor and ownership options. No contract is added to old jobs automatically;
 jobs without one retain the existing requirements/manual-criteria behavior.
-Contracts are job-level in v1; they are not silently inherited by workflow nodes.
+Workflow nodes may explicitly include their own `acceptance_contract`; contracts are never silently inherited. The workflow normalizer validates each named node scope, includes the contract in its spec hash, and forwards it unchanged to fresh job admission. See [workflow recipes](workflow-recipes.md) for explicit stage mappings and examples.
 
 ```json
 {

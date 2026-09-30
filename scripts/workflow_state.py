@@ -17,6 +17,7 @@ import context_packages
 import harness
 import routing_domains
 import runtime_metrics
+import acceptance_contract as contracts
 
 WorkflowError = admission.AdmissionError
 
@@ -41,7 +42,7 @@ DEFAULT_MAX_NODES = 12
 LAUNCHED_CONTRACT = (
     "id", "role", "effects", "files", "resources", "depends_on", "required",
     "brief", "kind", "final", "priority", "assessment", "shared_context",
-    "task_domain", "research_sources", "context_package",
+    "task_domain", "research_sources", "context_package", "acceptance_contract",
 )
 
 
@@ -245,6 +246,9 @@ def _normalize_node(raw, index, *, max_nodes):
         node["context_package"] = context_packages.normalize_reference(raw["context_package"])
     if raw.get("shared_context") not in (None, ""):
         node["shared_context"] = str(raw.get("shared_context"))
+    if "acceptance_contract" in raw:
+        # Normalize after final-verify policy has established the complete scope.
+        node["acceptance_contract"] = copy.deepcopy(raw["acceptance_contract"])
     return node
 
 
@@ -402,7 +406,7 @@ def _ensure_final_verify(nodes, max_nodes):
     return nodes
 
 
-def normalize_spec(raw, *, max_nodes=DEFAULT_MAX_NODES, workflow_id=""):
+def normalize_spec(raw, *, max_nodes=DEFAULT_MAX_NODES, workflow_id="", repo=None):
     if not isinstance(raw, dict):
         raise WorkflowError("workflow spec must be an object")
     nodes_raw = raw.get("nodes")
@@ -422,6 +426,21 @@ def normalize_spec(raw, *, max_nodes=DEFAULT_MAX_NODES, workflow_id=""):
     if len(nodes) > max_nodes:
         raise WorkflowError(f"workflow exceeds max_nodes {max_nodes}")
     _validate_graph(nodes)
+    for node in nodes:
+        if "acceptance_contract" not in node:
+            continue
+        if repo is None:
+            raise WorkflowError("workflow acceptance contracts require a repository for scope validation")
+        predecessors = _transitive(nodes, node["id"])
+        independent = node["role"] == "review" and any(
+            other["id"] in predecessors and _is_writer(other) for other in nodes
+        )
+        try:
+            node["acceptance_contract"] = contracts.normalize(
+                repo, node["acceptance_contract"], node["files"], independent_review=independent,
+            )
+        except ValueError as error:
+            raise WorkflowError(f"node {node['id']}: {error}") from error
     wid = str(raw.get("workflow_id") or workflow_id or "").strip()
     spec = {
         "version": 1,
@@ -940,7 +959,7 @@ def create_workflow(repo, raw, *, owner=None, owner_session="", queue_id=""):
     actor = admission._owner(owner, owner_session)
     with admission.transaction(root):
         cfg = require_adaptive_orchestration(root)
-        spec = normalize_spec(raw, max_nodes=cfg["max_nodes"])
+        spec = normalize_spec(raw, max_nodes=cfg["max_nodes"], repo=root)
         wid = spec["workflow_id"] or uuid.uuid4().hex[:16]
         admission._id(wid, "workflow id")
         spec["workflow_id"] = wid
@@ -1051,7 +1070,7 @@ def extend_workflow(repo, workflow_id, added_nodes, *, owner_token="", owner=Non
         }
         if isinstance(added_nodes, dict) and "shared_context" in added_nodes:
             merged_raw["shared_context"] = added_nodes.get("shared_context") or ""
-        merged = normalize_spec(merged_raw, max_nodes=cfg["max_nodes"], workflow_id=workflow_id)
+        merged = normalize_spec(merged_raw, max_nodes=cfg["max_nodes"], workflow_id=workflow_id, repo=root)
         by_id = {node["id"]: node for node in merged["nodes"]}
         for nid, original in launched.items():
             current = by_id.get(nid)
@@ -1091,10 +1110,18 @@ def _job_verification(root, job_id):
         return None
 
 
-def _job_acceptance(root, job_id, files):
+def _job_acceptance(root, job_id, files, acceptance_contract=None):
     stored = _job_verification(root, job_id)
     if not stored or stored.get("acceptance") != "accepted":
         return False, ""
+    meta = _job_row(root, job_id) or {}
+    if acceptance_contract is not None or meta.get("contract_fingerprint"):
+        # Contract evidence can change without changing source files. Use the
+        # existing job validator rather than trusting the stored acceptance.
+        import verification
+        current = verification.assessment(root, root / ".rig" / "jobs" / job_id, refresh=True)
+        matches = acceptance_contract is None or current.get("contract_fingerprint") == contracts.fingerprint(acceptance_contract)
+        return matches and current.get("state") == "verified", current.get("snapshot_id") or ""
     try:
         import change_evidence as evidence
         current = evidence.snapshot(root, files or [])["snapshot_id"]
@@ -1194,7 +1221,7 @@ def refresh_locked(root, spec, state):
                     effective = "ask"
             same_attempt = not row.get("attempt_id") or row["attempt_id"] == meta.get("attempt_id")
             if already_accepted:
-                accepted, snap = _job_acceptance(root, job_id, node.get("files") or [])
+                accepted, snap = _job_acceptance(root, job_id, node.get("files") or [], node.get("acceptance_contract"))
                 if accepted:
                     row["accepted"] = True
                     row["status"] = "accepted"
@@ -1226,7 +1253,7 @@ def refresh_locked(root, spec, state):
                     "execution stop unconfirmed"
                 )
             elif status == "ok":
-                accepted, snap = _job_acceptance(root, job_id, node.get("files") or [])
+                accepted, snap = _job_acceptance(root, job_id, node.get("files") or [], node.get("acceptance_contract"))
                 reject_reason = "" if accepted else _job_rejection_reason(root, job_id)
                 row["accepted"] = accepted
                 row["acceptance_snapshot"] = snap
@@ -1252,6 +1279,18 @@ def refresh_locked(root, spec, state):
                 row["attempt_id"] = meta.get("attempt_id")
         elif row.get("status") == "launching":
             live += 1
+    action = state.get("parent_action")
+    if isinstance(action, dict) and action.get("kind") == "parent_writes":
+        row = state["nodes"].get(action.get("node_id")) or {}
+        # A completed parent verification must not leave a permanent attention
+        # flag. Match the exact admitted attempt; neither acceptance nor a UI
+        # flag alone proves this parent execution has stopped.
+        binding = ("job_id", "reservation_id", "attempt_id")
+        if (row.get("accepted") and row.get("status") == "accepted"
+                and all(action.get(key) and action[key] == row.get(key) for key in binding)
+                and not _node_stop_unconfirmed(root, row)):
+            state["parent_action"] = None
+            row["parent_action"] = None
     metrics = state.setdefault("metrics", {})
     metrics["max_concurrency"] = max(int(metrics.get("max_concurrency") or 0), max(running, live))
     pending_coord = [item for item in (state.get("coordination") or []) if item.get("status") == "pending"]

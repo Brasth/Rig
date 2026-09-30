@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "name": "bugfix",
+  "version": 1,
+  "description": "Bounded local fix, protected independent review, then parent final verification.",
+  "required_parameters": ["task", "files"],
+  "optional_parameters": ["resources", "acceptance_contracts", "context_packages"],
+  "nodes": [
+    {"id": "implement", "role": "implement", "task_domain": "debugging", "effects": "local", "scope": "files", "depends_on": [], "brief": "Implement the bounded bug fix in the declared files."},
+    {"id": "review", "role": "review", "task_domain": "review", "effects": "none", "scope": "files", "depends_on": ["implement"], "brief": "Independently review the accepted writer snapshot. Preserve the protected handoff and require a different known actual provider; if unavailable, stop explicitly."},
+    {"id": "final-verify", "role": "verify", "effects": "none", "scope": "files", "depends_on": ["review"], "final": true, "brief": "Perform parent final verification after every required stage is accepted. Report actual checks and remaining limitations."}
+  ]
+}

@@ -82,6 +82,7 @@ usage: rig <command> [args]
   workflows [--json]
   context preview|build|show|validate --file PATH
   workflow create [--file PATH] [--json]    # JSON spec from --file or stdin
+  workflow recipe list|show|preview [NAME] [--file PARAMS.json] [--spec-only] [--json]
   workflow show|advance|wait|extend|resolve|approve|cancel|report <id>
   pick [explore|mini|bulk|implement|hard|review|verify|stay] [--case TEXT] [--exclude NAME] [--json]
   session [--role KIND] [--case TEXT] [--exclude NAME] [--compact] [--terminal-limit 0..100] [--json]
@@ -227,6 +228,7 @@ copy_rig_tree() {
       [[ -f "$f" ]] || continue
       install_file "$f" "$dest/templates/$(basename "$f")"
     done
+    copy_dir_files "$src/templates/workflows" "$dest/templates/workflows"
   fi
   chmod +x "$dest/bin/rig" "$dest/scripts/"*.sh "$dest/scripts/"*.py 2>/dev/null || true
   if git -C "$src" rev-parse --short HEAD >/dev/null 2>&1; then
@@ -1028,6 +1030,11 @@ cmd_workflows() {
 }
 
 cmd_workflow() {
+  if [[ "${1:-}" == recipe ]]; then
+    shift
+    python3 -B "$(py_script workflow_recipes.py)" "$@" --repo "$(repo_root)"
+    return
+  fi
   python3 "$(py_script workflow.py)" "$@" --repo "$(repo_root)"
 }
 
