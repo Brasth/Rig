@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "name": "ui-validation",
+  "version": 1,
+  "description": "Parent-only UI validation with existing capability, permission and evidence gates; no child clicker.",
+  "required_parameters": ["task", "files"],
+  "optional_parameters": ["resources", "acceptance_contracts", "context_packages"],
+  "nodes": [
+    {"id": "ui-validate", "role": "verify", "task_domain": "ui-verification", "effects": "none", "scope": "files", "depends_on": [], "final": true, "brief": "The parent inspects the requested UI behavior using only already authorized capabilities. Preserve existing browser/computer-use opt-in, freshness, confirmation and evidence gates. Do not spawn a child clicker, grant tools, or treat screenshots as automatic acceptance."}
+  ]
+}

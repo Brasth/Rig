@@ -30,6 +30,7 @@ import verification as rig_verification  # noqa: E402
 import worker_launch as rig_launch  # noqa: E402
 import child_mcp as rig_child_mcp  # noqa: E402
 import workflow as rig_workflow  # noqa: E402
+import workflow_recipes as rig_recipes  # noqa: E402
 import coordination as rig_coordination  # noqa: E402
 import routing_domains  # noqa: E402
 import doctor as rig_doctor  # noqa: E402
@@ -1225,6 +1226,21 @@ TOOLS.append({
 _WORKFLOW_ID = {"id": {"type": "string", "description": "Workflow id."}, "repo": {"type": "string"}}
 _WORKFLOW_OWNER = {"owner_token": {"type": "string"}, "owner_session": {"type": "string"}}
 TOOLS.extend([
+    {"name": "rig_workflow_recipe_list",
+     "annotations": {"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False},
+     "description": "Parent-only. List the bundled versioned workflow recipes. Offline and read-only; never creates or launches work.",
+     "inputSchema": {"type": "object", "properties": {"repo": {"type": "string"}}, "additionalProperties": False}},
+    {"name": "rig_workflow_recipe_show",
+     "annotations": {"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False},
+     "description": "Parent-only. Inspect a built-in workflow recipe, parameter schema and hash. No provider calls or remote templates.",
+     "inputSchema": {"type": "object", "properties": {"repo": {"type": "string"}, "name": {"type": "string"},
+                     "version": {"type": "integer", "default": 1}}, "required": ["name"], "additionalProperties": False}},
+    {"name": "rig_workflow_recipe_preview",
+     "annotations": {"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False},
+     "description": "Parent-only. Compile typed parameters into a reviewable existing workflow spec, recipe/spec hashes and node scopes/effects. Never creates, advances, launches, writes files, runs checks or probes providers. Contracts map explicitly to named nodes; UI validation stays parent-only.",
+     "inputSchema": {"type": "object", "properties": {"repo": {"type": "string"}, "name": {"type": "string"},
+                     "version": {"type": "integer", "default": 1}, "parameters": {"type": "object"}},
+                     "required": ["name", "parameters"], "additionalProperties": False}},
     {"name": "rig_workflow_create",
      "annotations": {
          "readOnlyHint": False,
@@ -1561,6 +1577,9 @@ TOOL_ORDER = (
     "rig_queue_unclaim",
     "rig_queue_spawned",
     "rig_workflow_create",
+    "rig_workflow_recipe_list",
+    "rig_workflow_recipe_show",
+    "rig_workflow_recipe_preview",
     "rig_workflows",
     "rig_workflow_show",
     "rig_workflow_advance",
@@ -2019,6 +2038,7 @@ def call_tool(name: str, args: dict, on_tick=None, *, wait_paths: list[Path] | N
             state = rig_harness.project_state(repo)
             readonly = {"rig_doctor", "rig_status", "rig_jobs", "rig_job_show", "rig_job_log", "rig_memory",
                         "rig_queue_list", "rig_workflows", "rig_workflow_show", "rig_workflow_report", "rig_task_timeline",
+                        "rig_workflow_recipe_list", "rig_workflow_recipe_show", "rig_workflow_recipe_preview",
                         "rig_routing_report", "rig_billing_report"}
             if state["state"] == "uninitialized" and name not in readonly:
                 return _err("Rig is uninitialized for this project; run rig init")
@@ -2494,6 +2514,19 @@ def call_tool(name: str, args: dict, on_tick=None, *, wait_paths: list[Path] | N
                     **_execution_args(args),
                 )
             )
+        if name in {"rig_workflow_recipe_list", "rig_workflow_recipe_show", "rig_workflow_recipe_preview"}:
+            allowed = {"repo"} if name.endswith("_list") else {"repo", "name", "version"}
+            if name.endswith("_preview"):
+                allowed.add("parameters")
+            if set(args) - allowed:
+                return _err("workflow recipe request has unsupported fields")
+            if name.endswith("_list"):
+                result = {"recipes": rig_recipes.listing()}
+            elif name.endswith("_show"):
+                result = rig_recipes.show(args.get("name"), args.get("version", 1))
+            else:
+                result = rig_recipes.preview(repo, args.get("name"), args.get("parameters"), args.get("version", 1))
+            return {**_ok(json.dumps(result, indent=2)), "structuredContent": result}
         if name == "rig_workflow_create":
             spec = args.get("spec")
             if not isinstance(spec, dict):
