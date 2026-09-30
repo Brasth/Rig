@@ -1632,6 +1632,15 @@ def _ownership_next_action(record, *, execution_status="", executor_kind="", ver
     assessment = verification or {}
     if status == "ask":
         return None
+    if (record.get("operation") or {}).get("operation") == "evidence":
+        return {"kind": "recover_evidence_operation", "tool": "rig_job_reconcile", "report_only": False,
+                "requires": ["exact job id", "current saved credentials_path or matching owner/attempt credentials",
+                             "rationale", "recorded evidence-operation executor confirmed dead"],
+                "instruction": "Inspect the recorded evidence-operation executor. Live or unknown execution stays protected. "
+                               "Only when confirmed dead, use rig_job_reconcile with this exact job id, apply=true, "
+                               "current owner/attempt credentials and rationale. This clears only the interrupted evidence "
+                               "operation; files remain held and no criterion is accepted. Retry pack recording with the "
+                               "same ownership and complete reviewed inputs; never reference abandoned staging files"}
     if record.get("operation") or assessment.get("active_check"):
         return {"kind": "inspect_verification", "tool": "rig_job_show", "report_only": True,
                 "requires": ["verification executor completion"],
@@ -1695,6 +1704,7 @@ def ownership_next_action(record, *, execution_status="", executor_kind="", veri
         return None
     reasons = {
         "inspect_verification": "Verification completion needs inspection",
+        "recover_evidence_operation": "Evidence recording executor needs inspection before scoped recovery",
         "reconcile_legacy": "Legacy work has no authenticated protected attempt",
         "resolve_unlaunched_owner": "Unlaunched work still holds its scope",
         "close_unverified": "Stopped work still holds files without acceptance",
@@ -1774,6 +1784,35 @@ def reconcile(repo, *, job_id="", queue_id="", apply=False, action="report", own
                     raise AdmissionError("check recovery credentials belong to another job")
                 recovered = _recover_check(root, record, actor, rationale)
                 return {"items": [_public(record)], "applied": int(recovered)}
+            recovered_evidence = 0
+            # Evidence assembly has no execution/acceptance authority. Recover only
+            # its exact stopped attempt, never clear arbitrary jobs' operations.
+            evidence_target = next((row for row in _records(root)
+                if job_id and row.get("job_id") == job_id
+                and (row.get("operation") or {}).get("operation") == "evidence"), None)
+            if evidence_target is not None:
+                if not isinstance(rationale, str) or not rationale.strip():
+                    raise AdmissionError("evidence recovery requires exact job id, current owner credentials and rationale")
+                current, actor = _auth(root, reservation_id, attempt_id, owner_token, owner, owner_session)
+                if (current.get("job_id") != job_id
+                        or current.get("reservation_id") != evidence_target.get("reservation_id")
+                        or current.get("attempt_id") != evidence_target.get("attempt_id")):
+                    raise AdmissionError("evidence recovery credentials belong to another attempt")
+                meta = _read(root / ".rig/jobs" / _id(job_id) / "meta.json", required=True)
+                if (not meta.get("ownership_established") or any(meta.get(key) != current.get(key)
+                        for key in ("job_id", "reservation_id", "attempt_id"))):
+                    raise AdmissionError("evidence recovery metadata does not match the protected attempt")
+                if current.get("stage") == "released" or not current.get("stopped"):
+                    raise AdmissionError("evidence recovery requires stopped execution with retained ownership")
+                if _process_state(current.get("operation")) != "dead":
+                    raise AdmissionError("evidence operation executor is live or unknown; protection remains held")
+                current["interrupted_operation"] = current.pop("operation")
+                current["evidence_recovery"] = {"at": _now(), "rationale": rationale.strip(),
+                                                "owner_session": actor.get("session_id") or ""}
+                current.update(needs_reconciliation=True,
+                               reconciliation_reason="stopped evidence operation cleared; retry recording or inspect before assessment")
+                _save(root, current)
+                recovered_evidence = 1
             before = sum(row.get("stage") != "released" for row in _records(root))
             _reconcile_dead(root)
             for record in _records(root):
@@ -1784,7 +1823,7 @@ def reconcile(repo, *, job_id="", queue_id="", apply=False, action="report", own
                                   reconciliation_reason="stopped verification operation cleared; parent assessment required")
                     _save(root, record)
             result = reconcile(root, job_id=job_id, queue_id=queue_id)
-            result["applied"] = before - sum(row.get("stage") != "released" for row in _records(root))
+            result["applied"] = recovered_evidence + before - sum(row.get("stage") != "released" for row in _records(root))
             result["report_only"] = False
             return result
         if not (queue_id or job_id) or not rationale.strip():

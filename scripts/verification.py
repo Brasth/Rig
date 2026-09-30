@@ -346,7 +346,7 @@ def record_criterion(repo, job_dir, criterion_id, contract_fingerprint, snapshot
         current = evidence.snapshot(root, _scope(root, folder))
         if not snapshot_id or current["snapshot_id"] != snapshot_id:
             raise VerificationError("content_changed: review assertion requires the current subject snapshot")
-        refs = contracts.artifact_refs(folder, evidence_refs, criterion["artifact_kind"])
+        refs = contracts.artifact_refs(folder, evidence_refs, criterion["artifact_kind"], criterion_id=criterion_id)
         value = {"schema_version": 1, **{key: frozen[key] for key in contracts.BINDING_KEYS},
                  "criterion_id": criterion_id, "assertion_id": uuid.uuid4().hex,
                  "snapshot_id": snapshot_id, "result": result, "rationale": rationale,

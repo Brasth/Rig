@@ -193,7 +193,7 @@ def validate_manifest(frozen, manifest):
         raise ContractError("requirements differ from frozen acceptance contract; use a fresh attempt for revisions")
 
 
-def artifact_refs(folder, refs, kind):
+def artifact_refs(folder, refs, kind, *, criterion_id=""):
     """Hash only explicit existing regular files within this job's evidence/.
 
     Refuse symlink traversal, hard links, control paths, FIFOs and large files.
@@ -239,6 +239,9 @@ def artifact_refs(folder, refs, kind):
                 raise ContractError("evidence reference changed")
         except OSError as error:
             raise ContractError("evidence reference unavailable") from error
+        if kind == "ui-pack":
+            from ui_evidence import validate_pack_reference
+            validate_pack_reference(folder, ref, criterion_id=criterion_id)
         result.append(dict(ref))
     return sorted(result, key=lambda row: row["path"])
 
@@ -277,7 +280,7 @@ def outcomes(repo, folder, frozen, snapshot_id, checks):
             if (history.is_symlink() or history.parent.is_symlink() or history.parent.parent.is_symlink()
                     or evidence.read_json(history) != assertion):
                 raise ContractError("review assertion differs from its immutable receipt: " + criterion["id"])
-            refs = artifact_refs(folder, assertion.get("evidence_refs"), criterion["artifact_kind"])
+            refs = artifact_refs(folder, assertion.get("evidence_refs"), criterion["artifact_kind"], criterion_id=criterion["id"])
             row.update(result="pass", provenance="parent_assertion", assertion_id=assertion["assertion_id"],
                        assertion_fingerprint=fingerprint(assertion), evidence_refs=refs)
         result.append(row)

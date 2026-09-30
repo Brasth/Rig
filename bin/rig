@@ -63,6 +63,7 @@ usage: rig <command> [args]
   job record [--worker NAME] [--role ROLE] [--status ok|fail] [--summary TEXT] [id]
     start/record metadata: [--model MODEL] [--effort EFFORT] [--executor-kind parent|native_child]
   job show [id]
+  job ui-evidence <id> --file PACK.json [--credentials-path PATH]
   job log [id] [-f] [-n N]
   job allow [id]
   job deny [id] [--reason TEXT]
@@ -1405,6 +1406,9 @@ cmd_job() {
   local sub="${1:-}"
   shift || true
   case "$sub" in
+    ui-evidence)
+      python3 "$(py_script ui_evidence.py)" --repo "$(repo_root)" "$@"
+      ;;
     requirements|check|criterion|accept)
       python3 "$(py_script verification.py)" --repo "$(repo_root)" "$sub" "$@"
       ;;
@@ -1412,7 +1416,7 @@ cmd_job() {
       python3 "$(py_script jobs.py)" "$sub" "$@" --repo "$(repo_root)"
       ;;
     *)
-      echo "usage: rig job start|finish|record|close|reconcile|recover-parent-write|break-glass-close|requirements|check|criterion|accept|show|log|allow|deny|cancel|wait|message [arguments]" >&2
+      echo "usage: rig job start|finish|record|close|reconcile|recover-parent-write|break-glass-close|requirements|ui-evidence|check|criterion|accept|show|log|allow|deny|cancel|wait|message [arguments]" >&2
       return 2
       ;;
   esac

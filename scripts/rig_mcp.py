@@ -1029,6 +1029,17 @@ _OWNERSHIP_PROPERTIES["credentials_path"]["description"] = (
     "Saved canonical private receipt. Restores its validated original owner session as well as "
     "attempt credentials; an explicitly conflicting owner_session is rejected. Does not transfer ownership."
 )
+TOOLS.append({
+    "name": "rig_job_ui_evidence",
+    "annotations": {"readOnlyHint": False, "destructiveHint": False,
+                    "idempotentHint": True, "openWorldHint": False},
+    "description": "Parent-only. Assemble already captured, privacy-reviewed UI receipts and PNGs into immutable private attempt evidence. Never captures, acts, or accepts work. Supplied receipts and privacy review are not authenticated backend or automatic privacy proof.",
+    "inputSchema": {"type": "object", "properties": {
+        **_JOB_REF_PROPERTIES, **_OWNERSHIP_PROPERTIES,
+        "pack": {"type": "object", "description": "Bounded pack with privacy_reviewed=true, contract_fingerprint, content_snapshot_id, criterion_ids and steps; see docs/ui-evidence.md."},
+    }, "required": ["id", "pack"]},
+})
+
 TOOLS.extend([
     {
         "name": "rig_job_requirements",
@@ -1519,6 +1530,7 @@ TOOL_ORDER = (
     "rig_job_finish",
     "rig_job_record",
     "rig_job_requirements",
+    "rig_job_ui_evidence",
     "rig_job_check",
     "rig_job_criterion",
     "rig_job_close",
@@ -2363,6 +2375,14 @@ def call_tool(name: str, args: dict, on_tick=None, *, wait_paths: list[Path] | N
             if "owner_token" in result:
                 result = {key: value for key, value in result.items() if key != "owner_token"}
             return {**_ok(json.dumps(result, indent=2, default=str)), "structuredContent": result}
+        if name == "rig_job_ui_evidence":
+            import ui_evidence
+            job_id = _optional_string(args, "id").strip()
+            if not job_id:
+                return _err("rig_job_ui_evidence needs id")
+            job_dir = Path(rig_jobs.resolve_job(repo, job_id)["dir"])
+            result = ui_evidence.record_pack(repo, job_dir, args.get("pack"), **_job_ownership_args(args, repo))
+            return {**_ok(json.dumps(result, indent=2)), "structuredContent": result}
         if name in {"rig_job_requirements", "rig_job_check", "rig_job_criterion", "rig_job_accept"}:
             job_id = _optional_string(args, "id").strip()
             if not job_id:
