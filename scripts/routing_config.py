@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import routing_profiles as rig_profiles
 
-POLICY_VERSION = 1
+POLICY_VERSION = 2
 ROUTING_JSON = ".rig/routing.json"
 MODES = ("smart", "legacy")
 ENGINES = ("local", "jev")
@@ -18,7 +18,7 @@ OBJECTIVES = ("quality", "balanced", "speed", "cost")
 DEFAULT_ENGINE = "local"
 DEFAULT_LOCAL_POLICY = "scored-v1"
 DEFAULT_OBJECTIVE = "balanced"
-SCHEMA_VERSIONS = (1, 2, 3)
+SCHEMA_VERSIONS = (1, 2, 3, 4)
 PROFILE_FIELDS = frozenset(
     {
         "worker",
@@ -38,7 +38,8 @@ V2_FIELDS = V1_FIELDS | {"execution"}
 EXECUTION_FIELDS = frozenset({"direct_parent_low_risk"})
 PICKER_FIELDS = frozenset({"engine", "local_policy", "objective"})
 V3_FIELDS = V2_FIELDS | {"picker"}
-CONFIG_FIELDS = V3_FIELDS
+V4_FIELDS = V3_FIELDS | {"domains"}
+CONFIG_FIELDS = V4_FIELDS
 
 
 class ConfigError(ValueError):
@@ -56,6 +57,7 @@ class RoutingConfig:
     engine: str = DEFAULT_ENGINE
     local_policy: str = DEFAULT_LOCAL_POLICY
     objective: str = DEFAULT_OBJECTIVE
+    domains: dict = field(default_factory=dict)
 
 
 def routing_json_path(repo: Path | None) -> Path | None:
@@ -101,6 +103,8 @@ def config_fingerprint(cfg: RoutingConfig) -> str:
         "profiles": [rig_profiles.as_dict(p) for p in sorted(cfg.profiles.values(), key=lambda item: item.id)],
         "preferences": {key: cfg.preferences.get(key, []) for key in rig_profiles.PREF_KEYS},
     }
+    if cfg.domains:
+        payload["domains"] = cfg.domains
     if cfg.direct_parent_low_risk:
         payload["execution"] = {"direct_parent_low_risk": True}
     if (cfg.engine, cfg.local_policy, cfg.objective) != (
@@ -389,8 +393,8 @@ def _parse_routing_json(path: Path | None, raw: dict | None, profiles: dict[str,
         return profiles, preferences, None, "builtin", False, picker
     version = raw.get("schema_version")
     if type(version) is not int or version not in SCHEMA_VERSIONS:
-        raise ConfigError(f"{path} schema_version must be 1, 2 or 3")
-    allowed = {1: V1_FIELDS, 2: V2_FIELDS, 3: V3_FIELDS}[version]
+        raise ConfigError(f"{path} schema_version must be 1, 2, 3 or 4")
+    allowed = {1: V1_FIELDS, 2: V2_FIELDS, 3: V3_FIELDS, 4: V4_FIELDS}[version]
     extra_keys = set(raw) - allowed
     if extra_keys:
         raise ConfigError(f"{path} unknown keys: {sorted(extra_keys)[0]}")
@@ -500,6 +504,12 @@ def load_config(repo: Path | None, *, policy_mode: str | None = None, harness: d
             objective=objective,
         )
         validate_profiles(cfg.profiles)
+        if parsed is not None and "domains" in parsed:
+            import routing_domains
+            try:
+                cfg.domains = routing_domains.parse_policies(parsed["domains"], cfg.profiles)
+            except ValueError as exc:
+                raise ConfigError(str(exc)) from exc
     except ConfigError:
         if mode != "smart":
             return builtin_cfg(source="builtin")
@@ -520,6 +530,7 @@ def doctor_lines(repo: Path | None) -> list[str]:
     rows.append(f"  objective: {cfg.objective}")
     rows.append(f"  fingerprint: {config_fingerprint(cfg)}")
     rows.append(f"  profiles: {len(cfg.profiles)}")
+    rows.append(f"  domain policies: {len(cfg.domains)}")
     rows.append(f"  direct_parent_low_risk: {str(cfg.direct_parent_low_risk).lower()}")
     path = routing_json_path(repo)
     if path is not None and path.is_file():

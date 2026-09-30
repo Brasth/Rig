@@ -36,6 +36,7 @@ PICK_KEYS = {
     "model_source",
     "routing",
     "execution_strategy",
+    "task_domain",
 }
 DISPATCH_TOOLS = (
     "rig_session",
@@ -253,7 +254,7 @@ class McpDispatch(unittest.TestCase):
         self.assertEqual(choice["spawn"], "native")
         self.assertEqual(choice["worker"], "grok")
         self.assertNotEqual(choice["spawn"], "run-worker")
-        expected = route.pick("grok", harness.effective_workers(self.repo, "grok"), "implement", "add a header")
+        expected = route.pick("grok", harness.effective_workers(self.repo, "grok"), "implement", "add a header", repo=self.repo)
         self.assertEqual(choice, expected)
         self.assertNotIn("grok", harness.effective_workers(self.repo, "grok"))
 
@@ -279,6 +280,7 @@ class McpDispatch(unittest.TestCase):
             harness.effective_workers(self.repo, live),
             "explore",
             "locate the auth middleware",
+            repo=self.repo,
         )
         self.assertEqual(choice, expected)
 

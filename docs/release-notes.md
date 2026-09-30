@@ -1,5 +1,25 @@
 # Release Notes
 
+## Task-domain routing v1 (2026-09-30)
+
+Smart routing now accepts a task domain separately from role and capability tier: `general`, `ui-design`, `frontend`, `ui-verification`, `research`, `backend`, `debugging`, and `review`. CLI pick/session and job start use `--task-domain` and repeatable `--research-source`; MCP pick/session/job start/job launch accept `task_domain` and `research_sources`. Workflow nodes carry the same inputs. Explicit domain wins; omitted domains use bounded English inference without changing an explicit role.
+
+Schema 4 `.rig/routing.json` adds per-domain ordered `preferred_profiles` and `fallback: scored|parent|none`. The first eligible preference wins. Existing schema 1–3 configurations remain valid. Domain policies never enable workers or relax role, tier, availability, catalog, or independent-review provider gates. High-risk tasks still require strong profiles. Configured domains run their preferences and fallback locally instead of the direct-parent shortcut, ordered picker, or Jev. Model preferences and capability scores are heuristics, not new benchmark claims or guaranteed model winners.
+
+UI design and visual/browser verification remain parent-only. Research workers must be explore/read with existing readable repository-contained source files; source acquisition without those inputs stays with the parent. Workers gain no browser, vision, Figma, or computer-use access. The parent must separately verify its tools and authorization.
+
+Picks, explanation output, and attempt-bound routing sidecars include domain evidence. Admission revalidates the current domain policy and source access, and research sources are protected read scope. Changed policy or conflicting inputs require a new pick. Manual and legacy launches cannot silently discard an explicit domain/source contract. No ownership, queue, acceptance, or cancellation rule is relaxed. Policy version 2 requires domain evidence on every new smart launch; re-pick older policy-v1 selections. Historical sidecars remain readable.
+
+See [Smart routing](smart-routing.md#task-domains) and the [example domain configuration](examples/task-domain-routing.json). The example uses existing Sonnet, Luna, and Grok profile IDs as project customizations; it does not change default pins or enable those workers.
+
+### Rollout / restart
+
+Stop new admissions, finish or cancel existing work, confirm stopped, accept or close scopes, and preserve routing, queue, reservation, and workflow data. Update every launcher and managed source skill/protocol, then fully restart all parent/MCP sessions before new admissions. Validate merged schema 4 configuration with `rig doctor` and inspect domain picks with `--explain`. A tested checkout is not an installed or live-runtime-accepted upgrade; mixed-version admission writers are unsupported.
+
+### Rollback
+
+Remove `domains` to return to the existing smart picker preferences, retaining only fields supported by the chosen schema. Smart mode still applies built-in domain classification and parent-only boundaries. For the old ladder, set `[routing] mode = "legacy"` and stop passing domain/source inputs; legacy rejects explicit domain contracts. Re-pick after any policy change. For a runtime rollback, use the same stop/confirm/accept-or-close/preserve/restart procedure and restore a routing config compatible with the older runtime. Do not delete job or workflow data.
+
 ## Claude Sonnet 5.5 and computer-use opt-in (2026-09-30)
 
 Claude Code implement/verify and the wrapper default now select `claude-sonnet-5-5` at effort `medium`. The stable profile ID remains `claude-sonnet-5-medium` so existing routing preferences continue to work. Haiku and the already updated Opus 5.5 selectors are unchanged. See the [official Sonnet 5.5 model ID](https://platform.claude.com/docs/en/models/sonnet-5-5/overview). Rig launches Claude Code rather than constructing Messages API requests; live model availability still depends on the installed Claude Code and account.

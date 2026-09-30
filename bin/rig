@@ -60,6 +60,7 @@ usage: rig <command> [args]
   pick [explore|mini|bulk|implement|hard|review|verify|stay] [--case TEXT] [--exclude NAME] [--json]
   session [--role KIND] [--case TEXT] [--exclude NAME] [--compact] [--terminal-limit 0..100] [--json]
     pick/session metadata: [--parent-model MODEL] [--parent-effort EFFORT] (actual session only)
+    domain: [--task-domain DOMAIN] [--research-source REPO_FILE] (repeatable)
     assessment: [--complexity low|medium|high] [--risk ...] [--uncertainty ...] [--assessment-reason TEXT]
     [--explain] [--policy-mode smart|legacy]
   routing report [--days N] [--json]
@@ -729,7 +730,8 @@ Live process + parent Rig MCP is the parent; the same binary with `RIG_JOB_ID` i
 Smart routing is default. Parent supplies complexity/risk/uncertainty low|medium|high plus assessment_reason to rig_session/rig_pick; explicit role wins. Defaults: explore/mini/bulk low/low/low, implement medium/medium/medium, hard high/medium/high, review high/medium/medium. Any high requires strong, else any medium standard, else fast; hard/review minimum strong. Stay performs no catalog discovery.
 Pick compares eligible model+effort profiles by minimum sufficient tier, configured preference, then stable ID. Default fast/standard order: Codex, Grok, Claude, conditional Devin, conditional MiMo, OpenCode, OMP, Pi, agy, Cursor; strong/review: conditional Devin, Claude, Codex, Grok, OpenCode, OMP, Pi, agy, Cursor. MiMo is fast/standard only. Devin stays disabled unless the user enables it; MiMo stays opt-in. Preference does not enable workers or bypass gates. Preserve flags/binary/MCP/live-parent/exclude/model-ban/provider gates. Cursor is last resort in pick. No eligible wrapper: parent_writes uses this parent with observed or unknown model, never a claimed model switch.
 Pass pick routing metadata unchanged to rig_job_launch/rig_job_start. It is not admission authority. Smart launch validates fingerprint, assessment, role, model, effort and catalog before consuming a claim. Invalid/stale picks require re-pick. Manual launches remain manual/unknown. High risk recommends independent review, not a new completion gate.
-Optional .rig/routing.json supports schema_version 1, 2, or 3: schema 1 overrides profiles keyed by stable ID and preferences fast/standard/strong/review; schema 2 may add execution.direct_parent_low_risk; schema 3 adds picker engine/local_policy/objective overrides; never enables workers. --explain shows candidate decisions. rig routing report / rig_routing_report separates execution and parent acceptance; no automatic learning/ranking. [routing] mode="legacy" restores the old ladder. See docs/smart-routing.md.
+Optional .rig/routing.json supports schema_version 1, 2, 3, or 4: schema 1 overrides profiles keyed by stable ID and preferences fast/standard/strong/review; schema 2 may add execution.direct_parent_low_risk; schema 3 adds picker engine/local_policy/objective overrides; schema 4 adds domains; never enables workers. --explain shows candidate decisions. rig routing report / rig_routing_report separates execution and parent acceptance; no automatic learning/ranking. [routing] mode="legacy" restores the old ladder. See docs/smart-routing.md.
+Task domain is separate from role/tier. Pass task_domain=general|ui-design|frontend|ui-verification|research|backend|debugging|review to rig_session/rig_pick; explicit domain wins over bounded English inference. UI design/verification stay parent-only; never grant a child vision, Figma, browser or computer-use. Research children require role=explore, access=read and existing readable repo-contained research_sources; parent acquires unavailable sources. Sources join read admission scope and are rechecked at launch. Schema 4 domains configure ordered preferred_profiles and fallback=scored|parent|none, inside all existing gates. Domain policy takes precedence over direct-parent/Jev/ordered selection. Pass policy-v2 routing.task_domain evidence unchanged; missing, conflicting or stale evidence requires re-pick. Existing schema 1-3 configs and historical jobs remain readable. Explicit domain/source contracts require smart mode.
 When live parent is agy, do not use nested agy /agent dispatch for coding; use MCP `rig_pick`.
 Do not spawn Cursor/Codex/OpenCode/OMP/Pi/agy just because their CLI is on PATH; all smart eligibility and profile gates still apply.
 Pin Claude IDs: `claude-haiku-4-5-20251001` cheap, `claude-sonnet-5-5` implement, `claude-opus-5-5` hard/review. Cursor: `composer-2.5-fast` cheap, `composer-2.5` implement, `cursor-grok-4.6-high` hard, `claude-opus-5-5-thinking-high` review.
@@ -1134,7 +1136,7 @@ cmd_pick() {
     case "$1" in
       --json) json=1; shift ;;
       --explain) extra_args+=(--explain); shift ;;
-      --writer-job-id|--writer-cli|--writer-model|--writer-provider|--review-mode|--complexity|--risk|--uncertainty|--assessment-reason|--policy-mode)
+      --writer-job-id|--writer-cli|--writer-model|--writer-provider|--review-mode|--complexity|--risk|--uncertainty|--assessment-reason|--policy-mode|--task-domain|--research-source)
         [[ $# -ge 2 ]] || { echo "rig pick: $1 needs a value" >&2; exit 2; }
         if [[ "$1" == --writer-* || "$1" == --review-mode ]]; then
           review_args+=("$1" "$2")
@@ -1157,7 +1159,7 @@ cmd_pick() {
         shift 2
         ;;
       --help|-h)
-        echo "usage: rig pick [explore|mini|bulk|implement|hard|review|verify|stay] [--case TEXT] [--exclude NAME] [--parent-model MODEL] [--parent-effort EFFORT] [--complexity L] [--risk L] [--uncertainty L] [--explain] [--json]" >&2
+        echo "usage: rig pick [explore|mini|bulk|implement|hard|review|verify|stay] [--case TEXT] [--exclude NAME] [--parent-model MODEL] [--parent-effort EFFORT] [--task-domain DOMAIN] [--research-source REPO_FILE] [--complexity L] [--risk L] [--uncertainty L] [--explain] [--json]" >&2
         exit 2
         ;;
       --*)
@@ -1188,7 +1190,7 @@ cmd_session() {
       --json) json=1; shift ;;
       --compact) compact=1; shift ;;
       --explain) extra_args+=(--explain); shift ;;
-      --writer-job-id|--writer-cli|--writer-model|--writer-provider|--review-mode|--complexity|--risk|--uncertainty|--assessment-reason|--policy-mode)
+      --writer-job-id|--writer-cli|--writer-model|--writer-provider|--review-mode|--complexity|--risk|--uncertainty|--assessment-reason|--policy-mode|--task-domain|--research-source)
         [[ $# -ge 2 ]] || { echo "rig session: $1 needs a value" >&2; exit 2; }
         if [[ "$1" == --writer-* || "$1" == --review-mode ]]; then
           review_args+=("$1" "$2")
@@ -1219,7 +1221,7 @@ cmd_session() {
         shift 2
         ;;
       --help|-h)
-        echo "usage: rig session [--role KIND] [--case TEXT] [--exclude NAME] [--compact] [--terminal-limit 0..100] [--parent-model MODEL] [--parent-effort EFFORT] [--complexity L] [--risk L] [--uncertainty L] [--explain] [--json]" >&2
+        echo "usage: rig session [--role KIND] [--case TEXT] [--exclude NAME] [--compact] [--terminal-limit 0..100] [--parent-model MODEL] [--parent-effort EFFORT] [--task-domain DOMAIN] [--research-source REPO_FILE] [--complexity L] [--risk L] [--uncertainty L] [--explain] [--json]" >&2
         exit 2
         ;;
       --*)

@@ -138,7 +138,8 @@ def _pick_node(repo, node, spec, state, *, exclude=""):
         }
     case = node.get("brief") or spec.get("case") or spec.get("title") or node["id"]
     return rig_route.pick(
-        live, effective, node["role"], case, exclude=exclude, repo=repo, assessment=assessment, **extra,
+        live, effective, node["role"], case, exclude=exclude, repo=repo, assessment=assessment,
+        task_domain=node.get("task_domain", ""), research_sources=node.get("research_sources"), **extra,
     )
 
 
@@ -188,6 +189,7 @@ def _default_launch(repo, *, node, spec, state, choice, owner, owner_session, re
             model=choice.get("model") or "", effort=choice.get("effort") or "",
             summary=brief, files=files, access=access, owner_session=owner_session,
             routing=choice.get("routing"), assessment=node.get("assessment") or None,
+            task_domain=node.get("task_domain", ""), research_sources=node.get("research_sources"),
             return_details=True,
             resources=resources, allow_read_overlap_reservations=allow_read, **identity,
             **_supported_kwargs(rig_jobs.start_job, handoff),
@@ -200,6 +202,7 @@ def _default_launch(repo, *, node, spec, state, choice, owner, owner_session, re
         model=choice.get("model") or "", effort=choice.get("effort") or "",
         access=access, files=files, owner_session=owner_session, routing=choice.get("routing"),
         assessment=node.get("assessment") or None,
+        task_domain=node.get("task_domain", ""), research_sources=node.get("research_sources"),
         resources=resources, allow_read_overlap_reservations=allow_read, **identity,
         **handoff,
     )
@@ -427,6 +430,8 @@ def advance(repo, workflow_id, *, owner=None, owner_session="", owner_token="",
                     "role": node["role"],
                     "files": node.get("files") or [],
                 }
+                if job.get("research_source_instructions"):
+                    parent_action["research_source_instructions"] = job["research_source_instructions"]
                 state["parent_action"] = parent_action
             wf.commit_launch(state, spec)
             if state.get("queue_id"):

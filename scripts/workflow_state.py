@@ -14,6 +14,7 @@ from pathlib import Path
 
 import admission
 import harness
+import routing_domains
 
 WorkflowError = admission.AdmissionError
 
@@ -24,9 +25,9 @@ STATUSES = (
 TERMINAL = frozenset({"verified", "cancelled"})
 ACTIVE = frozenset({"planned", "running", "attention", "blocked", "completed-unverified",
                     "failed", "cancel-requested"})
-NODE_ROLES = frozenset({"mini", "bulk", "implement", "hard", "verify", "review"})
+NODE_ROLES = frozenset({"explore", "mini", "bulk", "implement", "hard", "verify", "review"})
 WRITE_ROLES = frozenset({"mini", "bulk", "implement", "hard"})
-READ_ROLES = frozenset({"verify", "review"})
+READ_ROLES = frozenset({"explore", "verify", "review"})
 EFFECTS = frozenset({"none", "local", "external", "production", "destructive"})
 GATED_EFFECTS = frozenset({"external", "production", "destructive"})
 NODE_STATES = frozenset({
@@ -38,6 +39,7 @@ DEFAULT_MAX_NODES = 12
 LAUNCHED_CONTRACT = (
     "id", "role", "effects", "files", "resources", "depends_on", "required",
     "brief", "kind", "final", "priority", "assessment", "shared_context",
+    "task_domain", "research_sources",
 )
 
 
@@ -190,7 +192,7 @@ def _normalize_node(raw, index, *, max_nodes):
         raise WorkflowError("node id must be a stable identifier")
     role = str(raw.get("role") or "").strip()
     if role not in NODE_ROLES:
-        raise WorkflowError(f"node {nid}: role must be mini|bulk|implement|hard|verify|review")
+        raise WorkflowError(f"node {nid}: role must be explore|mini|bulk|implement|hard|verify|review")
     effects = str(raw.get("effects") or "none").strip() or "none"
     if effects not in EFFECTS:
         raise WorkflowError(f"node {nid}: effects must be none|local|external|production|destructive")
@@ -198,6 +200,17 @@ def _normalize_node(raw, index, *, max_nodes):
     if role in WRITE_ROLES and not files:
         raise WorkflowError(f"node {nid}: write nodes list concrete files")
     resources = canonical_resources(raw.get("resources"))
+    try:
+        task_domain, research_sources = routing_domains.resolve_inputs(
+            task_domain=raw.get("task_domain", ""), research_sources=raw.get("research_sources"),
+        )
+    except ValueError as error:
+        raise WorkflowError(f"node {nid}: {error}") from error
+    if role == "explore":
+        if effects != "none" or any(item["access"] != "read" for item in resources):
+            raise WorkflowError(f"node {nid}: explore nodes are read-only with no effects or write resources")
+        # Source evidence is also protected read scope, even when files is omitted.
+        files = list(dict.fromkeys([*files, *(research_sources or [])]))
     depends_on = _depends_set({"id": nid, **raw})
     required = raw.get("required")
     if required is None:
@@ -222,6 +235,10 @@ def _normalize_node(raw, index, *, max_nodes):
         "final": bool(raw.get("final")),
         "assessment": raw.get("assessment") if isinstance(raw.get("assessment"), dict) else {},
     }
+    if task_domain:
+        node["task_domain"] = task_domain
+    if research_sources is not None:
+        node["research_sources"] = list(research_sources)
     if raw.get("shared_context") not in (None, ""):
         node["shared_context"] = str(raw.get("shared_context"))
     return node
@@ -292,7 +309,7 @@ def _required_predecessor_ids(nodes, exclude_id=""):
         node["id"] for node in nodes
         if node["id"] != exclude_id
         and node.get("required", True)
-        and node["role"] in (WRITE_ROLES | {"review"})
+        and node["role"] in (WRITE_ROLES | {"explore", "review"})
     ]
 
 

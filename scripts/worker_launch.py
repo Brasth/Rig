@@ -26,12 +26,12 @@ LAUNCH_KEYS = frozenset({
     "queue_id", "reservation_id", "attempt_id", "owner_token", "owner_session",
     "writer_job_id", "continues_job_id", "writer_snapshot_id", "writer_cli", "writer_model",
     "writer_provider", "writer_job_ids", "writer_snapshot_ids", "writer_providers",
-    "review_mode", "live", "routing", "assessment", "resources",
+    "review_mode", "live", "routing", "assessment", "resources", "task_domain", "research_sources",
     "workflow_id", "workflow_node_id", "workflow_spec_hash", "workflow_attempt",
     "allow_read_overlap_reservations",
 })
 OBJECT_LAUNCH_KEYS = frozenset({
-    "files", "routing", "assessment", "resources", "writer_job_ids",
+    "files", "routing", "assessment", "resources", "writer_job_ids", "research_sources",
     "writer_snapshot_ids", "writer_providers", "allow_read_overlap_reservations",
 })
 WRAPPER_ENV = (
@@ -296,6 +296,14 @@ def launch(repo, **kwargs) -> dict:
     import routing_policy
     picked_routing = routing_arg if isinstance(routing_arg, dict) else None
     assessment_obj = assessment_arg if isinstance(assessment_arg, dict) else None
+    import routing_domains
+    try:
+        task_domain, research_sources = routing_domains.resolve_inputs(
+            task_domain=kwargs.get("task_domain", ""),
+            research_sources=kwargs.get("research_sources"), routing=picked_routing,
+        )
+    except ValueError as error:
+        raise LaunchError(str(error)) from error
     if not worker:
         choice = rig_route.pick(
             live_parent, effective, role, case,
@@ -308,6 +316,7 @@ def launch(repo, **kwargs) -> dict:
             writer_providers=kwargs.get("writer_providers"),
             review_mode=_require_string(kwargs.get("review_mode"), "review_mode").strip() or "standalone",
             repo=repo, assessment=assessment_obj,
+            task_domain=task_domain, research_sources=research_sources,
         )
         if choice.get("spawn") != "run-worker" or not choice.get("worker"):
             raise LaunchError(choice.get("reason") or "no eligible wrapper worker")
@@ -339,6 +348,15 @@ def launch(repo, **kwargs) -> dict:
             try:
                 choice = routing_policy.resolve_explicit_worker_choice(
                     live_parent, worker, role, case, repo=repo, assessment=assessment_obj,
+                    task_domain=task_domain, research_sources=research_sources,
+                    writer_job_id=_require_string(kwargs.get("writer_job_id"), "writer_job_id"),
+                    writer_cli=_require_string(kwargs.get("writer_cli"), "writer_cli"),
+                    writer_model=_require_string(kwargs.get("writer_model"), "writer_model"),
+                    writer_provider=_require_string(kwargs.get("writer_provider"), "writer_provider"),
+                    writer_job_ids=kwargs.get("writer_job_ids"),
+                    writer_snapshot_ids=kwargs.get("writer_snapshot_ids"),
+                    writer_providers=kwargs.get("writer_providers"),
+                    review_mode=_require_string(kwargs.get("review_mode"), "review_mode").strip() or "standalone",
                 )
             except (ValueError, routing_policy.ConfigError) as error:
                 raise LaunchError(str(error)) from error
@@ -363,12 +381,19 @@ def launch(repo, **kwargs) -> dict:
         routing_obj = routing_policy.validate_launch_tuple(
             repo, worker=worker, model=model, effort=effort, role=role, case=case,
             routing=picked_routing, assessment=assessment_obj,
+            task_domain=task_domain, research_sources=research_sources,
             executor_kind="wrapper", access=_access(role, _require_string(kwargs.get("access"), "access")),
         )
     except (ValueError, routing_policy.ConfigError) as error:
         raise LaunchError(str(error)) from error
+    instructions = rig_jobs.research_source_instructions(routing_obj)
+    if instructions:
+        brief += "\n\n" + instructions
     listed = _files(kwargs.get("files"))
     access = _access(role, _require_string(kwargs.get("access"), "access"))
+    if access == "read":
+        domain = routing_obj.get("task_domain") or {}
+        listed = list(dict.fromkeys([*listed, *domain.get("research_sources", [])]))
     review_mode = _require_string(kwargs.get("review_mode"), "review_mode").strip() or "standalone"
     if review_mode not in {"standalone", "independent"}:
         raise LaunchError("review_mode must be standalone|independent")

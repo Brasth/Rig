@@ -13,6 +13,10 @@ argument-hint: "[job-id]"
 Show the user which Rig worker is running, the task, status, and a readable log.
 Do not guess. Use MCP. The parent checks this board and MUST spawn workers for code, review, SSH, and gather unless pick `parent_writes` is true (native implement/hard).
 
+## Task-domain routing
+
+Task domain is separate from role/tier. Pass task_domain=general|ui-design|frontend|ui-verification|research|backend|debugging|review to rig_session/rig_pick; explicit domain wins over bounded English inference. UI design/verification stay parent-only; never grant a child vision, Figma, browser or computer-use. Research children require role=explore, access=read and existing readable repo-contained research_sources; parent acquires unavailable sources. Sources join read admission scope and are rechecked at launch. Schema 4 domains configure ordered preferred_profiles and fallback=scored|parent|none, inside all existing gates. Domain policy takes precedence over direct-parent/Jev/ordered selection. Pass policy-v2 routing.task_domain evidence unchanged; missing, conflicting or stale evidence requires re-pick. Existing schema 1-3 configs and historical jobs remain readable. Explicit domain/source contracts require smart mode.
+
 ## MCP first
 
 Do not shell `rig` for jobs, wait, allow, deny, log, or message when MCP is listed.
