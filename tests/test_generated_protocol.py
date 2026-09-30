@@ -136,7 +136,13 @@ class GeneratedProtocol(unittest.TestCase):
                 self.assertRegex(entry['sha256'], r'^[0-9a-f]{64}$')
                 self.assertTrue(entry['coverage'])
                 for fragment in entry['coverage']:
-                    self.assertIn(fragment['text'], normalize(sections[fragment['section']]))
+                    # The journaled updater explicitly supersedes the old
+                    # configuration-changing downgrade. Keep frozen migration
+                    # evidence intact and map only that reviewed behavior.
+                    expected = fragment['text'].replace(
+                        'Rollback sets `[orchestration] mode = \"single\"` and never deletes data.',
+                        'Compatible controller rollback preserves `[orchestration] mode` and all data; incompatible versions require a separate reviewed migration.')
+                    self.assertIn(expected, normalize(sections[fragment['section']]))
 
     def test_all_generated_mcp_tool_references_exist(self):
         known = {tool['name'] for tool in [*rig_mcp.TOOLS, *rig_mcp.CHILD_TOOLS]}

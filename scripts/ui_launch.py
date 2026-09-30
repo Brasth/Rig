@@ -11,6 +11,7 @@ import subprocess
 import sys
 import uuid
 from pathlib import Path
+import update_gate
 
 HERE = Path(__file__).resolve().parent
 
@@ -134,6 +135,11 @@ def session_commands(session, repo, host, executable, args, launch_file=None):
 
 def main(argv):
     if len(argv) < 2: return 2
+    try:
+        update_gate.assert_ready()
+    except update_gate.UpdateBlocked as exc:
+        print(f'Rig launch blocked: {exc}', file=sys.stderr)
+        return 1
     original_env = os.environ.copy()
     launch_cwd = os.getcwd()
     host, executable, *args = argv
@@ -147,13 +153,13 @@ def main(argv):
             print('Rig UI unavailable (tmux 3.3+ required); opening parent normally.', file=sys.stderr)
         os.execvpe(executable, [executable, *args], original_env)
     from ui_service import ensure_service, request
-    from ui_install import lifecycle_lock, register_lease, runtime_home
+    from ui_install import lifecycle_lock, _register_lease_locked, runtime_home
     session = 'rig-' + uuid.uuid4().hex[:12]
     base = [binary, *server_args()]
     started = False
     launch_file = None
     try:
-        with lifecycle_lock():
+        with update_gate.lock(), lifecycle_lock():
             if not (runtime_home() / 'ui/shell-enabled').exists():
                 os.execvpe(executable, [executable, *args], original_env)
             socket = ensure_service(repo)
@@ -174,9 +180,12 @@ def main(argv):
             pid = int(pane.stdout.strip())
             from admission import process_identity
             identity = process_identity(pid)
-            register_lease(session, repo, pid, start_id=identity.get('start_id'))
+            _register_lease_locked(session, repo, pid, start_id=identity.get('start_id'))
             for command in commands[1:]: subprocess.run(base + command, check=True)
             request(socket, {'op': 'register', 'session': session, 'host': host, 'pid': pid, 'start_id': identity.get('start_id'), 'tmux_session': session, 'socket_name': None if os.environ.get('TMUX') else 'rig-ui', 'server': os.environ.get('TMUX', 'rig-ui')})
+    except (update_gate.UpdateBlocked, TimeoutError) as exc:
+        print(f'Rig launch blocked: {exc}', file=sys.stderr)
+        return 1
     except Exception as exc:
         if not started:
             if launch_file is not None: launch_file.unlink(missing_ok=True)
@@ -231,6 +240,7 @@ def run_child(path):
     ready.unlink(missing_ok=True)
     env = payload['env']
     env.pop('RIG_LIFECYCLE_FD', None)
+    env.pop('RIG_LIFECYCLE_OWNER_PID', None)
     env.update({'RIG_UI_ACTIVE': '1', 'RIG_UI_SESSION': payload['session'], 'RIG_UI_REPO': payload['repo']})
     for key in ('TMUX', 'TMUX_PANE', 'TERM'):
         if key in os.environ: env[key] = os.environ[key]

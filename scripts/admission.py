@@ -24,6 +24,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
+import update_gate
 import change_evidence as evidence
 import harness
 
@@ -67,6 +68,13 @@ def _now():
 
 @contextmanager
 def transaction(repo, timeout=5.0):
+    with update_gate.lock():
+        with _transaction(repo, timeout) as root:
+            yield root
+
+
+@contextmanager
+def _transaction(repo, timeout=5.0):
     """Reentrant per thread, serialized locally and across processes; fail closed."""
     global _process, _locks, _lock_map_guard, _held
     deadline = time.monotonic() + max(0.0, timeout)

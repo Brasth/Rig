@@ -1,6 +1,26 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# The pending path runs before sourcing any potentially half-updated runtime.
+# Recovery code is the private pre-update controller, outside replaced assets.
+_RIG_PENDING_ROOT="${RIG_HOME:-$HOME/.rig}"
+if [[ -e "$_RIG_PENDING_ROOT/updates/pending.json" || -L "$_RIG_PENDING_ROOT/updates/pending.json" ]]; then
+  case "${1:-}" in
+    update)
+      shift
+      exec python3 -E -s -B "$_RIG_PENDING_ROOT/updates/recovery/runtime_update.py" "$@"
+      ;;
+    help|-h|--help|"")
+      echo "Pending runtime update: rig update --status | rig update --recover"
+      exit 0
+      ;;
+    *)
+      echo "rig: pending runtime update; use rig update --status or rig update --recover before other commands" >&2
+      exit 1
+      ;;
+  esac
+fi
+
 _RIG_BIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 _RIG_DETECT=""
 if [[ -f "$_RIG_BIN_DIR/../scripts/detect-binaries.sh" ]]; then
@@ -22,7 +42,8 @@ usage: rig <command> [args]
     Optional desktop/browser components ask once (default No); their shared skills install only after opt-in.
   ui [open|status|enable|disable|stop]
   uninstall [--dry-run] [--repo PATH]
-  update
+  update --revision FULL_COMMIT_SHA [--dry-run]
+  update --rollback [--dry-run] | --recover | --status
   init [--patch-agents|--no-patch-agents] [--patch-claude]
   doctor [--task coding|research|browser|computer-use] [--parent NAME] [--model MODEL] [--json] [--smoke]
     Task doctor is offline; --smoke checks only a temporary child MCP fixture.
@@ -445,38 +466,7 @@ cmd_update() {
     echo "rig update: refuse inside a worker" >&2
     exit 1
   fi
-  local url dest tmp rc
-  url="${RIG_INSTALL_SH:-https://raw.githubusercontent.com/Brasth/Rig/main/install.sh}"
-  if [[ "$url" != *://* && -f "$url" ]]; then
-    url="file://${url}"
-  fi
-  dest="$(rig_home)"
-  if ! command -v curl >/dev/null 2>&1; then
-    echo "rig update: curl not found" >&2
-    exit 1
-  fi
-  tmp="$(mktemp)"
-  if ! (command curl -fsSL "$url" -o "$tmp"); then
-    rm -f "$tmp"
-    echo "rig update: could not fetch installer from $url" >&2
-    exit 1
-  fi
-  if [[ ! -s "$tmp" ]]; then
-    rm -f "$tmp"
-    echo "rig update: installer empty from $url" >&2
-    exit 1
-  fi
-  set +e
-  RIG_HOME="$dest" bash "$tmp"
-  rc=$?
-  set -e
-  rm -f "$tmp"
-  if [[ "$rc" -ne 0 ]]; then
-    echo "rig update: installer failed ($rc)" >&2
-    exit "$rc"
-  fi
-  echo "kit is at $dest"
-  echo "fully quit the parent CLI once if MCP/skills changed"
+  PYTHONDONTWRITEBYTECODE=1 python3 "$(py_script runtime_update.py)" "$@"
 }
 
 ensure_harness() {
@@ -777,7 +767,7 @@ doctor_print_update() {
   if [[ "$remote" == "$local_sha"* ]]; then
     echo "  update:   current"
   else
-    echo "  update:   behind main — run: rig update"
+    echo "  update:   behind main — review: rig update --revision $remote --dry-run"
   fi
 }
 
@@ -815,7 +805,7 @@ cmd_doctor() {
   if [[ -n "$ver" ]]; then
     echo "  version:  $ver"
   else
-    echo "  version:  (unknown — run: rig update)"
+    echo "  version:  (unknown — run: rig update --status)"
   fi
   doctor_print_update "$ver"
   echo
@@ -1505,6 +1495,12 @@ cmd_run() {
 main() {
   local cmd="${1:-}"
   shift || true
+  if [[ -e "$(rig_home)/updates/pending.json" || -L "$(rig_home)/updates/pending.json" ]]; then
+    case "$cmd" in update|help|-h|--help|"") ;; *)
+      echo "rig: pending runtime update; use rig update --status or rig update --recover before other commands" >&2
+      return 1 ;;
+    esac
+  fi
   if [[ "$cmd" == "setup" || "$cmd" == "init" ]] && [[ "${RIG_INSTALL_TRANSACTION:-}" != "1" ]] && command -v python3 >/dev/null 2>&1; then
     local repo_arg="-"
     [[ "$cmd" != "init" ]] || repo_arg="$(repo_root)"

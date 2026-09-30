@@ -17,4 +17,4 @@ Queue lifecycle when bound to a workflow: claimed on create from a parked pendin
 
 UI (`rig tui` Tab Jobs/Queue/Workflows): workflow id, status, accepted/required, running, ASK, blocker, next parent action, title. No estimated progress, savings, or ETA.
 
-Combined rollout with wait-cancel: stop new admissions, finish or cancel existing work, confirm stopped, accept or close scopes, preserve data, update every launcher and managed protocol, then fully restart all parent/MCP sessions. Rollback sets `[orchestration] mode = "single"` and never deletes data.
+Combined rollout with wait-cancel: stop new admissions, finish or cancel existing work, confirm stopped, accept or close scopes, preserve data, update every launcher and managed protocol, then fully restart all parent/MCP sessions. Compatible controller rollback preserves `[orchestration] mode` and all data; incompatible versions require a separate reviewed migration.
