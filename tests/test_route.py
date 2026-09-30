@@ -168,7 +168,7 @@ class Pick(unittest.TestCase):
     def test_grok_parent_uses_claude_then_native(self):
         c = legacy_pick("grok", ["claude"], "implement", "add a header")
         self.assertEqual(c["worker"], "claude")
-        self.assertEqual(c["model"], "claude-sonnet-5")
+        self.assertEqual(c["model"], "claude-sonnet-5-5")
         self.assertEqual(c["effort"], "medium")
         c = legacy_pick("grok", ["codex"], "implement", "add a header")
         self.assertEqual(c["spawn"], "native")
@@ -230,7 +230,7 @@ class Pick(unittest.TestCase):
 
     def test_claude_code_ladder(self):
         self.assertEqual(route.model_for("claude", "explore"), ("claude-haiku-4-5-20251001", "low"))
-        self.assertEqual(route.model_for("claude", "implement"), ("claude-sonnet-5", "medium"))
+        self.assertEqual(route.model_for("claude", "implement"), ("claude-sonnet-5-5", "medium"))
         hard = legacy_pick("grok", ["claude"], "hard", "multi-file architecture")
         self.assertEqual((hard["model"], hard["effort"]), ("claude-opus-5-5", "high"))
 
@@ -260,7 +260,7 @@ class Pick(unittest.TestCase):
         self.assertIsNone(route.assert_child_model("gpt-6-luna"))
         self.assertIsNone(route.assert_child_model("gpt-5.3-codex-spark"))
         self.assertIsNone(route.assert_child_model("claude-opus-5-5"))
-        self.assertIsNone(route.assert_child_model("claude-sonnet-5"))
+        self.assertIsNone(route.assert_child_model("claude-sonnet-5-5"))
         self.assertIsNone(route.assert_child_model("claude-haiku-4-5-20251001"))
         self.assertIsNone(route.assert_child_model("composer-2.5"))
         self.assertIsNone(route.assert_child_model("cursor-grok-4.6-high"))
@@ -663,10 +663,10 @@ class Pick(unittest.TestCase):
     def test_pick_keeps_existing_optional_positional_arguments(self):
         choice = legacy_pick(
             "grok", ["opencode"], "implement", "task",
-            {"opencode": ["anthropic/claude-sonnet-5"]}, "grok",
+            {"opencode": ["anthropic/claude-sonnet-5-5"]}, "grok",
         )
         self.assertEqual(choice["worker"], "opencode")
-        self.assertEqual(choice["model"], "anthropic/claude-sonnet-5")
+        self.assertEqual(choice["model"], "anthropic/claude-sonnet-5-5")
 
 
 class ReviewProvenance(unittest.TestCase):
@@ -681,7 +681,7 @@ class ReviewProvenance(unittest.TestCase):
         self.job_dir.mkdir(parents=True)
         self.writer = {
             "job_id": "writer", "worker": "cursor", "status": "ok", "role": "implement",
-            "model": "claude-sonnet-5", "model_source": "selected", "model_inferred": False,
+            "model": "claude-sonnet-5-5", "model_source": "selected", "model_inferred": False,
         }
         (self.job_dir / "meta.json").write_text(json.dumps(self.writer))
         self.assessment = Mock(return_value={
@@ -699,7 +699,7 @@ class ReviewProvenance(unittest.TestCase):
             ("gpt-6-luna", "openai"), ("openai/gpt-6-astra", "openai"),
             ("o3-mini", "openai"), ("codex-mini-latest", "openai"),
             ("claude-opus-5-5-thinking-high", "anthropic"),
-            ("openrouter/anthropic/claude-sonnet-5", "anthropic"),
+            ("openrouter/anthropic/claude-sonnet-5-5", "anthropic"),
             ("xai-oauth/grok-4.6", "xai"), ("cursor-grok-4.6-high", "xai"),
             ("google/gemini-3.1-pro-high", "google"), ("composer-2.5-fast", "cursor"),
             ("openai/custom-v2", "openai"),
@@ -718,16 +718,16 @@ class ReviewProvenance(unittest.TestCase):
         self.assessment.assert_not_called()
 
     def test_known_writer_skips_same_provider_across_wrappers(self):
-        choice = self.pick(["claude", "grok", "cursor"], writer_cli="cursor", writer_model="claude-sonnet-5")
+        choice = self.pick(["claude", "grok", "cursor"], writer_cli="cursor", writer_model="claude-sonnet-5-5")
         self.assertEqual(choice["worker"], "grok")
         self.assertEqual(choice["independence"], "confirmed")
         self.assertEqual(choice["writer_provider"], "anthropic")
-        choice = self.pick(["cursor"], writer_model="claude-sonnet-5")
+        choice = self.pick(["cursor"], writer_model="claude-sonnet-5-5")
         self.assertEqual(choice["spawn"], "none")
         self.assertIn("matches writer provider anthropic", choice["reason"])
 
     def test_independent_requires_writer_id_and_current_acceptance(self):
-        choice = self.pick(["grok"], review_mode="independent", writer_model="claude-sonnet-5")
+        choice = self.pick(["grok"], review_mode="independent", writer_model="claude-sonnet-5-5")
         self.assertEqual(choice["spawn"], "none")
         self.assertIn("writer_job_id", choice["reason"])
         self.assessment.return_value = {"state": "pending", "acceptance": "accepted", "reason": "content_changed"}
@@ -756,7 +756,7 @@ class ReviewProvenance(unittest.TestCase):
         self.assertIn("known actual writer provider", choice["reason"])
         choice = self.pick(
             ["grok"], writer_job_id="writer", review_mode="independent",
-            jobs_snapshot=[self.writer], writer_model="claude-sonnet-5",
+            jobs_snapshot=[self.writer], writer_model="claude-sonnet-5-5",
         )
         self.assertEqual(choice["independence"], "confirmed")
 
@@ -767,7 +767,7 @@ class ReviewProvenance(unittest.TestCase):
             with self.subTest(supplied=supplied), self.assertRaisesRegex(ValueError, "conflicts"):
                 self.pick(["grok"], writer_job_id="writer", **supplied)
         with self.assertRaisesRegex(ValueError, "conflicts"):
-            self.pick(["grok"], writer_model="claude-sonnet-5", writer_provider="xai")
+            self.pick(["grok"], writer_model="claude-sonnet-5-5", writer_provider="xai")
 
     def test_explicit_provider_fills_an_unknown_alias(self):
         self.writer.update(model="corporate-alias", model_source="selected")
@@ -797,7 +797,7 @@ class ReviewProvenance(unittest.TestCase):
 
     def test_catalogs_are_resolved_in_candidate_order_until_eligible(self):
         with patch.object(route, "resolved_model_for", wraps=route.resolved_model_for) as resolve:
-            choice = self.pick(["claude", "grok", "opencode", "omp"], writer_model="claude-sonnet-5")
+            choice = self.pick(["claude", "grok", "opencode", "omp"], writer_model="claude-sonnet-5-5")
         self.assertEqual(choice["worker"], "grok")
         self.assertEqual([call.args[0] for call in resolve.call_args_list], ["claude", "grok"])
 
@@ -856,12 +856,12 @@ class ReviewAcceptedContent(unittest.TestCase):
             owner_session = "accepted-writer-test"
             owner = admission.caller_owner("parent", owner_session=owner_session)
             reserved = admission.reserve(repo, job_id="writer", worker="parent", role="implement",
-                                         model="claude-sonnet-5", files=["subject.txt"], access="write", owner=owner)
+                                         model="claude-sonnet-5-5", files=["subject.txt"], access="write", owner=owner)
             credentials = {**admission.credentials(reserved), "owner_session": owner_session}
             admission.activate(repo, job_id="writer", worker="parent", files=["subject.txt"], access="write", **credentials)
             admission.finish(repo, status="ok", completion={"kind": "parent_task", "completed": True}, **credentials)
             (folder / "meta.json").write_text(json.dumps({
-                "job_id": "writer", "worker": "parent", "model": "claude-sonnet-5",
+                "job_id": "writer", "worker": "parent", "model": "claude-sonnet-5-5",
                 "model_source": "selected", "status": "ok", "execution_mode": "parent",
                 "files": ["subject.txt"], "access": "write", "owner": reserved["owner"],
                 "ownership_established": True, "reservation_id": reserved["reservation_id"],

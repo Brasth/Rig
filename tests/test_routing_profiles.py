@@ -12,6 +12,15 @@ class BuiltinPins(unittest.TestCase):
     def setUp(self):
         self.rows = profiles.profiles_by_id()
 
+    def test_sonnet_55_preserves_stable_profile_id(self):
+        sonnet = self.rows["claude-sonnet-5-medium"]
+        self.assertEqual(sonnet.selector, "claude-sonnet-5-5")
+        self.assertEqual(sonnet.effort, "medium")
+        for role in ("implement", "verify"):
+            with self.subTest(role=role):
+                self.assertEqual(route.model_for("claude", role), (sonnet.selector, sonnet.effort))
+        self.assertEqual(self.rows["claude-opus-5-high"].selector, "claude-opus-5-5")
+
     def test_selectors_come_from_route_models(self):
         mapping = {
             "grok-4.5-low": ("grok", "explore"),

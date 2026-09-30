@@ -76,6 +76,8 @@ Each MiMo job gets its own `.rig/jobs/<job-id>/mimo-config/mimocode.json` via `M
 
 ## Computer-use (parent)
 
+Generic computer-use requests do not select Rig. First check that `.rig/harness.toml` exists and the project is enabled (`[project] enabled=false` disables Rig; an existing legacy harness without that section stays enabled), parent Rig MCP is available, and the selected backend is opted in and available. Global skill installation or a tool name alone is not opt-in. If Rig is uninitialized, disabled, or unavailable, or its backend is not opted in, use an available host-native computer/browser capability under its own instructions. Do not initialize, enable, install, unlock, or repair Rig merely because the user mentioned computer use. If the user explicitly requests Rig, explain the blocker and ask before setup instead of silently switching providers. Once a Rig backend is selected, preserve its permission, grant, freshness, child-isolation, and no-bypass rules; a denial is never a reason to switch tools. The Rig-specific routing and fallback rules below apply only after this selection gate.
+
 Cua Driver is parent-only eyes and hands. Never a Rig worker. Never `[workers].cua`. Children never receive cua-driver or chrome-devtools MCP.
 
 Effective on = machine `~/.rig/cua-driver.json` `opt_in=true` **and** `cua-driver` on PATH **and** this repo `[computer-use] enabled=true`. Anything else: **chrome-devtools** only. Never Figma MCP or Playwright as the computer-use fallback. Never the Hermes `computer_use` skill.
@@ -659,7 +661,7 @@ Smart mode uses declared profiles: exact selectors/aliases, supported effort, ro
 
 See [smart routing](smart-routing.md) for assessment defaults, `.rig/routing.json`, `--explain`, reporting and `[routing] mode="legacy"` rollback. Pins below are built-in profile inputs, not unconditional role-to-model assignments.
 
-- Claude: `claude-haiku-4-5-20251001` cheap, `claude-sonnet-5` implement, `claude-opus-5-5` hard/review
+- Claude: `claude-haiku-4-5-20251001` cheap, `claude-sonnet-5-5` implement, `claude-opus-5-5` hard/review
 - Cursor: `composer-2.5-fast` cheap, `composer-2.5` implement, `cursor-grok-4.6-high` hard, `claude-opus-5-5-thinking-high` review
 - Grok: implement `grok-4.7` high; explore `grok-4.5`
 - Codex: cheap/explore `gpt-6-luna` low. Hard Codex work can use `gpt-5.6-terra` medium. Optional `.rig/routing.json` override for exploration only: profile `codex-explorer-low` selector `gpt-5.3-codex-spark`. Spark is not a baseline and cannot be enabled for write roles.

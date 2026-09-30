@@ -72,6 +72,7 @@ class ClaudeWorkerArgv(unittest.TestCase):
         self.assertIn(proc.returncode, (0, 127), out)
         self.assertIn("would run:", out, out)
         self.assertIn("claude -p", out)
+        self.assertRegex(out, r"--model claude-sonnet-5-5(?:\s|$)")
         self.assertIn("stream-json", out)
         self.assertIn("--verbose", out)
         self.assertIn("acceptEdits", out)
@@ -129,7 +130,7 @@ class ClaudeWorkerArgv(unittest.TestCase):
 
     def test_claude_sonnet_dry_run_passes_effort(self):
         env = {
-            "RIG_MODEL": "claude-sonnet-5",
+            "RIG_MODEL": "claude-sonnet-5-5",
             "RIG_EFFORT": "medium",
         }
         proc = run_worker(self.repo, "claude", "claude-stream", str(self.brief), env=env)
@@ -137,7 +138,7 @@ class ClaudeWorkerArgv(unittest.TestCase):
         self.assertIn(proc.returncode, (0, 127), out)
         self.assertIn("would run:", out, out)
         self.assertIn("--effort medium", out)
-        self.assertIn("claude-sonnet-5", out)
+        self.assertIn("claude-sonnet-5-5", out)
         self.assertIn("stream-json", out)
 
     def test_wrapper_pauses_timeout_while_ask_pending(self):
@@ -611,7 +612,7 @@ class WrapperChangeEvidence(unittest.TestCase):
         }):
             details = jobs.start_job(
                 self.repo, worker="claude", role="implement", job_id=job_id, live="grok",
-                model="claude-sonnet-5", files=files, native_agent_id=job_id + "-agent",
+                model="claude-sonnet-5-5", files=files, native_agent_id=job_id + "-agent",
                 owner_session=session, return_details=True,
             )
             credentials = admission.credentials(details)
@@ -683,7 +684,7 @@ class WrapperChangeEvidence(unittest.TestCase):
 
     def test_standalone_review_persists_known_provider_independence(self):
         self._worker("print('review finished')\n")
-        proc = self._run(RIG_ROLE="review", RIG_WRITER_MODEL="claude-sonnet-5", RIG_WRITER_CLI="cursor")
+        proc = self._run(RIG_ROLE="review", RIG_WRITER_MODEL="claude-sonnet-5-5", RIG_WRITER_CLI="cursor")
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         result = json.loads((self.job_dir / "result.json").read_text())
         self.assertEqual(result["independence"], "confirmed")

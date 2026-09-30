@@ -1,7 +1,9 @@
 ---
 name: delegate-harness
 description: >
-  ALWAYS activate when `.rig/harness.toml` exists. MUST run MCP `rig_session`
+  Activate only when `.rig/harness.toml` exists and the Rig project is enabled
+  (not `[project] enabled=false`). Global installation alone does not activate Rig.
+  MUST run MCP `rig_session`
   (or `rig_pick`) and spawn a Rig worker for code, review, fix, SSH, remote
   debug, or gather in the codebase unless pick parent_writes is true. Parent
   checks first and prepares brief TEXT for MCP launch. Delegate implement, review, explore, or
@@ -14,7 +16,9 @@ user-invocable: true
 
 ## Hard gate
 
-When `.rig/harness.toml` exists, do not write app code, review a diff, fix a bug, or SSH yourself **unless pick `parent_writes` is true** (native implement/hard). `run-worker` means you still do not write the patch. Spawn explore/mini for codebase gather only if the parent cannot name the files after a short check.
+If `.rig/harness.toml` is missing or `[project] enabled=false`, this protocol does not apply. Follow the host instructions; do not initialize or enable Rig implicitly. Existing legacy harnesses without `[project]` remain enabled.
+
+When `.rig/harness.toml` exists and the project is enabled, do not write app code, review a diff, fix a bug, or SSH yourself **unless pick `parent_writes` is true** (native implement/hard). `run-worker` means you still do not write the patch. Spawn explore/mini for codebase gather only if the parent cannot name the files after a short check.
 
 Parent checks first: read local files, name the cause, prepare brief TEXT for launch. Parent checks before an implement spawn (name files and the update). Ask / plan / advise stay with the parent. Docs/skills-only: MCP `rig_pick` with `role` mini. If the implement brief already lists files, do not also spawn explore.
 
@@ -74,6 +78,8 @@ This CLI is the parent. It manages. It does not sit on write/review/SSH when pic
 - codebase gather (grep, file search, trace) and remote/SSH gather (logs, server facts)
 
 Figma, computer-use, and chrome-profile stay with the parent. If this CLI has no Figma MCP, ask the user for a screenshot. Do not spawn a clicker.
+Generic computer-use requests do not select Rig. First check that `.rig/harness.toml` exists and the project is enabled (`[project] enabled=false` disables Rig; an existing legacy harness without that section stays enabled), parent Rig MCP is available, and the selected backend is opted in and available. Global skill installation or a tool name alone is not opt-in. If Rig is uninitialized, disabled, or unavailable, or its backend is not opted in, use an available host-native computer/browser capability under its own instructions. Do not initialize, enable, install, unlock, or repair Rig merely because the user mentioned computer use. If the user explicitly requests Rig, explain the blocker and ask before setup instead of silently switching providers. Once a Rig backend is selected, preserve its permission, grant, freshness, child-isolation, and no-bypass rules; a denial is never a reason to switch tools. The Rig-specific routing and fallback rules below apply only after this selection gate.
+
 Parent may call Cua Driver only when this repo `[computer-use] enabled=true` and `cua-driver` is on PATH, via Rig MCP `rig_cu_status` / `rig_cu_serve` / `rig_cu_capture` / `rig_cu_act` / `rig_cu_confirm` / `rig_cu_record` (capture → act on a fresh element_token → recapture). AX token first; px only after `degraded` / `escalate_px` on that snapshot. Named Chrome profile: parent `chrome-profile` open, then Driver existing-profile bind. Isolated profile is not the Figma path. Existing-profile grant is human (`cua-driver serve --grant existing-profile`); Rig never silent-grants. Otherwise chrome-devtools. Never Figma MCP or Playwright as computer-use fallback. Figma MCP remains parent file/node. Never the Hermes `computer_use` skill. Children never receive cua-driver or chrome-devtools MCP. Children never receive chrome-profile or `rig_cu_*`.
 Parent may call BrowserSkill only when this repo `[browser-skill] enabled=true`, machine `~/.rig/browser-skill.json` opt_in=true, `bsk` on PATH, and the extension is connected, via Rig MCP `rig_bsk_status` / `rig_bsk_session` / `rig_bsk_observe` / `rig_bsk_act` / `rig_bsk_confirm` (session `--no-focus`; observe → one act on a fresh `@eN` ref → confirm). Never run `bsk install-skill`. Install is a Cua-style ask (default No). Website + real cookies → BSK. Native / canvas px → Driver. Neither effective → chrome-devtools. One backend per turn. Children never receive `bsk` or `rig_bsk_*`.
 
@@ -214,7 +220,7 @@ Upgrade/rollback: stop new admissions, finish or cancel existing work, confirm s
 
 ## Child commands
 
-Exact argv lives in `run-worker.sh`. Pass `RIG_MODEL` and `RIG_EFFORT` from MCP `rig_pick`. Defaults if unset: Codex `gpt-6-luna` low, Grok `grok-4.7` high, Claude Code `claude-sonnet-5` medium, Cursor `composer-2.5`. Explore: Codex `gpt-6-luna` low; mini writes: Codex `gpt-6-luna` low. Cheap Claude: `claude-haiku-4-5-20251001` low, Cursor `composer-2.5-fast`. Hard/review Claude Code: `claude-opus-5-5` high. Cursor hard `cursor-grok-4.6-high`; Cursor review `claude-opus-5-5-thinking-high`. Cursor has no `--effort` flag. Haiku cheap jobs record `low` on the board but do not pass `--effort` into Claude Code (Haiku print-mode hangs). OpenCode / OMP / Pi / agy / Devin smart profiles require exact selectors or declared aliases confirmed by the CLI catalog (cache `~/.rig/cache/model-catalogs.json`); legacy mode retains its older resolver. Never Sol/Astra/Fable. OpenCode preference: cheap `openai/gpt-5.4-mini` `--variant minimal`, implement `openai/gpt-6-luna` `--variant high`, hard/review `openai/gpt-5.6-terra` `--variant max`. OMP/Pi preference: cheap `grok-4.5` `--thinking low`, implement/hard `grok-4.6` `--thinking high`, review `claude-opus-5-5` `--thinking high`. agy preference: cheap `gemini-3.8-flash-low` `--effort low`, implement `gemini-3.8-flash-high` `--effort high`, hard/review `gemini-3.1-pro-high` `--effort high`. Devin (child-only): exact `swe-2-medium` explore/mini/bulk, `swe-2-high` implement, `swe-2-max` hard/review. Never swe aliases, SWE-1.x, Fusion, or defaults.
+Exact argv lives in `run-worker.sh`. Pass `RIG_MODEL` and `RIG_EFFORT` from MCP `rig_pick`. Defaults if unset: Codex `gpt-6-luna` low, Grok `grok-4.7` high, Claude Code `claude-sonnet-5-5` medium, Cursor `composer-2.5`. Explore: Codex `gpt-6-luna` low; mini writes: Codex `gpt-6-luna` low. Cheap Claude: `claude-haiku-4-5-20251001` low, Cursor `composer-2.5-fast`. Hard/review Claude Code: `claude-opus-5-5` high. Cursor hard `cursor-grok-4.6-high`; Cursor review `claude-opus-5-5-thinking-high`. Cursor has no `--effort` flag. Haiku cheap jobs record `low` on the board but do not pass `--effort` into Claude Code (Haiku print-mode hangs). OpenCode / OMP / Pi / agy / Devin smart profiles require exact selectors or declared aliases confirmed by the CLI catalog (cache `~/.rig/cache/model-catalogs.json`); legacy mode retains its older resolver. Never Sol/Astra/Fable. OpenCode preference: cheap `openai/gpt-5.4-mini` `--variant minimal`, implement `openai/gpt-6-luna` `--variant high`, hard/review `openai/gpt-5.6-terra` `--variant max`. OMP/Pi preference: cheap `grok-4.5` `--thinking low`, implement/hard `grok-4.6` `--thinking high`, review `claude-opus-5-5` `--thinking high`. agy preference: cheap `gemini-3.8-flash-low` `--effort low`, implement `gemini-3.8-flash-high` `--effort high`, hard/review `gemini-3.1-pro-high` `--effort high`. Devin (child-only): exact `swe-2-medium` explore/mini/bulk, `swe-2-high` implement, `swe-2-max` hard/review. Never swe aliases, SWE-1.x, Fusion, or defaults.
 
 Cursor child is print-mode `stream-json` with `--force --trust`. Do not use `--worktree` (edits must land in this repo). Binary is `cursor-agent`, not a random `agent`. Grok Bot.app cannot be spawned.
 

@@ -238,7 +238,7 @@ class ResolveAgainstCatalog(unittest.TestCase):
         for worker, kind, pin in (
             ("codex", "implement", "gpt-6-luna"),
             ("grok", "implement", "grok-4.7"),
-            ("claude", "implement", "claude-sonnet-5"),
+            ("claude", "implement", "claude-sonnet-5-5"),
             ("cursor", "implement", "composer-2.5"),
         ):
             preferred, _effort = route.model_for(worker, kind)

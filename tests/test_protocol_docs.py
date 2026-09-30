@@ -15,6 +15,14 @@ import rig_mcp
 import verification
 
 
+def protocol_block(path):
+    # Lifecycle removal code also contains marker strings; select only whole-line markers.
+    match = re.search(r"^<!-- rig:start -->$(.*?)^<!-- rig:end -->$", path.read_text(), re.M | re.S)
+    if not match:
+        raise AssertionError(f"managed protocol missing from {path}")
+    return match.group(1)
+
+
 class ProtocolDocumentation(unittest.TestCase):
     def test_smart_policy_is_documented_across_managed_protocols(self):
         sources = self.protocol_sources()
@@ -38,8 +46,7 @@ class ProtocolDocumentation(unittest.TestCase):
             ROOT / "skills" / "delegate-harness" / "SKILL.md",
             ROOT / "skills" / "rig-jobs" / "SKILL.md",
         )}
-        sources["generated parent protocol"] = (ROOT / "bin" / "rig").read_text().split(
-            "<!-- rig:start -->", 1)[1].split("<!-- rig:end -->", 1)[0]
+        sources["generated parent protocol"] = protocol_block(ROOT / "bin" / "rig")
         return sources
 
     def test_cancellation_and_transport_recovery_instructions_are_consistent(self):
@@ -144,8 +151,7 @@ class ProtocolDocumentation(unittest.TestCase):
 
     def test_mcp_agent_steps_do_not_precreate_brief_before_launch(self):
         sources = {
-            "generated parent protocol": (ROOT / "bin" / "rig").read_text().split(
-                "<!-- rig:start -->", 1)[1].split("<!-- rig:end -->", 1)[0],
+            "generated parent protocol": protocol_block(ROOT / "bin" / "rig"),
             "AGENTS.md": (ROOT / "AGENTS.md").read_text(),
             "skills/delegate-harness/SKILL.md": (ROOT / "skills" / "delegate-harness" / "SKILL.md").read_text(),
             "skills/rig-jobs/SKILL.md": (ROOT / "skills" / "rig-jobs" / "SKILL.md").read_text(),
@@ -185,7 +191,7 @@ class ProtocolDocumentation(unittest.TestCase):
             with self.subTest(path=source.relative_to(ROOT)):
                 mentioned = set(pattern.findall(source.read_text()))
                 self.assertFalse(mentioned - known, mentioned - known)
-        protocol = (ROOT / "bin" / "rig").read_text().split("<!-- rig:start -->", 1)[1].split("<!-- rig:end -->", 1)[0]
+        protocol = protocol_block(ROOT / "bin" / "rig")
         self.assertFalse(set(pattern.findall(protocol)) - known)
 
     def test_delegate_harness_source_documents_cursor_tripwire(self):
@@ -194,10 +200,8 @@ class ProtocolDocumentation(unittest.TestCase):
         self.assertIn("Cursor is last resort in pick", source)
 
     def test_generated_parent_protocol_matches_agents_workflow_contract(self):
-        agents = (ROOT / "AGENTS.md").read_text().split(
-            "<!-- rig:start -->", 1)[1].split("<!-- rig:end -->", 1)[0]
-        generated = (ROOT / "bin" / "rig").read_text().split(
-            "<!-- rig:start -->", 1)[1].split("<!-- rig:end -->", 1)[0]
+        agents = protocol_block(ROOT / "AGENTS.md")
+        generated = protocol_block(ROOT / "bin" / "rig")
         self.assertEqual(agents, generated)
         for phrase in (
             "stay|explore|mini|bulk|implement|hard|review|verify",
@@ -243,8 +247,7 @@ class ProtocolDocumentation(unittest.TestCase):
             "AGENTS.md": (ROOT / "AGENTS.md").read_text(),
             "skills/delegate-harness/SKILL.md": (ROOT / "skills" / "delegate-harness" / "SKILL.md").read_text(),
         }
-        managed["generated parent protocol"] = (ROOT / "bin" / "rig").read_text().split(
-            "<!-- rig:start -->", 1)[1].split("<!-- rig:end -->", 1)[0]
+        managed["generated parent protocol"] = protocol_block(ROOT / "bin" / "rig")
         core_names = (
             "README.md", "docs/usage.md", "AGENTS.md",
             "skills/delegate-harness/SKILL.md", "generated parent protocol",
@@ -330,8 +333,7 @@ class ProtocolDocumentation(unittest.TestCase):
     def test_computer_use_parent_protocol_and_fallback(self):
         sources = {
             "AGENTS.md": (ROOT / "AGENTS.md").read_text(),
-            "generated parent protocol": (ROOT / "bin" / "rig").read_text().split(
-                "<!-- rig:start -->", 1)[1].split("<!-- rig:end -->", 1)[0],
+            "generated parent protocol": protocol_block(ROOT / "bin" / "rig"),
             "skills/delegate-harness/SKILL.md": (ROOT / "skills" / "delegate-harness" / "SKILL.md").read_text(),
             "docs/usage.md": (ROOT / "docs" / "usage.md").read_text(),
             "docs/rig-flow.md": (ROOT / "docs" / "rig-flow.md").read_text(),
@@ -356,11 +358,36 @@ class ProtocolDocumentation(unittest.TestCase):
                 self.assertIn("Hermes", source)
                 self.assertIn("computer_use", source)
 
+    def test_computer_use_selection_requires_opt_in_before_rig_protocol(self):
+        sources = self.protocol_sources()
+        sources.pop("skills/rig-jobs/SKILL.md")
+        for path in ("AGENTS.md", "docs/rig-flow.md", "skills/computer-use/SKILL.md",
+                     "skills/computer-test/SKILL.md"):
+            sources[path] = (ROOT / path).read_text()
+        for name, source in sources.items():
+            with self.subTest(source=name):
+                self.assertIn("Generic computer-use requests do not select Rig", source)
+                self.assertIn("[project] enabled=false", source)
+                self.assertIn("parent Rig MCP is available", source)
+                self.assertIn("Global skill installation or a tool name alone is not opt-in", source)
+                self.assertIn("available host-native computer/browser capability", source)
+                self.assertIn("Do not initialize, enable, install, unlock, or repair Rig", source)
+                self.assertIn("explicitly requests Rig, explain the blocker and ask before setup", source)
+                self.assertIn("a denial is never a reason to switch tools", source)
+        for path in ("skills/computer-use/SKILL.md", "skills/computer-test/SKILL.md"):
+            skill = sources[path]
+            frontmatter = skill.split("---", 2)[1]
+            self.assertIn("enabled Rig", frontmatter)
+            self.assertIn("do not select Rig", frontmatter)
+            self.assertLess(skill.index("## Scope and opt-in first"), skill.index("Stay. Do not")
+                            if "Stay. Do not" in skill else skill.index("Stay. Real GUI"))
+        self.assertNotIn("If status itself is absent, the running Rig MCP is outdated",
+                         sources["skills/computer-use/SKILL.md"])
+
     def test_browser_skill_parent_protocol(self):
         sources = {
             "AGENTS.md": (ROOT / "AGENTS.md").read_text(),
-            "generated parent protocol": (ROOT / "bin" / "rig").read_text().split(
-                "<!-- rig:start -->", 1)[1].split("<!-- rig:end -->", 1)[0],
+            "generated parent protocol": protocol_block(ROOT / "bin" / "rig"),
             "skills/delegate-harness/SKILL.md": (ROOT / "skills" / "delegate-harness" / "SKILL.md").read_text(),
             "docs/usage.md": (ROOT / "docs" / "usage.md").read_text(),
             "docs/rig-flow.md": (ROOT / "docs" / "rig-flow.md").read_text(),
@@ -381,8 +408,7 @@ class ProtocolDocumentation(unittest.TestCase):
     def test_browser_skill_real_cli_surface(self):
         sources = {
             "AGENTS.md": (ROOT / "AGENTS.md").read_text(),
-            "generated parent protocol": (ROOT / "bin" / "rig").read_text().split(
-                "<!-- rig:start -->", 1)[1].split("<!-- rig:end -->", 1)[0],
+            "generated parent protocol": protocol_block(ROOT / "bin" / "rig"),
             "docs/usage.md": (ROOT / "docs" / "usage.md").read_text(),
             "docs/rig-flow.md": (ROOT / "docs" / "rig-flow.md").read_text(),
             "README.md": (ROOT / "README.md").read_text(),

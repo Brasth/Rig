@@ -1503,7 +1503,7 @@ def listed_tools() -> list[dict]:
         import computer_use as cu
         raw = (os.environ.get("RIG_REPO") or "").strip()
         repo = _repo({"repo": raw} if raw else {})
-        if not cu.tools_listed(repo, child=False):
+        if not rig_harness.project_state(repo)["enabled"] or not cu.tools_listed(repo, child=False):
             tools = [item for item in tools if item["name"] not in CU_TOOL_NAMES]
     except Exception:
         # Mixed ~/.rig copies or a CU helper crash must not kill tools/list.
@@ -1512,7 +1512,7 @@ def listed_tools() -> list[dict]:
         import browser_skill as bsk
         raw = (os.environ.get("RIG_REPO") or "").strip()
         repo = _repo({"repo": raw} if raw else {})
-        if not bsk.tools_listed(repo, child=False):
+        if not rig_harness.project_state(repo)["enabled"] or not bsk.tools_listed(repo, child=False):
             tools = [item for item in tools if item["name"] not in BSK_TOOL_NAMES]
     except Exception:
         tools = [item for item in tools if item["name"] not in BSK_TOOL_NAMES]
