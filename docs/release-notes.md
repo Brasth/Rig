@@ -1,5 +1,13 @@
 # Release Notes
 
+## Claude Sonnet 5.5 and computer-use opt-in (2026-09-30)
+
+Claude Code implement/verify and the wrapper default now select `claude-sonnet-5-5` at effort `medium`. The stable profile ID remains `claude-sonnet-5-medium` so existing routing preferences continue to work. Haiku and the already updated Opus 5.5 selectors are unchanged. See the [official Sonnet 5.5 model ID](https://platform.claude.com/docs/en/models/sonnet-5-5/overview). Rig launches Claude Code rather than constructing Messages API requests; live model availability still depends on the installed Claude Code and account.
+
+Globally installed computer-use and computer-test skills no longer select Rig for a generic request. Rig requires an enabled project, available parent MCP, and an opted-in available backend. Otherwise follow available host-native capabilities and their instructions. Explicit Rig requests report setup blockers without silently choosing another provider or enabling anything. Permission denials on a selected Rig path still cannot be bypassed. CU and BrowserSkill action tools are hidden while the project is disabled or uninitialized, even if backend flags remain enabled.
+
+Refresh managed project skills and protocol text, then safely restart parent/MCP sessions using the existing rollout procedure. This change does not enable a project or backend. Historical job metadata and stable routing profile IDs are not rewritten.
+
 ## OpenAI Luna and Claude Opus pins (2026-09-23)
 
 Codex explorer and routine Luna pins are `gpt-6-luna` at effort `low` on profiles `codex-explorer-low` and `codex-luna-low`. Role limits stay the same: the explorer profile is explore-only. Codex hard and review stay `gpt-5.6-terra` on `codex-terra-medium` and `codex-terra-high`.

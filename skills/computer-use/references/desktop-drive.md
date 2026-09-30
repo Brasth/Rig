@@ -1,5 +1,7 @@
 # Drive a desktop app (parent)
 
+Apply only after the Rig selection gate in `../SKILL.md`: an enabled project, parent Rig MCP, and an opted-in available backend. Generic computer-use requests do not select Rig.
+
 Stay. Native macOS/Windows/Linux apps through Cua Driver — Calculator, Settings, your shipped `.app`. Same loop as `../SKILL.md`. Real pass/fail: `skills/computer-test/SKILL.md`.
 
 ## Bind

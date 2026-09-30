@@ -1,6 +1,9 @@
 ---
 name: computer-test
 description: >
+  Rig-only GUI testing, after an enabled Rig project, parent Rig MCP, and
+  an opted-in available backend are confirmed. Generic GUI/computer-use
+  requests do not select Rig; use host instructions when Rig is off or absent.
   Parent-only real GUI testing with Cua Driver: click the live UI
   (capture → act → confirm), pass/fail from AX text and screenshots, and
   record a session video (recording.mp4). Stay. Never spawn a clicker.
@@ -9,6 +12,12 @@ user-invocable: true
 ---
 
 # Computer test (parent only)
+
+## Scope and opt-in first
+
+Generic computer-use requests do not select Rig. First check that `.rig/harness.toml` exists and the project is enabled (`[project] enabled=false` disables Rig; an existing legacy harness without that section stays enabled), parent Rig MCP is available, and the selected backend is opted in and available. Global skill installation or a tool name alone is not opt-in. If Rig is uninitialized, disabled, or unavailable, or its backend is not opted in, use an available host-native computer/browser capability under its own instructions. Do not initialize, enable, install, unlock, or repair Rig merely because the user mentioned computer use. If the user explicitly requests Rig, explain the blocker and ask before setup instead of silently switching providers. Once a Rig backend is selected, preserve its permission, grant, freshness, child-isolation, and no-bypass rules; a denial is never a reason to switch tools. The Rig-specific routing and fallback rules below apply only after this selection gate.
+
+Read the selection gate in `skills/computer-use/SKILL.md` before applying the Rig loop below.
 
 Stay. Real GUI testing on **this computer** — a native app or a named Chrome profile — via Rig MCP `rig_cu_capture` / `rig_cu_act` / `rig_cu_confirm` / `rig_cu_record`. Same loop as `skills/computer-use/SKILL.md`. Do not spawn a clicker. Do not call `computer_use(...)`. Do not shell cua-driver. Children never click.
 

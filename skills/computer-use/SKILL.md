@@ -1,8 +1,11 @@
 ---
 name: computer-use
 description: >
-  Parent-only desktop eyes and hands. Use Cua Driver when this repo has
-  [computer-use] enabled=true and cua-driver is present; otherwise chrome-devtools.
+  Rig-only parent desktop eyes and hands. Activate only in an enabled Rig
+  project with parent Rig MCP and an opted-in, available Rig backend.
+  Generic computer-use requests do not select Rig; when Rig is off or absent,
+  use the host computer/browser instructions instead. Cua Driver requires
+  [computer-use] enabled=true, machine opt-in, and cua-driver on PATH.
   Recreating a Figma/canvas/screenshot as UI, driving a desktop app, logged-in
   Chromium via parent-only BrowserSkill (`rig_bsk_*`), or real GUI tests:
   download every image into the codebase folder when matching a design;
@@ -13,6 +16,12 @@ user-invocable: true
 ---
 
 # Computer-use (parent only)
+
+## Scope and opt-in first
+
+Generic computer-use requests do not select Rig. First check that `.rig/harness.toml` exists and the project is enabled (`[project] enabled=false` disables Rig; an existing legacy harness without that section stays enabled), parent Rig MCP is available, and the selected backend is opted in and available. Global skill installation or a tool name alone is not opt-in. If Rig is uninitialized, disabled, or unavailable, or its backend is not opted in, use an available host-native computer/browser capability under its own instructions. Do not initialize, enable, install, unlock, or repair Rig merely because the user mentioned computer use. If the user explicitly requests Rig, explain the blocker and ask before setup instead of silently switching providers. Once a Rig backend is selected, preserve its permission, grant, freshness, child-isolation, and no-bypass rules; a denial is never a reason to switch tools. The Rig-specific routing and fallback rules below apply only after this selection gate.
+
+Check project state with read-only `rig_status` when it is available, or read `.rig/harness.toml`. Check Driver with `rig_cu_status` only after choosing the Rig path; BrowserSkill has its separate `rig_bsk_status` and opt-in gates. If no authorized host capability is available, explain that limitation or ask for a screenshot. Do not claim a missing capability exists.
 
 Stay. Do not spawn a clicker. Do not call `computer_use(...)`. Children never click. Children never receive `bsk` or `rig_bsk_*`. Never run `bsk install-skill`.
 
@@ -30,7 +39,7 @@ First call parent-only `rig_cu_status` when action tools are absent or recently 
 - `needs_human` with a nonempty `user_prompt` → ask the user **once** with `user_prompt` plus `exact_command` (unlock TTY or OS permission sheets only), then stop. No retry loop. No native CU. No chrome-devtools until they say skip Driver.
 - `unavailable` → chrome-devtools or ask for a screenshot. Do not ask them to unlock Driver.
 
-If status itself is absent, the running Rig MCP is outdated: update it after safely completing active jobs and restart the parent. Do not bypass a failed or missing Rig tool with raw Driver shell/MCP, native CU, or another browser tool.
+If status itself is absent, Rig is unavailable in this session; absence alone does not prove an outdated MCP. For an explicit Rig request, explain the missing tool and ask before setup or repair. For an already selected Rig backend, do not bypass a failed or missing Rig tool with raw Driver shell/MCP, native CU, or another browser tool.
 
 Logged-in Chromium (real cookies) uses parent-only BrowserSkill when this repo `[browser-skill] enabled=true`, machine `~/.rig/browser-skill.json` opt_in=true, `bsk` on PATH, and the extension is connected: `rig_bsk_status` (always listed) then `rig_bsk_session` (`bsk session start --json`, optional `--no-focus`; retain `session_id`) → `rig_bsk_navigate` or explicit tab list/borrow/return → `rig_bsk_observe` → one `rig_bsk_act` (`click`/`fill`/`press` on a fresh `@eN` ref) → `rig_bsk_confirm`. `--session` on every scoped command; `session stop` with positional ID. nonempty `status.browsers` is connected. Never run `bsk install-skill`. Children never receive `bsk` or `rig_bsk_*`. Native / canvas px stays Cua Driver. One backend per turn.
 

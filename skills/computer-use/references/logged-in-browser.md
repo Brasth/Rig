@@ -1,5 +1,7 @@
 # Logged-in Chrome (parent)
 
+Apply only after the Rig selection gate in `../SKILL.md`: an enabled project, parent Rig MCP, and an opted-in available backend. Generic computer-use requests do not select Rig.
+
 Stay. Real cookies, real profile. Isolated Driver Chrome is **not** this path.
 
 Website / localhost preview: chrome-devtools or BrowserSkill. Do not open Driver for a local HTML check.

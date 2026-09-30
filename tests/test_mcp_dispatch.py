@@ -1170,6 +1170,33 @@ class McpDispatch(unittest.TestCase):
         self.assertIn("rig_cu_record", names)
         self.assertIn("rig_cu_serve", names)
 
+    def test_parent_browser_actions_hidden_without_enabled_rig_project(self):
+        os.environ["RIG_REPO"] = str(self.repo)
+        path = harness.harness_path(self.repo)
+        backend_flags = "[computer-use]\nenabled = true\n[browser-skill]\nenabled = true\n"
+        for state in ("missing", "disabled", "invalid"):
+            with self.subTest(state=state):
+                if state == "missing":
+                    path.unlink(missing_ok=True)
+                else:
+                    value = "false" if state == "disabled" else '"true"'
+                    path.write_text(f"[project]\nenabled = {value}\n" + backend_flags)
+                with mock.patch("computer_use.tools_listed", return_value=True) as cu, \
+                     mock.patch("browser_skill.tools_listed", return_value=True) as bsk:
+                    names = {t["name"] for t in rig_mcp.listed_tools()}
+                self.assertFalse(names & (rig_mcp.CU_TOOL_NAMES | rig_mcp.BSK_TOOL_NAMES))
+                self.assertTrue({"rig_status", "rig_cu_status", "rig_bsk_status"} <= names)
+                cu.assert_not_called()
+                bsk.assert_not_called()
+                # Previously discovered tools cannot bypass a later project disable.
+                with mock.patch("computer_use.cu_capture") as capture, \
+                     mock.patch("browser_skill.bsk_session") as session:
+                    for tool in ("rig_cu_capture", "rig_bsk_session"):
+                        result = rig_mcp.call_tool(tool, {"repo": str(self.repo)})
+                        self.assertTrue(result.get("isError"), (state, tool, result))
+                capture.assert_not_called()
+                session.assert_not_called()
+
     def test_parent_cu_serve_forwards_when_effective(self):
         os.environ["RIG_REPO"] = str(self.repo)
         served = {

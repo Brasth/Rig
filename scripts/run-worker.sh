@@ -906,7 +906,7 @@ case "$WORKER" in
     CLAUDE_WORKER_MD="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../adapters/claude/CLAUDE.worker.md"
     CMD=(
       claude -p
-      --model "${MODEL:-claude-sonnet-5}"
+      --model "${MODEL:-claude-sonnet-5-5}"
       --output-format stream-json
       --verbose
       --permission-mode acceptEdits
