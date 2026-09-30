@@ -11,6 +11,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tests"))
 import mcp_test_support  # noqa: E402
+from protocol_test_support import read_guidance
 
 
 class NormalPromptFlow(unittest.TestCase):
@@ -127,11 +128,11 @@ class NormalPromptFlow(unittest.TestCase):
         self.assertIn("Preserve my project fact.", memory.read_text())
         self.assertIn("Preserve my project instructions.", agents.read_text())
         self.assertEqual(agents.read_text().count("<!-- rig:start -->"), 1)
-        self.assertIn("rig job wait ID --timeout 0", agents.read_text())
-        self.assertIn("Do not re-wait, re-pick, or drain queued work after explicit cancellation", agents.read_text())
-        self.assertIn("native-cancel-required", agents.read_text())
-        self.assertIn(".rig/queue/credentials/<queue-id>.json", agents.read_text())
-        self.assertNotIn("Host-dropped wait still bash-waits once", agents.read_text())
+        self.assertIn("rig job wait ID --timeout 0", read_guidance(agents))
+        self.assertIn("Do not re-wait, re-pick, or drain queued work after explicit cancellation", read_guidance(agents))
+        self.assertIn("native-cancel-required", read_guidance(agents))
+        self.assertIn(".rig/queue/credentials/<queue-id>.json", read_guidance(agents))
+        self.assertNotIn("Host-dropped wait still bash-waits once", read_guidance(agents))
         for name in ("admission.py", "change_evidence.py", "verification.py", "jobs.py", "rig_mcp.py"):
             self.assertEqual((kit / "scripts" / name).read_bytes(), (ROOT / "scripts" / name).read_bytes())
         for skill in ("delegate-harness", "rig-jobs", "rig-queue"):

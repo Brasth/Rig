@@ -13,11 +13,12 @@ sys.path.insert(0, str(ROOT / "scripts"))
 import admission
 import rig_mcp
 import verification
+from protocol_test_support import read_guidance
 
 
 def protocol_block(path):
     # Lifecycle removal code also contains marker strings; select only whole-line markers.
-    match = re.search(r"^<!-- rig:start -->$(.*?)^<!-- rig:end -->$", path.read_text(), re.M | re.S)
+    match = re.search(r"^<!-- rig:start -->$(.*?)^<!-- rig:end -->$", read_guidance(path), re.M | re.S)
     if not match:
         raise AssertionError(f"managed protocol missing from {path}")
     return match.group(1)
@@ -48,8 +49,8 @@ class ProtocolDocumentation(unittest.TestCase):
         sources = self.protocol_sources()
         sources.pop("skills/rig-jobs/SKILL.md")
         sources.pop("README.md")
-        sources["AGENTS.md"] = (ROOT / "AGENTS.md").read_text()
-        sources["managed skill"] = self.managed_skill.read_text()
+        sources["AGENTS.md"] = read_guidance((ROOT / "AGENTS.md"))
+        sources["managed skill"] = read_guidance(self.managed_skill)
         for name, source in sources.items():
             with self.subTest(source=name):
                 self.assertIn("complexity", source)
@@ -61,7 +62,7 @@ class ProtocolDocumentation(unittest.TestCase):
 
     @staticmethod
     def protocol_sources():
-        sources = {str(path.relative_to(ROOT)): path.read_text() for path in (
+        sources = {str(path.relative_to(ROOT)): read_guidance(path) for path in (
             ROOT / "README.md", ROOT / "docs" / "usage.md",
             ROOT / "skills" / "delegate-harness" / "SKILL.md",
             ROOT / "skills" / "rig-jobs" / "SKILL.md",
@@ -83,9 +84,9 @@ class ProtocolDocumentation(unittest.TestCase):
         sources = {
             "docs/usage.md": (ROOT / "docs" / "usage.md").read_text(),
             "docs/rig-flow.md": (ROOT / "docs" / "rig-flow.md").read_text(),
-            "AGENTS.md": (ROOT / "AGENTS.md").read_text(),
-            "skills/delegate-harness/SKILL.md": (ROOT / "skills" / "delegate-harness" / "SKILL.md").read_text(),
-            "managed skill": self.managed_skill.read_text(),
+            "AGENTS.md": read_guidance((ROOT / "AGENTS.md")),
+            "skills/delegate-harness/SKILL.md": read_guidance((ROOT / "skills" / "delegate-harness" / "SKILL.md")),
+            "managed skill": read_guidance(self.managed_skill),
             "skills/rig-jobs/SKILL.md": (ROOT / "skills" / "rig-jobs" / "SKILL.md").read_text(),
         }
         for name, source in sources.items():
@@ -172,8 +173,8 @@ class ProtocolDocumentation(unittest.TestCase):
     def test_mcp_agent_steps_do_not_precreate_brief_before_launch(self):
         sources = {
             "generated parent protocol": protocol_block(ROOT / "bin" / "rig"),
-            "AGENTS.md": (ROOT / "AGENTS.md").read_text(),
-            "skills/delegate-harness/SKILL.md": (ROOT / "skills" / "delegate-harness" / "SKILL.md").read_text(),
+            "AGENTS.md": read_guidance((ROOT / "AGENTS.md")),
+            "skills/delegate-harness/SKILL.md": read_guidance((ROOT / "skills" / "delegate-harness" / "SKILL.md")),
             "skills/rig-jobs/SKILL.md": (ROOT / "skills" / "rig-jobs" / "SKILL.md").read_text(),
             "skills/rig-queue/SKILL.md": (ROOT / "skills" / "rig-queue" / "SKILL.md").read_text(),
         }
@@ -209,13 +210,13 @@ class ProtocolDocumentation(unittest.TestCase):
         )
         for source in sources:
             with self.subTest(path=source.relative_to(ROOT)):
-                mentioned = set(pattern.findall(source.read_text()))
+                mentioned = set(pattern.findall(read_guidance(source)))
                 self.assertFalse(mentioned - known, mentioned - known)
         protocol = protocol_block(ROOT / "bin" / "rig")
         self.assertFalse(set(pattern.findall(protocol)) - known)
 
     def test_delegate_harness_source_documents_cursor_tripwire(self):
-        source = (ROOT / "skills" / "delegate-harness" / "SKILL.md").read_text()
+        source = read_guidance((ROOT / "skills" / "delegate-harness" / "SKILL.md"))
         self.assertIn("job-scoped `--plugin-dir` Rig MCP", source)
         self.assertIn("Cursor is last resort in pick", source)
 
@@ -252,7 +253,7 @@ class ProtocolDocumentation(unittest.TestCase):
             ".rig/workflows/*/owner-credentials.json",
         )
         for path in (ROOT / ".gitignore", ROOT / "templates" / "gitignore-fragment"):
-            text = path.read_text()
+            text = read_guidance(path)
             for line in needed:
                 with self.subTest(path=str(path.relative_to(ROOT)), line=line):
                     self.assertIn(line, text)
@@ -264,8 +265,8 @@ class ProtocolDocumentation(unittest.TestCase):
             "docs/rig-flow.md": (ROOT / "docs" / "rig-flow.md").read_text(),
             "docs/smart-routing.md": (ROOT / "docs" / "smart-routing.md").read_text(),
             "docs/release-notes.md": (ROOT / "docs" / "release-notes.md").read_text(),
-            "AGENTS.md": (ROOT / "AGENTS.md").read_text(),
-            "skills/delegate-harness/SKILL.md": (ROOT / "skills" / "delegate-harness" / "SKILL.md").read_text(),
+            "AGENTS.md": read_guidance((ROOT / "AGENTS.md")),
+            "skills/delegate-harness/SKILL.md": read_guidance((ROOT / "skills" / "delegate-harness" / "SKILL.md")),
         }
         managed["generated parent protocol"] = protocol_block(ROOT / "bin" / "rig")
         core_names = (
@@ -352,9 +353,9 @@ class ProtocolDocumentation(unittest.TestCase):
 
     def test_computer_use_parent_protocol_and_fallback(self):
         sources = {
-            "AGENTS.md": (ROOT / "AGENTS.md").read_text(),
+            "AGENTS.md": read_guidance((ROOT / "AGENTS.md")),
             "generated parent protocol": protocol_block(ROOT / "bin" / "rig"),
-            "skills/delegate-harness/SKILL.md": (ROOT / "skills" / "delegate-harness" / "SKILL.md").read_text(),
+            "skills/delegate-harness/SKILL.md": read_guidance((ROOT / "skills" / "delegate-harness" / "SKILL.md")),
             "docs/usage.md": (ROOT / "docs" / "usage.md").read_text(),
             "docs/rig-flow.md": (ROOT / "docs" / "rig-flow.md").read_text(),
             "README.md": (ROOT / "README.md").read_text(),
@@ -383,7 +384,7 @@ class ProtocolDocumentation(unittest.TestCase):
         sources.pop("skills/rig-jobs/SKILL.md")
         for path in ("AGENTS.md", "docs/rig-flow.md", "skills/computer-use/SKILL.md",
                      "skills/computer-test/SKILL.md"):
-            sources[path] = (ROOT / path).read_text()
+            sources[path] = read_guidance((ROOT / path))
         for name, source in sources.items():
             with self.subTest(source=name):
                 self.assertIn("Generic computer-use requests do not select Rig", source)
@@ -406,9 +407,9 @@ class ProtocolDocumentation(unittest.TestCase):
 
     def test_browser_skill_parent_protocol(self):
         sources = {
-            "AGENTS.md": (ROOT / "AGENTS.md").read_text(),
+            "AGENTS.md": read_guidance((ROOT / "AGENTS.md")),
             "generated parent protocol": protocol_block(ROOT / "bin" / "rig"),
-            "skills/delegate-harness/SKILL.md": (ROOT / "skills" / "delegate-harness" / "SKILL.md").read_text(),
+            "skills/delegate-harness/SKILL.md": read_guidance((ROOT / "skills" / "delegate-harness" / "SKILL.md")),
             "docs/usage.md": (ROOT / "docs" / "usage.md").read_text(),
             "docs/rig-flow.md": (ROOT / "docs" / "rig-flow.md").read_text(),
             "README.md": (ROOT / "README.md").read_text(),
@@ -427,7 +428,7 @@ class ProtocolDocumentation(unittest.TestCase):
 
     def test_browser_skill_real_cli_surface(self):
         sources = {
-            "AGENTS.md": (ROOT / "AGENTS.md").read_text(),
+            "AGENTS.md": read_guidance((ROOT / "AGENTS.md")),
             "generated parent protocol": protocol_block(ROOT / "bin" / "rig"),
             "docs/usage.md": (ROOT / "docs" / "usage.md").read_text(),
             "docs/rig-flow.md": (ROOT / "docs" / "rig-flow.md").read_text(),

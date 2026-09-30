@@ -9,6 +9,7 @@ import tempfile
 import threading
 import time
 import unittest
+from protocol_test_support import read_guidance
 from pathlib import Path
 
 from repo_test_support import initialize_project
@@ -567,7 +568,7 @@ class InitAgentsWait(unittest.TestCase):
     def test_init_agents_one_wait_not_loop(self):
         proc = _run_rig(self.repo, "init")
         self.assertEqual(proc.returncode, 0, proc.stderr)
-        text = (self.repo / "AGENTS.md").read_text()
+        text = read_guidance(self.repo / "AGENTS.md")
         start = text.split("<!-- rig:start -->", 1)[1].split("<!-- rig:end -->", 1)[0]
         self.assertIn("rig job wait", text)
         self.assertIn("rig job allow", text)
@@ -587,7 +588,7 @@ class InitAgentsWait(unittest.TestCase):
         self.assertIn("After implement+verify ok", start)
         self.assertIn("disjoint", start)
         self.assertIn("ids", start)
-        skill = (self.repo / ".agents" / "skills" / "delegate-harness" / "SKILL.md").read_text()
+        skill = read_guidance(self.repo / ".agents" / "skills" / "delegate-harness" / "SKILL.md")
         self.assertIn("Stage-gated parallel", skill)
         self.assertIn("MCP first", skill)
         self.assertIn("rig job wait <id1> <id2>", skill)

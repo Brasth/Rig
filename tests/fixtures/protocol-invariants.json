@@ -1,0 +1,275 @@
+{
+  "activation": {
+    "section": "activation",
+    "previous": "AGENTS activation; SKILL Hard gate",
+    "requires": [
+      ".rig/harness.toml",
+      "[project] enabled=false",
+      "do not initialize or enable Rig implicitly",
+      "Global skill installation"
+    ]
+  },
+  "child-isolation": {
+    "section": "delegate",
+    "previous": "AGENTS child MCP; SKILL MCP first",
+    "requires": [
+      "RIG_JOB_ID",
+      "first `rig_job_inbox`",
+      "child MCP handshake missing",
+      "Children never spawn or message children",
+      "never authorizes ownership"
+    ]
+  },
+  "mcp-authority": {
+    "section": "orchestration",
+    "previous": "AGENTS orchestration; SKILL MCP first",
+    "requires": [
+      "Do not shell `rig`",
+      "REQUIRED parent flow",
+      "No separate native subagents without scoped MCP",
+      "Parent does not shop models"
+    ]
+  },
+  "scope-brief": {
+    "section": "launching",
+    "previous": "AGENTS brief; SKILL Call another CLI",
+    "requires": [
+      "Prepare brief TEXT",
+      "the tool creates that path",
+      "first Rig operation is `rig_job_inbox`",
+      "files to modify, what to change, what not to change, and acceptance",
+      "absolute `SKILL.md` path"
+    ]
+  },
+  "routing-gates": {
+    "section": "routing",
+    "previous": "AGENTS smart routing; SKILL Effective workers/Route",
+    "requires": [
+      "Preference order does not enable workers or bypass gates",
+      "live-parent exclusion",
+      "model bans",
+      "read-only explore/review",
+      "independent-provider checks",
+      "Cursor is last resort in pick"
+    ]
+  },
+  "routing-evidence": {
+    "section": "routing",
+    "previous": "AGENTS routing provenance; SKILL Route",
+    "requires": [
+      "provenance, not ownership authorization",
+      "Stale or incompatible picks require re-pick",
+      "actual parent model/effort",
+      "successful catalog <=24 hours old",
+      "skipped/unavailable/empty are not confirmation"
+    ]
+  },
+  "domain-gates": {
+    "section": "routing",
+    "previous": "AGENTS task domains; SKILL Task-domain routing",
+    "requires": [
+      "UI design/verification stay parent-only",
+      "role=explore, access=read",
+      "existing readable repo-contained research_sources",
+      "rechecked at launch",
+      "Explicit domain/source contracts require smart mode"
+    ]
+  },
+  "registration": {
+    "section": "ownership",
+    "previous": "AGENTS native writes; SKILL Ownership and native completion",
+    "requires": [
+      "before the first edit",
+      "reservation_id",
+      "attempt_id",
+      "owner_token",
+      "credentials_path",
+      "mode 0600",
+      "same initiating session",
+      "Native mini/bulk needs an edit-capable worker",
+      "the gpt-6-luna explorer stays read-only"
+    ]
+  },
+  "native-completion": {
+    "section": "ownership",
+    "previous": "AGENTS native cancellation; SKILL Ownership and native completion",
+    "requires": [
+      "Parent/MCP PID is not child evidence",
+      "never manufacture a terminal result",
+      "native-cancel-required",
+      "confirmed_stopped=true",
+      "same initiating parent session",
+      "never delete reservation files"
+    ]
+  },
+  "scope-and-caps": {
+    "section": "ownership",
+    "previous": "AGENTS concurrency; SKILL Stage-gated parallel",
+    "requires": [
+      "Stopped execution frees its slot, not its files",
+      "read/read overlap is allowed",
+      "Unknown write scope is exclusive",
+      "file AND resource disjointness",
+      "configured global/per-worker caps remain authoritative",
+      "fresh read-only reviewer attempt"
+    ]
+  },
+  "verification": {
+    "section": "ownership",
+    "previous": "AGENTS acceptance; SKILL Parent verification and close",
+    "requires": [
+      "Child exit zero is execution success, not verified work",
+      "complete `rig_job_requirements` manifest",
+      "omitting check IDs cannot hide failure",
+      "exact name/argv/cwd",
+      "Changed content invalidates acceptance",
+      "live/ASK/unknown ownership never age-expires"
+    ]
+  },
+  "review": {
+    "section": "routing",
+    "previous": "AGENTS independent review; SKILL Route",
+    "requires": [
+      "different known actual model provider",
+      "Independent review unavailable stays explicit",
+      "Writer does not review its own diff"
+    ]
+  },
+  "wait-cancel": {
+    "section": "waiting",
+    "previous": "AGENTS waits; SKILL Fail classes/Call another CLI",
+    "requires": [
+      "durable cancellation",
+      "stop-requested",
+      "stop-unconfirmed",
+      "native-cancel-required",
+      "Never re-wait, re-pick, or drain",
+      "rig job wait ID --timeout 0",
+      "Never kill, close, finish, or replace"
+    ]
+  },
+  "workflow-stop": {
+    "section": "waiting",
+    "previous": "PR32 AGENTS wait paragraph; SKILL MCP first",
+    "requires": [
+      "Without owner_token, rig_workflow_wait is observation-only",
+      "Stop only ends observation",
+      "exact workflow incarnation",
+      "including in-flight admissions",
+      "Cancelled workflows never resume implicitly",
+      "Existing continuation eligibility is unchanged"
+    ]
+  },
+  "workflow-gates": {
+    "section": "workflows",
+    "previous": "AGENTS workflow summary; SKILL Adaptive workflows",
+    "requires": [
+      "overlapping writer scopes are rejected, not sequenced",
+      "required nodes",
+      "current parent acceptance",
+      "bound to workflow+node+owner session+current spec hash",
+      "coordination never expands files, resources, effects, or frozen contracts",
+      "no extension after final verify launches"
+    ]
+  },
+  "queue-ownership": {
+    "section": "queue",
+    "previous": "AGENTS queue; SKILL Queue drain",
+    "requires": [
+      "more than one item is pending",
+      "Same-ID reuse is never launch permission",
+      "Do not claim during ASK",
+      "idempotency_key",
+      "known live ancestor",
+      "transient claim-command PID",
+      "cannot regress done/cancelled state",
+      "JSON file lists preserve spaces, Unicode and literal bracket names"
+    ]
+  },
+  "backend-selection": {
+    "section": "computer-use",
+    "previous": "AGENTS computer/browser; SKILL Parent vs worker",
+    "requires": [
+      "Generic computer-use requests do not select Rig",
+      "parent Rig MCP is available",
+      "Global skill installation or a tool name alone is not opt-in",
+      "Do not initialize, enable, install, unlock, or repair Rig",
+      "a denial is never a reason to switch tools"
+    ]
+  },
+  "cua-isolation": {
+    "section": "computer-use",
+    "previous": "AGENTS Cua Driver; SKILL Parent vs worker",
+    "requires": [
+      "[computer-use] enabled=true",
+      "fresh element_token",
+      "escalate_px",
+      "Existing-profile grant is human",
+      "Never Figma MCP or Playwright",
+      "Never the Hermes",
+      "Children never receive cua-driver"
+    ]
+  },
+  "browser-isolation": {
+    "section": "computer-use",
+    "previous": "AGENTS BrowserSkill; SKILL Parent vs worker",
+    "requires": [
+      "[browser-skill] enabled=true",
+      "opt_in=true",
+      "status.browsers",
+      "session_id",
+      "Never run `bsk install-skill`",
+      "One backend per turn",
+      "Children never receive `bsk` or `rig_bsk_*`"
+    ]
+  },
+  "provider-constraints": {
+    "section": "providers",
+    "previous": "AGENTS model IDs; SKILL Child commands",
+    "requires": [
+      "Never Sol/Astra/Fable",
+      "Do not use `--worktree`",
+      "No `--dangerously-skip-permissions`",
+      "denied_actions",
+      "no `--bare`",
+      "The work timeout pauses during `ask`"
+    ]
+  },
+  "failure-fallback": {
+    "section": "waiting",
+    "previous": "AGENTS failure; SKILL Fail classes",
+    "requires": [
+      "one re-pick",
+      "One fallback per user task",
+      "Do not vendor-shop",
+      "Timeout does not unlock grok"
+    ]
+  },
+  "rollout": {
+    "section": "maintenance",
+    "previous": "AGENTS rollout; SKILL After a run",
+    "requires": [
+      "stop new admissions",
+      "confirm stopped",
+      "accept or close scopes",
+      "fully restart all parent/MCP sessions",
+      "Never run mixed-version admission writers",
+      "never deletes data",
+      "unrelated AGENTS content",
+      "Prior-revision jobdata remains readable"
+    ]
+  },
+  "doctor-readiness": {
+    "section": "orchestration",
+    "previous": "PR33 task-aware doctor contract on merged main ce3bce2",
+    "requires": [
+      "parent-only MCP `rig_doctor`",
+      "schema_version=1",
+      "bare `rig doctor` is unchanged",
+      "never certify authentication",
+      "never providers, browsers, installers or user-project writes",
+      "does not activate it",
+      "Existing activation, routing, permissions and ownership gates still apply"
+    ]
+  }
+}

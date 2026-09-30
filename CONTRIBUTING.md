@@ -6,6 +6,14 @@ Branch from `main`, keep docs and protocol text accurate, and open a focused pul
 - README above-the-fold is for first-time visitors. Keep Install, Smart routing, Adaptive workflows, and Verification details intact below the fold.
 - Deeper contracts live in `docs/usage.md`, `docs/smart-routing.md`, and `.agents/skills/delegate-harness/SKILL.md`.
 
+## Managed agent guidance
+
+Edit `docs/agent-protocol.md`, then run `python3 scripts/generate_protocol.py`.
+Do not separately edit the generated AGENTS block, delegation bootstrap or topic
+references. `python3 scripts/generate_protocol.py --check` detects drift without
+writing; the offline test suite also checks generation, safety-invariant coverage
+and isolated installation. See [the read contract and migration map](docs/agent-guidance.md).
+
 ## Test baseline
 
 Use Python 3.11 or newer, Git, Bash, and Node.js. CI explicitly tests Python
