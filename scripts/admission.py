@@ -676,6 +676,8 @@ def _accounting(root, skip_reservation="", skip_queue=""):
     bound_jobs = {record.get("job_id") for record in held if record.get("job_id")}
     bound_queues = {record.get("queue_id") for record in held if record.get("queue_id")}
     rows = [record for record in held if record.get("reservation_id") != skip_reservation]
+    import workflow_cancellation
+    rows.extend(workflow_cancellation.orphaned_scopes(root, records))
     for path in (root / ".rig" / "jobs").glob("*/meta.json"):
         job = _read(path, required=True)
         jid = path.parent.name
@@ -714,10 +716,11 @@ def _accounting(root, skip_reservation="", skip_queue=""):
     seen, result = set(), []
     for row in rows:
         jid = row.get("job_id")
-        if jid and jid in seen:
+        identity = ("workflow-orphan", jid, row.get("reservation_id"), row.get("attempt_id")) if row.get("orphaned_workflow_scope") else jid
+        if jid and identity in seen:
             continue
         if jid:
-            seen.add(jid)
+            seen.add(identity)
         result.append(row)
     return result
 
@@ -1189,8 +1192,13 @@ def reserve(repo, *, job_id="", worker="", role="worker", model="", files=None,
                                  writer_snapshot_ids=writer_snapshot_ids, writer_providers=writer_providers)
         if lineage:
             _apply_continuation(record, lineage)
+        import workflow_cancellation
+        workflow_state = workflow_cancellation.prepare_admission(root, record)
         record["pending_operation"] = "bind_queue" if queue_id else "register_job"
         _save(root, record)
+        if workflow_state is not None:
+            import workflow_state as wf
+            wf.save_state(root, workflow_state)
         if queue_id:
             _queue_update(root, record, "claimed")
         record.pop("pending_operation", None)

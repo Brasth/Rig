@@ -70,7 +70,7 @@ class RuntimeTests(unittest.TestCase):
         entered, finish = queue.Queue(), threading.Event()
         self.addCleanup(finish.set)
         def execute(request):
-            if request.name == "rig_job_cancel":
+            if request.name in {"rig_job_cancel", "rig_workflow_cancel"}:
                 return {"accepted": True}
             entered.put(request)
             finish.wait(3)
@@ -83,9 +83,57 @@ class RuntimeTests(unittest.TestCase):
         self.assertIn("busy", refused["error"]["message"])
         self.assertIsNone(runtime.start(10, "rig_job_cancel", {}, {}))
         self.assertTrue(replies.get(timeout=1)["result"]["accepted"])
+        self.assertIsNone(runtime.start(11, "rig_workflow_cancel", {}, {}))
+        self.assertTrue(replies.get(timeout=1)["result"]["accepted"])
         finish.set()
         for request in requests:
             request.thread.join(1)
+
+    def test_workflow_wait_does_not_consume_ordinary_lane(self):
+        entered, finish = queue.Queue(), threading.Event()
+        self.addCleanup(finish.set)
+        def execute(request):
+            if request.name == "rig_session":
+                return {"available": True}
+            entered.put(request)
+            finish.wait(3)
+            return {}
+        runtime, replies = self.runtime(execute)
+        for number in range(16):
+            self.assertIsNone(runtime.start(number, "rig_workflow_wait", {}, {}))
+        requests = [entered.get(timeout=1) for _ in range(16)]
+        self.assertIn("busy", runtime.start(16, "rig_job_wait", {}, {})["error"]["message"])
+        self.assertIsNone(runtime.start(17, "rig_session", {}, {}))
+        self.assertTrue(replies.get(timeout=1)["result"]["available"])
+        finish.set()
+        for request in requests:
+            request.thread.join(1)
+
+    def test_workflow_cancel_before_binding_is_target_bound(self):
+        entered, aborted = queue.Queue(), queue.Queue()
+        bind, finish = threading.Event(), threading.Event()
+        self.addCleanup(bind.set)
+        self.addCleanup(finish.set)
+        def execute(request):
+            entered.put(request)
+            bind.wait(2)
+            request.targets = ["workflow-incarnation"]
+            request.bound.set()
+            finish.wait(2)
+            return {}
+        runtime, replies = self.runtime(execute, aborted.put)
+        runtime.start("workflow", "rig_workflow_wait", {}, {})
+        request = entered.get(timeout=1)
+        runtime.cancel("workflow")
+        runtime.cancel("workflow")
+        self.assertTrue(request.stop.is_set())
+        self.assertTrue(aborted.empty())
+        bind.set()
+        self.assertEqual(aborted.get(timeout=1).targets, ["workflow-incarnation"])
+        finish.set()
+        request.thread.join(1)
+        self.assertTrue(aborted.empty())
+        self.assertTrue(replies.empty())
 
     def test_completed_registry_entries_are_pruned_and_capacity_reusable(self):
         runtime, replies = self.runtime(lambda request: {"ok": True})

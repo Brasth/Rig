@@ -584,7 +584,9 @@ def _with_job_guidance(action, state, node_id):
 
 def next_parent_action(spec, state):
     status = state.get("status") or "planned"
-    if state.get("cancel_requested") and status != "cancelled":
+    if status == "cancelled":
+        return None
+    if state.get("cancel_requested"):
         return {"kind": "confirm_stop"}
     asking = [nid for nid, row in (state.get("nodes") or {}).items()
               if row.get("guidance_ask", row.get("status") == "ask") and not row.get("guidance_blocker")]
@@ -701,6 +703,14 @@ def load_pair(repo, workflow_id, *, required=False):
     spec, state = load_spec(repo, workflow_id, required=required), load_state(repo, workflow_id, required=required)
     if spec is None or state is None:
         return None, None
+    import workflow_cancellation
+    if workflow_cancellation.requested(repo, spec):
+        # A host Stop is durable before any admission-locked refresh can run.
+        # Read-only listings must show that intent, never claim actual stop.
+        state["cancel_requested"] = True
+        state["parent_action"] = None
+        if state.get("status") != "cancelled":
+            state["status"] = "cancel-requested"
     return spec, state
 
 
@@ -950,6 +960,9 @@ def extend_workflow(repo, workflow_id, added_nodes, *, owner_token="", owner=Non
         cfg = require_adaptive_orchestration(root)
         match_workflow_credentials(root, workflow_id, owner_token)
         spec, state = load_pair(root, workflow_id, required=True)
+        import workflow_cancellation
+        if state.get("cancel_requested") or workflow_cancellation.requested(root, spec):
+            raise WorkflowError("cannot extend a cancelled workflow")
         if state.get("status") in TERMINAL:
             raise WorkflowError("cannot extend a terminal workflow")
         if any((state.get("nodes") or {}).get(node["id"], {}).get("launched") and (node.get("final") or node.get("kind") == "final-verify")
@@ -1072,6 +1085,20 @@ def _job_execution_status(root, meta):
 
 def refresh_locked(root, spec, state):
     """Update node/workflow status from jobs, reservations, verification, queue."""
+    import workflow_cancellation
+
+    if workflow_cancellation.requested(root, spec):
+        state["cancel_requested"] = True
+    if state.get("cancel_requested"):
+        state["parent_action"] = None
+        # Replay durable intent after an interrupted publisher or an in-flight
+        # launch. A launching node remains protected until its result is known.
+        for row in (state.get("nodes") or {}).values():
+            if not row.get("job_id") and row.get("status") in {"pending", "ready", "blocked"}:
+                row["status"] = "cancelled"
+        workflow_cancellation.cancel_jobs(root, state)
+        if state.get("queue_id"):
+            _bind_queue(root, spec, state, "cancelled")
     asking = False
     running = 0
     live = 0
@@ -1086,6 +1113,10 @@ def refresh_locked(root, spec, state):
             if field in current_guidance.get(node["id"], {}):
                 row[field] = current_guidance[node["id"]][field]
         if meta:
+            if any(row.get(key) and row[key] != (meta.get(key) or "")
+                   for key in ("reservation_id", "attempt_id")):
+                row.update(status="unconfirmed", blocker="workflow job attempt changed; original ownership retained")
+                continue
             if row.get("status") == "skipped":
                 continue
             status, _reservation = _job_execution_status(root, meta)
@@ -1181,9 +1212,13 @@ def refresh_locked(root, spec, state):
         state["failure"] = unresolved
 
     if state.get("cancel_requested"):
+        for row in state["nodes"].values():
+            if row.get("status") in {"cancelled", "failed", "completed-unverified", "accepted"} and _node_stop_unconfirmed(root, row):
+                row.update(status="unconfirmed", blocker="execution stop unconfirmed; original ownership retained")
         remaining = [
             node for node in spec.get("nodes") or []
-            if (state["nodes"].get(node["id"]) or {}).get("status") in {"running", "ask", "launching"}
+            if (state["nodes"].get(node["id"]) or {}).get("status") in {"running", "ask", "launching", "unconfirmed"}
+            or _node_stop_unconfirmed(root, state["nodes"].get(node["id"]) or {})
         ]
         state["status"] = "cancelled" if not remaining else "cancel-requested"
     elif (unresolved or {}).get("final"):
@@ -1208,6 +1243,21 @@ def refresh_locked(root, spec, state):
     else:
         state["status"] = "planned"
     return state
+
+
+def _node_stop_unconfirmed(root, row):
+    """A terminal display is not evidence that an admitted attempt stopped."""
+    if not row.get("job_id"):
+        return False
+    meta = _job_row(root, row["job_id"])
+    if not meta:
+        return True
+    rid = row.get("reservation_id") or ""
+    if not rid:
+        return meta.get("status") not in _TERMINAL_EXECUTION
+    reservation = admission.get_reservation(root, rid)
+    return (not reservation or reservation.get("attempt_id") != row.get("attempt_id")
+            or reservation.get("job_id") != row["job_id"] or not reservation.get("stopped"))
 
 
 def refresh(repo, workflow_id):

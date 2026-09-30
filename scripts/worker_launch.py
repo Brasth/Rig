@@ -446,11 +446,19 @@ def launch(repo, **kwargs) -> dict:
             writer_providers = context["writer_providers"]
     wrapper = installed_wrapper()
     owner_session = _require_string(kwargs.get("owner_session"), "owner_session").strip()
+    initiating_owner = None
     if not owner_session:
         owner_session = next((os.environ.get(key, "") for key in (
             "RIG_OWNER_SESSION", "RIG_THREAD", "CODEX_THREAD_ID", "CODEX_SESSION_ID", "GROK_SESSION_ID",
-        ) if os.environ.get(key)), "") or f"launch-{job_id}"
+        ) if os.environ.get(key)), "")
+        if not owner_session and workflow_id:
+            # Keep the actually observed bare-shell initiator across the
+            # job-local launcher session; never adopt identity from the DAG.
+            initiating_owner = admission.caller_owner("parent")
+        owner_session = owner_session or f"launch-{job_id}"
     owner = admission.caller_owner("parent", owner_session=owner_session)
+    if initiating_owner:
+        owner["initiating_identity"] = admission.initiating_identity(initiating_owner)
     queue_id = _require_string(kwargs.get("queue_id"), "queue_id")
     reservation_id = _require_string(kwargs.get("reservation_id"), "reservation_id")
     attempt_id = _require_string(kwargs.get("attempt_id"), "attempt_id")

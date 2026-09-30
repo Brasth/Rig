@@ -1177,8 +1177,8 @@ TOOLS.extend([
          "idempotentHint": False,
          "openWorldHint": True,
      },
-     "description": "Parent-only. Wait on a workflow. Wakes COORDINATION and ASK. Shows sibling node status. Do not pass timeout unless you must cap the wait.",
-     "inputSchema": {"type": "object", "properties": {**_WORKFLOW_ID, "timeout": {"type": "number"}}}},
+     "description": "Parent-only. Wait on a workflow. Pass its retained owner_token for host Stop to durably cancel this workflow; without credentials this is observation-only. EOF always preserves execution. Wakes COORDINATION and ASK. Shows sibling node status. Do not pass timeout unless you must cap the wait.",
+     "inputSchema": {"type": "object", "properties": {**_WORKFLOW_ID, **_WORKFLOW_OWNER, "timeout": {"type": "number"}}}},
     {"name": "rig_workflow_extend",
      "annotations": {
          "readOnlyHint": False,
@@ -2411,6 +2411,8 @@ def call_tool(name: str, args: dict, on_tick=None, *, wait_paths: list[Path] | N
             )
             if code == 1:
                 return _err(text)
+            if not args.get("owner_token"):
+                text = "Observation-only wait: host Stop ends observation; use rig_workflow_cancel with owner credentials to stop execution.\n" + text
             return _ok(text)
         if name == "rig_workflow_extend":
             wid = _optional_string(args, "id").strip()
@@ -2620,9 +2622,13 @@ _out_lock = threading.Lock()
 def _abort_request(request):
     for target in request.targets:
         try:
-            rig_jobs.cancel_target(target, "wait-cancelled")
+            if request.name == "rig_workflow_wait":
+                import workflow_cancellation
+                workflow_cancellation.publish(target, "wait-cancelled")
+            else:
+                rig_jobs.cancel_target(target, "wait-cancelled")
         except (SystemExit, Exception) as error:
-            print(f"rig cancellation {target.get('job_id')}: {error}", file=sys.stderr)
+            print(f"rig cancellation {target.get('job_id') or target.get('workflow_id')}: {error}", file=sys.stderr)
 
 
 def _execute_request(request):
@@ -2642,13 +2648,22 @@ def _execute_request(request):
         request.bound.set()
         if request.cancelled:
             _abort_request(request)
+    elif request.name == "rig_workflow_wait" and not is_child() and request.args.get("owner_token"):
+        import workflow_cancellation
+        request.targets = [workflow_cancellation.capture(
+            _repo(request.args), _optional_string(request.args, "id").strip(),
+            **_workflow_owner_args(request.args),
+        )]
+        request.bound.set()
+        if request.cancelled:
+            _abort_request(request)
     else:
         request.bound.set()
     try:
         return call_tool(request.name, request.args, on_tick=on_tick, wait_paths=paths,
                          cancel_event=request.stop, wait_targets=request.targets or None)
     finally:
-        if request.cancelled and request.name == "rig_job_wait":
+        if request.cancelled and request.name in {"rig_job_wait", "rig_workflow_wait"}:
             _abort_request(request)
 
 

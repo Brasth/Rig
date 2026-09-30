@@ -230,6 +230,15 @@ def _never_started(message):
     return any(token in text for token in ("never started", "not_started", "could not start", "no eligible"))
 
 
+def _bound_never_started(root, row):
+    record = admission.get_reservation(root, row.get("reservation_id") or "") if row.get("reservation_id") else None
+    meta = wf._job_row(root, row.get("job_id")) or {}
+    return bool(record and record.get("stopped") and record.get("stage") == "released"
+                and not record.get("launch_started") and meta.get("execution_mode") == "not_started"
+                and all(record.get(key) == row.get(key) == meta.get(key)
+                        for key in ("job_id", "reservation_id", "attempt_id")))
+
+
 def _is_parent_choice(choice):
     """Parent executes this node: parent_writes, or stay when no wrapper exists."""
     choice = choice or {}
@@ -348,6 +357,14 @@ def advance(repo, workflow_id, *, owner=None, owner_session="", owner_token="",
         with admission.transaction(root):
             spec, state = wf.load_pair(root, workflow_id, required=True)
             row = state["nodes"][node["id"]]
+            import workflow_cancellation
+            if state.get("cancel_requested") or workflow_cancellation.requested(root, spec):
+                # The picker has returned but no launcher has run yet.
+                row["status"] = "cancelled"
+                state = wf.refresh_locked(root, spec, state)
+                wf.save_state(root, state)
+                skipped.append({"node_id": node["id"], "reason": "cancelled before launch"})
+                continue
             if row.get("status") == "launching":
                 row["routing"] = copy.deepcopy(choice.get("routing"))
                 wf.save_state(root, state)
@@ -368,9 +385,10 @@ def advance(repo, workflow_id, *, owner=None, owner_session="", owner_token="",
             with admission.transaction(root):
                 spec, state = wf.load_pair(root, workflow_id, required=True)
                 row = state["nodes"][node["id"]]
-                if row.get("status") == "launching" and not row.get("job_id"):
+                stopped_before_start = _bound_never_started(root, row)
+                if row.get("status") == "launching" and (not row.get("job_id") or stopped_before_start):
                     dead = str((choice or {}).get("worker") or "")
-                    if (_never_started(message) and not row.get("ran")
+                    if ((_never_started(message) or stopped_before_start) and not row.get("ran")
                             and len(row.get("exclude") or []) < 1):
                         if dead and dead not in (row.get("exclude") or []):
                             row.setdefault("exclude", []).append(dead)
@@ -402,8 +420,10 @@ def advance(repo, workflow_id, *, owner=None, owner_session="", owner_token="",
                 launched=True,
                 ran=False,
             )
-            cancelled = bool(state.get("cancel_requested") or row.get("status") == "cancelled")
+            cancelled = bool(state.get("cancel_requested") or row.get("status") == "cancelled"
+                             or workflow_cancellation.requested(root, spec))
             if cancelled:
+                state["cancel_requested"] = True
                 job_id = job.get("job_id") or ""
                 # A live job must remain visible so the workflow stays cancel-requested
                 # until confirmed stop. Do not claim termination here.
@@ -469,6 +489,9 @@ def approve_node(repo, workflow_id, node_id, *, owner_token="", owner=None, owne
         wf.require_adaptive_orchestration(root)
         creds = wf.match_workflow_credentials(root, workflow_id, owner_token)
         spec, state = wf.load_pair(root, workflow_id, required=True)
+        import workflow_cancellation
+        if state.get("cancel_requested") or workflow_cancellation.requested(root, spec):
+            raise SchedulerError("cancelled workflows cannot resume; create an explicitly requested new workflow")
         node = next((item for item in spec["nodes"] if item["id"] == node_id), None)
         if node is None:
             raise SchedulerError("unknown workflow node")
@@ -503,6 +526,9 @@ def resolve_node(repo, workflow_id, node_id, *, action="retry", rationale="", ow
         wf.require_adaptive_orchestration(root)
         wf.match_workflow_credentials(root, workflow_id, owner_token)
         spec, state = wf.load_pair(root, workflow_id, required=True)
+        import workflow_cancellation
+        if state.get("cancel_requested") or workflow_cancellation.requested(root, spec):
+            raise SchedulerError("cancelled workflows cannot resume; create an explicitly requested new workflow")
         node = next((item for item in spec["nodes"] if item["id"] == node_id), None)
         if node is None:
             raise SchedulerError("unknown workflow node")
@@ -545,29 +571,16 @@ def resolve_node(repo, workflow_id, node_id, *, action="retry", rationale="", ow
 
 
 def cancel_workflow(repo, workflow_id, *, owner_token="", owner=None, owner_session="", rationale="parent"):
+    import workflow_cancellation
+
     root = admission._root(repo)
+    target = workflow_cancellation.capture(root, workflow_id, owner_token=owner_token, owner_session=owner_session)
+    cancelled_jobs = workflow_cancellation.publish(target, rationale)
     with admission.transaction(root):
-        wf.match_workflow_credentials(root, workflow_id, owner_token)
-        spec, state = wf.load_pair(root, workflow_id, required=True)
-        state["cancel_requested"] = True
-        state["status"] = "cancel-requested"
-        cancelled_jobs = []
-        for node in spec["nodes"]:
-            row = state["nodes"][node["id"]]
-            if not row.get("job_id") and row.get("status") in {"pending", "ready", "blocked", "launching"}:
-                row["status"] = "cancelled"
-            job_id = row.get("job_id")
-            if job_id and row.get("status") in {"running", "ask", "launching"}:
-                try:
-                    cancelled_jobs.append(rig_jobs.cancel_job(root, job_id, rationale or "parent", return_details=True))
-                except (SystemExit, OSError, ValueError):
-                    cancelled_jobs.append({"job_id": job_id, "state": "error"})
-        if state.get("queue_id"):
-            wf._bind_queue(root, spec, state, "cancelled")
-        wf.save_state(root, state)
-        wf.append_event(root, workflow_id, "cancelled", {"rationale": rationale})
+        spec, state = workflow_cancellation.current(target)
         state = wf.refresh_locked(root, spec, state)
         wf.save_state(root, state)
+        wf.append_event(root, workflow_id, "cancel-requested", {"rationale": rationale})
         result = wf.public_record(spec, state)
         result["cancelled_jobs"] = [
             {key: value for key, value in item.items() if key != "owner_token"} if isinstance(item, dict) else item
@@ -590,6 +603,8 @@ def wait_workflow(repo, workflow_id, timeout=None, *, on_tick=None, cancel_event
             return 130, "CANCELLED WAIT: observer stopped; execution stop confirmation is separate. Do not re-wait."
         public = wf.refresh(repo, workflow_id)
         last = public
+        if public.get("status") == "cancel-requested":
+            return 130, json.dumps({"workflow": public}, indent=2, default=str)
         siblings = []
         for node in public.get("nodes") or []:
             row = (public.get("node_state") or {}).get(node["id"]) or {}

@@ -74,6 +74,14 @@ def requested(job_dir, attempt_id="", reservation_id=""):
         reservation_id = reservation_id or meta.get("reservation_id") or ""
     record = _read(_marker(folder, attempt_id))
     if not record:
+        if reservation_id:
+            import admission
+            import workflow_cancellation
+            root = folder.resolve().parents[2]
+            admitted = admission.get_reservation(root, reservation_id)
+            if (admitted and admitted.get("attempt_id") == attempt_id
+                    and admitted.get("job_id") == folder.name):
+                return workflow_cancellation.requested_for_record(root, admitted)
         return False
     return (not attempt_id or (record.get("attempt_id") == attempt_id
             and (not reservation_id or record.get("reservation_id") == reservation_id)))
