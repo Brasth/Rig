@@ -2336,6 +2336,7 @@ def start_job(
     task_domain: str = "",
     research_sources: list[str] | None = None,
     acceptance_contract=None,
+    context_package=None,
 ) -> str | dict:
     """Write a running job. Does not launch a worker. Returns the job id."""
     _require_harness(repo)
@@ -2346,6 +2347,9 @@ def start_job(
     raw_id = (job_id or "").strip()
     job_id = _allocate_job_id(raw_id)
     job_dir = _job_path(repo, job_id)
+    import context_packages
+    context = context_packages.prepare_launch(repo, context_package)
+    context_evidence = None
     worker = _resolve_worker(worker, live, preferred, {})
     rig_harness.assert_spawn_allowed(repo, worker, live)
     listed = job_files_input(files)
@@ -2452,6 +2456,9 @@ def start_job(
                             writer_providers=writer_providers, reservation=lease, resources=lease.get("resources"),
                             workflow_id=workflow_id, workflow_node_id=workflow_node_id,
                             workflow_spec_hash=workflow_spec_hash, workflow_attempt=workflow_attempt)
+            context_evidence = context_packages.attach_to_job(repo, job_dir, context, lease)
+            if context is not None:
+                context_packages.write_native_brief(repo, job_dir, (summary or "") + "\n\n" + context_packages.render(context), lease)
             routing_policy.write_sidecar(job_dir, lease["attempt_id"], routing_obj)
             lease = admission.activate(repo, **credentials, job_id=job_id, worker=worker, files=listed,
                                        access=access, owner=owner, owner_session=owner_session,
@@ -2479,6 +2486,10 @@ def start_job(
                                       owner=owner, owner_session=owner_session, mode="launch_failed")
             raise
     details = {**lease, **credentials, "job_id": job_id, "credentials_path": str(artifact)}
+    if context_evidence is not None:
+        details["context_package"] = context_packages.reference(context)
+        details["context_evidence"] = context_evidence
+        details["context_data"] = context_packages.render(context)
     instructions = research_source_instructions(routing_obj)
     if instructions:
         details["research_source_instructions"] = instructions

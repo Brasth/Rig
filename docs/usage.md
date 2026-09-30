@@ -1073,3 +1073,11 @@ Setup/configuration remains `rig setup`, `rig update`, `rig init`, `rig doctor`,
 ### Runtime evidence reports
 
 Routing and workflow reports expose local execution-latency distributions, sample/token coverage, recorded domain outcomes, retries and continuations, and forward-only blocked-time observations. Workflow report reads do not refresh state or affect acceptance. See [runtime metrics](runtime-metrics.md) for exact definitions, legacy/partial coverage, and the opt-in offline startup/routing/status benchmark.
+
+## Bounded context packages
+
+Parents can explicitly preview/build small hash-pinned local context selections with
+`rig context preview|build --file selection.json` or `rig_context_preview` /
+`rig_context_build`. Pass the built `context_package` reference to job start/launch
+or an individual workflow node. Context is read-only data, never write scope or
+acceptance. [Bounds, screening, freshness, and explicit workflow rebind](context-packages.md).

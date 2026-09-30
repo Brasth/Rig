@@ -14,6 +14,7 @@ if str(HERE) not in sys.path:
     sys.path.insert(0, str(HERE))
 
 import admission  # noqa: E402
+import context_packages  # noqa: E402
 import child_mcp  # noqa: E402
 import harness as rig_harness  # noqa: E402
 import jobs as rig_jobs  # noqa: E402
@@ -28,11 +29,11 @@ LAUNCH_KEYS = frozenset({
     "writer_provider", "writer_job_ids", "writer_snapshot_ids", "writer_providers",
     "review_mode", "live", "routing", "assessment", "resources", "task_domain", "research_sources",
     "workflow_id", "workflow_node_id", "workflow_spec_hash", "workflow_attempt",
-    "allow_read_overlap_reservations", "acceptance_contract",
+    "allow_read_overlap_reservations", "acceptance_contract", "context_package",
 })
 OBJECT_LAUNCH_KEYS = frozenset({
     "files", "routing", "assessment", "resources", "writer_job_ids", "research_sources",
-    "writer_snapshot_ids", "writer_providers", "allow_read_overlap_reservations", "acceptance_contract",
+    "writer_snapshot_ids", "writer_providers", "allow_read_overlap_reservations", "acceptance_contract", "context_package",
 })
 WRAPPER_ENV = (
     "PATH", "HOME", "USER", "LANG", "LC_ALL", "LC_CTYPE", "TZ", "TMPDIR",
@@ -283,6 +284,12 @@ def launch(repo, **kwargs) -> dict:
     brief = _require_string(kwargs.get("brief"), "brief")
     if not brief.strip():
         raise LaunchError("brief is required")
+    try:
+        context = context_packages.prepare_launch(repo, kwargs.get("context_package"))
+    except context_packages.ContextPackageError as error:
+        raise LaunchError(str(error)) from error
+    if context is not None:
+        brief += "\n\n" + context_packages.render(context)
     case = _require_string(kwargs.get("case"), "case")
     role = _require_string(kwargs.get("role"), "role").strip() or rig_route.classify("", case)
     worker = _require_string(kwargs.get("worker"), "worker").strip()
@@ -468,6 +475,7 @@ def launch(repo, **kwargs) -> dict:
     brief_path = job_dir / "brief.md"
     record = None
     credentials = None
+    context_evidence = None
 
     def abort_setup(message: str, error: BaseException) -> None:
         try:
@@ -505,6 +513,7 @@ def launch(repo, **kwargs) -> dict:
         try:
             job_dir.mkdir(parents=True, exist_ok=False)
             credentials = admission.write_credentials(repo, record)
+            context_evidence = context_packages.attach_to_job(repo, job_dir, context, record)
             tmp = job_dir / "brief.md.tmp"
             tmp.write_text(brief if brief.endswith("\n") else brief + "\n")
             tmp.replace(brief_path)
@@ -534,7 +543,7 @@ def launch(repo, **kwargs) -> dict:
         except FileExistsError as error:
             _drop(repo, record, owner, "job directory already exists")
             raise LaunchError("job directory already exists") from error
-        except (OSError, LaunchError, SystemExit) as error:
+        except (OSError, LaunchError, SystemExit, context_packages.ContextPackageError) as error:
             abort_setup(str(error) or "launch setup failed", error)
         extra = {
             "RIG_LIVE": "1",
@@ -597,6 +606,9 @@ def launch(repo, **kwargs) -> dict:
         }
         if record.get("contract_fingerprint"):
             result["contract_fingerprint"] = record["contract_fingerprint"]
+    if context_evidence is not None:
+        result["context_package"] = context_packages.reference(context)
+        result["context_evidence"] = context_evidence
     return result
 
 

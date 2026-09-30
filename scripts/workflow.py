@@ -205,9 +205,9 @@ def main(argv=None) -> int:
                     raise WorkflowError("workflow spec must be JSON") from error
             else:
                 raw = _load_json_source(args.spec_file or "")
-            nodes = raw if isinstance(raw, list) else (raw or {}).get("nodes")
-            if not isinstance(nodes, list) or not nodes:
-                raise WorkflowError("extension needs additional nodes")
+            nodes = raw
+            if not isinstance(nodes, (list, dict)) or not nodes:
+                raise WorkflowError("extension needs additional nodes or explicit context rebindings")
             _print_public(
                 extend(repo, wid, nodes, owner_token=token, owner_session=owner_session),
                 as_json=args.json,

@@ -78,6 +78,7 @@ usage: rig <command> [args]
   queue unclaim <id>
   queue spawned <id> --job <job-id> [--files a,b]
   workflows [--json]
+  context preview|build|show|validate --file PATH
   workflow create [--file PATH] [--json]    # JSON spec from --file or stdin
   workflow show|advance|wait|extend|resolve|approve|cancel|report <id>
   pick [explore|mini|bulk|implement|hard|review|verify|stay] [--case TEXT] [--exclude NAME] [--json]
@@ -1566,6 +1567,7 @@ main() {
     jobs) cmd_jobs "$@" ;;
     workflows) cmd_workflows "$@" ;;
     workflow) cmd_workflow "$@" ;;
+    context) python3 "$(py_script context_packages.py)" "$@" --repo "$(repo_root)" ;;
     queue) cmd_queue "$@" ;;
     tui) cmd_tui "$@" ;;
     memory) cmd_memory "$@" ;;

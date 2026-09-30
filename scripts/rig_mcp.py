@@ -33,6 +33,7 @@ import workflow as rig_workflow  # noqa: E402
 import coordination as rig_coordination  # noqa: E402
 import routing_domains  # noqa: E402
 import doctor as rig_doctor  # noqa: E402
+import context_packages  # noqa: E402
 
 _DOCTOR_HOST_SNAPSHOT = rig_doctor.runtime_snapshot()
 
@@ -989,9 +990,23 @@ TOOLS = [
     },
 ]
 
+CONTEXT_REFERENCE_SCHEMA = context_packages.REFERENCE_SCHEMA
+for _operation in ("preview", "build"):
+    TOOLS.append({
+        "name": "rig_context_" + _operation,
+        "description": "Parent-only. " + ("Read-only preview" if _operation == "preview" else "Explicit private artifact build")
+            + " of bounded, selected local text context. No harvesting, command execution, or authority expansion.",
+        "annotations": {"readOnlyHint": _operation == "preview", "destructiveHint": False,
+                        "idempotentHint": True, "openWorldHint": False},
+        "inputSchema": {"type": "object", "properties": {"repo": {"type": "string"},
+            "selection": context_packages.SELECTION_SCHEMA},
+            "required": ["selection"], "additionalProperties": False},
+    })
+
 for _tool in TOOLS:
     if _tool["name"] in {"rig_job_start", "rig_job_launch"}:
         _tool["inputSchema"]["properties"]["acceptance_contract"] = ACCEPTANCE_CONTRACT_SCHEMA
+        _tool["inputSchema"]["properties"]["context_package"] = CONTEXT_REFERENCE_SCHEMA
     if _tool["name"] in {"rig_pick", "rig_session", "rig_job_start", "rig_job_launch"}:
         _tool["inputSchema"]["properties"].update(TASK_DOMAIN_PROPERTIES)
     if _tool["name"] in {"rig_pick", "rig_session"}:
@@ -1243,8 +1258,8 @@ TOOLS.extend([
          "idempotentHint": False,
          "openWorldHint": False,
      },
-     "description": "Parent-only. Append-only workflow extension. Cannot alter launched nodes or contracts. No extension after final verify launches.",
-     "inputSchema": {"type": "object", "properties": {**_WORKFLOW_ID, **_WORKFLOW_OWNER, "nodes": {"type": "array", "items": {"type": "object"}}}, "required": ["id", "nodes"]}},
+     "description": "Parent-only. Append nodes or explicitly rebind context_packages for never-executed nodes after resolution/release. No scope changes, held attempts, launched-node changes, or extension after final verify launches.",
+     "inputSchema": {"type": "object", "properties": {**_WORKFLOW_ID, **_WORKFLOW_OWNER, "nodes": {"type": "array", "items": {"type": "object"}}, "context_packages": {"type": "object", "additionalProperties": CONTEXT_REFERENCE_SCHEMA}}, "required": ["id"]}},
     {"name": "rig_workflow_resolve",
      "annotations": {
          "readOnlyHint": False,
@@ -1469,6 +1484,8 @@ for _tool in TOOLS:
 
 TOOL_ORDER = (
     "rig_session",
+    "rig_context_preview",
+    "rig_context_build",
     "rig_job_wait",
     "rig_job_allow",
     "rig_job_deny",
@@ -1638,11 +1655,11 @@ LAUNCH_ARG_NAMES = frozenset({
     "credentials_path",
     "writer_job_id", "writer_snapshot_id", "writer_cli", "writer_model",
     "writer_provider", "review_mode", "routing", "assessment", "task_domain", "research_sources",
-    "continues_job_id", "acceptance_contract",
+    "continues_job_id", "acceptance_contract", "context_package",
 })
 _LAUNCH_PUBLIC_KEYS = (
     "job_id", "worker", "role", "wrapper_pid", "status",
-    "reservation_id", "attempt_id", "credentials_path", "contract_fingerprint",
+    "reservation_id", "attempt_id", "credentials_path", "contract_fingerprint", "context_package", "context_evidence",
 )
 
 
@@ -1994,6 +2011,10 @@ def call_tool(name: str, args: dict, on_tick=None, *, wait_paths: list[Path] | N
             if want and jid and want != jid:
                 return _err("child can only show its own job")
             args = {**args, "id": jid}
+        if name in {"rig_context_preview", "rig_context_build"}:
+            operation = context_packages.preview if name == "rig_context_preview" else context_packages.build
+            result = operation(repo, args.get("selection"))
+            return {**_ok(json.dumps(result, indent=2)), "structuredContent": result}
         if name == "rig_job_doing":
             text = str(args.get("text") or "").strip()
             if not text:
@@ -2391,6 +2412,7 @@ def call_tool(name: str, args: dict, on_tick=None, *, wait_paths: list[Path] | N
                         preferred=preferred,
                         **_execution_args(args),
                         files=args.get("files"), acceptance_contract=args.get("acceptance_contract"),
+                        context_package=args.get("context_package"),
                         writer_job_id=_optional_string(args, "writer_job_id"),
                         continues_job_id=_optional_string(args, "continues_job_id"),
                         writer_snapshot_id=_optional_string(args, "writer_snapshot_id"),
@@ -2490,11 +2512,11 @@ def call_tool(name: str, args: dict, on_tick=None, *, wait_paths: list[Path] | N
             return _ok(text)
         if name == "rig_workflow_extend":
             wid = _optional_string(args, "id").strip()
-            nodes = args.get("nodes")
+            nodes = {"nodes": args.get("nodes", []), "context_packages": args.get("context_packages", {})}
             if not wid:
                 return _err("rig_workflow_extend needs id")
-            if not isinstance(nodes, list) or not nodes:
-                return _err("nodes must be a nonempty array of objects")
+            if not isinstance(nodes["nodes"], list) or not isinstance(nodes["context_packages"], dict):
+                return _err("nodes must be an array and context_packages a node/reference object")
             return _workflow_response(
                 rig_workflow.extend(repo, wid, nodes, **_workflow_owner_args(args)),
             )
@@ -2667,7 +2689,7 @@ def call_tool(name: str, args: dict, on_tick=None, *, wait_paths: list[Path] | N
                     effort=_optional_string(args, "effort"),
                     access=_optional_string(args, "access"),
                     files=files, acceptance_contract=args.get("acceptance_contract"),
-                    brief=_optional_string(args, "brief"),
+                    brief=_optional_string(args, "brief"), context_package=args.get("context_package"),
                     queue_id=_optional_string(args, "queue_id"),
                     writer_job_id=_optional_string(args, "writer_job_id"),
                     continues_job_id=_optional_string(args, "continues_job_id"),

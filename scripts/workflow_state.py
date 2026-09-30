@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import admission
+import context_packages
 import harness
 import routing_domains
 import runtime_metrics
@@ -40,7 +41,7 @@ DEFAULT_MAX_NODES = 12
 LAUNCHED_CONTRACT = (
     "id", "role", "effects", "files", "resources", "depends_on", "required",
     "brief", "kind", "final", "priority", "assessment", "shared_context",
-    "task_domain", "research_sources",
+    "task_domain", "research_sources", "context_package",
 )
 
 
@@ -240,6 +241,8 @@ def _normalize_node(raw, index, *, max_nodes):
         node["task_domain"] = task_domain
     if research_sources is not None:
         node["research_sources"] = list(research_sources)
+    if "context_package" in raw:
+        node["context_package"] = context_packages.normalize_reference(raw["context_package"])
     if raw.get("shared_context") not in (None, ""):
         node["shared_context"] = str(raw.get("shared_context"))
     return node
@@ -978,6 +981,36 @@ def create_workflow(repo, raw, *, owner=None, owner_session="", queue_id=""):
         }
 
 
+def _rebind_contexts(root, spec, state, replacements):
+    """Explicitly rebind only never-executed nodes with no held attempt."""
+    if not isinstance(replacements, dict):
+        raise WorkflowError("context_packages must map existing node ids to pinned references")
+    nodes = copy.deepcopy(spec["nodes"])
+    by_id = {node["id"]: node for node in nodes}
+    events = list_events(root, spec["workflow_id"])
+    reservations = admission.list_reservations(root, include_released=True)
+    for node_id, ref in replacements.items():
+        if node_id not in by_id:
+            raise WorkflowError("context rebind requires an existing workflow node")
+        row = (state.get("nodes") or {}).get(node_id) or {}
+        if (row.get("status") not in {"pending", "ready", "blocked"}
+                or any(row.get(key) for key in ("launched", "ran", "accepted", "job_id", "reservation_id", "attempt_id"))):
+            raise WorkflowError(f"node {node_id}: context rebind requires a never-executed node; resolve/release the unlaunched attempt first")
+        if any(event.get("node_id") == node_id and event.get("kind") in {"launched", "advanced"} for event in events):
+            raise WorkflowError(f"node {node_id}: context for an executed node is immutable")
+        for record in reservations:
+            if record.get("workflow_id") != spec["workflow_id"] or record.get("workflow_node_id") != node_id:
+                continue
+            if record.get("stage") != "released" or not record.get("stopped") or record.get("launch_started"):
+                raise WorkflowError(f"node {node_id}: context rebind refused for an active, reserved, or executed attempt")
+        try:
+            context_packages.prepare_launch(root, ref)
+        except context_packages.ContextPackageError as error:
+            raise WorkflowError(f"node {node_id}: {error}") from error
+        by_id[node_id]["context_package"] = context_packages.normalize_reference(ref)
+    return nodes
+
+
 def extend_workflow(repo, workflow_id, added_nodes, *, owner_token="", owner=None, owner_session=""):
     root = _root(repo)
     with admission.transaction(root):
@@ -998,9 +1031,15 @@ def extend_workflow(repo, workflow_id, added_nodes, *, owner_token="", owner=Non
             if (state.get("nodes") or {}).get(node["id"], {}).get("launched")
         }
         previous_ids = {node["id"] for node in spec["nodes"]}
-        extra = added_nodes if isinstance(added_nodes, list) else (added_nodes or {}).get("nodes")
-        if not extra:
-            raise WorkflowError("extension needs additional nodes")
+        replacements = added_nodes.get("context_packages", {}) if isinstance(added_nodes, dict) else {}
+        if not isinstance(replacements, dict):
+            raise WorkflowError("context_packages must map existing node ids to pinned references")
+        extra = added_nodes if isinstance(added_nodes, list) else (added_nodes or {}).get("nodes", [])
+        if not isinstance(extra, list):
+            raise WorkflowError("extension nodes must be an array")
+        if not extra and not replacements:
+            raise WorkflowError("extension needs additional nodes or explicit context rebindings")
+        rebound_nodes = _rebind_contexts(root, spec, state, replacements) if replacements else spec["nodes"]
         for item in extra:
             nid = str((item or {}).get("id") or "").strip() if isinstance(item, dict) else ""
             if nid in launched:
@@ -1008,7 +1047,7 @@ def extend_workflow(repo, workflow_id, added_nodes, *, owner_token="", owner=Non
         merged_raw = {
             **{key: spec.get(key) for key in ("title", "case", "shared_context", "queue_id", "created_at")},
             "workflow_id": spec["workflow_id"],
-            "nodes": spec["nodes"] + list(extra),
+            "nodes": rebound_nodes + list(extra),
         }
         if isinstance(added_nodes, dict) and "shared_context" in added_nodes:
             merged_raw["shared_context"] = added_nodes.get("shared_context") or ""
@@ -1028,6 +1067,8 @@ def extend_workflow(repo, workflow_id, added_nodes, *, owner_token="", owner=Non
         for node in spec["nodes"]:
             state.setdefault("nodes", {}).setdefault(node["id"], _empty_node_state(node))
         for nid, row in list(state["nodes"].items()):
+            if nid in replacements:
+                row.update(routing=None, exclude=[], blocker="")
             if isinstance(row.get("approval"), dict) and row["approval"].get("spec_hash") != spec["spec_hash"]:
                 row["approval"] = None
                 row["blocker"] = "approval invalidated by spec change"
@@ -1036,6 +1077,7 @@ def extend_workflow(repo, workflow_id, added_nodes, *, owner_token="", owner=Non
         append_event(root, workflow_id, "extended", {
             "previous_spec_hash": previous, "spec_hash": spec["spec_hash"],
             "added": [node["id"] for node in spec["nodes"] if node["id"] not in previous_ids],
+            "context_rebound": sorted(replacements),
         })
         return public_record(spec, state)
 
