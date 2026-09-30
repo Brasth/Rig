@@ -43,7 +43,8 @@ _STATE_LABELS = {
 }
 PRIMARY_FOOTER = "Tab  j/k  y/n  x  e  l  r  ?  q"
 HELP_LINES = (
-    "Tab            Jobs / Queue / Workflows",
+    "Tab            Jobs / Queue / Workflows / Settings",
+    "Settings e     Edit domain routing and preview tasks",
     "j/k or arrows  Move the selection",
     "e              Open the Unicode queue editor",
     "y / n          Allow or deny the selected ASK",
@@ -266,6 +267,8 @@ def compact_footer(tab: str, row, *, log_mode: bool = False) -> str:
     elif tab == "Queue":
         parts.append("e enqueue")
         parts.append("x cancel")
+    elif tab == "Settings":
+        parts.append("e routing / preview" if (row or {}).get("id") == "domains" else "c/d key · t/o picker")
     else:
         parts.append("read only")
     parts.extend(["? help", "q quit"])
@@ -431,6 +434,8 @@ def render(stdscr, repo, snapshot, *, tab, selected, offset, follow, log_off,
                 available = max(0, h - 3 - len(detail))
                 start = max(0, len(acts) - available - (0 if follow else log_off))
                 detail.extend(acts[start:start + available] or ["(no log yet)"])
+            elif row and tab == "Settings":
+                detail = [str(row["id"]), str(row.get("text") or "")]
             elif row:
                 detail = [str(row["id"]), "status pending", row.get("waiting_reason") or "Awaiting parent claim",
                           f"priority {row.get('priority') or 0}", f"worker {row.get('worker') or 'parent chooses'}", ""]

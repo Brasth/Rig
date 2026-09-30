@@ -584,6 +584,8 @@ def pick(
     explain: bool = False,
     task_domain: str = "",
     research_sources: list[str] | None = None,
+    preview_config=None,
+    catalog_snapshot=None,
 ) -> dict:
     import routing_policy
 
@@ -592,6 +594,8 @@ def pick(
     if review_mode not in {"standalone", "independent"}:
         raise ValueError("review_mode must be standalone or independent")
     mode = routing_policy.resolve_mode(repo, policy_mode)
+    if (preview_config is not None or catalog_snapshot is not None) and mode != "smart":
+        raise ValueError("routing preview requires smart routing")
     assessed = routing_policy.normalize_assessment(
         kind, assessment, complexity=complexity, risk=risk, uncertainty=uncertainty, reason=assessment_reason,
     )
@@ -603,6 +607,7 @@ def pick(
             writer_provider=writer_provider, review_mode=review_mode, repo=repo,
             jobs_snapshot=jobs_snapshot, hash_cache=hash_cache, assessment=assessed,
             policy_mode="smart", task_domain=task_domain, research_sources=research_sources,
+            preview_config=preview_config, catalog_snapshot=catalog_snapshot,
             writer_job_ids=writer_job_ids, writer_snapshot_ids=writer_snapshot_ids,
             writer_providers=writer_providers,
         )

@@ -82,6 +82,8 @@ def load_snapshot(repo, *, start=0, rows=20, selected_id=None):
         {"id": "engine", "state": "configured", "text": f"Project picker: {routing.get('engine') or 'local'} (t toggle)"},
         {"id": "objective", "state": "configured", "text": f"Local objective: {routing.get('objective') or 'balanced'} (o cycle)"},
     ]
+    import routing_settings
+    settings.extend(routing_settings.settings_rows(Path(repo)))
     return Snapshot(projected, pending, slots, cap, time.monotonic(), settings)
 
 

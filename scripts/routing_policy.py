@@ -758,12 +758,16 @@ def smart_pick(
     harness: dict | None = None,
     task_domain: str = "",
     research_sources=None,
+    preview_config: RoutingConfig | None = None,
+    catalog_snapshot=None,
 ) -> dict:
     import route as rig_route
 
     if review_mode not in {"standalone", "independent"}:
         raise ValueError("review_mode must be standalone or independent")
-    cfg = load_config(repo, policy_mode=policy_mode or "smart", harness=harness)
+    if preview_config is not None and catalog_snapshot is None:
+        raise ValueError("preview config requires a read-only catalog snapshot")
+    cfg = preview_config or load_config(repo, policy_mode=policy_mode or "smart", harness=harness)
     fingerprint = config_fingerprint(cfg)
     classification = rig_route.classify_details(role, case)
     kind = classification["kind"]
@@ -794,6 +798,8 @@ def smart_pick(
     fallback = ("domain-policy-local" if domain_managed else "jev-unavailable") if cfg.engine == "jev" else ""
     routing = empty_routing(mode="smart", fingerprint=fingerprint, assessment=assessed)
     routing["task_domain"] = domain
+    if catalog_snapshot is not None:
+        routing["preview_only"] = True
 
     def finish(choice, source: str, selected_id: str = "", canonical=None):
         choice["task_domain"] = domain["name"]
@@ -877,7 +883,7 @@ def smart_pick(
         )
     wrapper_names = [w for w in effective if w not in blocked]
     decisions: dict[str, dict] = {}
-    session = CatalogSession(catalogs)
+    session = CatalogSession(catalogs, snapshot=catalog_snapshot)
 
     for profile in sorted(cfg.profiles.values(), key=lambda item: item.id):
         filtered = _hard_filter(
@@ -922,7 +928,10 @@ def smart_pick(
             domain["reason"] = "preferred profiles unavailable; scored fallback among eligible profiles"
 
     if selected and cfg.engine == "jev" and canonical and not domain_managed:
-        jev_id, jev_fallback = _jev_choice(case, kind, assessed, traits, canonical)
+        if catalog_snapshot is not None:
+            jev_id, jev_fallback = "", "preview-provider-not-invoked"
+        else:
+            jev_id, jev_fallback = _jev_choice(case, kind, assessed, traits, canonical)
         if jev_id:
             jev_profile, jev_model, jev_tier, jev_catalog = _select_jev_candidate(
                 jev_id, canonical, cfg, session, need,
