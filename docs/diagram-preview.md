@@ -16,8 +16,8 @@
 Examples:
 
 ```bash
-./bin/rig diagram README.md
-./bin/rig diagram README.md --ascii
+./bin/rig diagram docs/rig-flow.md
+./bin/rig diagram docs/rig-flow.md --ascii
 ./bin/rig diagram docs/flow.mmd --popup
 ./bin/rig diagram docs/flow.mmd --output /tmp/flow.txt
 ```

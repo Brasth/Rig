@@ -103,11 +103,11 @@ CHILD_TOOLS = (
 
 def _stub_path(extra: Path | None = None) -> str:
     parts = [
+        str(Path(sys.executable).resolve().parent),
         "/usr/bin",
         "/bin",
         "/usr/sbin",
         "/sbin",
-        str(Path(sys.executable).resolve().parent),
     ]
     if extra:
         parts.insert(0, str(extra))

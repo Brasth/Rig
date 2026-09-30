@@ -873,7 +873,7 @@ case "$WORKER" in
       [[ -n "$EFFORT" ]] && CMD+=(--effort "$EFFORT")
       CMD+=("$BRIEF_TEXT")
     else
-      SESSION_ID="$(uuidgen | tr 'A-Z' 'a-z')"
+      SESSION_ID="$(python3 -c 'import uuid; print(uuid.uuid4())')"
       CMD=(grok --no-auto-update --prompt-file "$BRIEF" --cwd "$REPO" --output-format streaming-json --session-id "$SESSION_ID" --always-approve --max-turns 40)
       [[ -n "$MODEL" ]] && CMD+=(-m "$MODEL")
       [[ -n "$EFFORT" ]] && CMD+=(--effort "$EFFORT")

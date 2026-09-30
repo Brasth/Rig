@@ -24,12 +24,32 @@ def protocol_block(path):
 
 
 class ProtocolDocumentation(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        # Validate the generated project skill without relying on a developer's
+        # untracked .agents directory or writing installation state to the checkout.
+        temporary = tempfile.TemporaryDirectory()
+        cls.addClassCleanup(temporary.cleanup)
+        base = Path(temporary.name)
+        repo, home = base / "repo", base / "home"
+        repo.mkdir()
+        home.mkdir()
+        (repo / ".git").mkdir()
+        env = {**os.environ, "HOME": str(home), "RIG_HOME": str(home / ".rig"),
+               "RIG_SRC": str(ROOT), "RIG_SKIP_UPDATE_CHECK": "1",
+               "RIG_SKIP_MODEL_CATALOG": "1"}
+        result = subprocess.run([str(ROOT / "bin/rig"), "init"], cwd=repo,
+                                env=env, capture_output=True, text=True, timeout=30)
+        if result.returncode:
+            raise AssertionError(result.stdout + result.stderr)
+        cls.managed_skill = repo / ".agents/skills/delegate-harness/SKILL.md"
+
     def test_smart_policy_is_documented_across_managed_protocols(self):
         sources = self.protocol_sources()
         sources.pop("skills/rig-jobs/SKILL.md")
         sources.pop("README.md")
         sources["AGENTS.md"] = (ROOT / "AGENTS.md").read_text()
-        sources["managed skill"] = (ROOT / ".agents/skills/delegate-harness/SKILL.md").read_text()
+        sources["managed skill"] = self.managed_skill.read_text()
         for name, source in sources.items():
             with self.subTest(source=name):
                 self.assertIn("complexity", source)
@@ -65,7 +85,7 @@ class ProtocolDocumentation(unittest.TestCase):
             "docs/rig-flow.md": (ROOT / "docs" / "rig-flow.md").read_text(),
             "AGENTS.md": (ROOT / "AGENTS.md").read_text(),
             "skills/delegate-harness/SKILL.md": (ROOT / "skills" / "delegate-harness" / "SKILL.md").read_text(),
-            "managed skill": (ROOT / ".agents" / "skills" / "delegate-harness" / "SKILL.md").read_text(),
+            "managed skill": self.managed_skill.read_text(),
             "skills/rig-jobs/SKILL.md": (ROOT / "skills" / "rig-jobs" / "SKILL.md").read_text(),
         }
         for name, source in sources.items():

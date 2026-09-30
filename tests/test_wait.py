@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import json
 import os
+import queue
 import signal
 import subprocess
 import sys
@@ -10,11 +11,14 @@ import time
 import unittest
 from pathlib import Path
 
+from repo_test_support import initialize_project
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 import ask  # noqa: E402
 import jobs  # noqa: E402
+import job_metadata
 import rig_mcp  # noqa: E402
 
 
@@ -48,16 +52,54 @@ def _alarm_run(seconds: float, fn):
         signal.signal(signal.SIGALRM, prev)
 
 
-def _mcp_ndjson(messages: list, timeout: float = 3) -> subprocess.CompletedProcess:
-    payload = "".join(json.dumps(m, ensure_ascii=False) + "\n" for m in messages)
-    return subprocess.run(
-        [sys.executable, "-u", str(ROOT / "scripts" / "rig_mcp.py")],
-        input=payload,
-        text=True,
-        capture_output=True,
-        timeout=timeout,
-        check=False,
-    )
+def _mcp_ndjson(messages: list, finish, *, progress: bool, timeout: float = 5) -> subprocess.CompletedProcess:
+    """Keep the transport open and finish only after an observable server event.
+
+    A sleep started before Python imports could complete the job before the
+    server ever observed it, hiding the progress notification being tested.
+    """
+    command = [sys.executable, "-u", str(ROOT / "scripts" / "rig_mcp.py")]
+    proc = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE, text=True)
+    received = queue.Queue()
+    def read():
+        for line in proc.stdout:
+            received.put(line)
+        received.put(None)
+    reader = threading.Thread(target=read)
+    reader.start()
+    lines = []
+    deadline = time.monotonic() + timeout
+    try:
+        outgoing = list(messages)
+        if not progress:
+            outgoing.append({"jsonrpc": "2.0", "id": 3, "method": "ping"})
+        for message in outgoing:
+            proc.stdin.write(json.dumps(message) + "\n")
+        proc.stdin.flush()
+        finished = False
+        while True:
+            line = received.get(timeout=max(0.001, deadline - time.monotonic()))
+            if line is None:
+                raise AssertionError("MCP exited before completing wait: " + "".join(lines))
+            lines.append(line)
+            message = json.loads(line)
+            trigger = message.get("method") == "notifications/progress" if progress else message.get("id") == 3
+            if trigger and not finished:
+                finish()
+                finished = True
+            if message.get("id") == 2:
+                break
+        proc.stdin.close()
+        proc.wait(timeout=max(0.001, deadline - time.monotonic()))
+        return subprocess.CompletedProcess(command, proc.returncode, "".join(lines), proc.stderr.read())
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+        proc.wait(timeout=3)
+        reader.join(timeout=3)
+        for stream in (proc.stdin, proc.stdout, proc.stderr):
+            stream.close()
 
 
 def _init_and_wait(repo: Path, job_id: str, meta: dict | None = None) -> list:
@@ -90,34 +132,26 @@ def _init_and_wait(repo: Path, job_id: str, meta: dict | None = None) -> list:
 class WaitContract(unittest.TestCase):
     def setUp(self):
         self.td = tempfile.TemporaryDirectory()
+        self.addCleanup(self.td.cleanup)
         self.repo = Path(self.td.name)
+        initialize_project(self.repo)
         self.d = self.repo / ".rig" / "jobs" / "wait-job"
         self.d.mkdir(parents=True)
         (self.d / "brief.md").write_text("do the work\n")
         self._write_meta("running")
 
-    def tearDown(self):
-        self.td.cleanup()
-
     def _write_meta(self, status: str) -> None:
-        (self.d / "meta.json").write_text(
-            json.dumps(
-                {
-                    "job_id": "wait-job",
-                    "worker": "claude",
-                    "role": "implement",
-                    "status": status,
-                    "pid": os.getpid(),
-                    "model": "claude-sonnet-5",
-                    "effort": "medium",
-                    "summary": "done" if status == "ok" else "",
-                }
-            )
-        )
+        # The MCP observer reads concurrently: mirror production's atomic
+        # replacement so a truncated fixture never looks like a changed attempt.
+        job_metadata.write_json_atomic(self.d / "meta.json", {
+            "job_id": "wait-job", "worker": "claude", "role": "implement",
+            "status": status, "pid": os.getpid(), "model": "claude-sonnet-5",
+            "effort": "medium", "summary": "done" if status == "ok" else "",
+        })
 
     def _finish_ok(self) -> None:
         self._write_meta("ok")
-        (self.d / "result.json").write_text(json.dumps({"status": "ok"}))
+        job_metadata.write_json_atomic(self.d / "result.json", {"status": "ok"})
 
     def test_timeout_0_running_is_124(self):
         code, text = jobs.wait_job(self.repo, "wait-job", timeout=0)
@@ -175,7 +209,9 @@ class WaitContract(unittest.TestCase):
             time.sleep(0.3)
             self._finish_ok()
 
-        threading.Thread(target=later, daemon=True).start()
+        writer = threading.Thread(target=later)
+        self.addCleanup(writer.join, 3)
+        writer.start()
         t0 = time.time()
         code, text = _alarm_run(
             3, lambda: jobs.wait_job(self.repo, "wait-job", timeout=None)
@@ -212,7 +248,9 @@ class WaitContract(unittest.TestCase):
             time.sleep(0.3)
             self._finish_ok()
 
-        threading.Thread(target=later, daemon=True).start()
+        writer = threading.Thread(target=later)
+        self.addCleanup(writer.join, 3)
+        writer.start()
         code, _text = _alarm_run(
             3, lambda: jobs.wait_job(self.repo, "wait-job", on_tick=ticks.append)
         )
@@ -240,14 +278,9 @@ class WaitContract(unittest.TestCase):
             '{"type":"tool_call","toolName":"read_file","rawInput":{"path":"README.md"}}\n'
         )
 
-        def later():
-            time.sleep(0.3)
-            self._finish_ok()
-
-        threading.Thread(target=later, daemon=True).start()
         proc = _mcp_ndjson(
             _init_and_wait(self.repo, "wait-job", {"progressToken": "tok-1"}),
-            timeout=3,
+            self._finish_ok, progress=True,
         )
         self.assertIn("notifications/progress", proc.stdout, proc.stderr)
         lines = [json.loads(line) for line in proc.stdout.splitlines() if line.strip()]
@@ -274,12 +307,7 @@ class WaitContract(unittest.TestCase):
             '{"type":"tool_call","toolName":"read_file","rawInput":{"path":"README.md"}}\n'
         )
 
-        def later():
-            time.sleep(0.3)
-            self._finish_ok()
-
-        threading.Thread(target=later, daemon=True).start()
-        proc = _mcp_ndjson(_init_and_wait(self.repo, "wait-job"), timeout=3)
+        proc = _mcp_ndjson(_init_and_wait(self.repo, "wait-job"), self._finish_ok, progress=False)
         self.assertNotIn("notifications/progress", proc.stdout, proc.stderr)
         self.assertIn('"id": 2', proc.stdout)
         lines = [json.loads(line) for line in proc.stdout.splitlines() if line.strip()]
@@ -302,15 +330,17 @@ class WaitContract(unittest.TestCase):
             "pid": 2 ** 22 - 1,
             "model": "composer-2.5",
         }
-        (grace / "meta.json").write_text(json.dumps(meta))
+        job_metadata.write_json_atomic(grace / "meta.json", meta)
 
         def later():
             time.sleep(0.4)
             meta.update(status="ok", summary="done")
-            (grace / "meta.json").write_text(json.dumps(meta))
-            (grace / "result.json").write_text('{"status": "ok"}')
+            job_metadata.write_json_atomic(grace / "meta.json", meta)
+            job_metadata.write_json_atomic(grace / "result.json", {"status": "ok"})
 
-        threading.Thread(target=later, daemon=True).start()
+        writer = threading.Thread(target=later)
+        self.addCleanup(writer.join, 3)
+        writer.start()
         code, text = _alarm_run(
             5, lambda: jobs.wait_job(self.repo, "grace-job", timeout=None)
         )
@@ -380,7 +410,9 @@ class WaitContract(unittest.TestCase):
 class WaitPanel(unittest.TestCase):
     def setUp(self):
         self.td = tempfile.TemporaryDirectory()
+        self.addCleanup(self.td.cleanup)
         self.repo = Path(self.td.name)
+        initialize_project(self.repo)
         self.review = self.repo / ".rig" / "jobs" / "review-job"
         self.seed = self.repo / ".rig" / "jobs" / "seed-job"
         self.review.mkdir(parents=True)
@@ -390,12 +422,8 @@ class WaitPanel(unittest.TestCase):
         self._write(self.review, "review-job", "running")
         self._write(self.seed, "seed-job", "running")
 
-    def tearDown(self):
-        self.td.cleanup()
-
     def _write(self, d: Path, job_id: str, status: str) -> None:
-        (d / "meta.json").write_text(
-            json.dumps(
+        job_metadata.write_json_atomic(d / "meta.json",
                 {
                     "job_id": job_id,
                     "worker": "cursor" if job_id.startswith("review") else "grok",
@@ -406,10 +434,9 @@ class WaitPanel(unittest.TestCase):
                     "effort": "high",
                     "summary": "done" if status == "ok" else "",
                 }
-            )
         )
         if status in {"ok", "fail", "timeout"}:
-            (d / "result.json").write_text(json.dumps({"status": status}))
+            job_metadata.write_json_atomic(d / "result.json", {"status": status})
 
     def test_both_ok_is_0(self):
         self._write(self.review, "review-job", "ok")
@@ -510,7 +537,9 @@ class WaitPanel(unittest.TestCase):
             self._write(self.review, "review-job", "ok")
             self._write(self.seed, "seed-job", "ok")
 
-        threading.Thread(target=later, daemon=True).start()
+        writer = threading.Thread(target=later)
+        self.addCleanup(writer.join, 3)
+        writer.start()
         t0 = time.time()
         code, text = _alarm_run(
             3,
@@ -551,7 +580,10 @@ class InitAgentsWait(unittest.TestCase):
         self.assertIn("rig_job_start", start)
         self.assertIn("MCP", start)
         self.assertNotIn("Loop `rig job wait`", text)
-        self.assertNotIn("'", start)
+        syntax = subprocess.run(["/bin/bash", "-n", str(ROOT / "bin/rig")],
+                                capture_output=True, text=True)
+        self.assertEqual(syntax.returncode, 0, syntax.stderr)
+        self.assertIn("the parent's reply includes", start)
         self.assertIn("After implement+verify ok", start)
         self.assertIn("disjoint", start)
         self.assertIn("ids", start)

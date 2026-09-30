@@ -8,6 +8,8 @@ from decimal import Decimal
 from pathlib import Path
 from unittest.mock import patch
 
+from repo_test_support import initialize_project
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
@@ -34,7 +36,7 @@ class BillingLedger(unittest.TestCase):
         self.td = tempfile.TemporaryDirectory()
         self.repo = Path(self.td.name)
         (self.repo / ".git").mkdir()
-        (self.repo / ".rig").mkdir()
+        initialize_project(self.repo)
         os.environ.pop("RIG_JOB_ID", None)
         os.environ.pop("RIG_JOB_DIR", None)
 

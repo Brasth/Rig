@@ -201,21 +201,21 @@ class LaunchTupleValidation(unittest.TestCase):
     def test_catalog_miss_does_not_substitute(self):
         choice = route.pick(
             "codex", ["opencode"], "implement", "add a header", repo=self.repo,
-            policy_mode="smart", catalogs={"opencode": ["openai/gpt-5.6-luna"]},
+            policy_mode="smart", catalogs={"opencode": ["openai/gpt-6-luna"]},
         )
         self.assertEqual(choice["worker"], "opencode")
         with self.assertRaisesRegex(ValueError, "catalog-miss"):
             policy.validate_launch_tuple(
                 self.repo, worker=choice["worker"], model=choice["model"], effort=choice["effort"],
                 role="implement", routing=choice["routing"], executor_kind="wrapper",
-                catalogs={"opencode": ["openai/gpt-5.6-luna-preview"]},
+                catalogs={"opencode": ["openai/gpt-6-luna-preview"]},
             )
         ok = policy.validate_launch_tuple(
             self.repo, worker=choice["worker"], model=choice["model"], effort=choice["effort"],
             role="implement", routing=choice["routing"], executor_kind="wrapper",
-            catalogs={"opencode": ["openai/gpt-5.6-luna"]},
+            catalogs={"opencode": ["openai/gpt-6-luna"]},
         )
-        self.assertEqual(ok["selected_profile"]["model"], "openai/gpt-5.6-luna")
+        self.assertEqual(ok["selected_profile"]["model"], "openai/gpt-6-luna")
 
     def test_smart_policy_version_must_be_current_integer(self):
         choice = self._smart(complexity="low", risk="low", uncertainty="low")

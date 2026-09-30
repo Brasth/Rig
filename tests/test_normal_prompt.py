@@ -152,10 +152,10 @@ class CompatibilityContracts(unittest.TestCase):
         self.assertEqual(self.fixture.counts["load_job_calls"], 3)
 
     def test_disabled_missing_and_live_parent_boundaries(self):
-        # Fixture enables catalog workers (opencode/omp/pi/agy/devin) with binaries and MCP.
-        self.assertEqual(harness.effective_workers(self.repo, "opencode"), ["omp", "pi", "agy", "devin"])
+        # Fixture enables every catalog worker, including MiMo, with binaries and MCP.
+        self.assertEqual(harness.effective_workers(self.repo, "opencode"), ["omp", "pi", "agy", "devin", "mimo"])
         (self.fixture.bins / "omp").unlink()
-        self.assertEqual(harness.effective_workers(self.repo, "opencode"), ["pi", "agy", "devin"])
+        self.assertEqual(harness.effective_workers(self.repo, "opencode"), ["pi", "agy", "devin", "mimo"])
         with self.assertRaisesRegex(SystemExit, "off in harness"):
             harness.assert_spawn_allowed(self.repo, "grok", live="codex")
         choice = route.pick("codex", [], "implement", "Fix the fixture", catalogs={})

@@ -437,7 +437,7 @@ PY
 }
 
 cmd_update() {
-  if [[ -n "${RIG_LIVE:-}" ]]; then
+  if [[ -n "${RIG_LIVE:-}" || -n "${RIG_JOB_ID:-}" || -n "${RIG_JOB_DIR:-}" ]]; then
     echo "rig update: refuse inside a worker" >&2
     exit 1
   fi
@@ -1581,7 +1581,7 @@ main() {
     on) cmd_project_toggle on; return ;;
     off) cmd_project_toggle off; return ;;
   esac
-  case "$cmd" in init|setup|status|doctor|jobs|tui|memory|workflows|workflow|queue|routing|billing|help|-h|--help|"") ;; *) project_guard || return ;; esac
+  case "$cmd" in init|setup|update|status|doctor|jobs|tui|memory|workflows|workflow|queue|routing|billing|help|-h|--help|"") ;; *) project_guard || return ;; esac
   case "$cmd" in
     ui) python3 "$(py_script rig_ui.py)" "$@" ;;
     uninstall) python3 "$(py_script ui_install.py)" "$@" ;;
