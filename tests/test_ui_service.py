@@ -202,6 +202,11 @@ class WorkflowSnapshotTests(unittest.TestCase):
     def test_blocked_and_attention_workflows_surface_blocker_and_action(self):
         nodes, state = active_nodes(accepted=1, running=0, ask=1, pending=1)
         write_workflow(self.repo, "wf-ask", status="attention", nodes=nodes, node_state=state)
+        # ASK guidance is based on the current request, not only saved workflow state.
+        folder = self.repo / ".rig" / "jobs" / "ask-job"
+        folder.mkdir(parents=True)
+        (folder / "meta.json").write_text(json.dumps({"job_id": "ask-job", "status": "running"}))
+        (folder / "ask.json").write_text(json.dumps({"tool_name": "Bash", "tool_use_id": "ask-one"}))
         failed = [{"id": "n1", "role": "implement", "files": ["a.py"], "required": True, "depends_on": []}]
         write_workflow(self.repo, "wf-fail", status="blocked", nodes=failed,
                        node_state={"n1": {"status": "failed", "accepted": False}},

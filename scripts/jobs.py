@@ -1658,6 +1658,8 @@ def format_table(jobs: list[dict], repo: Path | None = None, *, jobs_snapshot=No
             extras = [f"          {job['display_reason']}"]
             if job.get("display_action"):
                 extras.append(f"          action {job['display_action']}")
+                import admission
+                extras.extend("          " + line for line in admission.ownership_action_details(job.get("ownership_next_action")))
             assessment = job.get("verification") or job.get("verification_summary") or {}
             if assessment:
                 state = assessment.get("state", "unknown")
@@ -1718,6 +1720,8 @@ def format_show(job: dict, log_lines: int = 24) -> str:
     ]
     if job.get("display_action"):
         lines.append(f"action  {job['display_action']}")
+        import admission
+        lines.extend(admission.ownership_action_details(job.get("ownership_next_action")))
     lines.append(f"independence  {job['independence']} (review {'completed' if job['review_completed'] else 'not completed'})")
     lines.append(f"model      {job['display_model']}")
     lines.append(f"reasoning  {job.get('effort') or '-'}")

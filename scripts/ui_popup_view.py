@@ -4,6 +4,7 @@ import textwrap
 from datetime import datetime
 
 from ui_snapshot import format_parent_action, scrub_secrets
+from admission import ownership_action_details
 
 
 def _wrap_lines(lines, width):
@@ -28,6 +29,7 @@ def workflow_detail_lines(item, width=80):
         'Blocker: ' + str(item.get('blocker') or 'none'),
         'Next parent action: ' + format_parent_action(item.get('next_parent_action')),
     ]
+    lines.extend(ownership_action_details(item.get('next_parent_action')))
     if item.get('title'):
         lines.append('Title: ' + str(item['title']))
     return _wrap_lines(lines, width)
@@ -42,6 +44,9 @@ def detail_lines(job, width=80):
              'Status: ' + str(job.get('display_state') or job.get('effective') or job.get('status') or 'unknown'),
              'Worker: ' + ' · '.join(str(job[k]) for k in ('worker', 'display_model', 'role') if job.get(k))]
     if job.get('display_reason'): lines.append(str(job['display_reason']))
+    if job.get('display_action'):
+        lines.append('Next parent action: ' + str(job['display_action']))
+        lines.extend(ownership_action_details(job.get('ownership_next_action')))
     if ask:
         lines += ['', 'Approval requested: ' + str(ask.get('tool_name') or 'tool'), str(ask.get('preview') or '')]
         if ask.get('input') or ask.get('tool_input'):

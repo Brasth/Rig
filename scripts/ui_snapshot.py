@@ -61,6 +61,10 @@ def format_parent_action(action):
         item = action.get(key)
         if item not in (None, ""):
             parts.append(f"{key} {item}")
+    instruction = action.get("instruction")
+    if instruction:
+        identity = [kind] + [f"{key} {action[key]}" for key in ("node_id", "job_id", "request_id") if action.get(key)]
+        return " ".join(identity) + ": " + str(instruction)
     return " ".join(parts)
 
 
@@ -146,7 +150,12 @@ def collect_workflows(repo, *, limit=MAX_UI_WORKFLOWS):
     cache_key = str(root)
     with _WORKFLOW_LOCK:
         cached = _WORKFLOW_CACHE.get(cache_key)
-        if cached and cached[0] == stamp:
+        # Active/actionable guidance depends on current job, reservation, ASK,
+        # and checker evidence outside workflow state, plus process liveness.
+        # Cache terminal inert summaries only; never replay a saved mutation hint.
+        if (cached and cached[0] == stamp and all(
+                row.get("status") not in _ACTIVE_STATUSES and not row.get("next_parent_action")
+                for row in cached[1])):
             return copy.deepcopy(cached[1])[:max(0, int(limit or 0))]
     try:
         import workflow_state as wf
@@ -174,7 +183,7 @@ def workflow_detail(repo, workflow_id):
         spec, state = wf.load_pair(repo, workflow_id)
         if spec is None or state is None:
             return None
-        payload = public_workflow_row(wf.public_record(spec, state))
+        payload = public_workflow_row(wf.public_record(spec, wf.project_guidance(repo, state)))
         payload["case"] = str((spec or {}).get("case") or "")
         return payload
     except (OSError, ValueError, TypeError):
