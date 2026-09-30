@@ -1081,3 +1081,7 @@ Parents can explicitly preview/build small hash-pinned local context selections 
 `rig_context_build`. Pass the built `context_package` reference to job start/launch
 or an individual workflow node. Context is read-only data, never write scope or
 acceptance. [Bounds, screening, freshness, and explicit workflow rebind](context-packages.md).
+
+## Private UI evidence packs
+
+Parents can assemble already captured, privacy-reviewed CUA/BrowserSkill receipts and PNGs with `rig_job_ui_evidence` or `rig job ui-evidence ID --file PACK.json`. Packs bind the current attempt, frozen contract criteria and content snapshot; a separate explicit criterion assertion and normal acceptance remain required. No capture, actions, uploads or child privileges are added. See [inputs, privacy, coverage and limits](ui-evidence.md).
