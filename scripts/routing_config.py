@@ -2,6 +2,7 @@
 """Smart routing configuration load and profile validation."""
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 from dataclasses import dataclass, field
@@ -438,15 +439,37 @@ def _parse_routing_json(path: Path | None, raw: dict | None, profiles: dict[str,
     return profiles, preferences, raw, str(path), direct_parent, picker
 
 
+def validate_candidate(raw: dict | None, *, harness: dict | None = None) -> RoutingConfig:
+    """Validate an in-memory candidate without reading or writing project state.
+
+    Uses the same parser as load_config. Strict smart validation is intentional,
+    even when the project's active mode is legacy.
+    """
+    if raw is not None and not isinstance(raw, dict):
+        raise ConfigError("routing candidate must be a JSON object")
+    return _config_from_data(copy.deepcopy(raw), mode="smart", harness=harness, path=Path(ROUTING_JSON))
+
+
 def load_config(repo: Path | None, *, policy_mode: str | None = None, harness: dict | None = None) -> RoutingConfig:
     if harness is None and repo is not None:
         import harness as rig_harness
-
         harness = rig_harness.parse_harness(rig_harness.harness_path(Path(repo)))
     mode = resolve_mode(repo, policy_mode, harness)
+    path = routing_json_path(repo)
+    try:
+        raw = _read_json(path) if path is not None else None
+    except ConfigError:
+        if mode == "smart":
+            raise
+        # Preserve legacy's tolerance of malformed optional smart settings.
+        raw = None
+        harness = None
+    return _config_from_data(raw, mode=mode, harness=harness, path=path)
+
+
+def _config_from_data(raw, *, mode, harness, path):
     picker = harness_picker(harness)
     builtin = rig_profiles.profiles_by_id()
-    path = routing_json_path(repo)
 
     def builtin_cfg(source: str = "builtin", selected: tuple[str, str, str] | None = None) -> RoutingConfig:
         profiles = dict(builtin)
@@ -472,12 +495,6 @@ def load_config(repo: Path | None, *, policy_mode: str | None = None, harness: d
             validate_profiles(cfg.profiles)
         return cfg
 
-    try:
-        raw = _read_json(path) if path is not None else None
-    except ConfigError:
-        if mode != "smart":
-            return builtin_cfg(source="builtin")
-        raise
     if raw is None:
         return builtin_cfg(selected=picker)
     try:

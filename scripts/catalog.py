@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import math
 import os
@@ -470,6 +471,57 @@ def _schedule_refresh(worker: str, timeout: float, *, distinguish_empty: bool = 
         name=f"rig-catalog-refresh-{worker}",
         daemon=True,
     ).start()
+
+
+class ReadOnlyCatalogSnapshot:
+    """A detached cache observation. Never refreshes, writes, or promotes IDs.
+
+    Missing, skipped and expired entries retain their original eligibility. This
+    is for ephemeral previews only, not launch authority.
+    """
+    def __init__(self, rows: dict, captured_at: float):
+        self._rows = copy.deepcopy(rows)
+        self.captured_at = captured_at
+
+    def info(self, worker: str) -> dict:
+        return copy.deepcopy(self._rows.get(worker, {
+            "worker": worker, "ids": None, "state": "unavailable", "source": "none",
+            "freshness": "unavailable", "confirmed_empty": False,
+            "fetched_at": None, "age_s": None, "refresh_failed": False,
+        }))
+
+
+def readonly_catalog_snapshot() -> ReadOnlyCatalogSnapshot:
+    """Read cache once, with one clock, and no probe/background refresh."""
+    now = time.time()
+    with _CACHE_LOCK:
+        cache = _read_cache_file()
+    rows = {}
+    for worker in CATALOG_WORKERS:
+        row = {"worker": worker, "ids": None, "state": "unavailable", "source": "none",
+               "freshness": "unavailable", "confirmed_empty": False,
+               "fetched_at": None, "age_s": None, "refresh_failed": False}
+        if env_on("RIG_SKIP_MODEL_CATALOG"):
+            row.update(state="skipped", source="skip", freshness="unverified")
+        else:
+            entry = cache.get(worker)
+            if isinstance(entry, dict):
+                try:
+                    fetched = float(entry.get("fetched_at") or 0)
+                except (TypeError, ValueError):
+                    fetched = 0
+                ids = entry.get("ids")
+                status = str(entry.get("status") or "ok")
+                if (math.isfinite(fetched) and 0 < fetched <= now and isinstance(ids, list)
+                        and status in {"ok", "empty"}):
+                    ids = [str(x) for x in ids if str(x).strip()]
+                    empty = status == "empty" or not ids
+                    age = now - fetched
+                    state = "empty" if empty else ("fresh" if age <= TTL_SECONDS else "stale")
+                    row.update(ids=ids, state=state, source="cache", freshness=state,
+                               confirmed_empty=empty, fetched_at=fetched, age_s=age)
+        rows[worker] = row
+    return ReadOnlyCatalogSnapshot(rows, now)
 
 
 def load_catalog_info(worker: str, timeout: float = PROBE_TIMEOUT, *, require_fresh: bool = False) -> dict:

@@ -152,11 +152,16 @@ def match_profile_model(profile: rig_profiles.Profile, ids: list[str]) -> str | 
 
 
 class CatalogSession:
-    def __init__(self, catalogs: dict | None = None):
+    def __init__(self, catalogs: dict | None = None, *, snapshot=None):
+        if snapshot is not None and catalogs is not None:
+            raise ValueError("catalog snapshot cannot be combined with injected catalogs")
+        self.snapshot = snapshot
         self.injected = catalogs
         self.seen: dict[str, dict] = {}
 
     def info(self, worker: str, *, require_fresh: bool = False) -> dict:
+        if self.snapshot is not None:
+            return self.snapshot.info(worker)
         if worker in self.seen and not require_fresh:
             return self.seen[worker]
         if worker not in rig_catalog.CATALOG_WORKERS:
@@ -465,6 +470,8 @@ def validate_launch_tuple(
         return manual_routing(worker=worker, model=model, effort=effort, mode="manual")
     if not isinstance(routing, dict):
         raise ValueError("routing metadata must be an object; re-pick")
+    if "preview_only" in routing:
+        raise ValueError("routing preview is not launch evidence; re-pick with current rig_pick")
     mode = str(routing.get("policy_mode") or "").strip().lower()
     if mode in {"", "manual", "legacy"}:
         if domains.normalize_domain(task_domain) or research_sources is not None or "task_domain" in routing:

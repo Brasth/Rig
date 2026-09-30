@@ -158,6 +158,50 @@ This is a customization example, not a built-in winner or a promise either profi
 
 See [the complete example configuration](examples/task-domain-routing.json) for frontend, backend, debugging, local-source research, review, and parent-only domains. Its Grok preferences are also project choices, not measured superiority claims. `codex-explorer-low` is used only as a research preference because it is explore-only; it does not gain write access. The separate `codex-luna-low` write profile keeps its existing role limits. Merge the example's `domains` into your existing `.rig/routing.json` with `schema_version: 4`; do not overwrite unrelated profile, execution, or picker settings. Run `rig doctor` and inspect `rig pick ... --explain` before launching.
 
+## TUI domain settings and preview
+
+In `rig tui`, open **Settings**, select **Domain routing**, and press `e`.
+The form edits existing profile IDs in preference order and cycles the domain's
+`scored` / `parent` / `none` fallback. Use Tab/Shift-Tab or up/down to select a
+field, Enter/left/right to cycle a choice, and ordinary text editing for the
+comma-separated profile IDs. The available IDs appear below the form; PgUp/PgDn
+scroll the details. This editor does not create profiles, enable workers, change
+provider credentials, or change popup controls. UI design/verification remain
+parent-only. Ctrl-R removes the selected domain's override in the draft.
+
+- **F5** previews the current task/domain/role, optional complexity/risk/uncertainty,
+  excluded workers, local research sources, and independent-review writer job
+- **F2** saves domain preferences only; task and assessment fields are never saved
+- **Esc** closes and discards unsaved edits; a submitted save finishes before closing
+
+Opening or cancelling the form does not change project files. Save validates the
+entire candidate with the same parser as normal routing, compares the exact file
+content fingerprint captured when the form opened, then atomically replaces
+`.rig/routing.json`. If another editor changed the file, cancel and reopen rather
+than overwriting it. Invalid input, stale saves, and failed writes leave the
+original file intact. Unrelated profiles/preferences/execution/picker settings
+are preserved. A domain edit upgrades schema 1–3 to schema 4; a no-change save
+leaves the original bytes/schema untouched. Disabled or uninitialized projects
+are not enabled implicitly. Legacy-mode settings can be edited, but previews
+require the project to use smart routing; the editor never switches its mode.
+
+Preview uses the normal `route.pick` / smart policy against the unsaved candidate
+and a detached, read-only local catalog snapshot. It shows the actual selected
+worker/model/effort/tier for that snapshot, parent-only/unavailable outcomes,
+configuration fingerprint, and candidate rejection reasons. Worker flags, binary
+and MCP readiness, live parent, bans, role/tier, independent-review provenance,
+parent-only domains, and research-source gates remain authoritative. Unknown
+parent model/effort stay unknown. The preview does not launch jobs, refresh
+catalogs, invoke provider CLIs, or call a routing provider. Missing, skipped,
+empty, and expired catalog entries are not promoted to fresh. Bounded stale
+catalogs retain their existing policy eligibility. Because no refresh occurs,
+a later live pick can change after its catalog refresh. If Jev would be used,
+the preview labels the local fallback explicitly; it cannot predict Jev's reply.
+
+Preview evidence is marked `preview_only` and is rejected by launch validation.
+Run a fresh normal pick before starting work; neither the preview nor its
+fingerprint grants admission authority. Existing CLI/MCP contracts are unchanged.
+
 ## Catalog confirmation
 
 OpenCode, OMP, Pi, agy, Devin, and MiMo profiles require a successful CLI catalog. Only exact selectors or explicitly declared aliases match; no substring or arbitrary-first-model fallback. Devin uses `devin models list --format json` only and never falls back to a table parse, keyword hit, or first remaining model. Catalog enumeration order cannot change the chosen profile.

@@ -16,6 +16,8 @@ import jobs as rig_jobs  # noqa: E402
 import work_queue as rig_queue  # noqa: E402
 import jev_provider  # noqa: E402
 import jev_settings  # noqa: E402
+import routing_settings  # noqa: E402
+from tui_routing import RoutingPanel, render_panel  # noqa: E402
 from tui_editor import Draft, InputDecoder  # noqa: E402
 from tui_runtime import BoardRuntime, visible_jobs as _visible_jobs  # noqa: E402
 from tui_view import (  # noqa: E402,F401
@@ -60,6 +62,8 @@ def _paint(stdscr, repo: Path, *, runtime=None) -> None:
     help_mode = False
     confirm = None
     secret_active, secret_text = False, ""
+    routing_panel, routing_open = None, ""
+    routing_open_count = 0
     bracketed = sys.stdout.isatty()
     if bracketed:
         sys.stdout.write("\x1b[?2004h")
@@ -78,6 +82,23 @@ def _paint(stdscr, repo: Path, *, runtime=None) -> None:
                           for name in selected}
             revision = runtime.revision
             for result in runtime.poll():
+                if result.key.startswith("routing-open:"):
+                    if result.key == routing_open:
+                        routing_open = ""
+                        # An asynchronous open must not replace a newer editor,
+                        # modal, or navigation choice made while it was loading.
+                        if (tab != "Settings" or identities.get("Settings") != "domains"
+                                or draft.active or secret_active or help_mode or confirm is not None):
+                            continue
+                        if result.error:
+                            footer = f"Routing Settings unavailable: {result.error}"
+                        else:
+                            routing_panel = RoutingPanel(result.value)
+                    continue
+                if result.key.startswith("routing-form:"):
+                    if routing_panel is not None and result.key.startswith(f"routing-form:{routing_panel.token}:"):
+                        routing_panel.accept(result.key.rsplit(":", 1)[-1], result)
+                    continue
                 if result.key == "enqueue":
                     draft.submitting = False
                     if result.error:
@@ -112,10 +133,13 @@ def _paint(stdscr, repo: Path, *, runtime=None) -> None:
             curses.curs_set(1 if draft.active or secret_active else 0)
             if secret_active:
                 footer = "Jev API key: " + ("•" * min(len(secret_text), 24)) + "  Enter saves · Esc cancels"
-            offsets[tab] = render(stdscr, repo, runtime.snapshot, tab=tab, selected=selected[tab], offset=offsets[tab],
-                                  follow=follow, log_off=log_off, footer=footer, snapshot_status=_snapshot_status(runtime),
-                                  requested=requested, draft=draft, log_mode=log_mode, workflows=board_workflows,
-                                  help_mode=help_mode, confirm=confirm)
+            if routing_panel is not None:
+                render_panel(stdscr, routing_panel)
+            else:
+                offsets[tab] = render(stdscr, repo, runtime.snapshot, tab=tab, selected=selected[tab], offset=offsets[tab],
+                                      follow=follow, log_off=log_off, footer=footer, snapshot_status=_snapshot_status(runtime),
+                                      requested=requested, draft=draft, log_mode=log_mode, workflows=board_workflows,
+                                      help_mode=help_mode, confirm=confirm)
             try:
                 key = stdscr.get_wch()
                 incoming = decoder.feed(key)
@@ -127,6 +151,34 @@ def _paint(stdscr, repo: Path, *, runtime=None) -> None:
                 if key == curses.KEY_RESIZE:
                     runtime.refresh()
                     continue
+                if routing_panel is not None:
+                    action = routing_panel.key(key, pasted=pasted)
+                    if action == "cancel":
+                        routing_panel = None
+                        footer = "Routing editor closed; unsaved changes discarded"
+                    elif action in {"preview", "save"}:
+                        panel = routing_panel
+                        candidate = panel.candidate()
+                        if action == "preview":
+                            args = panel.preview_args()
+                            work = lambda candidate=candidate, args=args: routing_settings.preview(repo, candidate, **args)
+                        else:
+                            expected = panel.document.expected_fingerprint
+                            work = lambda candidate=candidate, expected=expected: routing_settings.save_settings(
+                                repo, candidate, expected_fingerprint=expected)
+                        if runtime.submit(f"routing-form:{panel.token}:{action}", work):
+                            panel.pending = action
+                        else:
+                            panel.message = "Actions busy; retry shortly (draft retained)"
+                    continue
+                if key == "\x1b" and routing_open:
+                    routing_open = ""
+                    footer = "Routing editor opening cancelled"
+                    continue
+                if routing_open and not pasted and (
+                        key in ("\t", curses.KEY_BTAB, "j", "k", curses.KEY_UP, curses.KEY_DOWN, "?")
+                        or (key == "e" and (tab != "Settings" or identities.get("Settings") != "domains"))):
+                    routing_open = ""
                 # Pasting into navigation must never execute x/y/n/q commands.
                 if pasted and not draft.active:
                     pasted_outside_editor = True
@@ -226,6 +278,13 @@ def _paint(stdscr, repo: Path, *, runtime=None) -> None:
                     objective = values[(values.index(old) + 1) % len(values)]
                     if runtime.submit("routing-objective", lambda objective=objective: jev_settings.update_project(repo, objective=objective)):
                         footer = f"Setting local objective to {objective}"
+                elif tab == "Settings" and row and key == "e" and row.get("id") == "domains":
+                    if not routing_open:
+                        routing_open_count += 1
+                        action_key = f"routing-open:{routing_open_count}"
+                        if runtime.submit(action_key, lambda: routing_settings.open_settings(repo)):
+                            routing_open = action_key
+                            footer = "Opening routing settings; Esc cancels"
                 elif key == "e":
                     draft.active, draft.message = True, ""
                 elif key == "o" and row and tab == "Jobs":
