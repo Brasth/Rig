@@ -9,6 +9,7 @@ from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import route  # noqa: E402
+from repo_test_support import initialize_project
 
 
 def legacy_pick(*args, **kwargs):
@@ -850,6 +851,7 @@ class ReviewAcceptedContent(unittest.TestCase):
         }):
             repo = Path(temp).resolve()
             subprocess.run(["git", "init", "-q", str(repo)], check=True)
+            initialize_project(repo)
             folder = repo / ".rig" / "jobs" / "writer"
             folder.mkdir(parents=True)
             (repo / "subject.txt").write_text("accepted content\n")

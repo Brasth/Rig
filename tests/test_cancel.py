@@ -22,6 +22,7 @@ from mcp_runtime import Request
 import jobs  # noqa: E402
 import rig_mcp  # noqa: E402
 import work_queue  # noqa: E402
+import mcp_test_support
 
 
 def _run_rig(repo: Path, *args: str) -> subprocess.CompletedProcess:
@@ -207,7 +208,10 @@ class CancelJob(unittest.TestCase):
         bins = self.repo / "bins"
         bins.mkdir()
         grok = bins / "grok"
-        grok.write_text("#!/bin/sh\nexec sleep 30\n")
+        home = self.repo / "home"
+        mcp_test_support.seed_installed_mcp(home)
+        grok.write_text(f"#!{sys.executable}\n" + mcp_test_support.inbox_handshake_prelude(ROOT)
+                        + "import time\ntime.sleep(30)\n")
         grok.chmod(0o755)
         brief = self.d / "brief.md"
         env = os.environ.copy()
@@ -220,13 +224,15 @@ class CancelJob(unittest.TestCase):
                 env.pop(key, None)
         env.update(
             {
-                "PATH": f"{bins}:/usr/bin:/bin",
+                "PATH": mcp_test_support.stub_path(bins),
+                "HOME": str(home),
                 "RIG_HOME": str(ROOT),
                 "RIG_PARENT": "codex",
                 "RIG_LIVE": "1",
                 "RIG_TIMEOUT": "20",
                 "RIG_SKIP_MODEL_CATALOG": "1",
                 "RIG_ROLE": "worker",
+                "RIG_OWNER_SESSION": "cancel-test-parent",
             }
         )
         proc_holder = {}
@@ -256,7 +262,8 @@ class CancelJob(unittest.TestCase):
             if pid and jobs.pid_alive(pid):
                 break
             time.sleep(0.05)
-        self.assertTrue(pid and jobs.pid_alive(pid), "wrapper never stamped a live pid")
+        self.assertTrue(pid and jobs.pid_alive(pid),
+                        f"wrapper never stamped a live pid: {proc_holder.get('p')}")
         text = jobs.cancel_job(self.repo, "live-job")
         self.assertTrue(text.startswith("cancellation requested"), text)
         t.join(timeout=8)

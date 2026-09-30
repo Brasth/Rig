@@ -7,6 +7,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from repo_test_support import initialize_project
+
 ROOT = Path(__file__).resolve().parents[1]
 RIG = ROOT / "bin" / "rig"
 
@@ -306,11 +308,11 @@ def _stub_path(extra: Path | None = None) -> str:
     import sys
 
     parts = [
+        str(Path(sys.executable).resolve().parent),
         "/usr/bin",
         "/bin",
         "/usr/sbin",
         "/sbin",
-        str(Path(sys.executable).resolve().parent),
     ]
     if extra:
         parts.insert(0, str(extra))
@@ -621,7 +623,7 @@ class InitPresence(unittest.TestCase):
         self.assertIn("the same binary with `RIG_JOB_ID` is a child", text)
         self.assertIn("OpenCode, OMP, Pi, and agy can be the parent", text)
         self.assertIn("When live parent is agy, do not use nested agy /agent dispatch", text)
-        self.assertIn("openai/gpt-5.6-luna", text)
+        self.assertIn("openai/gpt-6-luna", text)
         self.assertIn("gemini-3.8-flash-high", text)
         self.assertIn("~/.rig/cache/model-catalogs.json", text)
         self.assertIn("profiles require exact selectors or declared aliases", text)
@@ -675,6 +677,7 @@ class InitPresence(unittest.TestCase):
         self.assertEqual(source_skill, copied)
 
     def test_session_and_pick_exclude(self):
+        initialize_project(self.repo)
         sess = run_rig(
             self.repo,
             "session",

@@ -8,6 +8,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from repo_test_support import initialize_project
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 import change_evidence as evidence
@@ -22,6 +24,7 @@ class ParentVerification(unittest.TestCase):
         self.repo = Path(self.temp.name).resolve()
         subprocess.run(["git", "init", "-q", str(self.repo)], check=True)
         self.enterContext(patch.dict(os.environ, {"RIG_JOB_ID": "", "RIG_JOB_DIR": "", "RIG_PARENT": "codex"}))
+        initialize_project(self.repo)
         self.subject = self.repo / "subject.txt"
         self.subject.write_text("checked content\n")
         self.create_job()

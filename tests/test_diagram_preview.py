@@ -8,6 +8,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from repo_test_support import initialize_project
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
@@ -37,7 +39,7 @@ def run_rig(*args: str, cwd: Path | None = None, env: dict | None = None) -> sub
 class DiagramPreviewParse(unittest.TestCase):
     def setUp(self):
         self.td = tempfile.TemporaryDirectory()
-        self.dir = Path(self.td.name)
+        self.dir = initialize_project(Path(self.td.name))
 
     def tearDown(self):
         self.td.cleanup()

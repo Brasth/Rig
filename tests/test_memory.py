@@ -4,6 +4,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from repo_test_support import initialize_project
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
@@ -14,7 +16,7 @@ class MemoryFile(unittest.TestCase):
     def setUp(self):
         self.td = tempfile.TemporaryDirectory()
         self.repo = Path(self.td.name)
-        (self.repo / ".rig").mkdir()
+        initialize_project(self.repo)
 
     def tearDown(self):
         self.td.cleanup()

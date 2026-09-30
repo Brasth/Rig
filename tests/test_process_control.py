@@ -14,6 +14,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import admission
 import process_control
+import mcp_test_support
 
 
 class ProcessControlTests(unittest.TestCase):
@@ -79,11 +80,15 @@ class ProcessControlTests(unittest.TestCase):
             bins = repo / "bins"
             bins.mkdir()
             worker = bins / "grok"
-            worker.write_text("#!/bin/sh\nexec sleep 30\n")
+            home = repo / "home"
+            mcp_test_support.seed_installed_mcp(home)
+            worker.write_text(f"#!{sys.executable}\n" + mcp_test_support.inbox_handshake_prelude(root)
+                              + "import time\ntime.sleep(30)\n")
             worker.chmod(0o755)
-            env = {**os.environ, "PATH": str(bins) + ":/usr/bin:/bin", "RIG_HOME": str(root),
+            env = {**os.environ, "PATH": mcp_test_support.stub_path(bins), "HOME": str(home), "RIG_HOME": str(root),
                    "RIG_PARENT": "codex", "RIG_LIVE": "1", "RIG_TIMEOUT": "20",
-                   "RIG_SKIP_MODEL_CATALOG": "1", "RIG_ROLE": "worker"}
+                   "RIG_SKIP_MODEL_CATALOG": "1", "RIG_ROLE": "worker",
+                   "RIG_OWNER_SESSION": "process-control-test-parent"}
             if unknown:
                 fixture = repo / "inspection-fixture"
                 fixture.mkdir()

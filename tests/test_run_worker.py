@@ -35,6 +35,7 @@ def run_worker(repo: Path, *args: str, env: dict | None = None) -> subprocess.Co
     merged["RIG_HOME"] = str(ROOT)
     merged["PATH"] = f"{ROOT / 'bin'}:{merged.get('PATH', '')}"
     merged["RIG_PARENT"] = "grok"
+    merged["RIG_OWNER_SESSION"] = "run-worker-test-parent"
     merged["RIG_LIVE"] = "0"
     merged["RIG_SKIP_MODEL_CATALOG"] = "1"
     if env:
@@ -183,7 +184,7 @@ class CursorWorkerArgv(unittest.TestCase):
 
     def test_cursor_dry_run_stream_json_force_trust(self):
         env = {
-            "PATH": f"{self.bins}:/usr/bin:/bin",
+            "PATH": mcp_test_support.stub_path(self.bins),
             "RIG_PARENT": "grok",
             "RIG_MODEL": "composer-2.5",
             "RIG_ROLE": "implement",
@@ -207,7 +208,7 @@ class CursorWorkerArgv(unittest.TestCase):
 
     def test_cursor_explore_is_ask_mode(self):
         env = {
-            "PATH": f"{self.bins}:/usr/bin:/bin",
+            "PATH": mcp_test_support.stub_path(self.bins),
             "RIG_PARENT": "grok",
             "RIG_MODEL": "composer-2.5-fast",
             "RIG_ROLE": "explore",
@@ -220,7 +221,7 @@ class CursorWorkerArgv(unittest.TestCase):
         home = self.repo / "home"
         home.mkdir()
         env = {
-            "PATH": f"{self.bins}:/usr/bin:/bin",
+            "PATH": mcp_test_support.stub_path(self.bins),
             "RIG_PARENT": "grok",
             "RIG_LIVE": "1",
             "RIG_MODEL": "composer-2.5",
@@ -287,6 +288,26 @@ class GrokJobMcpIsolation(unittest.TestCase):
 
     def tearDown(self):
         self.td.cleanup()
+
+    def test_fresh_grok_session_uses_python_uuid_without_external_uuidgen(self):
+        import re
+        import uuid
+
+        bins = self.repo / "bins"
+        bins.mkdir()
+        marker = self.repo / "uuidgen-called"
+        external = bins / "uuidgen"
+        external.write_text(f"#!/bin/sh\ntouch '{marker}'\nexit 99\n")
+        external.chmod(0o755)
+        proc = run_worker(self.repo, "grok", "grok-stream", str(self.brief), env={
+            "RIG_PARENT": "codex", "PATH": mcp_test_support.stub_path(bins),
+        })
+        out = proc.stdout + proc.stderr
+        self.assertIn("would run:", out)
+        match = re.search(r"--session-id ([0-9a-f-]+)", out)
+        self.assertIsNotNone(match, out)
+        self.assertEqual(uuid.UUID(match.group(1)).version, 4)
+        self.assertFalse(marker.exists(), out)
 
     def test_grok_dry_run_payload_has_no_cua_driver(self):
         proc = run_worker(

@@ -345,6 +345,7 @@ class RunWorkerMetadataIntegration(unittest.TestCase):
             "PATH": mcp_test_support.stub_path(self.bins),
             "HOME": str(self.home),
             "RIG_PARENT": "grok",
+            "RIG_OWNER_SESSION": "metadata-test-parent",
             "RIG_LIVE": "1",
             "RIG_SKIP_MODEL_CATALOG": "1",
             "RIG_ROLE": "implement",

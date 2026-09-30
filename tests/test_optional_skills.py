@@ -119,6 +119,15 @@ fi
         self.assert_project(False)
         self.assertFalse((self.base / "installs").exists())
 
+    def test_shell_ui_without_extra_arguments_keeps_optional_backends_skipped(self):
+        self.write_stub("tmux", "printf 'tmux 3.3\\n'\n")
+        result = self.run_rig("setup", "--shell-ui", "--no-mimo")
+        self.assertIn("Shell UI enabled", result.stdout)
+        self.assert_global(False)
+        self.assertTrue((self.kit / "ui/shell-enabled").is_file())
+        self.assertIn("# >>> Rig shell UI >>>", (self.home / ".bashrc").read_text())
+        self.assertFalse((self.base / "installs").exists())
+
     def test_interactive_default_no_remembers_both_choices(self):
         output = self.interactive_setup(["", ""])
         self.assertIn("Rig's desktop/browser skills", output)

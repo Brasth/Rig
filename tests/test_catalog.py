@@ -35,7 +35,7 @@ class CatalogEnv(unittest.TestCase):
         os.environ.pop("RIG_SKIP_MODEL_CATALOG", None)
         os.environ.pop("RIG_REFRESH_MODELS", None)
         os.environ["RIG_MODEL_CATALOG_CACHE"] = str(self.cache)
-        os.environ["PATH"] = f"{self.bins}:/usr/bin:/bin"
+        os.environ["PATH"] = f"{self.bins}:{Path(sys.executable).resolve().parent}:/usr/bin:/bin"
 
     def tearDown(self):
         for key, val in self._old.items():

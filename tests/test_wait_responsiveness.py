@@ -12,6 +12,8 @@ import time
 import unittest
 from unittest import mock
 
+from repo_test_support import initialize_project
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 import cancellation
@@ -22,6 +24,7 @@ class Transport(unittest.TestCase):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
         self.repo = Path(self.temporary.name)
+        initialize_project(self.repo)
         self.folder = self.repo / ".rig" / "jobs" / "working"
         self.folder.mkdir(parents=True)
         (self.folder / "meta.json").write_text(json.dumps({
@@ -69,7 +72,7 @@ class Transport(unittest.TestCase):
         self.send({"id": 2, "method": "ping"})
         self.response(2)
         folder = self.repo / ".rig" / "queue"
-        folder.mkdir()
+        folder.mkdir(exist_ok=True)
         with (folder / ".lock").open("w") as lock:
             fcntl.flock(lock, fcntl.LOCK_EX)
             self.send({"method": "notifications/cancelled", "params": {"requestId": 10}})

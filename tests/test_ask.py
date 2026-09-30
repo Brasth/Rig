@@ -8,6 +8,8 @@ import time
 import unittest
 from pathlib import Path
 
+from repo_test_support import initialize_project
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
@@ -98,6 +100,7 @@ class AskJobBoard(unittest.TestCase):
     def setUp(self):
         self.td = tempfile.TemporaryDirectory()
         self.repo = Path(self.td.name)
+        initialize_project(self.repo)
         self.d = self.repo / ".rig" / "jobs" / "claude-ask"
         self.d.mkdir(parents=True)
         (self.d / "brief.md").write_text("SSH to the VM and gather nginx logs.\n")

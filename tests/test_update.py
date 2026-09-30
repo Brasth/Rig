@@ -103,13 +103,17 @@ class RigUpdate(unittest.TestCase):
         self.assertIn("update", proc.stdout)
 
     def test_update_refuses_inside_worker(self):
-        env = dict(self.base_env)
-        env["RIG_LIVE"] = "1"
-        proc = _run(self.repo, "update", env=env)
-        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
-        self.assertIn("refuse inside a worker", proc.stderr)
-        self.assertFalse((self.rig_home / "install-ran").exists())
-        self.assertNotIn("install-ok", proc.stdout)
+        for key, value in (("RIG_LIVE", "1"), ("RIG_JOB_ID", "child"),
+                           ("RIG_JOB_DIR", str(self.repo / ".rig/jobs/child"))):
+            with self.subTest(marker=key):
+                env = dict(self.base_env)
+                env[key] = value
+                proc = _run(self.repo, "update", env=env)
+                self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+                self.assertIn("refuse inside a worker", proc.stderr)
+                self.assertFalse((self.rig_home / "install-ran").exists())
+                self.assertNotIn("install-ok", proc.stdout)
+                self.assertFalse((self.repo / ".rig").exists())
 
     def test_update_runs_stub_installer(self):
         proc = _run(self.repo, "update", env=self.base_env)
@@ -119,6 +123,29 @@ class RigUpdate(unittest.TestCase):
         self.assertIn("fully quit the parent CLI once", proc.stdout)
         self.assertTrue((self.rig_home / "install-ran").exists())
         self.assertFalse((self.repo / ".rig" / "harness.toml").exists())
+
+    def test_update_disabled_project_preserves_gate_and_configuration(self):
+        folder = self.repo / ".rig"
+        folder.mkdir()
+        harness = folder / "harness.toml"
+        before = '[project]\nenabled = false\n[workers]\ngrok = false\n'
+        harness.write_text(before)
+        proc = _run(self.repo, "update", env=self.base_env)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertEqual(harness.read_text(), before)
+        self.assertFalse((self.repo / "AGENTS.md").exists())
+        blocked = _run(self.repo, "workers", "grok=on", env=self.base_env)
+        self.assertNotEqual(blocked.returncode, 0)
+        self.assertIn("Rig is disabled", blocked.stderr)
+        self.assertEqual(harness.read_text(), before)
+
+    def test_update_does_not_enable_uninitialized_project_commands(self):
+        proc = _run(self.repo, "update", env=self.base_env)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        blocked = _run(self.repo, "workers", "grok=on", env=self.base_env)
+        self.assertNotEqual(blocked.returncode, 0)
+        self.assertIn("Rig is uninitialized", blocked.stderr)
+        self.assertFalse((self.repo / ".rig").exists())
 
     def test_update_curl_failure(self):
         env = dict(self.base_env)

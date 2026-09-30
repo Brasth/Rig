@@ -13,6 +13,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from repo_test_support import initialize_project
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
@@ -43,7 +45,7 @@ def run_rig(*args: str, cwd: Path | None = None, env: dict | None = None) -> sub
 class DiagramTerminal(unittest.TestCase):
     def setUp(self):
         self.td = tempfile.TemporaryDirectory()
-        self.dir = Path(self.td.name)
+        self.dir = initialize_project(Path(self.td.name))
 
     def tearDown(self):
         self.td.cleanup()
@@ -335,8 +337,8 @@ class DiagramTerminal(unittest.TestCase):
         self.assertEqual(argv[1:3], ["-S", "/tmp/sock,not,this"])
         self.assertEqual(argv[-1], "/usr/bin/less -S '/tmp/file with space.txt'")
 
-    def test_cli_readme_example(self):
-        proc = run_rig("diagram", str(ROOT / "README.md"), cwd=ROOT)
+    def test_cli_documented_flow_example(self):
+        proc = run_rig("diagram", str(ROOT / "docs/rig-flow.md"), cwd=self.dir)
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertGreaterEqual(proc.stdout.count("Diagram "), 2)
         self.assertIn("┌", proc.stdout)

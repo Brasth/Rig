@@ -8,6 +8,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from unittest import mock
 
+from repo_test_support import initialize_project
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
@@ -444,6 +446,7 @@ class JobBoard(unittest.TestCase):
 
         self.td = tempfile.TemporaryDirectory()
         self.repo = Path(self.td.name)
+        initialize_project(self.repo)
         jobs_dir = self.repo / ".rig" / "jobs" / "260908-opencode-session-fix"
         jobs_dir.mkdir(parents=True)
         (jobs_dir / "brief.md").write_text(
@@ -753,7 +756,7 @@ class JobBoard(unittest.TestCase):
     def test_hud_idle_and_queue(self):
         idle_repo = Path(self.td.name) / "idle"
         idle_repo.mkdir()
-        (idle_repo / ".rig").mkdir()
+        initialize_project(idle_repo)
         snap = jobs.hud_snapshot(
             {"cwd": str(idle_repo), "workspace": {"repo_root": str(idle_repo)}},
             repo=idle_repo,
@@ -1079,7 +1082,7 @@ class McpTools(unittest.TestCase):
         import rig_mcp
 
         td = __import__("tempfile").TemporaryDirectory()
-        repo = Path(td.name)
+        repo = initialize_project(Path(td.name))
         d = repo / ".rig" / "jobs" / "j1"
         d.mkdir(parents=True)
         (d / "brief.md").write_text("Add session headers to OpenCode Go.\n")
