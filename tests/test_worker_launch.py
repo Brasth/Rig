@@ -811,6 +811,7 @@ class ResumeExecution(unittest.TestCase):
             ('{"type":"tool_call"}\nError: session not found: missing', False),
             ("Error: session not found: missing", True),
             ("Error: network timeout", False),
+            ("No such device or address (os error 6)", False),
         ]:
             with self.subTest(diagnostic=diagnostic, connected=connected), tempfile.TemporaryDirectory() as tmp:
                 folder = Path(tmp)

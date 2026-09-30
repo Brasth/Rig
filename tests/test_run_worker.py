@@ -1173,7 +1173,7 @@ class WrapperAdmission(unittest.TestCase):
 
 class ContinuationResumeArgv(unittest.TestCase):
     def setUp(self):
-        self.td = tempfile.TemporaryDirectory()
+        self.td = tempfile.TemporaryDirectory(prefix="rig continuation ")
         self.repo = Path(self.td.name)
         (self.repo / ".git").mkdir()
         (self.repo / ".rig").mkdir()
@@ -1235,6 +1235,8 @@ class ContinuationResumeArgv(unittest.TestCase):
         self.assertIn(proc.returncode, (0, 127), out)
         self.assertIn("would run:", out, out)
         self.assertIn(" -r sess-prior ", out)
+        self.assertIn("--prompt-file", out)
+        self.assertNotIn("Delta only", out.split("would run:", 1)[1])
         self.assertIn("## Previous worker context", self.brief.read_text())
         meta = json.loads((self.job_dir / "meta.json").read_text())
         self.assertEqual(meta.get("continues_job_id"), "prior-ok")
@@ -1251,6 +1253,88 @@ class ContinuationResumeArgv(unittest.TestCase):
         self.assertIn("## Previous worker context", self.brief.read_text())
         meta = json.loads((self.job_dir / "meta.json").read_text())
         self.assertEqual(meta.get("continuation_mode"), "fresh")
+
+    def _assert_live_headless_prompt_file(self, *, resume, long_brief=False):
+        import admission
+
+        self._seed_prior(session="sess-prior" if resume else "", resumable=resume)
+        original = "You are a worker, not the orchestrator.\n--literal 'quoted' résumé\n"
+        if long_brief:
+            # Exceeds Linux's per-argument limit, independently of ARG_MAX.
+            original += "Long brief content with spaces.\n" * 6000
+        self.brief.write_text(original)
+        home = self.repo / "test home"
+        home.mkdir()
+        bins = self.repo / "test bin"
+        bins.mkdir()
+        mcp_test_support.seed_installed_mcp(home)
+        fake = bins / "grok"
+        fake.write_text(
+            f"#!{sys.executable}\nimport json, os, pathlib, sys\n"
+            "folder = pathlib.Path(os.environ['RIG_JOB_DIR'])\n"
+            "try:\n"
+            "    fd = os.open('/dev/tty', os.O_RDWR)\n"
+            "    os.close(fd)\n"
+            "    tty_error = None\n"
+            "except OSError as error:\n"
+            "    tty_error = error.errno\n"
+            "with (folder / 'fixture-launches.jsonl').open('a') as stream:\n"
+            "    stream.write(json.dumps({'argv': sys.argv[1:], 'tty_error': tty_error}) + '\\n')\n"
+            # Model the official CLI's mode selection: positional text is TUI,
+            # while --prompt-file opts into headless execution. The old resume
+            # argv fails under Rig's detached supervisor before the handshake.
+            "if '--prompt-file' not in sys.argv:\n"
+            "    if tty_error is not None:\n"
+            "        raise SystemExit(f'{os.strerror(tty_error)} (os error {tty_error})')\n"
+            "    raise SystemExit('positional prompt selected interactive mode')\n"
+            "prompt = pathlib.Path(sys.argv[sys.argv.index('--prompt-file') + 1]).read_bytes()\n"
+            "(folder / 'fixture-prompt.txt').write_bytes(prompt)\n"
+            + mcp_test_support.inbox_handshake_prelude(ROOT)
+            + "print('HEADLESS_EXECUTED')\n"
+        )
+        fake.chmod(0o755)
+        result = run_worker(self.repo, "grok", "next-ok", str(self.brief), env=self._env(
+            RIG_LIVE="1", RIG_TIMEOUT="10", HOME=str(home), PATH=mcp_test_support.stub_path(bins)))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        launches = [json.loads(line) for line in (self.job_dir / "fixture-launches.jsonl").read_text().splitlines()]
+        self.assertEqual(len(launches), 1, launches)
+        argv = launches[0]["argv"]
+        self.assertIsNotNone(launches[0]["tty_error"], "fixture must run without a controlling terminal")
+        expected = ["--no-auto-update"]
+        if resume:
+            expected += ["-r", "sess-prior"]
+        expected += ["--prompt-file", str(self.brief), "--cwd", str(self.repo),
+                     "--output-format", "streaming-json"]
+        if not resume:
+            expected += ["--session-id", argv[argv.index("--session-id") + 1]]
+        expected += ["--always-approve", "--max-turns", "40", "-m", "grok-4.6", "--effort", "high"]
+        self.assertEqual(argv, expected)
+        captured = (self.job_dir / "fixture-prompt.txt").read_bytes()
+        self.assertEqual(captured, self.brief.read_bytes())
+        self.assertTrue(captured.startswith(original.encode()))
+        self.assertIn(b"## Previous worker context", captured)
+        meta = json.loads((self.job_dir / "result.json").read_text())
+        self.assertEqual(meta["continuation_mode"], "native" if resume else "fresh")
+        self.assertEqual(meta["child_mcp_status"], "connected")
+        self.assertEqual(meta["session_id"], "sess-prior" if resume else expected[expected.index("--session-id") + 1])
+        self.assertEqual(meta["model"], "grok-4.6")
+        self.assertFalse((self.job_dir / "resume-fallback.json").exists())
+        self.assertFalse((self.job_dir / "verification.json").exists())
+        record = next(row for row in admission.list_reservations(self.repo) if row.get("job_id") == "next-ok")
+        self.assertEqual(record["stage"], "verifying")
+        self.assertEqual(record["declared_files"], ["a.py"])
+        self.assertTrue(record["stopped"])
+        self.assertFalse(record["slot_held"])
+        self.assertEqual((self.repo / "a.py").read_text(), "a\n")
+
+    def test_native_resume_is_headless_without_a_controlling_terminal(self):
+        self._assert_live_headless_prompt_file(resume=True)
+
+    def test_native_resume_keeps_long_brief_out_of_argv(self):
+        self._assert_live_headless_prompt_file(resume=True, long_brief=True)
+
+    def test_fresh_continuation_keeps_headless_prompt_file_transport(self):
+        self._assert_live_headless_prompt_file(resume=False, long_brief=True)
 
     def test_cancelled_predecessor_is_refused(self):
         self._seed_prior(status="cancelled")

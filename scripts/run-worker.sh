@@ -885,10 +885,11 @@ case "$WORKER" in
   grok)
     if [[ "$SHOULD_RESUME" -eq 1 ]]; then
       SESSION_ID="$CONTINUES_SESSION"
-      CMD=(grok --no-auto-update -r "$SESSION_ID" --cwd "$REPO" --output-format streaming-json --always-approve --max-turns 40)
+      # A positional prompt selects Grok's interactive TUI, even with -r and
+      # streaming-json. Keep resume headless under the detached supervisor.
+      CMD=(grok --no-auto-update -r "$SESSION_ID" --prompt-file "$BRIEF" --cwd "$REPO" --output-format streaming-json --always-approve --max-turns 40)
       [[ -n "$MODEL" ]] && CMD+=(-m "$MODEL")
       [[ -n "$EFFORT" ]] && CMD+=(--effort "$EFFORT")
-      CMD+=("$BRIEF_TEXT")
     else
       SESSION_ID="$(python3 -c 'import uuid; print(uuid.uuid4())')"
       CMD=(grok --no-auto-update --prompt-file "$BRIEF" --cwd "$REPO" --output-format streaming-json --session-id "$SESSION_ID" --always-approve --max-turns 40)
