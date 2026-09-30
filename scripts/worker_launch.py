@@ -28,11 +28,11 @@ LAUNCH_KEYS = frozenset({
     "writer_provider", "writer_job_ids", "writer_snapshot_ids", "writer_providers",
     "review_mode", "live", "routing", "assessment", "resources", "task_domain", "research_sources",
     "workflow_id", "workflow_node_id", "workflow_spec_hash", "workflow_attempt",
-    "allow_read_overlap_reservations",
+    "allow_read_overlap_reservations", "acceptance_contract",
 })
 OBJECT_LAUNCH_KEYS = frozenset({
     "files", "routing", "assessment", "resources", "writer_job_ids", "research_sources",
-    "writer_snapshot_ids", "writer_providers", "allow_read_overlap_reservations",
+    "writer_snapshot_ids", "writer_providers", "allow_read_overlap_reservations", "acceptance_contract",
 })
 WRAPPER_ENV = (
     "PATH", "HOME", "USER", "LANG", "LC_ALL", "LC_CTYPE", "TZ", "TMPDIR",
@@ -497,7 +497,7 @@ def launch(repo, **kwargs) -> dict:
                 resources=resources, workflow_id=workflow_id, workflow_node_id=workflow_node_id,
                 workflow_spec_hash=workflow_spec_hash, workflow_attempt=workflow_attempt,
                 allow_read_overlap_reservations=allow_read,
-                continues_job_id=continues_job_id,
+                continues_job_id=continues_job_id, acceptance_contract=kwargs.get("acceptance_contract"),
             )
         except admission.AdmissionError as error:
             raise LaunchError(str(error)) from error
@@ -595,6 +595,8 @@ def launch(repo, **kwargs) -> dict:
             "attempt_id": record["attempt_id"],
             "credentials_path": str(credentials),
         }
+        if record.get("contract_fingerprint"):
+            result["contract_fingerprint"] = record["contract_fingerprint"]
     return result
 
 

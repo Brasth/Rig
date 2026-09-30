@@ -110,6 +110,28 @@ JOB_EXECUTION_PROPERTIES = {
     },
 }
 
+ACCEPTANCE_CONTRACT_SCHEMA = {
+    "type": "object", "additionalProperties": False,
+    "description": "Optional immutable acceptance contract. Frozen before work; revisions require a fresh attempt. Grants no tools or permissions.",
+    "properties": {
+        "schema_version": {"type": "integer", "enum": [1]},
+        "contract_id": {"type": "string"}, "revision": {"type": "integer", "minimum": 1, "maximum": 1000000},
+        "criteria": {"type": "array", "minItems": 1, "maxItems": 64, "items": {
+            "type": "object", "additionalProperties": False,
+            "properties": {
+                "id": {"type": "string"}, "description": {"type": "string", "maxLength": 2048},
+                "scope": {"type": "array", "minItems": 1, "maxItems": 256, "items": {"type": "string"}},
+                "evidence_type": {"type": "string", "enum": ["check", "review_assertion"]},
+                "verifier_role": {"type": "string", "enum": ["parent", "independent-review"]},
+                "artifact_kind": {"type": "string"},
+                "check": {"type": "object", "additionalProperties": False, "properties": {
+                    "id": {"type": "string"}, "argv": {"type": "array", "minItems": 1, "maxItems": 128, "items": {"type": "string"}},
+                    "cwd": {"type": "string"}}, "required": ["id", "argv"]},
+            }, "required": ["id", "description", "scope", "evidence_type", "verifier_role"],
+        }},
+    }, "required": ["schema_version", "contract_id", "revision", "criteria"],
+}
+
 TOOLS = [
     {
         "name": "rig_jobs",
@@ -968,6 +990,8 @@ TOOLS = [
 ]
 
 for _tool in TOOLS:
+    if _tool["name"] in {"rig_job_start", "rig_job_launch"}:
+        _tool["inputSchema"]["properties"]["acceptance_contract"] = ACCEPTANCE_CONTRACT_SCHEMA
     if _tool["name"] in {"rig_pick", "rig_session", "rig_job_start", "rig_job_launch"}:
         _tool["inputSchema"]["properties"].update(TASK_DOMAIN_PROPERTIES)
     if _tool["name"] in {"rig_pick", "rig_session"}:
@@ -1021,6 +1045,22 @@ TOOLS.extend([
             **_JOB_REF_PROPERTIES, "name": {"type": "string"},
             "argv": {"type": "array", "items": {"type": "string"}, "minItems": 1}, "cwd": {"type": "string"},
         }, "required": ["id", "name", "argv"]},
+    },
+    {
+        "name": "rig_job_criterion",
+        "annotations": {"readOnlyHint": False, "destructiveHint": False, "idempotentHint": False, "openWorldHint": False},
+        "description": "Parent-only explicit review assertion for a frozen criterion and current content. Requires matching existing evidence artifacts. This is an assertion, never objective check execution or automatic acceptance.",
+        "inputSchema": {"type": "object", "properties": {
+            **_JOB_REF_PROPERTIES,
+            "criterion_id": {"type": "string"}, "contract_fingerprint": {"type": "string"},
+            "snapshot_id": {"type": "string"}, "result": {"type": "string", "enum": ["pass", "fail"]},
+            "rationale": {"type": "string", "maxLength": 4096},
+            "evidence_refs": {"type": "array", "minItems": 1, "maxItems": 16, "items": {
+                "type": "object", "additionalProperties": False,
+                "properties": {key: {"type": "string"} for key in ("path", "sha256", "kind")},
+                "required": ["path", "sha256", "kind"],
+            }},
+        }, "required": ["id", "criterion_id", "contract_fingerprint", "snapshot_id", "result", "rationale", "evidence_refs"]},
     },
     {
         "name": "rig_job_accept",
@@ -1414,7 +1454,7 @@ TOOLS.extend([
 ])
 for _tool in TOOLS:
     _properties = _tool["inputSchema"]["properties"]
-    if _tool["name"] in {"rig_job_start", "rig_job_launch", "rig_job_finish", "rig_job_requirements", "rig_job_check", "rig_job_accept", "rig_job_reconcile", "rig_job_recover_cancelled", "rig_queue_unclaim", "rig_queue_spawned"}:
+    if _tool["name"] in {"rig_job_start", "rig_job_launch", "rig_job_finish", "rig_job_requirements", "rig_job_check", "rig_job_criterion", "rig_job_accept", "rig_job_reconcile", "rig_job_recover_cancelled", "rig_queue_unclaim", "rig_queue_spawned"}:
         _properties.update(_OWNERSHIP_PROPERTIES)
     if _tool["name"] == "rig_job_start":
         _properties.update({"access": {"type": "string", "enum": ["read", "write"]},
@@ -1463,6 +1503,7 @@ TOOL_ORDER = (
     "rig_job_record",
     "rig_job_requirements",
     "rig_job_check",
+    "rig_job_criterion",
     "rig_job_close",
     "rig_job_reconcile",
     "rig_job_recover_cancelled",
@@ -1597,11 +1638,11 @@ LAUNCH_ARG_NAMES = frozenset({
     "credentials_path",
     "writer_job_id", "writer_snapshot_id", "writer_cli", "writer_model",
     "writer_provider", "review_mode", "routing", "assessment", "task_domain", "research_sources",
-    "continues_job_id",
+    "continues_job_id", "acceptance_contract",
 })
 _LAUNCH_PUBLIC_KEYS = (
     "job_id", "worker", "role", "wrapper_pid", "status",
-    "reservation_id", "attempt_id", "credentials_path",
+    "reservation_id", "attempt_id", "credentials_path", "contract_fingerprint",
 )
 
 
@@ -2301,7 +2342,7 @@ def call_tool(name: str, args: dict, on_tick=None, *, wait_paths: list[Path] | N
             if "owner_token" in result:
                 result = {key: value for key, value in result.items() if key != "owner_token"}
             return {**_ok(json.dumps(result, indent=2, default=str)), "structuredContent": result}
-        if name in {"rig_job_requirements", "rig_job_check", "rig_job_accept"}:
+        if name in {"rig_job_requirements", "rig_job_check", "rig_job_criterion", "rig_job_accept"}:
             job_id = _optional_string(args, "id").strip()
             if not job_id:
                 return _err(f"{name} needs id")
@@ -2309,6 +2350,13 @@ def call_tool(name: str, args: dict, on_tick=None, *, wait_paths: list[Path] | N
             if name == "rig_job_requirements":
                 result = rig_verification.record_requirements(
                     repo, job_dir, args.get("requirements", []), args.get("manual_criteria", []),
+                    **_job_ownership_args(args, repo),
+                )
+            elif name == "rig_job_criterion":
+                result = rig_verification.record_criterion(
+                    repo, job_dir, _optional_string(args, "criterion_id"),
+                    _optional_string(args, "contract_fingerprint"), _optional_string(args, "snapshot_id"),
+                    _optional_string(args, "result"), _optional_string(args, "rationale"), args.get("evidence_refs"),
                     **_job_ownership_args(args, repo),
                 )
             elif name == "rig_job_check":
@@ -2342,7 +2390,7 @@ def call_tool(name: str, args: dict, on_tick=None, *, wait_paths: list[Path] | N
                         live=live,
                         preferred=preferred,
                         **_execution_args(args),
-                        files=args.get("files"),
+                        files=args.get("files"), acceptance_contract=args.get("acceptance_contract"),
                         writer_job_id=_optional_string(args, "writer_job_id"),
                         continues_job_id=_optional_string(args, "continues_job_id"),
                         writer_snapshot_id=_optional_string(args, "writer_snapshot_id"),
@@ -2618,7 +2666,7 @@ def call_tool(name: str, args: dict, on_tick=None, *, wait_paths: list[Path] | N
                     model=_optional_string(args, "model"),
                     effort=_optional_string(args, "effort"),
                     access=_optional_string(args, "access"),
-                    files=files,
+                    files=files, acceptance_contract=args.get("acceptance_contract"),
                     brief=_optional_string(args, "brief"),
                     queue_id=_optional_string(args, "queue_id"),
                     writer_job_id=_optional_string(args, "writer_job_id"),

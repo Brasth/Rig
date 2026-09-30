@@ -1756,7 +1756,7 @@ def format_show(job: dict, log_lines: int = 24) -> str:
         lines.append(f"snapshot_id  {snapshot['snapshot_id']}")
     except (OSError, ValueError):
         lines.append("snapshot_id  unavailable (declare a concrete file scope)")
-    for name in ("change-evidence.json", "requirements.json", "verification.json", "checks", "routing.json"):
+    for name in ("change-evidence.json", "acceptance-contract.json", "requirements.json", "verification.json", "checks", "criteria", "routing.json"):
         if (job_dir / name).exists():
             lines.append(f"evidence  {job_dir / name}")
     claims = verification.worker_claims(job_dir)
@@ -2118,6 +2118,10 @@ def write_job_files(
         for key in ("reservation_id", "attempt_id", "access", "owner", "queue_id"):
             if key in reservation:
                 obj[key] = reservation[key]
+        if reservation.get("acceptance_contract") is not None:
+            import acceptance_contract as contracts
+            contracts.initialize(job_dir, reservation)
+            obj["contract_fingerprint"] = reservation["contract_fingerprint"]
         obj["ownership_established"] = True
         obj["native_agent_id"] = (reservation.get("owner") or {}).get("native_agent_id", "")
     if model and not inferred and model_source in {"selected", "observed"}:
@@ -2331,6 +2335,7 @@ def start_job(
     allow_read_overlap_reservations=None,
     task_domain: str = "",
     research_sources: list[str] | None = None,
+    acceptance_contract=None,
 ) -> str | dict:
     """Write a running job. Does not launch a worker. Returns the job id."""
     _require_harness(repo)
@@ -2422,7 +2427,7 @@ def start_job(
             workflow_id=workflow_id, workflow_node_id=workflow_node_id,
             workflow_spec_hash=workflow_spec_hash, workflow_attempt=workflow_attempt,
             allow_read_overlap_reservations=allow_read_overlap_reservations,
-            continues_job_id=continues_job_id,
+            continues_job_id=continues_job_id, acceptance_contract=acceptance_contract,
         )
         credentials = admission.credentials(lease)
         listed = lease.get("declared_files", listed)
@@ -2928,6 +2933,7 @@ def main() -> int:
     parser.add_argument("--effort", default="")
     parser.add_argument("--executor-kind", choices=["parent", "native_child"], default="")
     parser.add_argument("--files-json")
+    parser.add_argument("--acceptance-contract", help="Path to a version 1 contract JSON, frozen before work")
     parser.add_argument("--access", choices=["read", "write"], default="")
     parser.add_argument("--reservation-id", default=os.environ.get("RIG_RESERVATION_ID", ""))
     parser.add_argument("--attempt-id", default=os.environ.get("RIG_ATTEMPT_ID", ""))
@@ -2973,7 +2979,15 @@ def main() -> int:
             if args.cmd == "start":
                 routing = json.loads(args.routing_json) if args.routing_json else None
                 assessment = json.loads(args.assessment_json) if args.assessment_json else None
+                contract = None
+                if args.acceptance_contract:
+                    import acceptance_contract as contracts
+                    path = Path(args.acceptance_contract)
+                    if path.stat().st_size > contracts.MAX_CONTRACT_BYTES:
+                        raise ValueError("acceptance contract exceeds 256 KiB")
+                    contract = json.loads(path.read_text())
                 result = start_job(repo, job_id=job_id or "", files=files, access=args.access,
+                                   acceptance_contract=contract,
                                    queue_id=args.queue_id, native_agent_id=args.native_agent_id,
                                    writer_job_id=args.writer_job_id, continues_job_id=args.continues_job_id,
                                    writer_snapshot_id=args.writer_snapshot_id,

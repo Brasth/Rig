@@ -1086,7 +1086,7 @@ def reserve(repo, *, job_id="", worker="", role="worker", model="", files=None,
             resources=None, workflow_id="", workflow_node_id="", workflow_spec_hash="",
             workflow_attempt=0, allow_read_overlap_reservations=None,
             writer_job_ids=None, writer_snapshot_ids=None, writer_providers=None,
-            continues_job_id=""):
+            continues_job_id="", acceptance_contract=None):
     root = _root(repo)
     _id(job_id, "job id", optional=bool(queue_id))
     _id(queue_id, "queue id", optional=True)
@@ -1149,6 +1149,18 @@ def reserve(repo, *, job_id="", worker="", role="worker", model="", files=None,
                 raise AdmissionError("claim already consumed by another executor")
             if source.get("launch_started") or source.get("process") or source.get("stage") != "reserved":
                 raise AdmissionError("attempt already launched; credentials cannot authorize another launch")
+        import acceptance_contract as contracts
+        frozen_contract = None
+        if acceptance_contract is not None:
+            frozen_contract = contracts.normalize(
+                root, acceptance_contract, declared,
+                independent_review=bool(writer_job_id and writer_snapshot_id and access == "read"
+                                        and role in {"review", "reviewer"}),
+            )
+        if source and not writer_job_id and source.get("acceptance_contract") is not None:
+            if frozen_contract is not None and frozen_contract != source["acceptance_contract"]:
+                raise AdmissionError("acceptance contract is frozen; revisions require a fresh attempt")
+            frozen_contract = source["acceptance_contract"]
         if job_id:
             for record in _records(root):
                 if record.get("job_id") == job_id and (source is None or record["reservation_id"] != source["reservation_id"]):
@@ -1198,6 +1210,9 @@ def reserve(repo, *, job_id="", worker="", role="worker", model="", files=None,
                                  workflow_node_id=workflow_node_id, workflow_spec_hash=workflow_spec_hash,
                                  workflow_attempt=workflow_attempt, writer_job_ids=writer_job_ids,
                                  writer_snapshot_ids=writer_snapshot_ids, writer_providers=writer_providers)
+        if frozen_contract is not None:
+            record["acceptance_contract"] = frozen_contract
+            record["contract_fingerprint"] = contracts.fingerprint(frozen_contract)
         if lineage:
             _apply_continuation(record, lineage)
         import workflow_cancellation
@@ -1763,7 +1778,7 @@ def reconcile(repo, *, job_id="", queue_id="", apply=False, action="report", own
             _reconcile_dead(root)
             for record in _records(root):
                 operation = record.get("operation") or {}
-                if operation.get("operation") in {"requirements", "accept"} and _process_state(operation) == "dead":
+                if operation.get("operation") in {"requirements", "criterion", "accept"} and _process_state(operation) == "dead":
                     record["interrupted_operation"] = record.pop("operation")
                     record.update(needs_reconciliation=True,
                                   reconciliation_reason="stopped verification operation cleared; parent assessment required")
