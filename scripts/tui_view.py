@@ -41,9 +41,10 @@ _STATE_LABELS = {
     "pending": "WAIT",
     "planned": "PLAN",
 }
-PRIMARY_FOOTER = "Tab  j/k  y/n  x  e  l  r  ?  q"
+PRIMARY_FOOTER = "Tab  j/k  y/n  x  e  l  r  g  ?  q"
 HELP_LINES = (
     "Tab            Jobs / Queue / Workflows / Settings",
+    "Jobs list attention-first: ASK / attention / active, then history.",
     "Settings e     Edit domain routing and preview tasks",
     "j/k or arrows  Move the selection",
     "e              Open the Unicode queue editor",
@@ -51,13 +52,13 @@ HELP_LINES = (
     "x              Cancel selected job or queue item (y confirms)",
     "l              Toggle the selected job activity log",
     "r              Refresh the snapshot",
+    "g              Read-only recovery guidance for selected job/workflow",
     "f              Toggle follow for the activity pane",
     "PgUp / PgDn    Scroll activity when follow is off",
     "o              Show the selected job session path",
     "?              Close this help overlay",
     "q              Close the board; running jobs keep going",
     "",
-    "Jobs list attention-first: ASK / attention / active, then history.",
     "Each row shows a state label and task text; color is not the only cue.",
     "x explains the target and waits for y; Esc or any other key aborts.",
 )
@@ -271,6 +272,8 @@ def compact_footer(tab: str, row, *, log_mode: bool = False) -> str:
         parts.append("e routing / preview" if (row or {}).get("id") == "domains" else "c/d key · t/o picker")
     else:
         parts.append("read only")
+    if tab in {"Jobs", "Workflows"}:
+        parts.append("g recovery")
     parts.extend(["? help", "q quit"])
     return "  ".join(parts)
 
@@ -384,7 +387,7 @@ def _selected_attr(state: str, selected: bool) -> int:
 
 def render(stdscr, repo, snapshot, *, tab, selected, offset, follow, log_off,
            footer, snapshot_status, requested, draft, log_mode=False, workflows=None,
-           help_mode=False, confirm=None):
+           help_mode=False, confirm=None, recovery_lines=None, recovery_offset=0):
     h, w = stdscr.getmaxyx()
     stdscr.erase()
     workflows = _snapshot_workflows(snapshot, workflows)
@@ -393,6 +396,11 @@ def render(stdscr, repo, snapshot, *, tab, selected, offset, follow, log_off,
     _add(stdscr, 0, 0, _health_title(snapshot, workflows, repo), curses.A_REVERSE, width=w)
     if layout == "tiny":
         _add(stdscr, 1, 0, "terminal too small", width=w)
+    elif recovery_lines is not None:
+        _add(stdscr, 1, 0, "Recovery  ·  g/Esc closes · PgUp/PgDn scrolls", curses.A_REVERSE, width=w)
+        wrapped = [part for line in recovery_lines for part in textwrap.wrap(line, max(1, w - 2)) or [""]]
+        for index, line in enumerate(wrapped[recovery_offset:recovery_offset + max(0, h - 3)]):
+            _add(stdscr, index + 2, 1, line, width=max(0, w - 2))
     elif help_mode:
         _add(stdscr, 1, 0, "Help  ·  Esc or ? closes", curses.A_REVERSE, width=w)
         for index, line in enumerate(HELP_LINES):

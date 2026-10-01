@@ -81,6 +81,8 @@ usage: rig <command> [args]
   timeline --workflow ID | --job ID [--attempt ID] [--limit 1..200] [--json]
   workflows [--json]
   context preview|build|show|validate --file PATH
+  recovery guide --job ID | --workflow ID [--json]
+  task prepare --file INPUT.json [--json]
   workflow create [--file PATH] [--json]    # JSON spec from --file or stdin
   workflow recipe list|show|preview [NAME] [--file PARAMS.json] [--spec-only] [--json]
   workflow show|advance|wait|extend|resolve|approve|cancel|report <id>
@@ -167,6 +169,8 @@ copy_rig_tree() {
       [[ -f "$f" ]] || continue
       install_file "$f" "$dest/scripts/$(basename "$f")"
     done
+    # The MCP facade imports this package in installed runtimes too.
+    copy_dir_files "$src/scripts/mcp_tools" "$dest/scripts/mcp_tools"
     for skill in "$src/skills/"*; do
       [[ -d "$skill" ]] || continue
       mkdir -p "$dest/skills/$(basename "$skill")"
@@ -1531,7 +1535,7 @@ main() {
     on) cmd_project_toggle on; return ;;
     off) cmd_project_toggle off; return ;;
   esac
-  case "$cmd" in init|setup|update|status|doctor|jobs|tui|memory|timeline|workflows|workflow|queue|routing|billing|help|-h|--help|"") ;; *) project_guard || return ;; esac
+  case "$cmd" in init|setup|update|status|doctor|jobs|tui|memory|timeline|recovery|task|workflows|workflow|queue|routing|billing|help|-h|--help|"") ;; *) project_guard || return ;; esac
   case "$cmd" in
     ui) python3 "$(py_script rig_ui.py)" "$@" ;;
     uninstall) python3 "$(py_script ui_install.py)" "$@" ;;
@@ -1588,6 +1592,8 @@ main() {
     workflows) cmd_workflows "$@" ;;
     workflow) cmd_workflow "$@" ;;
     context) python3 "$(py_script context_packages.py)" "$@" --repo "$(repo_root)" ;;
+    recovery) python3 "$(py_script recovery_guide.py)" "$@" --repo "$(repo_root)" ;;
+    task) python3 "$(py_script task_preparation.py)" "$@" --repo "$(repo_root)" ;;
     queue) cmd_queue "$@" ;;
     tui) cmd_tui "$@" ;;
     memory) cmd_memory "$@" ;;

@@ -11,7 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 import rig_tui  # noqa: E402
-from tui_runtime import Snapshot  # noqa: E402
+from tui_runtime import Snapshot, ActionResult  # noqa: E402
 
 
 class FakeScr:
@@ -109,10 +109,16 @@ class ScriptedRuntime:
             if newer is not None:
                 self.snapshot = newer
                 self.revision += 1
-        return []
+        result = getattr(self, "pending_result", None)
+        self.pending_result = None
+        return [result] if result else []
 
     def request_snapshot(self, **_kwargs):
         pass
+
+    def submit(self, key, work, **_kwargs):
+        self.pending_result = ActionResult(key, work())
+        return True
 
     def refresh(self):
         pass
@@ -167,6 +173,15 @@ class BoardProjection(unittest.TestCase):
             left = [call[2] for call in frame if call[1] == 0 and 2 <= call[0] < screen.h - 1]
             self.assertTrue(any(f"job-{index:03}" in line for line in left), (index, left))
         self.assertTrue(any("Jobs 19-25/25" in call[2] for call in screen.frames[-1]))
+
+    def test_recovery_overlay_shows_guidance_and_blocks_mutation_keys(self):
+        screen = BoardScr(["g", "x", "a", "e", "q"], h=24)
+        evidence = {"state": "unconfirmed", "coverage": "recorded", "blockers": ["stop-unconfirmed"],
+                    "held": [], "steps": [], "evidence_gaps": []}
+        with mock.patch.object(rig_tui.recovery_guide, "build", return_value=evidence) as build:
+            self.paint(screen, [[self.job(1)]])
+        build.assert_called_once_with(Path("/fixture"), job_id="job-001")
+        self.assertTrue(any("stop-unconfirmed" in call[2] for call in screen.frames[-1]))
 
     def test_refresh_preserves_selected_job_when_order_changes(self):
         first, second = self.job(1), self.job(2)

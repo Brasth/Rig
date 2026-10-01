@@ -26,6 +26,8 @@ from tui_view import (  # noqa: E402,F401
     board_listing, format_list_row, render,
 )
 from ui_snapshot import collect_workflows  # noqa: E402
+import recovery_guide  # noqa: E402
+import recovery_view  # noqa: E402
 
 HELP = PRIMARY_FOOTER
 
@@ -60,6 +62,8 @@ def _paint(stdscr, repo: Path, *, runtime=None) -> None:
     requested = set()
     pasted_outside_editor = False
     help_mode = False
+    recovery_lines, recovery_request, recovery_offset = None, "", 0
+    recovery_sequence = 0
     confirm = None
     secret_active, secret_text = False, ""
     routing_panel, routing_open = None, ""
@@ -82,6 +86,11 @@ def _paint(stdscr, repo: Path, *, runtime=None) -> None:
                           for name in selected}
             revision = runtime.revision
             for result in runtime.poll():
+                if result.key.startswith("recovery:"):
+                    if result.key == recovery_request:
+                        recovery_lines = (["Recovery evidence unavailable; inspect the selected attempt."]
+                                          if result.error else recovery_view.format_lines(result.value))
+                    continue
                 if result.key.startswith("routing-open:"):
                     if result.key == routing_open:
                         routing_open = ""
@@ -139,7 +148,8 @@ def _paint(stdscr, repo: Path, *, runtime=None) -> None:
                 offsets[tab] = render(stdscr, repo, runtime.snapshot, tab=tab, selected=selected[tab], offset=offsets[tab],
                                       follow=follow, log_off=log_off, footer=footer, snapshot_status=_snapshot_status(runtime),
                                       requested=requested, draft=draft, log_mode=log_mode, workflows=board_workflows,
-                                      help_mode=help_mode, confirm=confirm)
+                                      help_mode=help_mode, confirm=confirm, recovery_lines=recovery_lines,
+                                      recovery_offset=recovery_offset)
             try:
                 key = stdscr.get_wch()
                 incoming = decoder.feed(key)
@@ -186,6 +196,18 @@ def _paint(stdscr, repo: Path, *, runtime=None) -> None:
                     continue
                 if not pasted:
                     pasted_outside_editor = False
+                if recovery_lines is not None:
+                    if key == "q":
+                        return
+                    if key in {"g", "\x1b"}:
+                        recovery_lines, recovery_request, recovery_offset = None, "", 0
+                    elif key == curses.KEY_NPAGE:
+                        recovery_offset = min(recovery_offset + max(1, h - 3),
+                                              sum(max(1, (len(line) + max(1, w - 3)) // max(1, w - 2))
+                                                  for line in recovery_lines) - 1)
+                    elif key == curses.KEY_PPAGE:
+                        recovery_offset = max(0, recovery_offset - max(1, h - 3))
+                    continue
                 if draft.active:
                     action = draft.key(key, pasted=pasted)
                     if action == "submit":
@@ -263,6 +285,13 @@ def _paint(stdscr, repo: Path, *, runtime=None) -> None:
                     tab = _TABS[(_TABS.index(tab) + step) % len(_TABS)]
                 elif key == "r":
                     runtime.refresh()
+                elif key == "g" and row and tab in {"Jobs", "Workflows"}:
+                    recovery_sequence += 1
+                    recovery_request = f"recovery:{recovery_sequence}"
+                    recovery_lines, recovery_offset = ["Reading recorded evidence…"], 0
+                    selector = {"job_id": row["job_id"]} if tab == "Jobs" else {"workflow_id": row["workflow_id"]}
+                    if not runtime.submit(recovery_request, lambda selector=selector: recovery_guide.build(repo, **selector)):
+                        recovery_lines = ["Background actions busy; close and reopen recovery guidance."]
                 elif tab == "Settings" and row and key == "c" and row.get("id") == "jev":
                     secret_active, secret_text, footer = True, "", "Enter Jev API key"
                 elif tab == "Settings" and row and key == "d" and row.get("id") == "jev":
