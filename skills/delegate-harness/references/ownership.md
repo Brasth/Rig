@@ -42,4 +42,6 @@ For UI evidence, parent-only `rig_job_ui_evidence` assembles already captured an
 
 Failed/cancelled/rejected work stays unverified. After confirmed task termination, `rig_job_close` with current credentials and rationale releases ownership without acceptance or retry. `rig_job_reconcile` reports by default; apply only explicit supported recovery. Dead unlaunched work can compensate, but live/ASK/unknown ownership never age-expires. Interrupted checks need same-owner credentials, rationale, and `completion={"checks_stopped":true}`; observed live checkers refuse recovery. Legacy recovery attaches prospective ownership only.
 
+Parent-only `rig_recovery_guide` explains bounded recorded job/workflow evidence with explicit incomplete coverage and fixed supported-operation prerequisites. It never refreshes lifecycle, probes processes, executes recovery, releases ownership or establishes current acceptance. TUI g is advisory; r remains refresh. Inspect evidence and deliberately use authenticated existing operations; explicit Stop/cancel never authorizes automatic waiting or retry. See docs/recovery-guide.md.
+
 Active checks emit only their own request progress. Native reviewer start passes writer_job_id/writer_snapshot_id and current holder credentials; wrapper uses RIG_REVIEW_MODE=independent and RIG_WRITER_JOB_ID.

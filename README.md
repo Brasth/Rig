@@ -43,6 +43,7 @@ Configure workers in `.rig/harness.toml`, then open whichever agent has parent R
 - [Everyday prompts](docs/usage.md#how-your-prompt-is-handled) · [Queue](docs/usage.md#how-the-queue-works)
 - [Terminal companion](docs/usage.md#optional-terminal-companion) · [Watch](docs/usage.md#watch-jobs-memory)
 - [Verification](#verification-and-cancellation) · [Cancellation](docs/rig-flow.md#closing-cancelling-and-stopping)
+- [Task preparation](docs/task-preparation.md) · [Guided recovery](docs/recovery-guide.md)
 - [Pinned updates and rollback](docs/safe-updates.md)
 - [Task readiness](docs/usage.md#task-aware-doctor) · [Troubleshooting](docs/usage.md#troubleshooting) · [Docs](docs/usage.md)
 

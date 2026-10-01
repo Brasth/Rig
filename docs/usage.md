@@ -555,6 +555,14 @@ sequenceDiagram
 
 The parent does **not** ask you which model. `rig pick` maps kind → worker, model, effort.
 
+## Prepare a task
+
+The parent discovers concrete scope and exact checks, then uses `rig_task_prepare` or `rig task prepare --file task.json --json` to assemble an inert brief, acceptance contract and context/recipe previews. Missing inputs stay explicit. Building context and launching remain deliberate parent actions. See [Task preparation](task-preparation.md).
+
+## Explain recovery
+
+Use `rig_recovery_guide`, `rig recovery guide --job ID --json`, or `--workflow ID` to explain recorded blockers and supported operations. In the TUI, **g** opens an asynchronous advisory view; **r** remains refresh. Guidance never mutates ownership or proves current process/content state. See [Guided recovery](recovery-guide.md).
+
 ## Why the queue exists
 
 The parent orchestrates work on its own turns. While a child runs (often several minutes) and `rig_job_wait` blocks, the optional terminal companion remains available: F9 saves extra work directly to Rig’s persisted queue, independently of the host turn. A host’s native prompt queue is separate and does not itself create a Rig queue item. The parent can later claim queued work, prepare brief TEXT, and MCP-launch on a free orchestration turn; the companion never dispatches. Explicit Esc/Stop instead requests cancellation of the jobs attached to that wait.

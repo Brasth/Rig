@@ -217,6 +217,8 @@ For UI evidence, parent-only `rig_job_ui_evidence` assembles already captured an
 
 Failed/cancelled/rejected work stays unverified. After confirmed task termination, `rig_job_close` with current credentials and rationale releases ownership without acceptance or retry. `rig_job_reconcile` reports by default; apply only explicit supported recovery. Dead unlaunched work can compensate, but live/ASK/unknown ownership never age-expires. Interrupted checks need same-owner credentials, rationale, and `completion={"checks_stopped":true}`; observed live checkers refuse recovery. Legacy recovery attaches prospective ownership only.
 
+Parent-only `rig_recovery_guide` explains bounded recorded job/workflow evidence with explicit incomplete coverage and fixed supported-operation prerequisites. It never refreshes lifecycle, probes processes, executes recovery, releases ownership or establishes current acceptance. TUI g is advisory; r remains refresh. Inspect evidence and deliberately use authenticated existing operations; explicit Stop/cancel never authorizes automatic waiting or retry. See docs/recovery-guide.md.
+
 Active checks emit only their own request progress. Native reviewer start passes writer_job_id/writer_snapshot_id and current holder credentials; wrapper uses RIG_REVIEW_MODE=independent and RIG_WRITER_JOB_ID.
 <!-- rig:endsection -->
 
@@ -238,6 +240,8 @@ Workflow waits pass the retained owner_token (and owner_session when explicit): 
 
 <!-- rig:section workflows -->
 ## Adaptive workflows
+
+Parent-assisted `rig_task_prepare` assembles explicitly selected files, exact checks, constraints, exclusions, manual criteria and references into an inert worker brief, acceptance contract and context/recipe previews. Parent discovers and reviews inputs first. Missing scope/checks stays unresolved; readiness grants no authority. Explicitly build any context package, bind its reference, re-preview recipes and use existing pick/start/launch/create/advance gates. Manual criteria need parent-review artifact assertions before acceptance. Never discover history, enable a project, run commands or launch through preparation. See docs/task-preparation.md.
 
 Optional parent-only context packages: `rig_context_preview` is read-only; `rig_context_build` explicitly creates a bounded private hash-pinned artifact from selected repository text files and stated decisions/constraints/test-command data. Pass `context_package` to `rig_job_start` / `rig_job_launch` or an individual workflow node. Never harvest history, personal notes, or credentials; screening is incomplete and cannot guarantee no secrets. Context grants no instructions, tools, network, write scope, or acceptance. Launch checks pinned content, current source hashes, and optional job/attempt/contract links. For a stale never-executed workflow node, resolve/release the unlaunched attempt, explicitly rebuild, and use authenticated `rig_workflow_extend` with `context_packages: {node_id: reference}` before advancing for a fresh pick. This cannot change held/executed attempts, scope, acceptance contracts, or frozen shared_context; changed spec invalidates effect approvals. See `docs/context-packages.md`.
 
