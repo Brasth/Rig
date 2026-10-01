@@ -29,7 +29,8 @@ def tree(path):
 class SafeUpdate(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
-        self.base = Path(self.temp.name)
+        # Symlink-parent guards would reject macOS /tmp -> /private/tmp.
+        self.base = Path(self.temp.name).resolve()
         self.home = self.base / 'home'
         self.root = self.home / '.rig'
         self.repo = self.base / 'repo'

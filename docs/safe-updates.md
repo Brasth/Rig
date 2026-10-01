@@ -1,18 +1,32 @@
 # Pinned updates and rollback
 
-`rig update` no longer downloads or runs `install.sh`, follows `main`, or repeats
-setup. Bare `rig update` prints usage and exits 2. Choose a full, 40-character
-commit SHA from the official [Brasth/Rig repository](https://github.com/Brasth/Rig).
-There is no assumed release/tag process and no automatic update or migration.
+`rig update` never downloads or runs `install.sh` and never follows a moving
+branch during an update. Every update installs one full, 40-character commit
+from the official [Brasth/Rig repository](https://github.com/Brasth/Rig).
 
 ```sh
+rig update                               # guided (TTY): check main, preview, ask
+rig update --latest --dry-run            # resolve official main to one full SHA; preview
+rig update --latest --yes                # apply that resolved commit without a prompt
 rig update --revision FULL_COMMIT_SHA --dry-run
-rig update --revision FULL_COMMIT_SHA
+rig update --revision FULL_COMMIT_SHA    # exact pin; unchanged automation contract
 rig update --rollback --dry-run
 rig update --rollback
 rig update --status
 rig update --recover
 ```
+
+**Guided.** In a terminal, bare `rig update` shows the installed commit, asks
+before contacting GitHub, resolves official `main` once, prints the dry-run
+preview for that exact SHA and applies it only after a second `y`. Without a TTY
+it changes nothing: it prints the exact commands above and exits 2.
+
+**`--latest`.** One `git ls-remote` of `refs/heads/main` must return exactly one
+full lowercase 40-character SHA, otherwise nothing changes. That SHA then goes
+through the same pinned controller as `--revision` (single fetch, preview, then
+apply). In a terminal it asks before applying; non-interactive runs need
+`--dry-run` or `--yes` and otherwise exit 2 before any network access. The dry-run
+prints `rig update --revision SHA` so automation can pin what was reviewed.
 
 The updater fetches exactly that commit through Git from the official repository.
 It checks the full resolved SHA, the explicit compatibility declaration, required
@@ -20,8 +34,11 @@ runtime files, Python syntax and shell syntax. It does not execute candidate
 Python, shell, installers or provider commands during validation. `--dry-run`
 uses temporary download storage and locks but changes no installed/project files.
 No optional installer, login, permission grant or configuration setup is run.
-Network access is needed only to fetch an explicitly requested commit; rollback,
-status, recovery and all update tests are offline.
+Network access is needed only to resolve `main` or fetch the requested commit;
+rollback, status, recovery and all update tests are offline.
+
+A legacy installation (no `runtime-state.json`) cannot use these commands; they
+print the runnable migration command instead (see below).
 
 ## Before changing a runtime
 
@@ -104,24 +121,29 @@ Lock contention times out by refusing the request; no holder is forcibly unlocke
 ## Legacy or unversioned installations
 
 The older installer/update flow did not record a trustworthy full commit and
-compatibility baseline. This controller does not infer that provenance from a
-short VERSION string, adopt unknown assets, or promise rollback for earlier installs.
-Legacy installations continue ordinary operation; only safe updating is unavailable.
-Dirty/unversioned source setups also remain explicitly unsupported.
+compatibility baseline. The controller never infers that provenance from a short
+VERSION string, adopts unknown assets, or promises rollback for earlier installs.
+Legacy installations keep working; they move to safe updates through an explicit,
+separate bootstrap:
 
-For transition, first preserve a manual backup of the existing runtime, its complete
-installation manifest and all affected integrations/project data. Stop all sessions
-as above. Review a clean checkout of the pinned controller revision and its setup
-behavior. Establish a **fresh installation in a new empty RIG_HOME** through an
-explicit, separately approved installation/setup, then explicitly initialize the
-projects you choose. Setup can change configuration and ask about optional components;
-those actions are outside `rig update` and must not be mistaken for an automatic
-legacy migration. Keep the old runtime and backup until the new setup is verified.
-Do not copy or fabricate `runtime-state.json`, delete an old installation to make
-it appear fresh, or rerun setup expecting it to prove legacy rollback support.
+```sh
+# Older installed CLIs lack these flags: run them from a Rig checkout's bin/rig.
+/path/to/Rig/bin/rig update --migrate --latest --dry-run [--project /path/to/enabled/project]
+/path/to/Rig/bin/rig update --migrate --latest [--project PATH]       # TTY asks; else add --yes
+/path/to/Rig/bin/rig update --migrate --revision FULL_COMMIT_SHA ...  # exact pin instead of main
+/path/to/Rig/bin/rig update --restore-migration ~/.rig-migrations/ID [--dry-run] [--yes] [--force]
+```
 
-A successful clean, fresh setup records the baseline. The first later compatible
-controller update creates the first rollback snapshot. If baseline creation fails,
-setup prints why; `rig update --status` explains that safe updates are unavailable.
+In a terminal, bare `rig update` from that checkout offers the same flow (and
+offers to initialize the current project only if it is an existing enabled one).
+The migration sets up a fresh root (`~/.rig-versioned`, or `--new-root PATH`) from
+a clean pinned Git checkout, keeps the legacy root, verifies a full baseline,
+and binds `~/.local/bin/rig` to the new root. Agent MCP servers that launch the
+new root's `scripts/rig-mcp.sh` inherit that root as `RIG_HOME` when the variable
+is unset (`runtime-state.json` is the versioned evidence); an explicit nonempty
+`RIG_HOME` still wins. Details, guarantees and recovery:
+[runtime migration runbook](legacy-runtime-migration.md).
 
-Detailed legacy cutover: [runtime migration runbook](legacy-runtime-migration.md).
+A successful migration records the baseline. The first later compatible
+controller update creates the first rollback snapshot. Dirty/unversioned source
+setups remain unsupported; do not copy or fabricate `runtime-state.json`.

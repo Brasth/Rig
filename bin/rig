@@ -8,6 +8,10 @@ if [[ -e "$_RIG_PENDING_ROOT/updates/pending.json" || -L "$_RIG_PENDING_ROOT/upd
   case "${1:-}" in
     update)
       shift
+      if [[ $# -eq 0 ]]; then
+        echo "Pending runtime update: rig update --status, then rig update --recover"
+        exit 1
+      fi
       exec python3 -E -s -B "$_RIG_PENDING_ROOT/updates/recovery/runtime_update.py" "$@"
       ;;
     help|-h|--help|"")
@@ -42,8 +46,13 @@ usage: rig <command> [args]
     Optional desktop/browser components ask once (default No); their shared skills install only after opt-in.
   ui [open|status|enable|disable|stop]
   uninstall [--dry-run] [--repo PATH]
+  update                                  guided (TTY); without a TTY prints exact commands, changes nothing
+  update --latest [--dry-run] [--yes]     pin official main to one full SHA, preview, apply on consent
   update --revision FULL_COMMIT_SHA [--dry-run]
   update --rollback [--dry-run] | --recover | --status
+  update --migrate (--latest|--revision SHA) [--project PATH] [--new-root PATH] [--dry-run] [--yes]
+  update --restore-migration DIR [--dry-run] [--yes] [--force]
+    Legacy installs: run a checkout's bin/rig (older installed CLIs lack --migrate).
   init [--patch-agents|--no-patch-agents] [--patch-claude]
   doctor [--task coding|research|browser|computer-use] [--parent NAME] [--model MODEL] [--json] [--smoke]
     Task doctor is offline; --smoke checks only a temporary child MCP fixture.
@@ -474,6 +483,23 @@ cmd_update() {
   if [[ -n "${RIG_LIVE:-}" || -n "${RIG_JOB_ID:-}" || -n "${RIG_JOB_DIR:-}" ]]; then
     echo "rig update: refuse inside a worker" >&2
     exit 1
+  fi
+  # Guided flags use the helper beside this CLI, so a checkout's bin/rig can
+  # bootstrap a legacy RIG_HOME whose installed scripts predate them.
+  local arg guided=0 assistant="$_RIG_BIN_DIR/../scripts/update_assistant.py"
+  [[ $# -gt 0 ]] || guided=1
+  for arg in "$@"; do
+    case "$arg" in
+      --latest|--migrate|--yes|--project|--project=*|--new-root|--new-root=*|--restore-migration|--restore-migration=*) guided=1 ;;
+    esac
+  done
+  if [[ "$guided" -eq 1 ]]; then
+    if [[ ! -f "$assistant" ]]; then
+      echo "rig update: guided helper missing beside this CLI; use rig update --revision FULL_COMMIT_SHA" >&2
+      exit 1
+    fi
+    PYTHONDONTWRITEBYTECODE=1 python3 "$assistant" "$@"
+    return
   fi
   PYTHONDONTWRITEBYTECODE=1 python3 "$(py_script runtime_update.py)" "$@"
 }

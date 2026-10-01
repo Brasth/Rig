@@ -52,7 +52,7 @@ What that does:
 
 From a checkout you already have: `./install.sh` (same copy + `rig setup`, no clone). That is the **dev** path; it copies the local tree, not GitHub `main`.
 
-Before updating an active repository, follow [safe upgrade and rollback](#safe-upgrade-and-rollback). Use `rig update --revision FULL_COMMIT_SHA --dry-run`, then the same pinned revision without `--dry-run`. The controller fetches only that official repository commit, stages and validates owned runtime/integration assets, and never runs `install.sh`, `rig setup`, optional installers or migrations. Bare `rig update` prints usage. See [pinned updates, recovery, rollback and the explicit legacy transition](safe-updates.md); older/unversioned installations cannot claim a rollback baseline.
+Before updating an active repository, follow [safe upgrade and rollback](#safe-upgrade-and-rollback). In a terminal, bare `rig update` resolves official `main` to one full commit, shows the dry-run preview and asks before applying; without a TTY it changes nothing and prints the commands. Scripts use `rig update --latest --dry-run` then `--latest --yes`, or pin with `rig update --revision FULL_COMMIT_SHA [--dry-run]`. The controller fetches only that official repository commit, stages and validates owned runtime/integration assets, and never runs `install.sh`, `rig setup` or optional installers. Older/unversioned installations cannot claim a rollback baseline; they migrate explicitly with a checkout's `bin/rig update --migrate --latest --dry-run` (older installed CLIs lack the flag). See [pinned updates](safe-updates.md) and the [migration runbook](legacy-runtime-migration.md).
 
 Tmux package operations are noninteractive and time out after five minutes per operation. Linux needs root or passwordless sudo. Missing package managers, permissions, or a suitable package produce manual recovery instructions and allow Rig installation to continue. Set `RIG_SKIP_TMUX_INSTALL=1 ./install.sh` to manage tmux yourself; safe updates never install tmux; for the piped installer, use `curl -fsSL https://raw.githubusercontent.com/Brasth/Rig/main/install.sh | RIG_SKIP_TMUX_INSTALL=1 bash`. The companion remains opt-in; explicit `--shell-ui` still fails if tmux 3.3+ is unavailable.
 
@@ -861,7 +861,7 @@ Repeated allow/approve is not completion. If a Codex or Pi parent write turn was
 
 ## Safe upgrade and rollback
 
-See [the complete pinned-update, recovery, rollback and legacy-transition guide](safe-updates.md). Use `rig update --revision FULL_COMMIT_SHA [--dry-run]`; rollback is `rig update --rollback [--dry-run]`. Neither runs setup nor changes project configuration.
+See [the complete pinned-update, recovery, rollback and legacy-transition guide](safe-updates.md). Use guided `rig update`, `rig update --latest [--dry-run] [--yes]` or `rig update --revision FULL_COMMIT_SHA [--dry-run]`; rollback is `rig update --rollback [--dry-run]`. None of these runs setup or changes project configuration. Legacy installs use the explicit `rig update --migrate` bootstrap from a checkout ([runbook](legacy-runtime-migration.md)); it runs the pinned checkout's setup only after a preview and consent.
 
 Combined rollout with wait-cancel: stop new admissions, finish or cancel existing work, confirm stopped, accept or close scopes, preserve data (pending queue text, credentials, workflow spec/state/events, reservations), update **every** launcher and managed protocol, then fully restart all parent/MCP sessions before admitting new work. Concurrent mixed-version admission writers are unsupported. Existing worker/cap values, memory, unrelated AGENTS content, and custom agent overrides must remain intact; inspect a custom native agent's write capability before using it for mini work.
 
@@ -988,7 +988,7 @@ Re-run the install if `~/.local/bin/rig` itself is missing:
 curl -fsSL https://raw.githubusercontent.com/Brasth/Rig/main/install.sh | bash
 ```
 
-If `rig` is already on PATH: inspect `rig update --status`, then follow [pinned safe updates](safe-updates.md).
+If `rig` is already on PATH: inspect `rig update --status`, then run `rig update` (guided) or follow [pinned safe updates](safe-updates.md).
 
 **MCP missing in Grok, Codex, OpenCode, OMP, Pi, or agy** (`rig doctor` MCP lines do not show `[mcp_servers.rig]` / `mcp.rig` / `mcpServers.rig`, or `/rig` / tools are absent)
 

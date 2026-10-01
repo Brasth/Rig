@@ -204,8 +204,10 @@ def candidate(source):
                 subprocess.run(['bash', '-n', str(path)], check=True, capture_output=True, timeout=10)
             # Newly introduced runtime files are owner-only. Existing owned
             # destination modes are preserved by plan(), never broadened.
+            # Setup marks only bin/rig and top-level scripts executable; nested
+            # packages (scripts/mcp_tools) are imported and stay 0600.
             mode = 0o600
-            if name == 'bin/rig' or (name.startswith('scripts/') and path.suffix in {'.py', '.sh'}):
+            if name == 'bin/rig' or (name.count('/') == 1 and name.startswith('scripts/') and path.suffix in {'.py', '.sh'}):
                 mode = 0o700
             files[name] = file_state(data, mode)
     return files
@@ -321,7 +323,9 @@ def record_install(root, source, manifest):
 
 def baseline(root):
     if not (root / 'runtime-state.json').is_file():
-        raise UpdateError('Legacy/unversioned installation: preserve a manual backup and bootstrap a clean pinned controller installation; no automatic adoption or legacy rollback. See docs/safe-updates.md')
+        raise UpdateError('Legacy/unversioned installation (no runtime-state.json): no automatic adoption or legacy rollback. '
+                          'Preview the guided migration: rig update --migrate --latest --dry-run '
+                          '(an older installed rig lacks --migrate; run it as /path/to/Rig-checkout/bin/rig update --migrate --latest --dry-run)')
     state = read_json(root / 'runtime-state.json')
     manifest = read_json(root / 'install-manifest.json')
     if state.get('schema_version') != 1 or not SHA.fullmatch(str(state.get('commit', ''))) or state.get('compatibility') != COMPAT:

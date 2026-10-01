@@ -47,7 +47,7 @@ Configure workers in `.rig/harness.toml`, then open whichever agent has parent R
 - [Pinned updates and rollback](docs/safe-updates.md)
 - [Task readiness](docs/usage.md#task-aware-doctor) · [Troubleshooting](docs/usage.md#troubleshooting) · [Docs](docs/usage.md)
 
-Safe `rig update --revision FULL_COMMIT_SHA` refreshes owned runtime/integration assets without rerunning optional installers or changing consent/configuration. See [compatibility, dry-run, rollback, recovery and legacy transition](docs/safe-updates.md).
+Update with `rig update`: in a terminal it resolves official `main` to one full commit, previews, and asks before applying (`rig update --latest --dry-run` / `--yes` for scripts; `--revision FULL_COMMIT_SHA` for exact pins). It refreshes owned runtime/integration assets without rerunning optional installers or changing consent/configuration. Legacy installs (no `runtime-state.json`) migrate explicitly from a checkout, since older installed CLIs lack the flag: `/path/to/Rig/bin/rig update --migrate --latest --dry-run`. See [pinned updates, rollback and recovery](docs/safe-updates.md) and the [migration runbook](docs/legacy-runtime-migration.md).
 
 ## Computer-use
 

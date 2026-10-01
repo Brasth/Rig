@@ -3,6 +3,14 @@
 set -euo pipefail
 export PYTHONUNBUFFERED=1
 HERE="$(cd "$(dirname "$0")" && pwd)"
+# Versioned installs: bind RIG_HOME to this launcher's runtime parent when unset.
+# Explicit nonempty RIG_HOME wins. Source/unversioned trees leave it unset.
+if [[ -z "${RIG_HOME:-}" ]]; then
+  ROOT="$(cd "$HERE/.." && pwd)"
+  if [[ -f "$ROOT/runtime-state.json" ]]; then
+    export RIG_HOME="$ROOT"
+  fi
+fi
 export PYTHONPATH="$HERE${PYTHONPATH:+:$PYTHONPATH}"
 PY=""
 for c in /opt/homebrew/bin/python3 /usr/local/bin/python3 /usr/bin/python3; do

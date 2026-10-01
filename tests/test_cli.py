@@ -1389,5 +1389,17 @@ class BrowserSkillCli(unittest.TestCase):
         )
 
 
+class UpdateUsageCli(unittest.TestCase):
+    def test_usage_lists_guided_update_and_migration(self):
+        with tempfile.TemporaryDirectory() as td:
+            proc = run_rig(Path(td), "help")
+        self.assertEqual(proc.returncode, 2)
+        for line in ("update --latest [--dry-run] [--yes]",
+                     "update --revision FULL_COMMIT_SHA [--dry-run]",
+                     "update --migrate (--latest|--revision SHA)",
+                     "update --restore-migration DIR"):
+            self.assertIn(line, proc.stdout)
+
+
 if __name__ == "__main__":
     unittest.main()
