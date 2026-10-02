@@ -1,12 +1,14 @@
-# Built-in workflow recipes
+# Workflow recipes
 
-Recipes are small, versioned JSON templates for recurring Rig workflows. Preview
-compiles typed parameters into the **existing workflow spec**, including its
-normal DAG, scope, resource and final-verification validation. It does not start
-work. No new scheduler, criterion engine, provider policy or tool authority is
-introduced.
+Templates for common multi-step work. Preview shows what a workflow will do; create/advance to start it. No automatic launching.
 
-## Catalog and preview
+**Available recipes:**
+
+- `bugfix`: implement → independent review → final verify (parent)
+- `research-implement`: read source files → implement → final verify
+- `ui-validation`: parent visual checks + verify node (parent-only)
+
+Preview (read-only):
 
 ```bash
 rig workflow recipe list --json
@@ -14,38 +16,7 @@ rig workflow recipe show bugfix --version 1 --json
 rig workflow recipe preview bugfix --file params.json --json
 ```
 
-Parent MCP equivalents are `rig_workflow_recipe_list`,
-`rig_workflow_recipe_show(name, version)` and
-`rig_workflow_recipe_preview(name, version, parameters)`, with optional `repo`.
-These tools are read-only and unavailable to children. Inspection works in an
-uninitialized or disabled project; it does not initialize or enable Rig.
-Creating and advancing the result still requires the existing enabled-project
-and adaptive-workflow gates.
-
-The bundled catalog is in `templates/workflows/*.v1.json`:
-
-- `bugfix`: `implement` → `review` → `final-verify`. One bounded local writer,
-  independent protected review, then parent final verification. Accept the writer
-  with `next=review` to retain protection. The existing scheduler resolves actual
-  provider eligibility at advance. Missing or unknown independent-review provider
-  stays explicitly blocked; preview neither probes availability nor falls back to
-  self-review.
-- `research-implement`: `research` → `implement` → `final-verify`. The research
-  node uses `role=explore`, read access and explicit existing local source files.
-  Remote source acquisition belongs to the parent before preview. Research
-  findings still need parent inspection and an explicit brief/context handoff;
-  this recipe does not automatically copy worker claims into implementation.
-- `ui-validation`: `ui-validate`, a required final `verify` node with
-  `task_domain=ui-verification`. It stays parent-only. It grants no browser,
-  computer-use, screenshot or permission capability, and never spawns a clicker.
-
-The result contains the recipe name/version/hash, normalized parameters and
-parameter hash, normalized `spec` and `spec_fingerprint`, and each node's role,
-access, effects, concrete file/resource scope and dependencies. Hashes are
-SHA-256 of canonical JSON, not signatures or proof of provider availability,
-safety, successful execution or acceptance. Identical normalized inputs and
-catalog/configuration produce identical preview output. No timestamps, job IDs,
-workflow IDs, reservations or owner tokens are allocated by preview.
+MCP: `rig_workflow_recipe_list`, `rig_workflow_recipe_show`, `rig_workflow_recipe_preview` (parent-only, no children access).
 
 ## Typed parameters
 
@@ -77,6 +48,14 @@ Optional parameters are explicit stage mappings:
   and source freshness through that API; the enabled-project gate still applies
   when referencing a package. It never builds, selects, refreshes or rebinds one,
   exposes package content, or adds source paths to writer scope
+- `preparations`: writer node ID → the unmodified `preparation` object from
+  [task preparation](task-preparation.md). Accepted by every recipe with a writer
+  stage, only for writer stages. Preview checks it against current source bytes,
+  uses the prepared brief byte-for-byte as that node's brief (no template text is
+  appended) and stores the object on the node, inside the spec hash. The node's
+  files and acceptance contract must equal the preparation. Reviewers and final
+  verifiers never receive an invented preparation. `rig task prepare` with a
+  `recipe` fills `acceptance_contracts` and `preparations` for the writer stage
 
 Unknown parameters or node IDs, unsupported versions, malformed fields, cycles,
 writer overlaps and out-of-scope criteria fail preview. The input is bounded to
@@ -84,6 +63,17 @@ writer overlaps and out-of-scope criteria fail preview. The input is bounded to
 are serialized as data, never evaluated as shell, Python, template expressions,
 hooks, provider selections or permission grants. Neither arbitrary recipe paths
 nor remote/custom templates are accepted.
+
+### Prepared nodes at advance
+
+Advance passes a prepared node's preparation to pick (which recomputes readiness
+and freshness) and to start/launch, which validates the node's raw brief, files,
+contract and current source bytes before admission. Workflow shared context is
+appended only after that validation. If an earlier stage changed a bound source,
+the later node fails as stale. Resolve/retry it, re-run `rig_task_prepare`, and
+rebind with authenticated `rig_workflow_extend` `preparations: {node_id: preparation}`;
+this replaces the node's brief with the new prepared brief, resets its routing,
+and is refused for executed, held or launched nodes, like context rebinding.
 
 ### Research scope limitation
 

@@ -1,19 +1,16 @@
-# Bounded context packages
+# Context packages
 
-A parent can explicitly select a small local context package for one job or
-workflow node. Rig embeds the selected bytes alongside the existing brief;
-it does not discover files, read conversation history or personal notes, call a
-provider, or run the supplied test-command text. Context is reference data and
-never grants authority, tools, network access, or child write permissions.
+Include specific files as reference data for a worker. A package bundles selected source files, decisions, and test commands into one immutable artifact: a reusable pinned reference.
 
-Existing plain `brief` and workflow `shared_context` strings work unchanged.
-No configuration or implicit project initialization is required or performed;
-the project must already be initialized and enabled. Restricted children cannot
-preview, build, or attach packages themselves.
+A brief is the task instructions, a context package is selected file contents, and a [workflow recipe](workflow-recipes.md) is an optional multi-stage template.
 
-## Preview, then explicitly build
+**What it does:** Included contents are reference data. Worker reads the files alongside your brief; permitted reads/writes still follow the admitted job scope (a package does NOT sandbox arbitrary access itself).
 
-Create a selection JSON outside `.rig` with only the intended inputs:
+**What it doesn't:** Discover files, run tests, call providers, or grant special access.
+
+## Build a package
+
+Create `selection.json` with files to include:
 
 ```json
 {
@@ -103,6 +100,15 @@ copying the artifact into the new admitted attempt's
 `evidence/context-package.json`. Wrapper briefs append clearly labeled reference
 data. Native registration returns `context_data` for the parent's handoff and
 stores a brief containing the same snapshot. Existing brief text is preserved.
+
+The rendered reference data is readable: a header with `package_id` and
+fingerprint, then one block per file with its path, reason, provenance,
+encoding, byte count and SHA-256, followed by the complete, untruncated content
+between `----- BEGIN FILE DATA <sha256> -----` and
+`----- END FILE DATA <sha256> -----` (markers carry the content's own hash, so
+the content cannot contain them; `final_newline=absent` notes a missing final
+newline). Stated decisions, constraints and test commands follow as JSON string
+data. All of it remains data, not instructions or commands.
 The `files` permission list is never expanded by selected context paths.
 
 Results expose `context_package` and an evidence reference

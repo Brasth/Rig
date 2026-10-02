@@ -6,19 +6,16 @@ In this file: [terminal companion](#optional-terminal-companion) · [diagram pre
 
 ## What Rig is
 
-The point is to stop you being the tired reviewer of one agent. You talk to a **parent** (intended: Codex on Astra). The parent assigns work to a **child**, then checks and sends feedback — allow/deny, another prompt — the loop you used to do yourself.
+You chat with one **parent** agent (Codex, Grok, OpenCode, OMP, Pi, agy, Cursor Desktop, or Claude Code). The parent scopes work, briefs eligible **worker** agents over MCP, waits for results, and verifies before you merge. You stay in the parent while workers run independently.
 
-You stay in **one parent**: whichever agent you opened with parent Rig MCP (no `RIG_JOB_ID`). Codex, Grok, OpenCode, OMP, Pi, agy, Cursor Desktop, and Claude Code are all valid when that MCP is wired. The parent picks **kind** and assesses complexity, risk, and uncertainty. `rig pick` selects an eligible model+effort profile at the minimum sufficient tier. Never spawn Astra, Sol, or Fable as a child.
+- **Parent** = the agent you opened with Rig MCP. Plans, checks, watches jobs, does vision/computer-use. Coordinates delegated work; may implement when routing explicitly chooses parent writes.
+- **Workers** = delegated agents. Write code, fix bugs, review, SSH/debug. Available: Grok, Claude Code, Cursor CLI, OpenCode, OMP, Pi, agy, Devin, Codex.
+- **Live parent** = the agent you actually opened (`rig status` shows it). The harness `parent =` key is just your preference (`rig use grok` / `codex` / etc.).
+- **Missing worker binary?** That worker is off. Parent picks another eligible model. Not a failure.
 
-- **Parent** (you open this): live process + parent Rig MCP. It plans, checks, talks to you, does vision / computer-use / chrome-profile, and watches jobs. It does **not** sit on write/review/SSH when a worker is effective.
-- **Workers** (the parent may spawn these): Grok, Claude Code, Cursor CLI, OpenCode, OMP, Pi, agy, Devin, Codex. They write code, fix bugs, review, SSH/debug, and gather facts. The same binary with `RIG_JOB_ID` is a child.
-- **Devin** is normally a child-only SWE-2 worker; a live Devin session is detected so the devin child is off. Devin children get a job-scoped `--config` allowlist (read-only git, `python3 -m unittest`, `bash -n`, read-only shell, Rig MCP). The Antigravity IDE/GUI is not a parent or worker; the CLI is `agy`.
-- **Live parent** is whichever CLI you actually opened with parent Rig MCP (`rig status`). The `parent =` key in `.rig/harness.toml` is only the preferred default (`rig use grok|codex|opencode|omp|pi|agy`). Opening the CLI is what makes it live. `rig use` does not admit Cursor or Claude as the preferred key.
-- **Missing binary is not a failure.** That worker is off. The parent uses a cheaper same-CLI worker. That is success.
+**Minimum setup:** one parent with Rig MCP. Optional: enable additional workers with `rig workers <name>=on`.
 
-**You need** one parent with Rig MCP. Optional worker binaries: `grok`, `claude`, `cursor-agent`, `codex`, `opencode`, `omp`, `pi`, `agy`, `devin`.
-
-Grok Bot.app and Cursor.app are GUIs, **not** spawnable workers. `rig doctor` may list them under **Apps (not spawnable)** as a hint. The Cursor worker binary is `cursor-agent`, not the GUI.
+Grok Bot.app and Cursor.app are GUIs, not workers. The Cursor worker binary is `cursor-agent`.
 
 Codex CLI and Grok CLI are installed from those products (this guide does not pin their installer URLs). Optional worker CLIs:
 
@@ -557,7 +554,9 @@ The parent does **not** ask you which model. `rig pick` maps kind → worker, mo
 
 ## Prepare a task
 
-The parent discovers concrete scope and exact checks, then uses `rig_task_prepare` or `rig task prepare --file task.json --json` to assemble an inert brief, acceptance contract and context/recipe previews. Missing inputs stay explicit. Building context and launching remain deliberate parent actions. See [Task preparation](task-preparation.md).
+Optionally, gather findings, decisions, files and checks before delegating. Your parent agent can structure this: "Prepare a brief with findings, decisions, files to change and checks, then implement the save fix." The parent reads the code; `rig_task_prepare` assembles selected inputs without discovering files or running checks.
+
+After the parent gathers and prepares, it calls MCP `rig_job_launch` or `rig_job_start` with the exact returned brief, files, acceptance contract and preparation object, plus the selected worker/model/effort/routing. See [Task preparation](task-preparation.md) for details and examples.
 
 ## Explain recovery
 
