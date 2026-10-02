@@ -541,14 +541,18 @@ def _base_choice(
 
 def _with_legacy_routing(
     choice: dict, assessment: dict, fingerprint: str, required: str, explain: bool,
-    *, kind: str, case: str,
+    *, kind: str, case: str, preparation: dict | None = None,
 ) -> dict:
     import routing_policy
+    import preparation_routing
 
     choice["routing"] = routing_policy.legacy_routing(
         choice, assessment=assessment, fingerprint=fingerprint, required=required,
         role=kind, case=case,
     )
+    if preparation is not None:
+        # Legacy routing records a validated preparation but never adjusts effort.
+        choice["routing"]["preparation"] = {key: preparation[key] for key in preparation_routing.PREPARATION_FIELDS}
     if explain:
         choice["_explain"] = True
     return choice
@@ -586,6 +590,7 @@ def pick(
     research_sources: list[str] | None = None,
     preview_config=None,
     catalog_snapshot=None,
+    preparation=None,
 ) -> dict:
     import routing_policy
 
@@ -599,6 +604,15 @@ def pick(
     assessed = routing_policy.normalize_assessment(
         kind, assessment, complexity=complexity, risk=risk, uncertainty=uncertainty, reason=assessment_reason,
     )
+    prepared = None
+    if preparation not in (None, ""):
+        if preview_config is not None or catalog_snapshot is not None:
+            raise ValueError("routing preview does not accept a preparation")
+        if repo is None:
+            raise ValueError("preparation requires the project repository")
+        import preparation_binding
+        # Pick recomputes readiness and source freshness; the object itself is never trusted.
+        _draft, prepared = preparation_binding.inspect(repo, preparation)
     if mode == "smart":
         choice = routing_policy.smart_pick(
             live, effective, role, case, catalogs=catalogs, exclude=exclude,
@@ -609,7 +623,7 @@ def pick(
             policy_mode="smart", task_domain=task_domain, research_sources=research_sources,
             preview_config=preview_config, catalog_snapshot=catalog_snapshot,
             writer_job_ids=writer_job_ids, writer_snapshot_ids=writer_snapshot_ids,
-            writer_providers=writer_providers,
+            writer_providers=writer_providers, preparation=prepared,
         )
         if explain:
             choice["_explain"] = True
@@ -651,7 +665,7 @@ def pick(
                     executor_kind="wrapper", model_source="selected",
                     review={**context, "independence": independence},
                 )
-                return _with_legacy_routing(choice, assessed, fingerprint, required, explain, kind=kind, case=case)
+                return _with_legacy_routing(choice, assessed, fingerprint, required, explain, kind=kind, case=case, preparation=prepared)
             failures.append(f"{worker}: {rejection}")
             remaining = [w for w in remaining if w != worker]
         return _with_legacy_routing(
@@ -659,7 +673,7 @@ def pick(
                 kind, "", "none", classification=classification, reason=reason,
                 review={**context, "independence": "unavailable"},
             ),
-            assessed, fingerprint, required, explain, kind=kind, case=case,
+            assessed, fingerprint, required, explain, kind=kind, case=case, preparation=prepared,
         )
     worker, spawn = choose_worker(kind, effective, live, exclude=exclude)
     actual_model = (parent_model or "").strip()
@@ -687,7 +701,7 @@ def pick(
                 model_source="observed" if actual_model else "unknown",
                 reason=stay_reason,
             ),
-            assessed, fingerprint, required, explain, kind=kind, case=case,
+            assessed, fingerprint, required, explain, kind=kind, case=case, preparation=prepared,
         )
     if spawn == "none" or not worker:
         if kind == "review":
@@ -700,7 +714,7 @@ def pick(
             reason = "no effective worker; use cheaper same-CLI workers. That is success."
         return _with_legacy_routing(
             _base_choice(kind, "", "none", classification=classification, reason=reason),
-            assessed, fingerprint, required, explain, kind=kind, case=case,
+            assessed, fingerprint, required, explain, kind=kind, case=case, preparation=prepared,
         )
     parent_writes = spawn == "native" and kind in {"implement", "hard", "mini", "bulk"}
     native_agent = "" if parent_writes else (NATIVE.get((worker, kind), "") if spawn == "native" else "")
@@ -735,12 +749,29 @@ def pick(
             executor_kind=executor_kind,
             model_source=model_source,
         ),
-        assessed, fingerprint, required, explain, kind=kind, case=case,
+        assessed, fingerprint, required, explain, kind=kind, case=case, preparation=prepared,
     )
     cid = (continues_job_id or "").strip()
     if cid:
         choice["continues_job_id"] = cid
     return choice
+
+
+def load_preparation_file(path: str):
+    """Read a bounded preparation JSON file: the object itself or a full rig task prepare result."""
+    import preparation_binding
+
+    with open(path, "rb") as stream:
+        raw = stream.read(preparation_binding.MAX_PREPARATION_BYTES * 2 + 1)
+    if len(raw) > preparation_binding.MAX_PREPARATION_BYTES * 2:
+        raise ValueError("preparation file exceeds its byte limit")
+    try:
+        value = json.loads(raw)
+    except (ValueError, UnicodeError, RecursionError):
+        raise ValueError("preparation file must be JSON") from None
+    if isinstance(value, dict) and isinstance(value.get("preparation"), dict) and "kind" not in value:
+        value = value["preparation"]
+    return value
 
 
 def assert_child_model(model: str) -> str | None:
@@ -845,6 +876,7 @@ def main() -> int:
     parser.add_argument("--policy-mode", choices=["smart", "legacy"], default="")
     parser.add_argument("--explain", action="store_true")
     parser.add_argument("--json", action="store_true")
+    parser.add_argument("--preparation", default="", help="Preparation JSON file from rig task prepare (the preparation object)")
     args = parser.parse_args()
     writer_args = dict(
         writer_job_id=args.writer_job_id, writer_cli=args.writer_cli,
@@ -884,6 +916,7 @@ def main() -> int:
 
     effective = [x.strip() for x in args.effective.split(",") if x.strip()]
     try:
+        preparation = load_preparation_file(args.preparation) if args.preparation else None
         choice = pick(
             args.live, effective, args.role, args.case, exclude=args.exclude,
             parent_model=args.parent_model, parent_effort=args.parent_effort, **writer_args,
@@ -891,8 +924,9 @@ def main() -> int:
             complexity=args.complexity, risk=args.risk, uncertainty=args.uncertainty,
             assessment_reason=args.assessment_reason, policy_mode=args.policy_mode or None,
             explain=args.explain, task_domain=args.task_domain, research_sources=args.research_sources,
+            preparation=preparation,
         )
-    except ValueError as exc:
+    except (ValueError, OSError) as exc:
         parser.error(str(exc))
     dumped = {key: value for key, value in choice.items() if not str(key).startswith("_")}
     if args.json:

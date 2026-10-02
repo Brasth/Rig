@@ -9,6 +9,8 @@ mode = "smart"
 engine = "local"
 local_policy = "scored-v1"
 objective = "balanced"
+# Opt-in preparation-aware effort pilot (docs/preparation-pilot.md). Absent means false.
+# preparation_aware_effort = false
 
 [orchestration]
 # Adaptive decomposes eligible work into a DAG (max 12 nodes). single keeps one-job behavior.

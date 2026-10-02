@@ -92,10 +92,11 @@ usage: rig <command> [args]
   context preview|build|show|validate --file PATH
   recovery guide --job ID | --workflow ID [--json]
   task prepare --file INPUT.json [--json]
+  pilot evaluate --file PILOT.json [--json]   # preparation pilot cohorts from recorded jobs
   workflow create [--file PATH] [--json]    # JSON spec from --file or stdin
   workflow recipe list|show|preview [NAME] [--file PARAMS.json] [--spec-only] [--json]
   workflow show|advance|wait|extend|resolve|approve|cancel|report <id>
-  pick [explore|mini|bulk|implement|hard|review|verify|stay] [--case TEXT] [--exclude NAME] [--json]
+  pick [explore|mini|bulk|implement|hard|review|verify|stay] [--case TEXT] [--exclude NAME] [--preparation FILE] [--json]
   session [--role KIND] [--case TEXT] [--exclude NAME] [--compact] [--terminal-limit 0..100] [--json]
     pick/session metadata: [--parent-model MODEL] [--parent-effort EFFORT] (actual session only)
     domain: [--task-domain DOMAIN] [--research-source REPO_FILE] (repeatable)
@@ -1126,7 +1127,7 @@ cmd_pick() {
     case "$1" in
       --json) json=1; shift ;;
       --explain) extra_args+=(--explain); shift ;;
-      --writer-job-id|--writer-cli|--writer-model|--writer-provider|--review-mode|--complexity|--risk|--uncertainty|--assessment-reason|--policy-mode|--task-domain|--research-source)
+      --writer-job-id|--writer-cli|--writer-model|--writer-provider|--review-mode|--complexity|--risk|--uncertainty|--assessment-reason|--policy-mode|--task-domain|--research-source|--preparation)
         [[ $# -ge 2 ]] || { echo "rig pick: $1 needs a value" >&2; exit 2; }
         if [[ "$1" == --writer-* || "$1" == --review-mode ]]; then
           review_args+=("$1" "$2")
@@ -1149,7 +1150,7 @@ cmd_pick() {
         shift 2
         ;;
       --help|-h)
-        echo "usage: rig pick [explore|mini|bulk|implement|hard|review|verify|stay] [--case TEXT] [--exclude NAME] [--parent-model MODEL] [--parent-effort EFFORT] [--task-domain DOMAIN] [--research-source REPO_FILE] [--complexity L] [--risk L] [--uncertainty L] [--explain] [--json]" >&2
+        echo "usage: rig pick [explore|mini|bulk|implement|hard|review|verify|stay] [--case TEXT] [--exclude NAME] [--parent-model MODEL] [--parent-effort EFFORT] [--task-domain DOMAIN] [--research-source REPO_FILE] [--complexity L] [--risk L] [--uncertainty L] [--preparation FILE] [--explain] [--json]" >&2
         exit 2
         ;;
       --*)
@@ -1180,7 +1181,7 @@ cmd_session() {
       --json) json=1; shift ;;
       --compact) compact=1; shift ;;
       --explain) extra_args+=(--explain); shift ;;
-      --writer-job-id|--writer-cli|--writer-model|--writer-provider|--review-mode|--complexity|--risk|--uncertainty|--assessment-reason|--policy-mode|--task-domain|--research-source)
+      --writer-job-id|--writer-cli|--writer-model|--writer-provider|--review-mode|--complexity|--risk|--uncertainty|--assessment-reason|--policy-mode|--task-domain|--research-source|--preparation)
         [[ $# -ge 2 ]] || { echo "rig session: $1 needs a value" >&2; exit 2; }
         if [[ "$1" == --writer-* || "$1" == --review-mode ]]; then
           review_args+=("$1" "$2")
@@ -1211,7 +1212,7 @@ cmd_session() {
         shift 2
         ;;
       --help|-h)
-        echo "usage: rig session [--role KIND] [--case TEXT] [--exclude NAME] [--compact] [--terminal-limit 0..100] [--parent-model MODEL] [--parent-effort EFFORT] [--task-domain DOMAIN] [--research-source REPO_FILE] [--complexity L] [--risk L] [--uncertainty L] [--explain] [--json]" >&2
+        echo "usage: rig session [--role KIND] [--case TEXT] [--exclude NAME] [--compact] [--terminal-limit 0..100] [--parent-model MODEL] [--parent-effort EFFORT] [--task-domain DOMAIN] [--research-source REPO_FILE] [--complexity L] [--risk L] [--uncertainty L] [--preparation FILE] [--explain] [--json]" >&2
         exit 2
         ;;
       --*)
@@ -1620,6 +1621,7 @@ main() {
     context) python3 "$(py_script context_packages.py)" "$@" --repo "$(repo_root)" ;;
     recovery) python3 "$(py_script recovery_guide.py)" "$@" --repo "$(repo_root)" ;;
     task) python3 "$(py_script task_preparation.py)" "$@" --repo "$(repo_root)" ;;
+    pilot) python3 "$(py_script preparation_pilot.py)" "$@" --repo "$(repo_root)" ;;
     queue) cmd_queue "$@" ;;
     tui) cmd_tui "$@" ;;
     memory) cmd_memory "$@" ;;

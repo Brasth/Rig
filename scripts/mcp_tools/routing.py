@@ -21,6 +21,7 @@ def dispatch(ctx, state):
     _review_args = ctx._review_args
     _assessment_args = ctx._assessment_args
     _domain_args = ctx._domain_args
+    _preparation_arg = ctx._preparation_arg
     format_session = ctx.format_session
     rig_harness = ctx.rig_harness
     rig_route = ctx.rig_route
@@ -40,6 +41,7 @@ def dispatch(ctx, state):
             parent_model=_optional_string(args, "parent_model"),
             parent_effort=_optional_string(args, "parent_effort"),
             repo=repo, **_review_args(args), **_assessment_args(args), **_domain_args(args),
+            preparation=_preparation_arg(args),
         )
         choice = {key: value for key, value in choice.items() if not str(key).startswith("_")}
         return _ok(json.dumps(choice, indent=2))
@@ -64,6 +66,7 @@ def dispatch(ctx, state):
                 parent_model=_optional_string(args, "parent_model"),
                 parent_effort=_optional_string(args, "parent_effort"),
                 **_review_args(args), **_assessment_args(args), **_domain_args(args),
+                preparation=_preparation_arg(args),
             )
         )
 

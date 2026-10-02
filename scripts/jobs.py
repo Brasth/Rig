@@ -1748,6 +1748,8 @@ def format_show(job: dict, log_lines: int = 24) -> str:
             f"profile={profile.get('id') or '-'}"
         )
         lines.append(f"routing_attempt  {sidecar['attempt_id']}")
+        import preparation_routing
+        lines.extend("routing_" + line for line in preparation_routing.explain_lines(routing))
         rec = routing.get("review_recommendation") or "none"
         if rec != "none":
             lines.append(f"review_recommendation  {rec} (not a completion gate)")
@@ -2337,6 +2339,8 @@ def start_job(
     research_sources: list[str] | None = None,
     acceptance_contract=None,
     context_package=None,
+    preparation=None,
+    workflow_shared_context: str = "",
 ) -> str | dict:
     """Write a running job. Does not launch a worker. Returns the job id."""
     _require_harness(repo)
@@ -2361,6 +2365,23 @@ def start_job(
     import routing_policy
     # Aliases such as explorer must receive the same default access as explore.
     access = access or ("read" if role == "research" or route.classify(role, "") in {"review", "explore", "verify"} else "write")
+    prepared = None
+    if preparation not in (None, ""):
+        import preparation_binding
+        try:
+            # Bind the raw summary/brief, scope and contract before any trusted suffix or admission write.
+            prepared = preparation_binding.validate_launch(
+                repo, preparation, brief=summary or "", files=listed,
+                acceptance_contract=acceptance_contract, access=access,
+            )
+        except ValueError as error:
+            raise SystemExit(f"rig job: {error}") from error
+    else:
+        preparation = None
+    if workflow_shared_context:
+        if not workflow_id:
+            raise SystemExit("rig job: workflow_shared_context requires a workflow job")
+        summary = (summary or "") + "\n\nShared context:\n" + workflow_shared_context
     # Resolve models before taking the admission lock. Parent models are observed,
     # while child selections still honor model bans and effective worker policy.
     if routing not in (None, "") and not isinstance(routing, dict):
@@ -2385,6 +2406,7 @@ def start_job(
                     writer_job_id=writer_job_id, writer_job_ids=writer_job_ids,
                     writer_snapshot_ids=writer_snapshot_ids, writer_providers=writer_providers,
                     review_mode="independent" if writer_job_id or writer_job_ids else "standalone",
+                    preparation=prepared,
                 )
             except (ValueError, routing_policy.ConfigError) as error:
                 raise SystemExit(f"rig job: {error}") from error
@@ -2404,7 +2426,7 @@ def start_job(
             repo, worker=worker, model=model, effort=effort, role=role,
             routing=picked_routing, assessment=assessment_obj,
             task_domain=task_domain, research_sources=research_sources,
-            executor_kind=kind, access=access, live=live,
+            executor_kind=kind, access=access, live=live, preparation=prepared,
         )
     except (ValueError, routing_policy.ConfigError) as error:
         raise SystemExit(f"rig job: {error}") from error
@@ -2420,6 +2442,13 @@ def start_job(
     if writer_job_id and writer_job_id not in writer_ids:
         writer_ids = [writer_job_id, *writer_ids]
     with admission.transaction(repo):
+        if preparation is not None:
+            import preparation_binding
+            try:
+                # Ownership boundary: recheck source bytes under the admission lock, before reserve.
+                preparation_binding.recheck(repo, preparation)
+            except ValueError as error:
+                raise SystemExit(f"rig job: {error}") from error
         lease = admission.reserve(
             repo, job_id=job_id, worker=worker, role=role, model=model, files=listed, access=access,
             owner=owner, owner_session=owner_session, queue_id=queue_id,
@@ -2945,6 +2974,7 @@ def main() -> int:
     parser.add_argument("--executor-kind", choices=["parent", "native_child"], default="")
     parser.add_argument("--files-json")
     parser.add_argument("--acceptance-contract", help="Path to a version 1 contract JSON, frozen before work")
+    parser.add_argument("--preparation", default="", help="Path to the preparation JSON from rig task prepare")
     parser.add_argument("--access", choices=["read", "write"], default="")
     parser.add_argument("--reservation-id", default=os.environ.get("RIG_RESERVATION_ID", ""))
     parser.add_argument("--attempt-id", default=os.environ.get("RIG_ATTEMPT_ID", ""))
@@ -2997,8 +3027,12 @@ def main() -> int:
                     if path.stat().st_size > contracts.MAX_CONTRACT_BYTES:
                         raise ValueError("acceptance contract exceeds 256 KiB")
                     contract = json.loads(path.read_text())
+                preparation = None
+                if args.preparation:
+                    import route
+                    preparation = route.load_preparation_file(args.preparation)
                 result = start_job(repo, job_id=job_id or "", files=files, access=args.access,
-                                   acceptance_contract=contract,
+                                   acceptance_contract=contract, preparation=preparation,
                                    queue_id=args.queue_id, native_agent_id=args.native_agent_id,
                                    writer_job_id=args.writer_job_id, continues_job_id=args.continues_job_id,
                                    writer_snapshot_id=args.writer_snapshot_id,

@@ -7,6 +7,7 @@ import acceptance_contract as contracts
 import admission
 import change_evidence
 import context_packages as context
+import preparation_handoff as handoff
 import verification
 
 INPUT_SCHEMA = {"type": "object", "additionalProperties": False, "required": ["task"],
@@ -23,6 +24,8 @@ INPUT_SCHEMA = {"type": "object", "additionalProperties": False, "required": ["t
                 "cwd": {"type": "string"}, "description": {"type": "string"}}}},
         "recipe": {"enum": ["bugfix", "research-implement", "ui-validation"]},
         "research_sources": {"type": "array", "maxItems": 100, "items": {"type": "string"}},
+        # Optional structured handoff; omission and an explicit [] are different facts.
+        **handoff.SCHEMA,
     }}
 
 
@@ -112,4 +115,5 @@ def normalize(repo, value):
     out["research_sources"] = paths(root, value.get("research_sources", []), "research_sources", 100)
     if out["research_sources"] and recipe != "research-implement":
         raise ValueError("research_sources requires research-implement recipe")
+    out.update(handoff.normalize(value, out["files"]))
     return out
