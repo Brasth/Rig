@@ -1,58 +1,56 @@
 # Smart routing
 
-Smart is the default for `rig pick`, `rig session`, and their MCP equivalents, including existing harnesses without a routing section. The parent supplies a semantic role, a task domain, and a short assessment; Rig selects a declared model+effort profile. Role describes the job stage, domain describes the work, and the assessment sets the required capability tier. Local routing uses the scored picker by default; Jev is an optional external choice engine with local fallback.
+Rig's default picker selects the right worker for your task. You provide a role (explore/mini/implement/hard/review) and Rig scores eligible workers by complexity, risk, and uncertainty.
 
-## Assessment and selection
+Quick example:
 
-| Role | Default complexity / risk / uncertainty | Minimum tier |
-| --- | --- | --- |
-| explore, mini, bulk | low / low / low | fast |
-| implement | medium / medium / medium | standard |
-| hard | high / medium / high | strong |
-| review | high / medium / medium | strong |
-| stay | not assessed | live parent; no catalog discovery |
-| verify | parent/final integration | read-only; not independent review |
+```bash
+rig pick implement --task-domain frontend --case "Build the payment form" --explain
+rig session --role hard --risk high --uncertainty high --case "Diagnose the race condition" --json
+```
 
-Any high dimension requires strong; otherwise any medium requires standard; otherwise fast. Hard and review cannot be downgraded below strong. Explicit role wins over task-text inference. Missing dimensions use role defaults and are listed in `assessment.defaulted`. High risk recommends independent review but does not add a new completion gate. Independent review unavailable stays explicit. `verify` is parent/final integration; `review` is independent post-write review. Review+seed requires file AND resource disjointness.
+**Role → worker tier:**
 
-In smart mode, an optional cost-aware lane can skip wrapper/catalog lookup. It is off by default. When `.rig/routing.json` schema 2 sets `execution.direct_parent_low_risk: true`, pick returns native parent writes only for **mini** or **implement** with complexity, risk, and uncertainty all **low**, and only when the live parent is an eligible tracked native parent (codex, grok, opencode, omp, pi, or agy) that is not excluded, the domain permits delegated implementation, and there is no configured policy for that domain. That pick is additive provenance `execution_strategy=direct-parent` with `spawn=native`, `parent_writes=true`, `executor_kind=parent`. Catalog confirmation is not consulted on that lane.
+| Role | Complexity | Risk | Uncertainty | Min Tier |
+|------|-----------|------|-------------|----------|
+| explore, mini, bulk | low | low | low | **fast** |
+| implement | medium | medium | medium | **standard** |
+| hard | high | medium | high | **strong** |
+| review | high | medium | medium | **strong** |
 
-Parent-only domains return before wrapper selection. Other roles and assessments use the wrapper catalog path unless the configured domain fallback skips it. If no eligible wrapper remains and parent fallback is permitted, parent writes use a distinct `execution_strategy=parent-fallback`. Wrapper selections are `wrapper`. Stay is `stay`. Unavailable spawn is `none`. Legacy mode never takes the direct-parent lane.
+Missing dimensions use the role defaults in the table above. Any high dimension → strong tier; any medium → standard tier; otherwise fast. Hard and review floor at strong. High risk recommends independent review but doesn't force it. `verify` = parent/final integration; `review` = independent post-write review. Picker output selects but does not launch: `rig pick` returns worker/model/effort; parent uses MCP `rig_job_launch` or `rig_job_start` with exact returned routing metadata.
 
 Profiles are filtered by worker eligibility, exclusion, role, model bans, catalog confirmation, and review-provider rules. The local picker then scores every eligible canonical model/effort group for task traits, tier fit, configured preference, transport health, and the selected objective (`quality`, `balanced`, `speed`, or `cost`). Duplicate transports for one provider/model/effort group are collapsed before scoring. Default fast/standard worker order is Codex, Grok, Claude, Devin, MiMo, OpenCode, OMP, Pi, agy. Strong/review order is Devin, Claude, Codex, Grok, OpenCode, OMP, Pi, agy. MiMo is fast/standard only. Devin is a conditional default candidate. Unavailable, disabled, or unverified Devin and MiMo are skipped automatically. Cheap implementation can select a fast model; a high-risk mini task can select strong. There is no unconditional Grok-first ladder in smart mode.
 
 ## Task domains
 
-Smart routing accepts `task_domain` independently of `role` and the fast/standard/strong tier:
+Domain describes the kind of work. It is optional: when omitted, Rig infers it from bounded English keywords, and unmatched text becomes `general`. Domains are not roles; `frontend` and `ui-verification` are domains.
 
-| Domain | Meaning and boundary |
-| --- | --- |
-| `general` | Work without a more specific domain |
-| `ui-design` | Parent-only design, vision, Figma, and visual inspection |
-| `frontend` | Implementation of UI code from the supplied brief and artifacts |
-| `ui-verification` | Parent-only visual checks and browser/computer-use verification |
-| `research` | Parent source acquisition; read-only worker synthesis only from verified local source files |
-| `backend` | Server, API, database, and other backend implementation |
-| `debugging` | Diagnosis and fixes; the role still determines read/write scope |
-| `review` | Review-stage work; does not replace role or independent-provider checks |
+| Domain | Use when |
+|--------|----------|
+| `general` | No specific type |
+| `frontend` | Building UI code (from brief/design artifacts) |
+| `backend` | Server, API, database implementation |
+| `debugging` | Investigating and fixing issues |
+| `research` | Analyzing local source files |
+| `ui-design` | Design/vision work (parent-only) |
+| `ui-verification` | Visual checks/browser tests (parent-only) |
+| `review` | Code review after implementation |
 
-An explicit domain is authoritative, including `general`. When absent, bounded English keyword rules infer a domain; role `review` defaults to domain `review`, and unmatched text defaults to `general`. Inference is a convenience, not multilingual understanding. Pass both semantic role and domain for ambiguous or non-English requests. Domain inference never changes an explicit role. For example, frontend review is `role=review, task_domain=frontend`; choosing domain `review` with another delegated role fails rather than upgrading that role into a reviewer (`stay` is allowed).
+Domain inference never changes a role. For frontend code review, use `rig session --role review --task-domain frontend`; domain never changes an explicit role.
 
-Domain labels and profile capability scores are routing heuristics, not benchmark results or claims that one model is best at a task. A frontend preference cannot lower a high-risk task below strong, turn an explore-only model into a writer, enable a worker, or make the writer's provider eligible as its independent reviewer.
+**Parent-only domains:** `ui-design` and `ui-verification` never delegate to workers. The parent keeps vision, Figma, browser/desktop access. For design-to-code: parent gets design → passes artifacts to worker (`frontend` domain) → parent verifies result (`ui-verification` domain).
 
-### Parent-only capabilities
+**Research workers** (role=explore with sources): read-only synthesis from existing local files only.
 
-`ui-design` and `ui-verification` stay with the parent. A configured policy for either must have empty `preferred_profiles` and `fallback: "parent"`; other values fail validation. A parent-only domain requested as an independent worker review reports review unavailable. Domain configuration cannot give workers vision, Figma, browser, BrowserSkill, or computer-use access.
+```bash
+rig pick explore --task-domain research \
+  --research-source docs/proposal.md \
+  --research-source docs/competitor-analysis.md \
+  --case "Compare and summarize" --json
+```
 
-A `stay` result is a routing boundary, not proof the parent has the necessary tools or authorization. Verify the parent's actual capability and existing project/backend opt-ins before acting. Missing tools do not justify enabling a backend or delegating clicks. For a design-to-code task, the parent obtains the design evidence, passes concrete artifacts to a `frontend` worker, then performs `ui-verification` itself.
-
-### Research source contract
-
-A research child requires all three: `role=explore`, `access=read`, and a nonempty `research_sources` list. Sources must already exist as readable regular files inside the repository. Use repository-relative file paths, at most 100 entries. URLs, absolute paths, `..` paths, directories, missing/unreadable files, and symlinks resolving outside the repository are rejected. Source paths are normalized and deduplicated; nonempty research sources are invalid with another domain.
-
-With no sources, or with a role other than explore, research stays with the parent for source acquisition unless the domain policy sets `fallback: "none"`, which reports unavailable. A review request reports independent worker review unavailable. Explicit `role=stay` remains parent planning/inspection even with `fallback: "none"`; no worker fallback is attempted, and registering that stay requires explicit `access=read`. Invalid supplied sources fail validation rather than being ignored. This does not grant the parent browsing access either: check its real tools and permissions separately. Once the parent has made the source material available locally, a read-only research worker can compare or synthesize it. The research contract restricts workers to the supplied local sources; missing or remote material must be requested from the parent. This adds no browser/tool permission and is not a new shell/network sandbox.
-
-Sources are checked again at launch and included in the job's read admission scope. Pass the same normalized source list when claiming queued work; a claim must cover the admitted sources. Workflow explore nodes also include sources in their read scope and cannot declare side effects or write resources. Source deletion, loss of read access, or a symlink moved outside the repository requires correcting the inputs and re-picking before launch.
+Rules: sources must exist as readable files in repo (no URLs, `..`, symlinks, missing files). Max 100 entries. Cannot grant browser/network access. Parent must acquire remote sources first. Workflow explore nodes use same constraints.
 
 ## Picker engine and Jev
 
@@ -212,11 +210,50 @@ Devin is child-only and stays disabled unless the user enables it. Built-in prof
 
 Cache is fresh for one hour. Successful results up to 24 hours old may be used while refreshing; failed refreshes preserve that bounded cache. Beyond 24 hours, a successful refresh is required. Successful-empty and unavailable are distinct. Probes are bounded and lazy in ranked-candidate order; lower-ranked catalogs are not needed after a sufficient candidate is selected. `RIG_SKIP_MODEL_CATALOG=1` is not confirmation. Static Grok/Claude/Codex pins remain explicitly unverified catalog provenance.
 
+## Direct-parent shortcut (optional)
+
+Off by default. Set it in `.rig/routing.json` (schema 2):
+
+```json
+{"schema_version": 2, "execution": {"direct_parent_low_risk": true}}
+```
+
+Only `mini` or `implement` with low complexity, risk and uncertainty qualify, and only when the live parent is an eligible native parent, the domain permits delegated implementation and has no custom policy. Rig then skips wrapper and catalog lookup and records `execution_strategy=direct-parent`. This is distinct from `parent-fallback`, which applies when no eligible wrapper exists. Both keep the actual observed (or unknown) parent model and the normal parent acceptance lifecycle. Schema 1, omitting the field, or `false` disables the shortcut.
+
+## Preparation-aware effort (opt-in pilot)
+
+Clear briefs work with this setting off. The experiment uses remaining work after the parent has prepared the task; speed and quality benefits have not been measured.
+
+Enable it in `.rig/harness.toml` only on a runtime supporting routing policy v3:
+
+```toml
+[routing]
+preparation_aware_effort = true
+```
+
+| Remaining work | Requirement |
+| --- | --- |
+| `low` | `execution_ready`: decisions settled, no open unknowns, file changes and checks specified |
+| `medium` | A normally `ready` brief when lowering effort; bounded unknowns may remain |
+| `high` | Substantial reasoning remains; capability floor is at least `strong` |
+
+Only smart wrapper jobs with role `mini`, `bulk` or `implement` and non-high risk qualify. `hard`, `review`, `verify`, `explore`, native/parent/fallback, manual and legacy jobs are excluded.
+
+Effort changes only to an exact `low`, `medium` or `high` listed in the selected profile's `supported_efforts` in `.rig/routing.json`. Built-in profiles currently declare one effort each, so enabling the flag alone cannot lower an unsupported effort. Keep support declarations specific to the exact model; CLI flags alone do not prove support.
+
+Rig never lowers the assessed capability floor: remaining `medium` requires at least `standard`, and `high` at least `strong`. Once the eligible worker/model is selected, only its effort may change. Unsupported or incomplete preparation retains baseline effort.
+
+Pass the same unmodified preparation to pick and launch/start with its exact brief, scope and acceptance contract. Source changes or edited preparation are refused; re-prepare and re-pick. Set the flag to `false` (default) to stop the experiment; re-pick after any settings change and restart parent/MCP sessions after a runtime update. Older routing records remain readable.
+
+See the [pilot procedure](preparation-pilot.md) to compare quality before timing.
+
 ## Reporting
 
 `rig routing report` is read-only. It groups recorded attempts by policy version, tier, profile, actual model, effort, and `execution_strategy`, while showing manual, legacy and missing provenance separately. Direct-parent and wrapper attempts are counted separately. It reports execution failures, cancellation, timeouts, duration, acceptance/freshness, and token coverage without equating exit zero with verification. Acceptance rate uses assessed accepted/rejected work as its denominator, excluding pending/unverified work. Changed content makes old acceptance stale.
 
 Optional `token_usage` is persisted only from an unambiguous final structured worker event: Claude-style `type=result`, or Grok `type=end` with a `stopReason` string. The usage object may include any subset of non-negative integer `input`, `output`, `reasoning`, `cached_input`, and `total`; only fields actually reported are kept. Totals and costs are never estimated or synthesized (`total_cost_usd` is ignored; a missing `total` stays unknown). Negative, malformed, non-final, or ambiguous payloads are omitted. Direct-parent jobs stay usage-unknown unless a real parent implementation supplies the same structured object. Overall known/unknown usage coverage is explicit. Per-component `n`/`sum`/`median` use only records that include that component; a missing field is unknown, not zero. Unknown actual models remain unknown; no inferred costs, correction counts, or adaptive ranking are invented.
+
+The report's `preparation` section counts cohorts by preparation (`present`, `absent`, or `unknown` for evidence before policy v3) and pilot (`on`, `off`, `n/a` for manual/legacy), with coverage and one row per baseline/requested/effective effort, floor and reason code. Attempt metrics start at admission and exclude parent preparation time.
 
 ## Rollout and rollback
 
@@ -225,7 +262,7 @@ Optional `token_usage` is persisted only from an unambiguous final structured wo
 mode = "legacy"
 ```
 
-Legacy restores the previous ladder and catalog resolver; `--policy-mode legacy` is a per-pick diagnostic override. Explicit `task_domain` or `research_sources` inputs are rejected in legacy mode; it is not a fallback that silently accepts a domain contract. To keep smart routing but disable the cost-aware lane, set `execution.direct_parent_low_risk` to `false` or omit it (schema 1 remains valid). To remove domain preferences while keeping smart routing, remove the `domains` object; schemas 1–3 are still supported if you retain only the fields that schema allows. Built-in domain inference and parent-only boundaries remain active in smart mode. Launching smart metadata against changed current policy is rejected; re-pick after configuration changes.
+Legacy restores the previous ladder and catalog resolver; `--policy-mode legacy` is a per-pick diagnostic override. Explicit `task_domain` or `research_sources` inputs are rejected in legacy mode; it is not a fallback that silently accepts a domain contract. To keep smart routing but disable the cost-aware lane, set `execution.direct_parent_low_risk` to `false` or omit it (schema 1 remains valid). To remove domain preferences while keeping smart routing, remove the `domains` object; schemas 1–3 are still supported if you retain only the fields that schema allows. Built-in domain inference and parent-only boundaries remain active in smart mode. Launching smart metadata against changed current policy is rejected; re-pick after configuration changes. To stop the effort pilot, remove `preparation_aware_effort` or set it to `false`.
 
 Orchestration is separate from routing: `[orchestration] mode = "adaptive"` (default) or `"single"`; `max_nodes` is 12. Queue and worker caps remain authoritative. Adaptive decomposes eligible work into a DAG; `single` keeps one-job behavior. Children never spawn or message children. No estimated progress, savings, or ETA.
 

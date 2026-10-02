@@ -140,6 +140,9 @@ def _pick_node(repo, node, spec, state, *, exclude=""):
             "review_mode": "independent",
         }
     case = node.get("brief") or spec.get("case") or spec.get("title") or node["id"]
+    if node.get("preparation") is not None:
+        # Same pick path as single jobs; pick recomputes readiness from current sources.
+        extra["preparation"] = node["preparation"]
     return rig_route.pick(
         live, effective, node["role"], case, exclude=exclude, repo=repo, assessment=assessment,
         task_domain=node.get("task_domain", ""), research_sources=node.get("research_sources"), **extra,
@@ -177,7 +180,12 @@ def _default_launch(repo, *, node, spec, state, choice, owner, owner_session, re
     files = list(node.get("files") or [])
     brief = node.get("brief") or spec.get("case") or spec.get("title") or node["id"]
     shared = state.get("shared_context") if state.get("shared_context_frozen") else spec.get("shared_context") or ""
-    if shared:
+    prepared = {}
+    if node.get("preparation") is not None:
+        # The raw node brief is validated against its preparation first; Rig appends the
+        # trusted shared-context suffix afterwards, so a suffix can never spoof the binding.
+        prepared = {"preparation": node["preparation"], "workflow_shared_context": shared or ""}
+    elif shared:
         brief = brief + "\n\nShared context:\n" + shared
     identity = {
         "workflow_id": spec["workflow_id"],
@@ -195,7 +203,7 @@ def _default_launch(repo, *, node, spec, state, choice, owner, owner_session, re
             routing=choice.get("routing"), assessment=node.get("assessment") or None,
             task_domain=node.get("task_domain", ""), research_sources=node.get("research_sources"),
             acceptance_contract=node.get("acceptance_contract"),
-            return_details=True,
+            return_details=True, **prepared,
             resources=resources, allow_read_overlap_reservations=allow_read, **identity,
             **_supported_kwargs(rig_jobs.start_job, handoff),
         )
@@ -210,6 +218,7 @@ def _default_launch(repo, *, node, spec, state, choice, owner, owner_session, re
         assessment=node.get("assessment") or None,
         task_domain=node.get("task_domain", ""), research_sources=node.get("research_sources"),
         acceptance_contract=node.get("acceptance_contract"),
+        **prepared,
         resources=resources, allow_read_overlap_reservations=allow_read, **identity,
         **handoff,
     )

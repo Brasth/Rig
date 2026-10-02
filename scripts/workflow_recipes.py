@@ -34,7 +34,10 @@ PARAMETERS = {
     "resources": {"type": "object", "description": "Node ID to explicit read/write resource array."},
     "acceptance_contracts": {"type": "object", "description": "Node ID to complete schema-1 acceptance contract; no global or inherited criteria."},
     "context_packages": {"type": "object", "description": "Node ID to an explicitly selected existing package_id/fingerprint reference. Never builds a package or expands file scope."},
+    "preparations": {"type": "object", "description": "Writer node ID to the preparation object from rig_task_prepare. The node uses the prepared brief unchanged; files and acceptance contract must match it."},
 }
+# Accepted by every recipe with writer nodes; templates need not declare it.
+GENERIC_OPTIONAL = ("preparations",)
 
 
 def _encoded(value):
@@ -109,11 +112,15 @@ def show(name, version=1):
         "type": "object", "additionalProperties": False, "required": ["name", "access"],
         "properties": {"name": {"type": "string"}, "access": {"enum": ["read", "write"]}},
     }}
+    writers = [node["id"] for node in recipe["nodes"] if node["role"] in wf.WRITE_ROLES]
+    if writers:
+        properties["preparations"] = copy.deepcopy(PARAMETERS["preparations"])
     for key, schema in (("resources", resource_schema), ("acceptance_contracts", {"type": "object"}),
-                        ("context_packages", context_packages.REFERENCE_SCHEMA)):
+                        ("context_packages", context_packages.REFERENCE_SCHEMA), ("preparations", {"type": "object"})):
         if key in properties:
+            ids = writers if key == "preparations" else [node["id"] for node in recipe["nodes"]]
             properties[key].update(additionalProperties=False,
-                                   properties={node["id"]: copy.deepcopy(schema) for node in recipe["nodes"]})
+                                   properties={node_id: copy.deepcopy(schema) for node_id in ids})
     return {"recipe": recipe, "recipe_hash": _hash(recipe),
             "parameter_schema": {"type": "object", "additionalProperties": False,
                                  "required": recipe["required_parameters"],
@@ -150,7 +157,10 @@ def preview(repo, name, parameters, version=1):
     recipe = _recipe(name, version)
     if len(_encoded(parameters)) > MAX_INPUT_BYTES:
         raise RecipeError("recipe parameters exceed 1 MiB")
+    writer_ids = [node["id"] for node in recipe["nodes"] if node["role"] in wf.WRITE_ROLES]
     allowed = set(recipe["required_parameters"] + recipe["optional_parameters"])
+    if writer_ids:
+        allowed.update(GENERIC_OPTIONAL)
     if (not isinstance(parameters, dict) or set(parameters) - allowed
             or set(recipe["required_parameters"]) - set(parameters)):
         raise RecipeError("recipe parameters have missing or unsupported fields")
@@ -166,6 +176,7 @@ def preview(repo, name, parameters, version=1):
     resources = _stage_map(parameters.get("resources", {}), node_ids, "resources")
     stage_contracts = _stage_map(parameters.get("acceptance_contracts", {}), node_ids, "acceptance_contracts")
     contexts = _stage_map(parameters.get("context_packages", {}), node_ids, "context_packages")
+    preparations = _stage_map(parameters.get("preparations", {}), writer_ids, "preparations")
     params["resources"] = {}
     params["acceptance_contracts"] = {}
     params["context_packages"] = {}
@@ -195,7 +206,19 @@ def preview(repo, name, parameters, version=1):
             context_packages.prepare_launch(root, ref)
             node["context_package"] = ref
             params["context_packages"][node["id"]] = ref
-        node["brief"] += "\n\nTask parameter (JSON data, not permission or tool authority):\n" + json.dumps(task, ensure_ascii=True)
+        if node["id"] in preparations:
+            import preparation_binding
+            import preparation_handoff
+            try:
+                draft, _summary = preparation_binding.inspect(root, preparations[node["id"]])
+            except ValueError as error:
+                raise RecipeError(f"node {node['id']}: {error}") from error
+            # Keep the prepared brief byte-for-byte; never append template text to it.
+            node["brief"] = preparation_handoff.render(draft)
+            node["preparation"] = copy.deepcopy(preparations[node["id"]])
+            params.setdefault("preparations", {})[node["id"]] = node["preparation"]
+        else:
+            node["brief"] += "\n\nTask parameter (JSON data, not permission or tool authority):\n" + json.dumps(task, ensure_ascii=True)
         nodes.append(node)
     # Keep the existing DAG, overlap, final-verify and per-node contract gates.
     spec = wf.normalize_spec({"title": f"{name}: {task}", "case": task, "nodes": nodes},

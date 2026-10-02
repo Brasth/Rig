@@ -71,6 +71,33 @@ class RoutingReport(unittest.TestCase):
         self.assertEqual(before, after)
         return result
 
+    def test_preparation_cohorts_coverage_and_effort_codes(self):
+        prep = {"status": "valid", "version": 1, "fingerprint": "f" * 64, "ready": True, "execution_ready": True,
+                "remaining_work": "low", "gap_codes": []}
+        effort = {"pilot": True, "baseline": "medium", "requested": "low", "effective": "low",
+                  "reason": "adjusted", "floor": ""}
+        cases = [
+            ({"policy_mode": "smart", "policy_version": 2}, ("unknown", "unknown")),
+            ({"policy_mode": "smart", "policy_version": 3}, ("absent", "off")),
+            ({"policy_mode": "manual", "policy_version": 3, "preparation": prep}, ("present", "n/a")),
+            ({"policy_mode": "smart", "policy_version": 3, "preparation": prep, "effort": effort}, ("present", "on")),
+        ]
+        for routing, expected in cases:
+            sidecar = {"schema_version": 1, "attempt_id": "att-1", "written_at": "2026-09-01T00:00:00Z",
+                       "routing": {"execution_strategy": "wrapper", "required_tier": "standard", **routing}}
+            result = self._build([_job()], sidecar=sidecar)
+            cohorts = result["preparation"]["cohorts"]
+            with self.subTest(expected=expected):
+                self.assertEqual([(row["preparation"], row["pilot"], row["attempts"]) for row in cohorts],
+                                 [(*expected, 1)])
+                known = 0 if expected[0] == "unknown" else 1
+                self.assertEqual(result["preparation"]["coverage"]["known"], known)
+                self.assertEqual(result["preparation"]["coverage"]["unknown"], 1 - known)
+        self.assertEqual([(row["baseline"], row["effective"], row["reason"]) for row in result["preparation"]["efforts"]],
+                         [("medium", "low", "adjusted")])
+        self.assertIn("preparation=present pilot=on n=1", report.format_report(result))
+        self.assertNotIn("Fix saving", json.dumps(result))
+
     def test_running_exit0_is_not_exit0(self):
         result = self._build([_job(status="running", exit_code=0, ended_at="")])
         self.assertEqual(result["totals"]["exit0"], 0)

@@ -25,6 +25,7 @@ def dispatch(ctx, state):
     _workflow_response = ctx._workflow_response
     _execution_args = ctx._execution_args
     _domain_args = ctx._domain_args
+    _preparation_arg = ctx._preparation_arg
     _child_ask = ctx._child_ask
     child_job_dir = ctx.child_job_dir
     child_job_id = ctx.child_job_id
@@ -266,6 +267,7 @@ def dispatch(ctx, state):
                     access=_optional_string(args, "access"), queue_id=_optional_string(args, "queue_id"),
                     native_agent_id=_optional_string(args, "native_agent_id"), return_details=True,
                     routing=args.get("routing"), assessment=args.get("assessment"), **_domain_args(args),
+                    preparation=_preparation_arg(args),
                     **_job_ownership_args(args, repo),
             )
             return {**_ok(result["job_id"]), "structuredContent": result}
@@ -370,6 +372,7 @@ def dispatch(ctx, state):
                 review_mode=review_mode if review_mode is not None else "standalone",
                 routing=args.get("routing"),
                 assessment=args.get("assessment"), **_domain_args(args),
+                preparation=_preparation_arg(args),
                 **_job_ownership_args(args, repo),
             )
         except rig_launch.LaunchError as exc:

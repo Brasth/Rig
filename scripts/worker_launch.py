@@ -29,11 +29,14 @@ LAUNCH_KEYS = frozenset({
     "writer_provider", "writer_job_ids", "writer_snapshot_ids", "writer_providers",
     "review_mode", "live", "routing", "assessment", "resources", "task_domain", "research_sources",
     "workflow_id", "workflow_node_id", "workflow_spec_hash", "workflow_attempt",
-    "allow_read_overlap_reservations", "acceptance_contract", "context_package",
+    "allow_read_overlap_reservations", "acceptance_contract", "context_package", "preparation",
+    # Internal scheduler suffix, appended only after the raw brief is validated.
+    "workflow_shared_context",
 })
 OBJECT_LAUNCH_KEYS = frozenset({
     "files", "routing", "assessment", "resources", "writer_job_ids", "research_sources",
     "writer_snapshot_ids", "writer_providers", "allow_read_overlap_reservations", "acceptance_contract", "context_package",
+    "preparation",
 })
 WRAPPER_ENV = (
     "PATH", "HOME", "USER", "LANG", "LC_ALL", "LC_CTYPE", "TZ", "TMPDIR",
@@ -284,14 +287,34 @@ def launch(repo, **kwargs) -> dict:
     brief = _require_string(kwargs.get("brief"), "brief")
     if not brief.strip():
         raise LaunchError("brief is required")
+    case = _require_string(kwargs.get("case"), "case")
+    role = _require_string(kwargs.get("role"), "role").strip() or rig_route.classify("", case)
+    preparation = kwargs.get("preparation")
+    prepared = None
+    if preparation not in (None, ""):
+        import preparation_binding
+        try:
+            # Bind the raw brief before any trusted suffix; no admission state is touched yet.
+            prepared = preparation_binding.validate_launch(
+                repo, preparation, brief=brief, files=_files(kwargs.get("files")),
+                acceptance_contract=kwargs.get("acceptance_contract"),
+                access=_access(role, _require_string(kwargs.get("access"), "access")),
+            )
+        except ValueError as error:
+            raise LaunchError(str(error)) from error
+    else:
+        preparation = None
+    shared = _require_string(kwargs.get("workflow_shared_context"), "workflow_shared_context")
+    if shared:
+        if not _require_string(kwargs.get("workflow_id"), "workflow_id"):
+            raise LaunchError("workflow_shared_context requires a workflow launch")
+        brief += "\n\nShared context:\n" + shared
     try:
         context = context_packages.prepare_launch(repo, kwargs.get("context_package"))
     except context_packages.ContextPackageError as error:
         raise LaunchError(str(error)) from error
     if context is not None:
         brief += "\n\n" + context_packages.render(context)
-    case = _require_string(kwargs.get("case"), "case")
-    role = _require_string(kwargs.get("role"), "role").strip() or rig_route.classify("", case)
     worker = _require_string(kwargs.get("worker"), "worker").strip()
     model = _require_string(kwargs.get("model"), "model").strip()
     effort = _require_string(kwargs.get("effort"), "effort").strip()
@@ -323,7 +346,7 @@ def launch(repo, **kwargs) -> dict:
             writer_providers=kwargs.get("writer_providers"),
             review_mode=_require_string(kwargs.get("review_mode"), "review_mode").strip() or "standalone",
             repo=repo, assessment=assessment_obj,
-            task_domain=task_domain, research_sources=research_sources,
+            task_domain=task_domain, research_sources=research_sources, preparation=preparation,
         )
         if choice.get("spawn") != "run-worker" or not choice.get("worker"):
             raise LaunchError(choice.get("reason") or "no eligible wrapper worker")
@@ -364,6 +387,7 @@ def launch(repo, **kwargs) -> dict:
                     writer_snapshot_ids=kwargs.get("writer_snapshot_ids"),
                     writer_providers=kwargs.get("writer_providers"),
                     review_mode=_require_string(kwargs.get("review_mode"), "review_mode").strip() or "standalone",
+                    preparation=prepared,
                 )
             except (ValueError, routing_policy.ConfigError) as error:
                 raise LaunchError(str(error)) from error
@@ -390,6 +414,7 @@ def launch(repo, **kwargs) -> dict:
             routing=picked_routing, assessment=assessment_obj,
             task_domain=task_domain, research_sources=research_sources,
             executor_kind="wrapper", access=_access(role, _require_string(kwargs.get("access"), "access")),
+            preparation=prepared,
         )
     except (ValueError, routing_policy.ConfigError) as error:
         raise LaunchError(str(error)) from error
@@ -493,6 +518,13 @@ def launch(repo, **kwargs) -> dict:
         raise LaunchError(message) from error
 
     with admission.transaction(repo):
+        if preparation is not None:
+            import preparation_binding
+            try:
+                # Ownership boundary: recheck source bytes under the admission lock, before reserve.
+                preparation_binding.recheck(repo, preparation)
+            except ValueError as error:
+                raise LaunchError(str(error)) from error
         try:
             record = admission.reserve(
                 repo, job_id=job_id, worker=worker, role=role, model=model, files=listed,

@@ -23,6 +23,11 @@ ROUTE_PY="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/route.py"
 EVIDENCE_PY="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/change_evidence.py"
 ADMISSION_PY="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/admission.py"
 CHILD_MCP_PY="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/child_mcp.py"
+WORKER_BRIEF_PY="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/worker_brief.py"
+# One canonical preamble for generated briefs and this fallback; keep the sourced text if unavailable.
+if _canonical_preamble="$(python3 "$WORKER_BRIEF_PY" preamble 2>/dev/null)" && [[ -n "$_canonical_preamble" ]]; then
+  WORKER_PREAMBLE="$_canonical_preamble"
+fi
 EXECUTION_MODE="dry_run"
 [[ "${RIG_LIVE:-0}" == "1" ]] && EXECUTION_MODE="live"
 OWNER_CREDENTIALS=""

@@ -63,6 +63,10 @@ def parse_harness(path: Path) -> dict:
         if section == "computer-use" and key == "enabled":
             out["computer_use"]["enabled"] = _toml_exact_true(val)
             continue
+        if section == "routing" and key == "preparation_aware_effort":
+            # Keep the raw token: routing config accepts only an exact TOML boolean.
+            out["routing"]["preparation_aware_effort"] = val
+            continue
         if section == "project" and key == "enabled":
             raw_enabled = val.strip()
             if raw_enabled == "true":

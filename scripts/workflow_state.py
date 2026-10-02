@@ -42,7 +42,7 @@ DEFAULT_MAX_NODES = 12
 LAUNCHED_CONTRACT = (
     "id", "role", "effects", "files", "resources", "depends_on", "required",
     "brief", "kind", "final", "priority", "assessment", "shared_context",
-    "task_domain", "research_sources", "context_package", "acceptance_contract",
+    "task_domain", "research_sources", "context_package", "acceptance_contract", "preparation",
 )
 
 
@@ -249,6 +249,9 @@ def _normalize_node(raw, index, *, max_nodes):
     if "acceptance_contract" in raw:
         # Normalize after final-verify policy has established the complete scope.
         node["acceptance_contract"] = copy.deepcopy(raw["acceptance_contract"])
+    if raw.get("preparation") not in (None, ""):
+        # Explicit per-node preparation only; validated against the brief/scope/contract with the repo.
+        node["preparation"] = copy.deepcopy(raw["preparation"])
     return node
 
 
@@ -406,6 +409,28 @@ def _ensure_final_verify(nodes, max_nodes):
     return nodes
 
 
+def _check_node_preparation(repo, node):
+    """Internal consistency only; launch revalidates current source bytes."""
+    import preparation_binding
+    import preparation_handoff
+
+    if repo is None:
+        raise WorkflowError("workflow preparations require a repository for validation")
+    if node["role"] not in WRITE_ROLES or node.get("final") or node.get("kind") == "final-verify":
+        raise WorkflowError(f"node {node['id']}: preparation applies only to writer nodes")
+    try:
+        draft, _summary = preparation_binding.inspect(repo, node["preparation"], fresh=False)
+    except ValueError as error:
+        raise WorkflowError(f"node {node['id']}: {error}") from error
+    if node["brief"] != preparation_handoff.render(draft):
+        raise WorkflowError(f"node {node['id']}: brief must equal the prepared brief exactly")
+    if sorted(node["files"]) != sorted(draft["files"]):
+        raise WorkflowError(f"node {node['id']}: files must equal the prepared writer scope")
+    contract = node.get("acceptance_contract")
+    if contract is None or contracts.fingerprint(contract) != node["preparation"]["acceptance"]["contract_fingerprint"]:
+        raise WorkflowError(f"node {node['id']}: acceptance_contract must equal the prepared contract")
+
+
 def normalize_spec(raw, *, max_nodes=DEFAULT_MAX_NODES, workflow_id="", repo=None):
     if not isinstance(raw, dict):
         raise WorkflowError("workflow spec must be an object")
@@ -441,6 +466,9 @@ def normalize_spec(raw, *, max_nodes=DEFAULT_MAX_NODES, workflow_id="", repo=Non
             )
         except ValueError as error:
             raise WorkflowError(f"node {node['id']}: {error}") from error
+    for node in nodes:
+        if "preparation" in node:
+            _check_node_preparation(repo, node)
     wid = str(raw.get("workflow_id") or workflow_id or "").strip()
     spec = {
         "version": 1,
@@ -1000,33 +1028,51 @@ def create_workflow(repo, raw, *, owner=None, owner_session="", queue_id=""):
         }
 
 
-def _rebind_contexts(root, spec, state, replacements):
+def _rebind_contexts(root, spec, state, replacements, preparations=None):
     """Explicitly rebind only never-executed nodes with no held attempt."""
     if not isinstance(replacements, dict):
         raise WorkflowError("context_packages must map existing node ids to pinned references")
+    preparations = {} if preparations is None else preparations
+    if not isinstance(preparations, dict):
+        raise WorkflowError("preparations must map existing node ids to preparation objects")
     nodes = copy.deepcopy(spec["nodes"])
     by_id = {node["id"]: node for node in nodes}
     events = list_events(root, spec["workflow_id"])
     reservations = admission.list_reservations(root, include_released=True)
-    for node_id, ref in replacements.items():
+
+    def never_executed(node_id, label):
         if node_id not in by_id:
-            raise WorkflowError("context rebind requires an existing workflow node")
+            raise WorkflowError(f"{label} rebind requires an existing workflow node")
         row = (state.get("nodes") or {}).get(node_id) or {}
         if (row.get("status") not in {"pending", "ready", "blocked"}
                 or any(row.get(key) for key in ("launched", "ran", "accepted", "job_id", "reservation_id", "attempt_id"))):
-            raise WorkflowError(f"node {node_id}: context rebind requires a never-executed node; resolve/release the unlaunched attempt first")
+            raise WorkflowError(f"node {node_id}: {label} rebind requires a never-executed node; resolve/release the unlaunched attempt first")
         if any(event.get("node_id") == node_id and event.get("kind") in {"launched", "advanced"} for event in events):
-            raise WorkflowError(f"node {node_id}: context for an executed node is immutable")
+            raise WorkflowError(f"node {node_id}: {label} for an executed node is immutable")
         for record in reservations:
             if record.get("workflow_id") != spec["workflow_id"] or record.get("workflow_node_id") != node_id:
                 continue
             if record.get("stage") != "released" or not record.get("stopped") or record.get("launch_started"):
-                raise WorkflowError(f"node {node_id}: context rebind refused for an active, reserved, or executed attempt")
+                raise WorkflowError(f"node {node_id}: {label} rebind refused for an active, reserved, or executed attempt")
+
+    for node_id, ref in replacements.items():
+        never_executed(node_id, "context")
         try:
             context_packages.prepare_launch(root, ref)
         except context_packages.ContextPackageError as error:
             raise WorkflowError(f"node {node_id}: {error}") from error
         by_id[node_id]["context_package"] = context_packages.normalize_reference(ref)
+    for node_id, value in preparations.items():
+        never_executed(node_id, "preparation")
+        import preparation_binding
+        import preparation_handoff
+        try:
+            # A replacement must be fresh now; the launch revalidates it again.
+            draft, _summary = preparation_binding.inspect(root, value)
+        except ValueError as error:
+            raise WorkflowError(f"node {node_id}: {error}") from error
+        by_id[node_id]["preparation"] = copy.deepcopy(value)
+        by_id[node_id]["brief"] = preparation_handoff.render(draft)
     return nodes
 
 
@@ -1053,12 +1099,16 @@ def extend_workflow(repo, workflow_id, added_nodes, *, owner_token="", owner=Non
         replacements = added_nodes.get("context_packages", {}) if isinstance(added_nodes, dict) else {}
         if not isinstance(replacements, dict):
             raise WorkflowError("context_packages must map existing node ids to pinned references")
+        preparations = added_nodes.get("preparations", {}) if isinstance(added_nodes, dict) else {}
+        if not isinstance(preparations, dict):
+            raise WorkflowError("preparations must map existing node ids to preparation objects")
         extra = added_nodes if isinstance(added_nodes, list) else (added_nodes or {}).get("nodes", [])
         if not isinstance(extra, list):
             raise WorkflowError("extension nodes must be an array")
-        if not extra and not replacements:
-            raise WorkflowError("extension needs additional nodes or explicit context rebindings")
-        rebound_nodes = _rebind_contexts(root, spec, state, replacements) if replacements else spec["nodes"]
+        if not extra and not replacements and not preparations:
+            raise WorkflowError("extension needs additional nodes or explicit context/preparation rebindings")
+        rebound_nodes = (_rebind_contexts(root, spec, state, replacements, preparations)
+                         if replacements or preparations else spec["nodes"])
         for item in extra:
             nid = str((item or {}).get("id") or "").strip() if isinstance(item, dict) else ""
             if nid in launched:
@@ -1086,7 +1136,7 @@ def extend_workflow(repo, workflow_id, added_nodes, *, owner_token="", owner=Non
         for node in spec["nodes"]:
             state.setdefault("nodes", {}).setdefault(node["id"], _empty_node_state(node))
         for nid, row in list(state["nodes"].items()):
-            if nid in replacements:
+            if nid in replacements or nid in preparations:
                 row.update(routing=None, exclude=[], blocker="")
             if isinstance(row.get("approval"), dict) and row["approval"].get("spec_hash") != spec["spec_hash"]:
                 row["approval"] = None
@@ -1097,6 +1147,7 @@ def extend_workflow(repo, workflow_id, added_nodes, *, owner_token="", owner=Non
             "previous_spec_hash": previous, "spec_hash": spec["spec_hash"],
             "added": [node["id"] for node in spec["nodes"] if node["id"] not in previous_ids],
             "context_rebound": sorted(replacements),
+            "preparation_rebound": sorted(preparations),
         })
         return public_record(spec, state)
 

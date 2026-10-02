@@ -2,103 +2,60 @@
 
 [![M8ven Score](https://m8ven.ai/badge/mcp/brasth/rig)](https://m8ven.ai/mcp/brasth/rig)
 
-Stop babysitting coding agents.
-
-Rig is a CLI harness. You talk to a parent agent; it scopes work, briefs workers over MCP, then verifies results. Done means accepted checks, not exit 0 vibes.
-
-**New: Adaptive workflows** (default). The parent can decompose eligible work into a DAG of disjoint workers, own the graph, briefs, and acceptance, and only mark verified after parent checks. Children never spawn children. See [Adaptive workflows](docs/usage.md#adaptive-workflows).
+Stop babysitting AI agents. Rig is a task harness: you chat with a **parent agent**; it briefs **worker agents** over MCP, then verifies results before merge.
 
 [![Watch the Rig demo](https://img.youtube.com/vi/KuhHMH--oGk/maxresdefault.jpg)](https://youtu.be/KuhHMH--oGk)
 
-Failing tests → Codex parent → Rig TUI → Grok worker over MCP → parent verifies → green.
+## Setup & use
 
-- Parent scopes files (no dumping the whole chat as the child prompt)
-- Worker runs from a brief over MCP (adaptive: parallel disjoint nodes under parent control)
-- Parent verifies before you merge
-
-## Quickstart
+**Prerequisites:** Install and sign in to your preferred agents (Codex, Grok, Claude Code, Cursor, OpenCode, OMP, Pi, or agy). Example: use Codex as parent and Claude as worker.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Brasth/Rig/main/install.sh | bash
 cd your-repo
 rig init
+rig workers claude=on
+rig doctor
 ```
 
-Configure workers in `.rig/harness.toml`, then open whichever agent has parent Rig MCP (Codex, Grok, OpenCode, OMP, Pi, agy, Cursor Desktop, or Claude Code) and type a normal prompt, for example `fix the failing tests in tests/test_cli.py`. Do not use `rig run` for normal work.
+Then open your parent agent with Rig MCP in the repo (new thread needed) and type: `Fix the failing tests in tests/test_cli.py`. Enabling a worker does not install its CLI; it just permits Rig to spawn that agent if available. Open a new parent thread for Rig MCP to load.
 
-### Repository lifecycle
+## Everyday commands
 
-`rig off` disables Rig for this repository only. It preserves `.rig` history, queue, memory, worker and routing settings, and removes only Rig's managed `AGENTS.md` block. It refuses while work or a workflow still holds ownership; queued items stay parked. `rig on` restores the managed block and re-enables the same repository settings. Both commands are idempotent and require a new parent thread because already-loaded instructions cannot be removed from a live context. This is separate from `rig workers`, `rig computer-use off`, `rig browser-skill off`, and `rig uninstall`: those control child eligibility, capabilities, and machine integration respectively.
+| Command | Purpose |
+| --- | --- |
+| `rig status` | Show parent and available workers |
+| `rig jobs` | List running and recent tasks |
+| `rig tui` | Open task board and queue manager |
+| `rig workers claude=on` / `rig workers claude=off` | Allow/disallow a worker |
+| `rig off` / `rig on` | Disable/enable Rig for this repo (new parent thread needed) |
+| `rig update` | Update to latest version |
 
-**Parents:** Live process + parent Rig MCP (no `RIG_JOB_ID`). Intended: Codex on Astra. Also supported: Grok, OpenCode, OMP, Pi, agy, Cursor Desktop, and Claude Code when Rig MCP is wired. The same binary with `RIG_JOB_ID` is a child. A live Devin session is detected so the devin child is off. MiMo is worker-only. **Effective workers:** Grok, Claude, OpenCode, OMP, Pi, agy, Codex, opt-in Devin (SWE-2 only), opt-in MiMo Code, and Cursor. Cursor jobs run with a job-scoped `--plugin-dir` Rig MCP and `--force`; other plugin MCPs stay visible, so the wrapper fails the job on any non-Rig MCP call (tripwire). Cursor is last resort in pick. Missing worker binary → that worker is off. Smart routing scores eligible task fit by default; Jev can be enabled per project with a global Keychain key. If no eligible worker exists, parent fallback preserves its actual model. Never spawn Astra, Sol, or Fable as a child.
+## Lifecycle
 
-**Try the demo:** [failing tests through parent verify](https://youtu.be/KuhHMH--oGk).
+`rig off` disables Rig for this repository, preserving `.rig` history, queue, memory and settings; it refuses while work or a workflow still holds ownership. `rig on` restores the managed instructions (it does not resume stopped jobs). Both need a new parent thread. See [repository lifecycle](docs/usage.md).
 
-## Navigation
+## Learn more
 
-- [Overall flow](docs/rig-flow.md)
-- [Install](docs/usage.md#install) · [Per project](docs/usage.md#per-project-setup) · [Configure](docs/usage.md#configure-agents) · [Computer-use](#computer-use) · [BrowserSkill](#browserskill)
-- [Smart routing](docs/smart-routing.md) · [Task domains and model preferences](docs/smart-routing.md#task-domains)
-- [Adaptive workflows](#adaptive-workflows)
-- [Everyday prompts](docs/usage.md#how-your-prompt-is-handled) · [Queue](docs/usage.md#how-the-queue-works)
-- [Terminal companion](docs/usage.md#optional-terminal-companion) · [Watch](docs/usage.md#watch-jobs-memory)
-- [Verification](#verification-and-cancellation) · [Cancellation](docs/rig-flow.md#closing-cancelling-and-stopping)
-- [Task preparation](docs/task-preparation.md) · [Guided recovery](docs/recovery-guide.md)
-- [Pinned updates and rollback](docs/safe-updates.md)
-- [Task readiness](docs/usage.md#task-aware-doctor) · [Troubleshooting](docs/usage.md#troubleshooting) · [Docs](docs/usage.md)
+- [How Rig works](docs/rig-flow.md) — parent, workers, queue overview
+- [Usage guide](docs/usage.md) — install, setup, daily workflows
+- [Task preparation](docs/task-preparation.md) — structure work before delegating
+- [Smart routing](docs/smart-routing.md) — how Rig picks the right worker (parent uses MCP `rig_job_launch` / `rig_job_wait` with selected worker/model)
+- [Safe updates](docs/safe-updates.md) — pinning, rollback, and recovery
 
-Update with `rig update`: in a terminal it resolves official `main` to one full commit, previews, and asks before applying (`rig update --latest --dry-run` / `--yes` for scripts; `--revision FULL_COMMIT_SHA` for exact pins). It refreshes owned runtime/integration assets without rerunning optional installers or changing consent/configuration. Legacy installs (no `runtime-state.json`) migrate explicitly from a checkout, since older installed CLIs lack the flag: `/path/to/Rig/bin/rig update --migrate --latest --dry-run`. See [pinned updates, rollback and recovery](docs/safe-updates.md) and the [migration runbook](docs/legacy-runtime-migration.md).
+## Success vs. verification
 
-## Computer-use
+Execution **ok** = worker finished. **Verified** = parent accepted result (ran checks, confirmed behavior). Only verified tasks count as done.
 
-Generic computer-use requests do not select Rig. First check that `.rig/harness.toml` exists and the project is enabled (`[project] enabled=false` disables Rig; an existing legacy harness without that section stays enabled), parent Rig MCP is available, and the selected backend is opted in and available. Global skill installation or a tool name alone is not opt-in. If Rig is uninitialized, disabled, or unavailable, or its backend is not opted in, use an available host-native computer/browser capability under its own instructions. Do not initialize, enable, install, unlock, or repair Rig merely because the user mentioned computer use. If the user explicitly requests Rig, explain the blocker and ask before setup instead of silently switching providers. Once a Rig backend is selected, preserve its permission, grant, freshness, child-isolation, and no-bypass rules; a denial is never a reason to switch tools. The Rig-specific routing and fallback rules below apply only after this selection gate.
+Press Esc/Stop to cancel: After explicit cancellation, do not re-wait, re-pick, or drain automatically. If a wait loses transport, inspect once with `rig job wait ID --timeout 0`. `stop-unconfirmed` and `native-cancel-required` keep ownership until stop is confirmed. See [cancellation details](docs/usage.md#scenarios).
 
-Install and `rig setup` **ask** to install Cua Driver and Rig’s parent desktop/browser skills (default **No**). Without a TTY, setup skips unless `--cua-driver` or `RIG_INSTALL_CUA_DRIVER=1` is set. Existing yes/no choices are remembered. Missing Driver does not fail Rig. Skip this run with `RIG_SKIP_CUA_DRIVER=1`. Per project: `[computer-use] enabled` in `.rig/harness.toml` (default false). `rig computer-use setup` installs/upgrades the binary; parents use Rig MCP. Vendor skill installation is not required. Effective on requires machine opt-in **and** the binary **and** the repo flag.
+<details>
+<summary>Advanced behavior: adaptive workflows, computer-use, BrowserSkill, acceptance contracts</summary>
 
-Every legal parent then uses Rig MCP `rig_cu_capture` / `rig_cu_act` / `rig_cu_confirm` / `rig_cu_record`. Capture → one act on a fresh 30s snapshot → mandatory confirm. AX token first; px only after `degraded` / `escalate_px` on that snapshot. Named Chrome profile: parent `chrome-profile` open, then Driver existing-profile bind. Isolated profile is not the Figma path. Existing-profile grant is human (`cua-driver serve --grant existing-profile`); Rig never silent-grants. Fallback is chrome-devtools only. Never Figma MCP or Playwright as computer-use fallback. Figma MCP remains parent file/node. Never the Hermes `computer_use` skill. Children never receive cua-driver or chrome-devtools MCP. Children never receive chrome-profile or `rig_cu_*`. Do not spawn a clicker.
+**Adaptive workflows:** `[orchestration] mode = "adaptive"` (default) decomposes eligible work into a DAG of at most `max_nodes` stages. Writers file AND resource disjoint; children never spawn children. Workflow files under `.rig/workflows/<id>/` with `owner-credentials.json` (mode 0600). Set `mode = "single"` to restore one-child. Parent uses `rig_workflow_advance` / `rig_workflow_wait`. No estimated progress, savings, or ETA. Independent review unavailable stays explicit. [Details](docs/usage.md#adaptive-workflows).
 
-```bash
-rig computer-use              # machine + this-repo + MCP + effective
-rig computer-use unlock       # one human TTY path: opt-in, repo on, remember Chrome grant
-rig computer-use serve        # human daemon start; --grant existing-profile if remembered
-rig computer-use setup        # install/upgrade binary; parents use Rig MCP
-rig computer-use on           # this repo [computer-use] enabled=true
-rig computer-use off          # this repo enabled=false; does not uninstall the binary
-rig computer-use doctor       # also folded into rig doctor
-```
+**Desktop and browser access:** Generic computer-use requests do not select Rig. First check that `.rig/harness.toml` exists and the project is enabled (`[project] enabled=false` disables Rig), parent Rig MCP is available, and the selected backend (`[computer-use] enabled` or `[browser-skill] enabled`) is opted in. Global skill installation or a tool name alone is not opt-in. Otherwise use an available host-native computer/browser capability. Do not initialize, enable, install, unlock, or repair Rig merely because the user mentioned computer use. If the user explicitly requests Rig, explain the blocker and ask before setup. Once a backend is selected, a denial is never a reason to switch tools. Computer-use: MCP `rig_cu_capture` / `rig_cu_act` (AX token first; px after `escalate_px`) / `rig_cu_confirm` / `rig_cu_record`; Chrome profile via parent `chrome-profile` then Driver `existing-profile` bind (human grant via `cua-driver serve --grant existing-profile`). BrowserSkill: `rig_bsk_status` / `rig_bsk_session` / `rig_bsk_observe` / `rig_bsk_act` / `rig_bsk_confirm` (`bsk session start --json`; retain `session_id`; nonempty `status.browsers` is connected). Never run `bsk install-skill`. Children never receive `bsk` or `rig_bsk_*`. Children never receive cua-driver or chrome-devtools MCP. Never Figma MCP or Playwright as computer-use fallback. Never the Hermes `computer_use` skill. [Setup](docs/usage.md#computer-use-parent).
 
-## BrowserSkill
+**Acceptance contracts and workflow recipes:** Declare checks and criteria upfront. [Contracts](docs/acceptance-contracts.md). [Recipes](docs/workflow-recipes.md): templates for bugfix, research→implement, UI validation.
 
-Install and `rig setup` **ask** to install BrowserSkill and Rig’s parent desktop/browser skills (default **No**). Without a TTY, setup skips unless `--browser-skill` or `RIG_INSTALL_BROWSER_SKILL=1` is set. Existing yes/no choices are remembered. Missing BrowserSkill does not fail Rig. Skip this run with `RIG_SKIP_BROWSER_SKILL=1`. The human installs the Chrome/Edge extension. Never run `bsk install-skill`. Children never receive `bsk` or `rig_bsk_*`.
-
-Parent-only BrowserSkill uses Rig MCP `rig_bsk_status` / `rig_bsk_session` / `rig_bsk_observe` / `rig_bsk_act` / `rig_bsk_confirm` (`bsk session start --json`, optional `--no-focus`; retain `session_id`; `--session` on every scoped command; `session stop` with positional ID; observe → one click/fill/press; `rig_bsk_navigate` plus explicit tab list/borrow/return) when `[browser-skill] enabled=true`, machine opt-in, `bsk` on PATH, and the extension is connected. nonempty `status.browsers` is connected. Website + real cookies → BSK. Native / canvas px → Driver. Neither effective → chrome-devtools. One backend per turn.
-
-```bash
-rig browser-skill              # machine + this-repo + extension + effective
-rig browser-skill setup        # install/upgrade bsk CLI; reprints store URLs; does not enable the repo flag
-rig browser-skill on           # this repo [browser-skill] enabled=true
-rig browser-skill off          # this repo enabled=false; does not uninstall the binary
-rig browser-skill doctor       # also folded into rig doctor
-```
-
-Rig’s shared `computer-use` and `computer-test` skills are linked globally and copied by `rig init` only after either backend is opted in. Core coding skills remain available when both are skipped. Updates preserve the choice; existing skills are not uninstalled by declining. Bundled reference files in `~/.rig/skills` are inert until linked or copied. Skill installation never enables a project backend or grants browser/OS access.
-
-`rig setup --browser-skill` / `--no-browser-skill` forwards to the BrowserSkill installer. `rig init` backfills `[browser-skill] enabled = false`. Details: [Usage — install](docs/usage.md#install).
-
-## Adaptive workflows
-
-When `[orchestration] mode = "adaptive"` (default), the parent decomposes eligible work into a DAG of at most `max_nodes` (default 12) and owns the graph, briefs, and acceptance. `single` keeps one-job behavior. Queue and worker caps remain authoritative. Writers must be file AND resource disjoint. Children never spawn children. Durable files live under `.rig/workflows/<id>/` with `owner-credentials.json` (mode 0600). The parent uses `rig_workflow_advance` / `rig_workflow_wait`. Independent review unavailable stays explicit. In `rig tui`, Tab Jobs/Queue/Workflows. No estimated progress, savings, or ETA.
-
-[Built-in workflow recipes](docs/workflow-recipes.md) preview bounded bugfix, research → implementation, or parent UI validation workflows without launching work.
-
-Parent orchestration is MCP (`rig_session`, `rig_job_launch`, `rig_workflow_create` / `rig_workflow_advance` / `rig_workflow_wait`, allow/deny, requirements/check/accept). Shell `run-worker.sh` is human/internal fallback. Children never spawn or message children.
-
-## Verification and cancellation
-
-Optional [acceptance contracts](docs/acceptance-contracts.md) freeze required checks and review criteria before a job starts, with per-criterion evidence bound to the job attempt and current content.
-
-Execution `ok` means the worker exited successfully. **Verified** means the parent accepted the current scoped content against declared requirements.
-
-Esc / Stop on **this wait** records durable cancellation for attached attempts and returns promptly. After explicit cancellation, do not re-wait, re-pick, or drain automatically.
-
-`stop-unconfirmed` and `native-cancel-required` mean execution is not confirmed stopped. Unconfirmed work keeps its slot and files. Transport failure alone preserves workers: one bounded `rig job wait ID --timeout 0`, then inspect or reconcile.
+</details>

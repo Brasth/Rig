@@ -10,7 +10,8 @@ from pathlib import Path
 
 import routing_profiles as rig_profiles
 
-POLICY_VERSION = 2
+# v3: opt-in preparation-aware effort; picks from earlier versions must re-pick.
+POLICY_VERSION = 3
 ROUTING_JSON = ".rig/routing.json"
 MODES = ("smart", "legacy")
 ENGINES = ("local", "jev")
@@ -59,6 +60,7 @@ class RoutingConfig:
     local_policy: str = DEFAULT_LOCAL_POLICY
     objective: str = DEFAULT_OBJECTIVE
     domains: dict = field(default_factory=dict)
+    preparation_aware_effort: bool = False
 
 
 def routing_json_path(repo: Path | None) -> Path | None:
@@ -104,6 +106,7 @@ def config_fingerprint(cfg: RoutingConfig) -> str:
         "profiles": [rig_profiles.as_dict(p) for p in sorted(cfg.profiles.values(), key=lambda item: item.id)],
         "preferences": {key: cfg.preferences.get(key, []) for key in rig_profiles.PREF_KEYS},
     }
+    payload["preparation_aware_effort"] = bool(cfg.preparation_aware_effort)
     if cfg.domains:
         payload["domains"] = cfg.domains
     if cfg.direct_parent_low_risk:
@@ -271,6 +274,22 @@ def harness_picker(harness: dict | None) -> tuple[str, str, str]:
     policy = str(section.get("local_policy") or "").strip().lower() or DEFAULT_LOCAL_POLICY
     objective = str(section.get("objective") or "").strip().lower() or DEFAULT_OBJECTIVE
     return engine, policy, objective
+
+
+def harness_preparation_effort(harness: dict | None) -> bool:
+    """[routing] preparation_aware_effort: absent means false; only exact true|false parse."""
+    section = harness.get("routing") if isinstance(harness, dict) else None
+    raw = section.get("preparation_aware_effort") if isinstance(section, dict) else None
+    if raw is None or raw is False:
+        return False
+    if raw is True:
+        return True
+    text = str(raw).strip()
+    if text == "true":
+        return True
+    if text == "false":
+        return False
+    raise ConfigError("harness [routing].preparation_aware_effort must be true or false")
 
 
 def _validate_picker(engine: str, policy: str, objective: str) -> None:
@@ -468,6 +487,20 @@ def load_config(repo: Path | None, *, policy_mode: str | None = None, harness: d
 
 
 def _config_from_data(raw, *, mode, harness, path):
+    cfg = _config_core(raw, mode=mode, harness=harness, path=path)
+    try:
+        cfg.preparation_aware_effort = harness_preparation_effort(harness)
+    except ConfigError:
+        if mode == "smart":
+            raise
+        cfg.preparation_aware_effort = False
+    if mode != "smart":
+        # The pilot is smart-routing only; legacy never adjusts effort.
+        cfg.preparation_aware_effort = False
+    return cfg
+
+
+def _config_core(raw, *, mode, harness, path):
     picker = harness_picker(harness)
     builtin = rig_profiles.profiles_by_id()
 
@@ -549,6 +582,7 @@ def doctor_lines(repo: Path | None) -> list[str]:
     rows.append(f"  profiles: {len(cfg.profiles)}")
     rows.append(f"  domain policies: {len(cfg.domains)}")
     rows.append(f"  direct_parent_low_risk: {str(cfg.direct_parent_low_risk).lower()}")
+    rows.append(f"  preparation_aware_effort: {str(cfg.preparation_aware_effort).lower()}")
     path = routing_json_path(repo)
     if path is not None and path.is_file():
         rows.append(f"  config: {path}")
