@@ -20,6 +20,8 @@ import routing_settings  # noqa: E402
 from tui_routing import RoutingPanel, render_panel  # noqa: E402
 from tui_editor import Draft, InputDecoder  # noqa: E402
 from tui_runtime import BoardRuntime, visible_jobs as _visible_jobs  # noqa: E402
+from tui_chrome import layout, message_rows_needed  # noqa: E402
+from tui_detail_state import DetailState, HelpState, Notifications  # noqa: E402
 from tui_view import (  # noqa: E402,F401
     PRIMARY_FOOTER, _TABS, _add, _detail_lines, _elide, _listing_id, _next_tab,
     _room, _row_task, _viewport, _workflow_detail_lines, attention_first_jobs,
@@ -30,6 +32,8 @@ import recovery_guide  # noqa: E402
 import recovery_view  # noqa: E402
 
 HELP = PRIMARY_FOOTER
+_ENTER = ("\n", "\r", curses.KEY_ENTER)
+_DETAIL_TABS = ("Jobs", "Queue", "Workflows")
 
 
 def _snapshot_status(runtime):
@@ -40,7 +44,20 @@ def _snapshot_status(runtime):
     return age + (" · refreshing" if runtime.scanning else "")
 
 
-def _paint(stdscr, repo: Path, *, runtime=None) -> None:
+def _report_result(notes, result) -> None:
+    """Every action result replaces the previous notice, including a persistent error."""
+    if result.error:
+        notes.error(f"Action failed: {result.error}")
+    elif isinstance(result.value, dict):
+        text = f"{result.value.get('status') or 'updated'} {result.value.get('id') or ''}".rstrip()
+        if result.value.get("held_reason"):
+            text += f" — {result.value['held_reason']}"
+        notes.success(text)
+    else:
+        notes.info(str(result.value or "Action completed"))
+
+
+def _paint(stdscr, repo: Path, *, runtime=None, clock=time.monotonic) -> None:
     runtime = runtime or BoardRuntime(repo)
     curses.curs_set(0)
     curses.use_default_colors()
@@ -57,11 +74,11 @@ def _paint(stdscr, repo: Path, *, runtime=None) -> None:
     selected = {name: 0 for name in _TABS}
     offsets = {name: 0 for name in _TABS}
     follow, log_off, log_mode = True, 0, False
-    footer = HELP
+    notes = Notifications(clock)
     draft, decoder = Draft(), InputDecoder()
     requested = set()
     pasted_outside_editor = False
-    help_mode = False
+    help_state, detail = None, None
     recovery_lines, recovery_request, recovery_offset = None, "", 0
     recovery_sequence = 0
     confirm = None
@@ -81,9 +98,11 @@ def _paint(stdscr, repo: Path, *, runtime=None) -> None:
             board_workflows = getattr(runtime.snapshot, "workflows", None)
             if board_workflows is None:
                 board_workflows = collect_workflows(repo)
-            identities = {name: (_listing_id(name, listing(name, board_workflows)[selected[name]])
-                                 if listing(name, board_workflows) else None)
-                          for name in selected}
+            identities = {}
+            for name in selected:
+                rows = listing(name, board_workflows)
+                # Workflows are collected outside the snapshot, so clamp before reading.
+                identities[name] = _listing_id(name, rows[min(selected[name], len(rows) - 1)]) if rows else None
             revision = runtime.revision
             for result in runtime.poll():
                 if result.key.startswith("recovery:"):
@@ -96,11 +115,12 @@ def _paint(stdscr, repo: Path, *, runtime=None) -> None:
                         routing_open = ""
                         # An asynchronous open must not replace a newer editor,
                         # modal, or navigation choice made while it was loading.
-                        if (tab != "Settings" or identities.get("Settings") != "domains"
-                                or draft.active or secret_active or help_mode or confirm is not None):
+                        if (tab != "Settings" or identities.get("Settings") != "domains" or draft.active
+                                or secret_active or help_state is not None or detail is not None
+                                or confirm is not None):
                             continue
                         if result.error:
-                            footer = f"Routing Settings unavailable: {result.error}"
+                            notes.error(f"Routing Settings unavailable: {result.error}")
                         else:
                             routing_panel = RoutingPanel(result.value)
                     continue
@@ -113,20 +133,15 @@ def _paint(stdscr, repo: Path, *, runtime=None) -> None:
                     if result.error:
                         draft.active = True
                         draft.message = f"Enqueue failed: {result.error}; draft retained"
-                        footer = draft.message
+                        notes.error(draft.message)
                     else:
                         item = result.value
-                        footer = f"queued {item['id']}  {item['text']}"
+                        notes.success(f"queued {item['id']}  {item['text']}")
                         draft = Draft()
-                elif result.error:
+                    continue
+                if result.error:
                     requested.discard(result.key)
-                    footer = f"Action failed: {result.error}"
-                elif isinstance(result.value, dict):
-                    footer = f"{result.value.get('status') or 'updated'} {result.value.get('id') or ''}"
-                    if result.value.get("held_reason"):
-                        footer += f" — {result.value['held_reason']}"
-                else:
-                    footer = str(result.value or "Action completed")
+                _report_result(notes, result)
             if runtime.revision != revision:
                 for name in selected:
                     rows = listing(name, board_workflows)
@@ -137,19 +152,23 @@ def _paint(stdscr, repo: Path, *, runtime=None) -> None:
                     if (row.get("reservation") or {}).get("stopped") or row.get("cancellation_state") == "stopped":
                         requested.discard(f"cancel:Jobs:{row['job_id']}")
             h, w = stdscr.getmaxyx()
-            runtime.request_snapshot(start=offsets["Jobs"], rows=max(0, h - 3) if h >= 8 and w >= 40 else 0,
-                                     selected_id=identities["Jobs"])
+            notice = notes.current()
+            lay = layout(h, w, tab=detail.tab if detail is not None else tab,
+                         message_rows=message_rows_needed(notice, w))
+            page = max(1, lay.message_y - 2)
+            jobs_view = layout(h, w, tab="Jobs", message_rows=lay.message_rows)
+            focus = detail.item_id if detail is not None and detail.tab == "Jobs" else identities["Jobs"]
+            runtime.request_snapshot(start=offsets["Jobs"], rows=jobs_view.capacity, selected_id=focus)
             curses.curs_set(1 if draft.active or secret_active else 0)
-            if secret_active:
-                footer = "Jev API key: " + ("•" * min(len(secret_text), 24)) + "  Enter saves · Esc cancels"
             if routing_panel is not None:
                 render_panel(stdscr, routing_panel)
             else:
                 offsets[tab] = render(stdscr, repo, runtime.snapshot, tab=tab, selected=selected[tab], offset=offsets[tab],
-                                      follow=follow, log_off=log_off, footer=footer, snapshot_status=_snapshot_status(runtime),
+                                      follow=follow, log_off=log_off, footer="", snapshot_status=_snapshot_status(runtime),
                                       requested=requested, draft=draft, log_mode=log_mode, workflows=board_workflows,
-                                      help_mode=help_mode, confirm=confirm, recovery_lines=recovery_lines,
-                                      recovery_offset=recovery_offset)
+                                      confirm=confirm, recovery_lines=recovery_lines, recovery_offset=recovery_offset,
+                                      notice=notice, detail=detail, help_state=help_state,
+                                      secret_len=len(secret_text) if secret_active else None)
             try:
                 key = stdscr.get_wch()
                 incoming = decoder.feed(key)
@@ -165,7 +184,7 @@ def _paint(stdscr, repo: Path, *, runtime=None) -> None:
                     action = routing_panel.key(key, pasted=pasted)
                     if action == "cancel":
                         routing_panel = None
-                        footer = "Routing editor closed; unsaved changes discarded"
+                        notes.info("Routing editor closed; unsaved changes discarded")
                     elif action in {"preview", "save"}:
                         panel = routing_panel
                         candidate = panel.candidate()
@@ -183,7 +202,7 @@ def _paint(stdscr, repo: Path, *, runtime=None) -> None:
                     continue
                 if key == "\x1b" and routing_open:
                     routing_open = ""
-                    footer = "Routing editor opening cancelled"
+                    notes.info("Routing editor opening cancelled")
                     continue
                 if routing_open and not pasted and (
                         key in ("\t", curses.KEY_BTAB, "j", "k", curses.KEY_UP, curses.KEY_DOWN, "?")
@@ -192,7 +211,7 @@ def _paint(stdscr, repo: Path, *, runtime=None) -> None:
                 # Pasting into navigation must never execute x/y/n/q commands.
                 if pasted and not draft.active:
                     pasted_outside_editor = True
-                    footer = "Press e before pasting queue text"
+                    notes.info("Press e before pasting queue text")
                     continue
                 if not pasted:
                     pasted_outside_editor = False
@@ -202,11 +221,11 @@ def _paint(stdscr, repo: Path, *, runtime=None) -> None:
                     if key in {"g", "\x1b"}:
                         recovery_lines, recovery_request, recovery_offset = None, "", 0
                     elif key == curses.KEY_NPAGE:
-                        recovery_offset = min(recovery_offset + max(1, h - 3),
+                        recovery_offset = min(recovery_offset + page,
                                               sum(max(1, (len(line) + max(1, w - 3)) // max(1, w - 2))
                                                   for line in recovery_lines) - 1)
                     elif key == curses.KEY_PPAGE:
-                        recovery_offset = max(0, recovery_offset - max(1, h - 3))
+                        recovery_offset = max(0, recovery_offset - page)
                     continue
                 if draft.active:
                     action = draft.key(key, pasted=pasted)
@@ -221,17 +240,19 @@ def _paint(stdscr, repo: Path, *, runtime=None) -> None:
                             draft.message = "Actions busy; draft retained, Enter retries"
                     elif action == "cancel":
                         draft.active = False
-                        footer = draft.message or "Enqueue cancelled"
+                        notes.info(draft.message or "Enqueue cancelled")
                     continue
                 if secret_active:
                     if key == "\x1b":
-                        secret_active, secret_text, footer = False, "", "Jev key entry cancelled"
-                    elif key in ("\n", "\r", curses.KEY_ENTER):
+                        secret_active, secret_text = False, ""
+                        notes.info("Jev key entry cancelled")
+                    elif key in _ENTER:
                         value = secret_text
                         if not value:
-                            footer = "Jev key cannot be empty"
+                            notes.error("Jev key cannot be empty")
                         elif runtime.submit("jev-key", lambda value=value: jev_provider.store_key(value)):
-                            secret_active, secret_text, footer = False, "", "Saving Jev key"
+                            secret_active, secret_text = False, ""
+                            notes.info("Saving Jev key")
                     elif key in ("\b", "\x7f", curses.KEY_BACKSPACE):
                         secret_text = secret_text[:-1]
                     elif isinstance(key, str) and key.isprintable():
@@ -245,34 +266,66 @@ def _paint(stdscr, repo: Path, *, runtime=None) -> None:
                         target_tab = pending["tab"]
                         action_key = f"cancel:{target_tab}:{jid}"
                         if action_key in requested:
-                            footer = f"stop already requested {jid}"
+                            notes.info(f"stop already requested {jid}")
                         else:
                             action = ((lambda jid=jid: rig_jobs.cancel_job(repo, jid, "tui"))
                                       if target_tab == "Jobs" else
                                       (lambda jid=jid: rig_queue.cancel_item(repo, jid)))
                             if runtime.submit(action_key, action, cancellation=True):
                                 requested.add(action_key)
-                                footer = (f"stop requested {jid}" if target_tab == "Jobs"
-                                          else f"queue cancellation requested {jid}")
+                                notes.info(f"stop requested {jid}" if target_tab == "Jobs"
+                                           else f"queue cancellation requested {jid}")
                             else:
-                                footer = "Cancellation lane busy; x retries"
+                                notes.error("Cancellation lane busy; x retries")
                     else:
-                        footer = f"Cancellation aborted {pending['id']}"
+                        notes.info(f"Cancellation aborted {pending['id']}")
                     continue
-                if help_mode:
-                    help_mode = False
-                    if key != "q":
-                        continue
+                if help_state is not None:
+                    action = help_state.key(key, page)
+                    if action == "quit":
+                        return
+                    if action == "close":
+                        help_state = None
+                    continue
+                if detail is not None:
+                    # Details are read-only: only scrolling, closing, and switching reach here.
+                    action = detail.key(key, page)
+                    if action == "quit":
+                        return
+                    if action == "close":
+                        detail = None
+                    elif action in {"next-tab", "prev-tab"}:
+                        step = -1 if action == "prev-tab" else 1
+                        tab = _TABS[(_TABS.index(detail.tab) + step) % len(_TABS)]
+                        detail = None
+                    elif action == "help":
+                        help_state = HelpState()
+                    elif action == "refresh":
+                        runtime.refresh()
+                    elif action == "blocked":
+                        notes.info("Details are read-only; Esc returns to the board for actions")
+                    continue
                 if key == "q":
                     return
-                if key == "?":
-                    help_mode = True
+                if lay.tiny:
+                    # Nothing is visible to act on until the terminal is resized.
                     continue
-                if key == "\x1b" or pasted_outside_editor:
+                if key == "?":
+                    help_state = HelpState()
+                    continue
+                if key == "\x1b":
+                    notes.dismiss()
+                    continue
+                if pasted_outside_editor:
                     continue
                 rows = listing(tab, board_workflows)
+                selected[tab] = min(selected[tab], max(0, len(rows) - 1))
                 row = rows[selected[tab]] if rows else None
-                if key in ("j", curses.KEY_DOWN):
+                if key in _ENTER:
+                    if row and tab in _DETAIL_TABS:
+                        detail = DetailState(tab, _listing_id(tab, row))
+                        runtime.refresh()
+                elif key in ("j", curses.KEY_DOWN):
                     selected[tab] = min(selected[tab] + 1, max(0, len(rows) - 1))
                     follow = True
                     runtime.refresh()
@@ -293,53 +346,58 @@ def _paint(stdscr, repo: Path, *, runtime=None) -> None:
                     if not runtime.submit(recovery_request, lambda selector=selector: recovery_guide.build(repo, **selector)):
                         recovery_lines = ["Background actions busy; close and reopen recovery guidance."]
                 elif tab == "Settings" and row and key == "c" and row.get("id") == "jev":
-                    secret_active, secret_text, footer = True, "", "Enter Jev API key"
+                    secret_active, secret_text = True, ""
                 elif tab == "Settings" and row and key == "d" and row.get("id") == "jev":
                     if runtime.submit("jev-remove", jev_provider.delete_key):
-                        footer = "Removing Jev key"
+                        notes.info("Removing Jev key")
                 elif tab == "Settings" and row and key == "t" and row.get("id") == "engine":
                     engine = "local" if "jev" in str(row.get("text") or "") else "jev"
                     if runtime.submit("routing-engine", lambda engine=engine: jev_settings.update_project(repo, engine=engine)):
-                        footer = f"Setting project picker to {engine}"
+                        notes.info(f"Setting project picker to {engine}")
                 elif tab == "Settings" and row and key == "o" and row.get("id") == "objective":
                     values = ("quality", "balanced", "speed", "cost")
                     old = next((value for value in values if value in str(row.get("text") or "")), "balanced")
                     objective = values[(values.index(old) + 1) % len(values)]
                     if runtime.submit("routing-objective", lambda objective=objective: jev_settings.update_project(repo, objective=objective)):
-                        footer = f"Setting local objective to {objective}"
+                        notes.info(f"Setting local objective to {objective}")
                 elif tab == "Settings" and row and key == "e" and row.get("id") == "domains":
                     if not routing_open:
                         routing_open_count += 1
                         action_key = f"routing-open:{routing_open_count}"
                         if runtime.submit(action_key, lambda: routing_settings.open_settings(repo)):
                             routing_open = action_key
-                            footer = "Opening routing settings; Esc cancels"
+                            notes.info("Opening routing settings; Esc cancels")
                 elif key == "e":
                     draft.active, draft.message = True, ""
                 elif key == "o" and row and tab == "Jobs":
-                    footer = row.get("open") or f"no session for {row['job_id']}"
+                    notes.info(row.get("open") or f"no session for {row['job_id']}")
                 elif key in ("y", "n") and row and tab == "Jobs":
                     behavior = "allow" if key == "y" else "deny"
                     action_key = f"answer:{row['job_id']}"
-                    accepted = runtime.submit(action_key, lambda row=row, behavior=behavior: rig_jobs.answer_pending(row, behavior))
-                    footer = f"{behavior} requested {row['job_id']}" if accepted else "Action already pending or busy"
+                    if runtime.submit(action_key, lambda row=row, behavior=behavior: rig_jobs.answer_pending(row, behavior)):
+                        notes.info(f"{behavior} requested {row['job_id']}")
+                    else:
+                        notes.error("Action already pending or busy")
                 elif key == "x" and row and tab in {"Jobs", "Queue"}:
                     jid = str(row.get("job_id") if tab == "Jobs" else row.get("id"))
                     if tab == "Jobs" and ((row.get("reservation") or {}).get("stopped") or
                                            (row.get("effective") in {"ok", "fail", "timeout"} and not row.get("cancellation_state"))):
-                        footer = f"{jid} already finished"
+                        notes.info(f"{jid} already finished")
                         continue
                     action_key = f"cancel:{tab}:{jid}"
                     if action_key in requested:
-                        footer = f"stop already requested {jid}"
+                        notes.info(f"stop already requested {jid}")
                         continue
                     confirm = {"tab": tab, "id": jid, "task": _row_task(tab, row)}
-                    footer = f"Confirm cancellation {jid}"
                 elif key == "l" and tab == "Jobs":
-                    log_mode = not log_mode
+                    if lay.split:
+                        log_mode = not log_mode
+                    elif row:
+                        detail = DetailState("Jobs", row["job_id"], mode="activity")
+                        runtime.refresh()
                 elif key == "f":
                     follow = not follow
-                    footer = "follow on" if follow else "follow off (pgup/pgdn)"
+                    notes.info("follow on" if follow else "follow off (PgUp/PgDn)")
                 elif key == curses.KEY_NPAGE:
                     follow, log_off = False, max(0, log_off - 8)
                 elif key == curses.KEY_PPAGE:
