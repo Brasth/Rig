@@ -310,7 +310,7 @@ class UnicodeDrafts(unittest.TestCase):
         with terminal():
             render(screen, Path("/fixture"), Snapshot(), tab="Jobs", selected=0, offset=0,
                    follow=True, log_off=0, footer="", snapshot_status="", requested=set(), draft=draft)
-        screen.move.assert_called_once_with(9, len("enqueue 3/2000: ") + 5)
+        screen.move.assert_called_once_with(4, 1 + 5)
         screen.calls.clear()
         _add(screen, 9, 0, "界" * 100)
         self.assertLessEqual(_text_width(screen.calls[0][2]), 39)

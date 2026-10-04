@@ -6,6 +6,7 @@ already-projected row fields and nothing else (no filesystem access).
 from __future__ import annotations
 
 import jobs as rig_jobs
+from tui_style import state_glyph
 from tui_text import _fit_head, _pad, _text_width, abbrev_id, first_line
 from ui_snapshot import _ACTIVE_STATUSES, _ATTENTION_STATUSES
 
@@ -174,7 +175,8 @@ def job_board_rank(job: dict) -> int:
 
 
 def attention_first_jobs(jobs) -> list[dict]:
-    return sorted(list(jobs or []), key=job_board_rank)
+    return sorted(list(jobs or []), key=lambda row: (job_board_rank(row),
+                  0 if job_state(row)[0] == "Unverified" else 1))
 
 
 def attention_first_workflows(rows) -> list[dict]:
@@ -239,24 +241,31 @@ def entry_lines(tab: str, row: dict, width: int, *, selected: bool = False, info
                 two_line: bool = False, requested=()) -> list[str]:
     """Marker, state, then task/activity; the ID only fills space left after the task."""
     label, _tone, _explanation = info or row_state_info(tab, row, requested)
-    marker = "▸" if selected else " "
-    label_w = LABEL_WIDTH if tab != "Settings" else 8
-    prefix = f"{marker} {_pad(label, min(label_w, max(1, width - 3)))} "
+    marker = ">" if selected else " "
+    label_w = 14 if tab != "Settings" else 8
+    prefix = f"{marker} {_pad(state_glyph(label) + ' ' + label, label_w)}  "
     room = max(0, width - _text_width(prefix))
     title = row_title(tab, row)
-    if tab == "Jobs" and not two_line and _is_active_job(row):
-        title = first_line(row.get("doing")) or title
     if tab == "Workflows":
-        title = f"{title}  {row.get('accepted', 0)}/{row.get('required', 0)}"
+        summary = f"accepted {row.get('accepted', 0)}/{row.get('required', 0)}"
+        title = _fit_head(title, max(1, room - _text_width(summary) - 2)) + "  " + summary
     if tab == "Settings":
         title = first_line(row.get("text")) or str(row.get("id") or "")
         return [_fit_head(prefix + _fit_head(title, room), width)]
-    first = prefix + _with_id(title, str(_listing_id(tab, row) or ""), room)
+    if tab == "Queue":
+        title = f"p{row.get('priority') or 0}  {title}"
+    first = prefix + (_with_id(title, str(_listing_id(tab, row) or ""), room)
+                      if width >= 70 else _fit_head(title, room))
     lines = [_fit_head(first, width)]
     if two_line:
-        indent = " " * min(_text_width(prefix), max(0, width - 1))
-        if _is_active_job(row):
-            second = "↳ " + (job_activity(row) or _explanation or label)
+        indent = " " * 4
+        if tab == "Queue":
+            second = f"waiting: {row.get('waiting_reason') or 'Awaiting parent claim'} · prefers {row.get('worker') or 'parent chooses'}"
+        elif tab == "Jobs" and row.get("effective") == "ask":
+            ask = row.get("ask") or {}
+            second = "permission: " + first_line(ask.get("preview") or ask.get("tool_name") or _explanation)
+        elif _is_active_job(row):
+            second = job_activity(row) or _explanation or label
         else:
             outcome = first_line(row.get("display_reason")) or _explanation
             worker = str(row.get("worker") or "")

@@ -4,7 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from tui_rows import _TABS
+from tui_rows import _TABS, job_board_rank, job_state
 from tui_text import _fit_head, _text_width, wrap_cells
 
 MIN_WIDTH, MIN_HEIGHT = 40, 8
@@ -38,9 +38,9 @@ def layout(h: int, w: int, *, tab: str = "Jobs", message_rows: int = 1) -> Layou
         return Layout(h, w, True, False, w, 0, 0, max(0, h - 2), 0, 1)
     message_rows = 2 if message_rows > 1 and h >= TWO_LINE_MIN_HEIGHT else 1
     split = w >= SPLIT_MIN_WIDTH
-    left_w = max(48, min(72, w * 11 // 20)) if split else w
-    list_rows = h - 4 - message_rows
-    entry = 2 if tab == "Jobs" and h >= TWO_LINE_MIN_HEIGHT else 1
+    left_w = max(52, min(72, (w * 52 + 50) // 100)) if split else w
+    list_rows = h - 4 - message_rows - (1 if h >= TWO_LINE_MIN_HEIGHT else 0)
+    entry = 2 if tab in {"Jobs", "Queue"} and h >= TWO_LINE_MIN_HEIGHT else 1
     return Layout(h, w, False, split, left_w, 3, list_rows, h - 1 - message_rows, message_rows, entry)
 
 
@@ -51,17 +51,25 @@ def project_name(repo) -> str:
         return str(repo)
 
 
-def header_text(snapshot, repo) -> str:
-    """Project and health only; snapshot age lives in the message row."""
-    jobs = list(getattr(snapshot, "jobs", None) or [])
-    asking = sum(row.get("effective") == "ask" for row in jobs)
-    running = sum(row.get("effective") == "running" for row in jobs)
-    reserved = sum(row.get("effective") == "reserved" for row in jobs)
-    health = (f"{asking} need input · {running} running · {reserved} reserved · "
-              f"slots {getattr(snapshot, 'slots', 0)}/{getattr(snapshot, 'cap', 0)}")
+def header_text(snapshot, repo, width: int = 200) -> str:
+    """Adapt health before truncating project names; never show unloaded counts."""
     if not getattr(snapshot, "captured_at", 0):
-        health = "loading…"
-    return f" Rig · {project_name(repo)}  {health}"
+        return f" Rig · {project_name(repo)}  loading snapshot"
+    jobs = list(getattr(snapshot, "jobs", None) or [])
+    attention = sum(job_board_rank(row) <= 1 for row in jobs)
+    running = sum(job_state(row)[0] == "Running" for row in jobs)
+    slots = f"slots {getattr(snapshot, 'slots', 0)}/{getattr(snapshot, 'cap', 0)}"
+    if width < 60:
+        health = f"!{attention} ●{running} {slots}"
+        prefix = " Rig "
+    else:
+        noun = "need attention" if width >= 100 else "attention"
+        health = f"! {attention} {noun}  ● {running} running  {slots}"
+        prefix = " Rig · "
+    room = max(1, width - _text_width(prefix + health) - 2)
+    project = _fit_head(project_name(repo), room)
+    left = prefix + project
+    return left + " " * max(2, width - _text_width(left + health) - 1) + health
 
 
 _FULL = {"Jobs": "Jobs", "Queue": "Queue", "Workflows": "Workflows", "Settings": "Settings"}
@@ -69,18 +77,21 @@ _COMPACT = {"Jobs": "Jobs", "Queue": "Queue", "Workflows": "Flows", "Settings": 
 _TINY = {"Jobs": "J", "Queue": "Q", "Workflows": "W", "Settings": "S"}
 
 
-def _tab_label(name: str, names: dict, counts: dict) -> str:
+def _tab_label(name: str, names: dict, counts: dict, width: int = 200) -> str:
     count = int(counts.get(name) or 0)
     if not count:
         return names[name]
     # "!" marks attention counts; Queue shows its pending count.
-    return f"{names[name]} {count}" + ("" if name == "Queue" else "!")
+    if name == "Queue":
+        return f"{names[name]} {count}" + (" pending" if width >= 80 else "")
+    return f"{names[name]} !{count}"
 
 
 def tab_segments(active: str, counts: dict, width: int) -> list[tuple[str, bool]]:
     """Every tab and count, shortening names before anything is dropped."""
-    for names, gap in ((_FULL, " "), (_COMPACT, " "), (_TINY, "")):
-        segments = [(f" {_tab_label(name, names, counts)} ", name == active) for name in _TABS]
+    preferred = _FULL if width >= 50 else {**_FULL, "Workflows": "Flows"}
+    for names, gap in ((preferred, " "), (_COMPACT, " "), (_TINY, "")):
+        segments = [(f" {_tab_label(name, names, counts, width)} ", name == active) for name in _TABS]
         total = sum(_text_width(text) for text, _ in segments) + len(gap) * (len(segments) - 1)
         if total <= width:
             return [(text, on) if index == 0 else (gap + text, on) for index, (text, on) in enumerate(segments)]
@@ -98,6 +109,9 @@ def message_lines(notice, snapshot_status: str, width: int, rows: int = 1) -> li
     """(text, kind) rows. Notices win; refresh status fills the remaining space."""
     status = str(snapshot_status or "")
     if notice is None:
+        if status.startswith("refresh failed"):
+            suffix = " · r retry"
+            return [(_fit_head(status, max(1, width - _text_width(suffix))) + suffix, "error")]
         return [(_fit_head(status, width), "status")]
     text, kind = str(notice.text), notice.kind
     wrapped = wrap_cells(text, width)
@@ -131,16 +145,24 @@ def _fit_hints(parts: list[str], keep: list[str], width: int) -> str:
 def board_hints(tab: str, row, *, log_mode: bool = False, split: bool = False, width: int = 200) -> str:
     row = row or {}
     parts = []
+    if tab == "Jobs" and row.get("effective") == "ask":
+        parts.extend(["y allow", "n deny"])
     if tab in {"Jobs", "Queue", "Workflows"} and row:
         parts.append("Enter details")
-    if tab == "Jobs" and row.get("effective") == "ask":
-        parts.append("y/n answer")
     if tab == "Jobs" and row:
         parts.append("x stop")
     elif tab == "Queue" and row:
         parts.append("x cancel")
     if tab == "Settings":
-        parts.append("e routing/preview" if row.get("id") == "domains" else "c/d key · t/o picker")
+        setting = row.get("id")
+        if setting == "domains":
+            parts.append("e routing/preview")
+        elif setting == "jev":
+            parts.append("c connect · d remove")
+        elif setting == "engine":
+            parts.append("t toggle picker")
+        elif setting == "objective":
+            parts.append("o cycle objective")
     else:
         parts.append("e enqueue")
     parts.append("j/k move")
@@ -156,12 +178,12 @@ def board_hints(tab: str, row, *, log_mode: bool = False, split: bool = False, w
 
 
 def detail_hints(tab: str, mode: str, follow: bool, width: int) -> str:
-    parts = ["j/k scroll", "Enter/Esc close", "PgUp/PgDn page", "Tab switch"]
-    if tab == "Jobs":
-        parts.insert(2, "l details" if mode == "activity" else "l activity")
+    parts = ["Esc back", "PgDn more"] if width < 60 else ["Enter/Esc close", "PgUp/PgDn scroll", "j/k scroll", "Tab switch"]
+    if tab == "Jobs" and width >= 60:
+        parts.insert(1, "l details" if mode == "activity" else "l activity")
         if mode == "activity":
-            parts.insert(3, "f follow off" if follow else "f follow on")
-    return _fit_hints(parts, ["q quit"], width)
+            parts.insert(2, "f follow off" if follow else "f follow on")
+    return _fit_hints(parts, ["? help", "q quit"], width)
 
 
 def help_hints(width: int) -> str:

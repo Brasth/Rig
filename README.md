@@ -26,7 +26,7 @@ Then open your parent agent with Rig MCP in the repo (new thread needed) and typ
 | --- | --- |
 | `rig status` | Show parent and available workers |
 | `rig jobs` | List running and recent tasks |
-| `rig tui` | Open task board and queue manager |
+| `rig tui` | Open [task board and queue manager](docs/tui-design.md) |
 | `rig workers claude=on` / `rig workers claude=off` | Allow/disallow a worker |
 | `rig off` / `rig on` | Disable/enable Rig for this repo (new parent thread needed) |
 | `rig update` | Update to latest version |
