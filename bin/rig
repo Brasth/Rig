@@ -59,6 +59,7 @@ usage: rig <command> [args]
   computer-use [status|setup|on|off|doctor|unlock|serve]
   browser-skill [status|setup|on|off|doctor]
   status
+  worktrees list|register [--json]   # discovery/identity only; does not enable execution
   use codex|grok|opencode|omp|pi|agy
   workers grok=on|off claude=on|off codex=on|off cursor=on|off opencode=on|off omp=on|off pi=on|off agy=on|off devin=on|off mimo=on|off
   prune
@@ -1562,7 +1563,7 @@ main() {
     on) cmd_project_toggle on; return ;;
     off) cmd_project_toggle off; return ;;
   esac
-  case "$cmd" in init|setup|update|status|doctor|jobs|tui|memory|timeline|recovery|task|workflows|workflow|queue|routing|billing|help|-h|--help|"") ;; *) project_guard || return ;; esac
+  case "$cmd" in init|setup|update|status|doctor|jobs|worktrees|tui|memory|timeline|recovery|task|workflows|workflow|queue|routing|billing|help|-h|--help|"") ;; *) project_guard || return ;; esac
   case "$cmd" in
     ui) python3 "$(py_script rig_ui.py)" "$@" ;;
     uninstall) python3 "$(py_script ui_install.py)" "$@" ;;
@@ -1571,6 +1572,7 @@ main() {
     init) cmd_init "$@" ;;
     doctor) cmd_doctor "$@" ;;
     status) cmd_status "$@" ;;
+    worktrees) python3 "$(py_script worktrees.py)" "$@" --repo "$PWD" ;;
     use) cmd_use "$@" ;;
     parent) cmd_parent "$@" ;;
     workers) cmd_workers "$@" ;;

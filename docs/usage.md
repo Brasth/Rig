@@ -1130,3 +1130,46 @@ barrier and a memory lock before unique atomic writes. No contradiction detectio
 or automatic rewriting occurs.
 
 For legacy runtime transition, see [the migration runbook](legacy-runtime-migration.md).
+
+
+## Git worktrees
+
+Rig keeps jobs, queues, memory, and ownership under each checkout's own `.rig`.
+Shell and Python commands recognize linked worktrees from nested directories.
+Initialize and enable each checkout explicitly when you want to run Rig there;
+creating or discovering a Git worktree does not initialize Rig.
+
+The discovery commands require Git with `rev-parse --path-format=absolute`
+and `worktree list --porcelain -z` support:
+
+```sh
+rig worktrees list
+rig worktrees list --json
+rig worktrees register --json
+```
+
+`list` discovers the repository's worktrees without writing files. It reports
+branch or detached HEAD, locked/prunable status, availability, local project
+state, and registered identity. Bare repositories cannot serve as execution
+checkouts. Discovery also works in uninitialized or disabled checkouts.
+
+`register` explicitly registers the current checkout. Repository identity and
+the registry live at `<git-common-dir>/rig/worktrees.json`; each checkout's
+identity lives at `<git-dir>/rig-worktree-id`. Git supplies both directories,
+including when the primary checkout's `.git` is a file. Registration is
+idempotent, serialized, and does not create `.rig`, enable Rig, or enable workers.
+A corrupt or unsupported registry fails without being overwritten.
+
+After `git worktree move`, discovery preserves the worktree identity but marks
+its recorded location stale. Run `rig worktrees register` from the moved checkout
+to explicitly refresh its binding. Removed registrations remain visible as
+unresolved records. Recreating a removed worktree receives a new identity.
+
+The JSON `eligible` field means the checkout is available, registered, has a
+current binding, and is locally enabled. It is discovery metadata, not a launch
+authorization or provider-readiness check. Worktree locks are reported as Git
+retention locks; they are not Rig execution reservations.
+
+This foundation does not aggregate scheduling limits or resource locks, launch
+workers across worktrees from one parent, or integrate results between branches.
+Those operations continue to use existing checkout-local behavior.
