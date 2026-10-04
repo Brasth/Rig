@@ -20,7 +20,8 @@ import routing_settings  # noqa: E402
 from tui_routing import RoutingPanel, render_panel  # noqa: E402
 from tui_editor import Draft, InputDecoder  # noqa: E402
 from tui_runtime import BoardRuntime, visible_jobs as _visible_jobs  # noqa: E402
-from tui_chrome import layout, message_rows_needed  # noqa: E402
+from tui_chrome import layout, message_rows_needed
+from tui_style import initialize  # noqa: E402
 from tui_detail_state import DetailState, HelpState, Notifications  # noqa: E402
 from tui_view import (  # noqa: E402,F401
     PRIMARY_FOOTER, _TABS, _add, _detail_lines, _elide, _listing_id, _next_tab,
@@ -60,10 +61,8 @@ def _report_result(notes, result) -> None:
 def _paint(stdscr, repo: Path, *, runtime=None, clock=time.monotonic) -> None:
     runtime = runtime or BoardRuntime(repo)
     curses.curs_set(0)
-    curses.use_default_colors()
     curses.noecho()
-    for index, color in enumerate((curses.COLOR_GREEN, curses.COLOR_RED, curses.COLOR_YELLOW, curses.COLOR_CYAN), 1):
-        curses.init_pair(index, color, -1)
+    initialize()
     # Curses otherwise waits up to a second to disambiguate an Escape key.
     if hasattr(curses, "set_escdelay"):
         curses.set_escdelay(25)
@@ -155,7 +154,7 @@ def _paint(stdscr, repo: Path, *, runtime=None, clock=time.monotonic) -> None:
             notice = notes.current()
             lay = layout(h, w, tab=detail.tab if detail is not None else tab,
                          message_rows=message_rows_needed(notice, w))
-            page = max(1, lay.message_y - 2)
+            page = max(1, lay.list_rows)
             jobs_view = layout(h, w, tab="Jobs", message_rows=lay.message_rows)
             focus = detail.item_id if detail is not None and detail.tab == "Jobs" else identities["Jobs"]
             runtime.request_snapshot(start=offsets["Jobs"], rows=jobs_view.capacity, selected_id=focus)

@@ -207,25 +207,28 @@ class TitlesAndActivity(unittest.TestCase):
 
     def test_two_line_active_rows_show_doing_with_recorded_fallback(self):
         rows = [job(1, effective="ask", display_state="needs-input", task="decide", doing="",
-                    display_reason="Bash: npm test"),
+                    display_reason="Bash: npm test", ask={"preview": "Bash: npm test"}),
                 job(2, task="build", doing="running unit tests"),
                 job(3, effective="ok", display_state="failed", task="old", display_reason="timeout")]
         screen = StrictScr([], h=16, w=80)
         render(screen, snap(rows))
-        self.assertIn("decide", screen.row(3))
-        self.assertIn("↳ Bash: npm test", screen.row(4))
-        self.assertIn("build", screen.row(5))
-        self.assertIn("↳ running unit tests", screen.row(6))
-        self.assertIn("old", screen.row(7))
-        self.assertIn("codex · timeout", screen.row(8))
+        self.assertIn("needs attention (1)", screen.row(3))
+        self.assertIn("decide", screen.row(4))
+        self.assertIn("permission: Bash: npm test", screen.row(5))
+        self.assertIn("active (1)", screen.row(6))
+        self.assertIn("build", screen.row(7))
+        self.assertIn("running unit tests", screen.row(8))
+        self.assertIn("finished (1)", screen.row(9))
+        self.assertIn("old", screen.row(10))
+        self.assertIn("codex · timeout", screen.row(11))
 
-    def test_short_screen_is_activity_first_with_title_fallback(self):
+    def test_short_screen_preserves_title_with_activity_in_details(self):
         rows = [job(1, task="build", doing="running unit tests"), job(2, task="idle task", doing=""),
                 job(3, effective="ok", display_state="completed-unverified", task="history", doing="stale doing")]
         screen = StrictScr([], h=10, w=80)
         render(screen, snap(rows))
-        self.assertIn("running unit tests", screen.row(3))
-        self.assertNotIn("build", screen.row(3))
+        self.assertIn("build", screen.row(3))
+        self.assertNotIn("running unit tests", screen.row(3))
         self.assertIn("idle task", screen.row(4))
         self.assertIn("history", screen.row(5))
 
@@ -315,8 +318,8 @@ class StateLabels(unittest.TestCase):
     def test_selected_row_has_marker_and_text_not_only_colour(self):
         screen = StrictScr([], h=10, w=80)
         render(screen, snap([job(1), job(2, effective="fail", display_state="failed")]), selected=1)
-        self.assertTrue(screen.row(4).startswith("▸ Failed"))
-        self.assertTrue(screen.row(3).startswith("  Running"))
+        self.assertTrue(screen.row(4).startswith("> ✗ Failed"))
+        self.assertTrue(screen.row(3).startswith("  ● Running"))
 
     def test_help_legend_lists_every_label(self):
         legend = "\n".join(tui_view.help_lines())
@@ -352,8 +355,10 @@ class Details(unittest.TestCase):
             with self.subTest(w=w):
                 state = snap([job(1, task="job task", token_usage={"input": 1200})], pending)
                 screen, _ = self.board(["\n", "\t", "\n", "\t", "\n", "q"], [state], w=w, workflows=[workflow])
-                self.assertIn("Tokens  1.2k in", screen.text(1))
-                self.assertIn("full second line", screen.text(3))
+                self.assertIn("Tokens  1.2k in", "\n".join(tui_view.detail_document("Jobs", state.jobs[0])))
+                self.assertIn("read-only", screen.text(1))
+                self.assertIn("full second line", "\n".join(tui_view.detail_document("Queue", pending[0])))
+                self.assertIn("read-only", screen.text(3))
                 self.assertIn("Blocked: node failed", screen.text(5))
                 self.assertNotIn("secret", screen.text(5))
 
@@ -447,11 +452,11 @@ class TabsAndLayout(unittest.TestCase):
                 screen = StrictScr([], h=10, w=w)
                 render(screen, state, tab="Queue", workflows=workflows)
                 tabs = [call for call in screen.calls if call[0] == 1]
-                self.assertEqual(len(tabs), 4)
+                self.assertEqual(len(tabs), 5 if w >= 100 else 4)
                 strip = "".join(call[2] for call in tabs)
-                self.assertIn("2!", strip)
+                self.assertIn("!2", strip)
                 self.assertIn("3", strip)
-                self.assertIn("1!", strip)
+                self.assertIn("!1", strip)
                 active = [call for call in tabs if call[4] & curses.A_REVERSE]
                 self.assertEqual(len(active), 1)
                 self.assertIn("Q", active[0][2])
@@ -463,7 +468,7 @@ class TabsAndLayout(unittest.TestCase):
         screen = StrictScr([], h=10, w=80)
         render(screen, snap([]), tab="Queue")
         self.assertIn("project", screen.row(0))
-        self.assertIn("need input", screen.row(0))
+        self.assertIn("attention", screen.row(0))
         self.assertIn("Press e to enqueue", screen.text())
         screen = StrictScr([], h=10, w=80)
         render(screen, snap([]))
@@ -473,8 +478,8 @@ class TabsAndLayout(unittest.TestCase):
     def test_row_order_marker_state_task_then_abbreviated_id(self):
         long_id = "20261003T044507Z-31263-e4f0a4c7b1544f4295d32d1be1185f8b"
         row = job(1, job_id=long_id, task="short", token_usage={"input": 900, "output": 20})
-        text = tui_rows.entry_lines("Jobs", row, 60, selected=True)[0]
-        self.assertTrue(text.startswith("▸ Running"))
+        text = tui_rows.entry_lines("Jobs", row, 80, selected=True)[0]
+        self.assertTrue(text.startswith("> ● Running"))
         self.assertLess(text.index("Running"), text.index("short"))
         self.assertIn(abbrev_id(long_id), text)
         self.assertNotIn(long_id, text)
@@ -494,7 +499,7 @@ class TabsAndLayout(unittest.TestCase):
         self.assertTrue(tui_chrome.layout(30, 100).split)
         self.assertEqual(tui_chrome.layout(11, 80).entry_lines, 1)
         self.assertEqual(tui_chrome.layout(12, 80).entry_lines, 2)
-        self.assertEqual(tui_chrome.layout(12, 80, tab="Queue").entry_lines, 1)
+        self.assertEqual(tui_chrome.layout(12, 80, tab="Queue").entry_lines, 2)
         self.assertEqual(tui_chrome.layout(24, 80).capacity, 9)
         self.assertEqual(tui_chrome.layout(10, 80).capacity, 5)
 
@@ -556,7 +561,7 @@ class TabsAndLayout(unittest.TestCase):
         screen = Resizing(["j"] * 20 + [curses.KEY_RESIZE, -1, "q"], h=30, w=140)
         run(screen, Clocked([snap(listing)]))
         after = screen.frames[-1]
-        selected = [call[2] for call in after if call[2].startswith("▸")]
+        selected = [call[2] for call in after if call[2].startswith(">")]
         self.assertEqual(len(selected), 1)
         self.assertIn("task 20", selected[0])
         self.assertTrue(all(call[1] + _text_width(call[2]) <= 44 for call in after))
@@ -566,8 +571,8 @@ class TabsAndLayout(unittest.TestCase):
         reordered = rows[1:] + rows[:1]
         screen = run(StrictScr(["j", "j", -1, -1, "q"], h=10, w=80),
                      Clocked([snap(rows), snap(rows), snap(rows), snap(reordered), snap(rows[:1])]))
-        self.assertIn("task 2", [call[2] for call in screen.frames[3] if call[2].startswith("▸")][0])
-        self.assertIn("task 0", [call[2] for call in screen.frames[4] if call[2].startswith("▸")][0])
+        self.assertIn("task 2", [call[2] for call in screen.frames[3] if call[2].startswith(">")][0])
+        self.assertIn("task 0", [call[2] for call in screen.frames[4] if call[2].startswith(">")][0])
 
 
 class Safeguards(unittest.TestCase):
@@ -577,7 +582,9 @@ class Safeguards(unittest.TestCase):
         self.assertIn("Stop job job-001 — stop me", screen.row(10, 1))
         self.assertEqual(screen.row(11, 1), "y confirm · any other key aborts")
         self.assertIn("Cancellation aborted job-001", screen.text(3))
-        self.assertTrue(screen.row(11, 5).startswith("enqueue 1/2000: a"))
+        self.assertIn("Enqueue task", screen.row(2, 5))
+        self.assertEqual(screen.row(4, 5).strip(), "a")
+        self.assertIn("Enter enqueue", screen.row(11, 5))
         self.assertIn("Enter queues", screen.row(10, 5))
         self.assertIn("Jobs 1-1/1", screen.text(7))
         self.assertEqual(runtime.submitted, [])
@@ -587,7 +594,7 @@ class Safeguards(unittest.TestCase):
         with mock.patch.object(rig_tui.rig_jobs, "cancel_job") as cancel:
             screen = run(StrictScr(["x", "y", "x", "q"], h=12, w=80), runtime)
         self.assertEqual(runtime.submitted, ["cancel:Jobs:job-001"])
-        self.assertIn("Stopping", screen.row(3, 2))
+        self.assertIn("Stopping", screen.text(2))
         self.assertIn("stop already requested job-001", screen.text(3))
         cancel.assert_not_called()
 
