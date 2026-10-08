@@ -1,5 +1,7 @@
 # Task preparation
 
+For a large implementation, prepare one bounded brief per independently testable deliverable and use an adaptive workflow to run eligible children in parallel. The parent assigns separate file and resource ownership, defines shared interfaces, and includes a final integration verification stage. The scheduler executes the parent's graph; it does not split a broad brief automatically. See [adaptive workflows](usage.md#adaptive-workflows). An existing worker's held files remain unavailable until its execution is confirmed stopped and ownership is explicitly released.
+
 A clear brief gives the worker the findings, decisions, files and checks it needs to begin. Normally your parent agent prepares this for you. Try:
 
 > "Prepare a brief with the relevant findings, decisions, files and checks, then implement the save fix."
