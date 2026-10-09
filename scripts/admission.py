@@ -315,8 +315,18 @@ def resolve_owner_credentials(repo, credentials_path, *, job_id=""):
         raise AdmissionError("owner credentials artifact initiating owner context is stale or mismatched")
     for owner in (saved_owner, current_owner):
         identity = initiating_identity(owner)
-        if not identity or owner.get("initiating_identity") not in (None, "", identity):
+        recorded_identity = owner.get("initiating_identity")
+        # Bare-shell DAG launches use a job-local executor session while
+        # retaining the observed parent as their initiating actor.
+        parent_identity = initiating_identity({**owner, "session_id": ""})
+        shell_workflow = (record.get("workflow_id")
+                          and owner.get("session_id") == f"launch-{job}"
+                          and parent_identity
+                          and recorded_identity == parent_identity)
+        if not identity or (recorded_identity not in (None, "", identity) and not shell_workflow):
             raise AdmissionError("owner credentials artifact initiating identity is inconsistent")
+    if not _same_initiating_owner(saved_owner, current_owner):
+        raise AdmissionError("owner credentials artifact initiating owner context is stale or mismatched")
     return {
         "job_id": job,
         "reservation_id": record.get("reservation_id") or reservation_id,

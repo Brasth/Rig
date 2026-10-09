@@ -130,6 +130,26 @@ class WorkerLaunchTests(unittest.TestCase):
             record = admission.get_reservation(self.repo, result["reservation_id"])
             self.assertEqual(record["owner"]["initiating_identity"], original)
             self.assertEqual(record["owner"]["session_id"], "launch-job-a")
+        self._finish_wrapper(result, owner_session="launch-job-a")
+        path = Path(result["credentials_path"])
+        payload = json.loads(path.read_text())
+        for overrides in ({"initiating_identity": "parent:1:wrong"},
+                          {"parent_start_id": "wrong", "initiating_identity":
+                           f"parent:{payload['owner']['parent_pid']}:wrong"}):
+            with self.subTest(overrides=overrides):
+                path.write_text(json.dumps({**payload, "owner": {**payload["owner"], **overrides}}))
+                with self.assertRaisesRegex(admission.AdmissionError, "initiating"):
+                    admission.resolve_owner_credentials(self.repo, str(path), job_id="job-a")
+        path.write_text(json.dumps(payload))
+        recovered = rig_mcp.call_tool(
+            "rig_job_recover_wrapper_receipt", {"repo": str(self.repo), "id": "job-a"})
+        self.assertFalse(recovered.get("isError"), recovered)
+        closed = rig_mcp.call_tool(
+            "rig_job_close", {"repo": str(self.repo), "id": "job-a",
+                              "credentials_path": result["credentials_path"],
+                              "rationale": "Close stopped bare-shell DAG worker"})
+        self.assertFalse(closed.get("isError"), closed)
+        self.assertEqual(admission.get_reservation(self.repo, result["reservation_id"])["stage"], "released")
 
     def test_bare_shell_workflow_launch_refuses_different_initiator(self):
         import workflow_state as wf
@@ -608,12 +628,12 @@ class WorkerLaunchTests(unittest.TestCase):
         job_dirs = {path.name for path in (self.repo / ".rig" / "jobs").iterdir() if path.is_dir()}
         self.assertEqual(job_dirs, set(ids))
 
-    def _finish_wrapper(self, launched):
+    def _finish_wrapper(self, launched, owner_session="launch-tests"):
         creds = json.loads(Path(launched["credentials_path"]).read_text())
         admission.finish(
             self.repo, status="ok", completion={"kind": "parent_task", "completed": True},
             reservation_id=creds["reservation_id"], attempt_id=creds["attempt_id"],
-            owner_token=creds["owner_token"], owner_session="launch-tests",
+            owner_token=creds["owner_token"], owner_session=owner_session,
         )
         return self.repo / ".rig" / "reservations" / f"{launched['reservation_id']}.json"
 
