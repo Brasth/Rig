@@ -677,6 +677,54 @@ class WorkflowScheduler(unittest.TestCase):
         self.assertIn("unconfirmed", text)
         self.assertIn("reconcile", text)
 
+    def _admitted_handoff_launch(self, repo, *, node, **kwargs):
+        import jobs
+        details = jobs.start_job(
+            repo, worker="parent", executor_kind="parent", role=node["role"],
+            files=node["files"], access="write", owner_session="sched-tests", return_details=True,
+        )
+        if node["id"] == "w1":
+            jobs.finish_job(
+                repo, details["job_id"], owner_session="sched-tests",
+                completion={"kind": "parent_task", "completed": True},
+                **{key: details[key] for key in ("reservation_id", "attempt_id", "owner_token")},
+            )
+        return {"kind": "wrapper", "job": details, "workflow_attempt": 1}
+
+    def test_finished_node_hands_off_before_running_sibling(self):
+        created = self.create([
+            {"id": "w1", "role": "implement", "files": ["a.py"]},
+            {"id": "w2", "role": "implement", "files": ["b.py"]},
+            {"id": "r1", "role": "review", "files": ["a.py"], "depends_on": ["w1"]},
+        ])
+        launched = self.advance(created, launch_fn=self._admitted_handoff_launch)
+        job_id = next(row["job_id"] for row in launched["launched"] if row["node_id"] == "w1")
+        # Fail immediately if waiting tries to poll rather than handing off.
+        stop = mock.Mock()
+        stop.is_set.return_value = False
+        stop.wait.side_effect = AssertionError("finished node must return to parent")
+        code, text = sched.wait_workflow(self.repo, created["workflow_id"], timeout=2, cancel_event=stop)
+        public = json.loads(text)["workflow"]
+        self.assertEqual(code, 0, text)
+        self.assertEqual(public["status"], "running")
+        self.assertEqual(public["next_parent_action"]["kind"], "accept")
+        self.assertEqual(public["next_parent_action"]["node_id"], "w1")
+        self.assertEqual(public["next_parent_action"]["job_id"], job_id)
+        self.assertEqual(public["node_state"]["w2"]["status"], "running")
+        self.assertFalse(public["node_state"]["w1"]["accepted"])
+        self.assertFalse(public["node_state"]["r1"]["launched"])
+
+    def test_finished_dependency_names_acceptance_instead_of_advance(self):
+        created = self.create([
+            {"id": "w1", "role": "implement", "files": ["a.py"]},
+            {"id": "r1", "role": "review", "files": ["a.py"], "depends_on": ["w1"]},
+        ])
+        self.advance(created, launch_fn=self._admitted_handoff_launch)
+        public = wf.refresh(self.repo, created["workflow_id"])
+        self.assertEqual(public["next_parent_action"]["kind"], "accept")
+        self.assertEqual(public["next_parent_action"]["node_id"], "w1")
+        self.assertFalse(public["node_state"]["r1"]["launched"])
+
 
 if __name__ == "__main__":
     unittest.main()
