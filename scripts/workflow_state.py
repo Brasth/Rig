@@ -672,6 +672,14 @@ def next_parent_action(spec, state):
                           instruction="Inspect the job and its ownership evidence with rig_job_show. "
                                       "Do not repeat reconciliation without new evidence; unknown ownership stays protected")
         return action
+    # Completion is a parent handoff even while siblings are still running or
+    # dependents are pending. Advancing cannot satisfy their acceptance barrier.
+    for node_id, row in (state.get("nodes") or {}).items():
+        if row.get("status") == "completed-unverified":
+            return _with_job_guidance(
+                {"kind": "accept", "reason": "parent acceptance required",
+                 "node_id": node_id, "job_id": row.get("job_id")}, state, node_id,
+            )
     gated = [
         node["id"] for node in spec.get("nodes") or []
         if node.get("effects") in GATED_EFFECTS

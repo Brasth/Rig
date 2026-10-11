@@ -647,6 +647,8 @@ def wait_workflow(repo, workflow_id, timeout=None, *, on_tick=None, cancel_event
             )
         if public.get("status") in {"blocked", "attention", "completed-unverified"}:
             return 0, json.dumps({"workflow": public, "siblings": siblings}, indent=2, default=str)
+        if (public.get("next_parent_action") or {}).get("kind") == "accept":
+            return 0, json.dumps({"workflow": public, "siblings": siblings}, indent=2, default=str)
         if not live_ids:
             return 0, json.dumps({"workflow": public, "siblings": siblings}, indent=2, default=str)
         if deadline is not None and time.monotonic() >= deadline:
