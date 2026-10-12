@@ -164,6 +164,8 @@ class WaitContract(unittest.TestCase):
         code, text = _alarm_run(3, lambda: jobs.wait_job(self.repo, "wait-job"))
         self.assertEqual(code, 2)
         self.assertIn("ASK wait-job", text)
+        self.assertIn("rig_job_allow(id='wait-job')", text)
+        self.assertIn("Do not call rig_job_wait again until", text)
 
     def test_omit_timeout_already_ok_is_0(self):
         self._finish_ok()

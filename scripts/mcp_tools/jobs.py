@@ -373,7 +373,9 @@ def dispatch(ctx, state):
                 routing=args.get("routing"),
                 assessment=args.get("assessment"), **_domain_args(args),
                 preparation=_preparation_arg(args),
-                **_job_ownership_args(args, repo),
+                **_ownership_args(args, repo, job_id=(
+                    _optional_string(args, "writer_job_id") or _optional_string(args, "id")
+                )),
             )
         except rig_launch.LaunchError as exc:
             return _err(str(exc))
