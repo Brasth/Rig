@@ -1468,6 +1468,8 @@ def format_wait(job: dict, others: list[dict] | None = None) -> str:
             f"answer  rig job allow {job_id}",
             f"        rig job deny {job_id}",
             "You must answer this prompt so the child can continue.",
+            f"next    rig_job_allow(id='{job_id}') or rig_job_deny(id='{job_id}', reason='...')",
+            "Do not call rig_job_wait again until this pending prompt is answered. Waiting does not approve it.",
             "Do not kill this job. Do not spawn another worker for this task.",
         ]
     elif eff == "running":

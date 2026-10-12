@@ -489,6 +489,22 @@ class WorkerLaunchTests(unittest.TestCase):
         self.assertEqual(self._held(), [])
         self.assertFalse((self.repo / ".rig" / "jobs" / "stale-review").exists())
 
+    def test_mcp_review_launch_resolves_writer_receipt_not_reviewer_id(self):
+        writer = self._launch()
+        args = {"repo": str(self.repo), "id": "new-reviewer", "brief": "review",
+                "worker": "claude", "role": "review", "access": "read",
+                "writer_job_id": "job-a", "credentials_path": writer["credentials_path"]}
+        with mock.patch.object(worker_launch, "launch", return_value={"job_id": "new-reviewer"}) as launch:
+            result = rig_mcp.call_tool("rig_job_launch", args)
+        self.assertFalse(result.get("isError"), result)
+        self.assertEqual(launch.call_args.kwargs["reservation_id"], writer["reservation_id"])
+        self.assertEqual(launch.call_args.kwargs["owner_session"], "launch-tests")
+        args["writer_job_id"] = "other-writer"
+        with mock.patch.object(worker_launch, "launch") as launch:
+            result = rig_mcp.call_tool("rig_job_launch", args)
+        self.assertTrue(result.get("isError"), result)
+        launch.assert_not_called()
+
     def test_readiness_override_env_propagates_to_wrapper(self):
         custom = self.root / "opencode.json"
         launcher = self.home / "rig-mcp.sh"
