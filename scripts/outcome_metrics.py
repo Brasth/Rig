@@ -14,6 +14,7 @@ DEFINITIONS = {
     "first_pass": "Initial accepted attempt with complete bound local history and no prior failed check/criterion, rejection, retry or continuation. Missing history is unknown.",
     "freshness": "Historical first acceptance is separate from current acceptance freshness and is not revalidated by these metrics.",
     "continuations": "Only explicitly linked attempts; missing, cyclic or replaced-attempt evidence is unknown. Later corrections are counted separately.",
+    "total_time": "Not measured here: these metrics start at admission and exclude parent preparation. Pilot total parent+worker time is recorded separately by the parent (docs/preparation-pilot.md).",
 }
 
 

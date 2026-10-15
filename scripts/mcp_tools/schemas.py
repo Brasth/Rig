@@ -12,6 +12,7 @@ import context_packages  # noqa: E402
 import doctor as rig_doctor  # noqa: E402
 import harness as rig_harness  # noqa: E402
 import routing_domains  # noqa: E402
+import preparation_binding  # noqa: E402
 import preparation_inputs  # noqa: E402
 
 PICK_ROLES = ("explore", "mini", "bulk", "implement", "hard", "review", "verify", "stay")
@@ -997,6 +998,8 @@ for _tool in TOOLS:
         _tool["inputSchema"]["properties"].update(TASK_DOMAIN_PROPERTIES)
     if _tool["name"] in {"rig_pick", "rig_session"}:
         _tool["inputSchema"]["properties"].update(REVIEW_PROPERTIES)
+    if _tool["name"] in {"rig_pick", "rig_session", "rig_job_start", "rig_job_launch"}:
+        _tool["inputSchema"]["properties"]["preparation"] = preparation_binding.SCHEMA
     if _tool["name"] == "rig_job_start":
         _tool["inputSchema"]["properties"].update({
             "files": {"type": "array", "items": {"type": "string"}},
@@ -1282,7 +1285,7 @@ TOOLS.extend([
          "openWorldHint": False,
      },
      "description": "Parent-only. Append nodes or explicitly rebind context_packages for never-executed nodes after resolution/release. No scope changes, held attempts, launched-node changes, or extension after final verify launches.",
-     "inputSchema": {"type": "object", "properties": {**_WORKFLOW_ID, **_WORKFLOW_OWNER, "nodes": {"type": "array", "items": {"type": "object"}}, "context_packages": {"type": "object", "additionalProperties": CONTEXT_REFERENCE_SCHEMA}}, "required": ["id"]}},
+     "inputSchema": {"type": "object", "properties": {**_WORKFLOW_ID, **_WORKFLOW_OWNER, "nodes": {"type": "array", "items": {"type": "object"}}, "context_packages": {"type": "object", "additionalProperties": CONTEXT_REFERENCE_SCHEMA}, "preparations": {"type": "object", "additionalProperties": preparation_binding.SCHEMA, "description": "Node ID to a fresh preparation for a never-executed writer node. Replaces that node's brief with the prepared brief; files and acceptance contract must still match."}}, "required": ["id"]}},
     {"name": "rig_workflow_resolve",
      "annotations": {
          "readOnlyHint": False,

@@ -6,19 +6,16 @@ In this file: [terminal companion](#optional-terminal-companion) · [diagram pre
 
 ## What Rig is
 
-The point is to stop you being the tired reviewer of one agent. You talk to a **parent** (intended: Codex on Astra). The parent assigns work to a **child**, then checks and sends feedback — allow/deny, another prompt — the loop you used to do yourself.
+You chat with one **parent** agent (Codex, Grok, OpenCode, OMP, Pi, agy, Cursor Desktop, or Claude Code). The parent scopes work, briefs eligible **worker** agents over MCP, waits for results, and verifies before you merge. You stay in the parent while workers run independently.
 
-You stay in **one parent**: whichever agent you opened with parent Rig MCP (no `RIG_JOB_ID`). Codex, Grok, OpenCode, OMP, Pi, agy, Cursor Desktop, and Claude Code are all valid when that MCP is wired. The parent picks **kind** and assesses complexity, risk, and uncertainty. `rig pick` selects an eligible model+effort profile at the minimum sufficient tier. Never spawn Astra, Sol, or Fable as a child.
+- **Parent** = the agent you opened with Rig MCP. Plans, checks, watches jobs, does vision/computer-use. Coordinates delegated work; may implement when routing explicitly chooses parent writes.
+- **Workers** = delegated agents. Write code, fix bugs, review, SSH/debug. Available: Grok, Claude Code, Cursor CLI, OpenCode, OMP, Pi, agy, Devin, Codex.
+- **Live parent** = the agent you actually opened (`rig status` shows it). The harness `parent =` key is just your preference (`rig use grok` / `codex` / etc.).
+- **Missing worker binary?** That worker is off. Parent picks another eligible model. Not a failure.
 
-- **Parent** (you open this): live process + parent Rig MCP. It plans, checks, talks to you, does vision / computer-use / chrome-profile, and watches jobs. It does **not** sit on write/review/SSH when a worker is effective.
-- **Workers** (the parent may spawn these): Grok, Claude Code, Cursor CLI, OpenCode, OMP, Pi, agy, Devin, Codex. They write code, fix bugs, review, SSH/debug, and gather facts. The same binary with `RIG_JOB_ID` is a child.
-- **Devin** is normally a child-only SWE-2 worker; a live Devin session is detected so the devin child is off. Devin children get a job-scoped `--config` allowlist (read-only git, `python3 -m unittest`, `bash -n`, read-only shell, Rig MCP). The Antigravity IDE/GUI is not a parent or worker; the CLI is `agy`.
-- **Live parent** is whichever CLI you actually opened with parent Rig MCP (`rig status`). The `parent =` key in `.rig/harness.toml` is only the preferred default (`rig use grok|codex|opencode|omp|pi|agy`). Opening the CLI is what makes it live. `rig use` does not admit Cursor or Claude as the preferred key.
-- **Missing binary is not a failure.** That worker is off. The parent uses a cheaper same-CLI worker. That is success.
+**Minimum setup:** one parent with Rig MCP. Optional: enable additional workers with `rig workers <name>=on`.
 
-**You need** one parent with Rig MCP. Optional worker binaries: `grok`, `claude`, `cursor-agent`, `codex`, `opencode`, `omp`, `pi`, `agy`, `devin`.
-
-Grok Bot.app and Cursor.app are GUIs, **not** spawnable workers. `rig doctor` may list them under **Apps (not spawnable)** as a hint. The Cursor worker binary is `cursor-agent`, not the GUI.
+Grok Bot.app and Cursor.app are GUIs, not workers. The Cursor worker binary is `cursor-agent`.
 
 Codex CLI and Grok CLI are installed from those products (this guide does not pin their installer URLs). Optional worker CLIs:
 
@@ -557,7 +554,9 @@ The parent does **not** ask you which model. `rig pick` maps kind → worker, mo
 
 ## Prepare a task
 
-The parent discovers concrete scope and exact checks, then uses `rig_task_prepare` or `rig task prepare --file task.json --json` to assemble an inert brief, acceptance contract and context/recipe previews. Missing inputs stay explicit. Building context and launching remain deliberate parent actions. See [Task preparation](task-preparation.md).
+Optionally, gather findings, decisions, files and checks before delegating. Your parent agent can structure this: "Prepare a brief with findings, decisions, files to change and checks, then implement the save fix." The parent reads the code; `rig_task_prepare` assembles selected inputs without discovering files or running checks.
+
+After the parent gathers and prepares, it calls MCP `rig_job_launch` or `rig_job_start` with the exact returned brief, files, acceptance contract and preparation object, plus the selected worker/model/effort/routing. See [Task preparation](task-preparation.md) for details and examples.
 
 ## Explain recovery
 
@@ -836,7 +835,7 @@ rig workflow show|advance|wait|extend|resolve|approve|cancel|report <id>
 
 Queue lifecycle when bound to a workflow: claimed on create from a parked pending item, spawned after the first node, done only after verification, cancelled on cancel. A workflow-bound queue is never pending.
 
-`rig tui` Tab Jobs/Queue/Workflows fields: workflow id, status, accepted/required, running, ASK, blocker, next parent action, title. Status row may show `wf` active and attention counts. Notices report workflow attention/blocked/cancel-requested/failed/verified/started. No estimated progress, savings, or ETA.
+`rig tui` Tab Jobs/Queue/Workflows, Workflows tab: rows show state, title, and accepted/required; Enter opens details with workflow id, status, accepted/required, running, ASK, blocker, next parent action, and title. The tab strip shows the workflow attention count (`Workflows 2!`). Notices report workflow attention/blocked/cancel-requested/failed/verified/started. No estimated progress, savings, or ETA.
 
 ## Queue ownership and recovery
 
@@ -924,7 +923,13 @@ rig queue cancel <id>
 
 `--timeout SECS` is an optional cap, not the default. Omit timeout to block. `0` snapshots once. Exit 124 only if still running when a cap hits.
 
-TUI controls: Tab switches Jobs/Queue/Workflows; `j`/`k` or arrows select. The Jobs list is attention-first (ASK, attention, and active jobs before historical terminal jobs) and shows a state label plus task text in each row so context is readable before opening details. Narrow terminals stack the list above a one-line summary; color is never the only status cue. The Queue tab shows pending text and known capacity/ownership blockers; it does not infer file scope from task text. The Workflows tab shows workflow id, status, accepted/required, running, ASK, blocker, next parent action, and title. No estimated progress, savings, or ETA. `e` opens the Unicode editor, Enter commits, Esc cancels the draft, and arrows/Home/End/Delete edit. Bracketed paste treats embedded newlines as spaces and is capped at 2,000 characters. A failed save retains the draft for retry. `x` starts cancellation for the selected job or pending queue item and names that target; it does not run until `y` confirms. Esc or any other key aborts. After confirmation, the request stays non-blocking and repeated requests for the same target are suppressed while pending. `?` opens a help overlay (Esc or `?` closes it). `y`/`n` answer the selected job's ASK when not confirming, `l` toggles its in-board activity log, and PgUp/PgDn scroll activity. `r` refreshes; `q` closes the board without stopping work. Snapshot collection and actions run in the background; a slow or failed refresh leaves the last snapshot visible with its age/error.
+TUI layout: the top row shows the project name and health (ASK, running, reserved, live slots). The second row is the tab strip Jobs / Queue / Workflows / Settings with the active tab highlighted; `n!` marks attention counts for Jobs and Workflows, and Queue shows its pending count. Narrow terminals shorten tab names (`Flows`, `Set`, then single letters) but keep every tab and count. Below that come the list heading, the list, a message row, and a persistent key-hint row. Terminals at least 100 columns wide split the list and a details preview; narrower terminals show the full-width list. Below 40 columns or 8 rows the board shows a resize message; `q` still quits and other board keys wait for a resize. At 12 or more rows each job takes two lines.
+
+Rows read marker, state, then task. The task is the first non-empty line of the recorded task; the full task stays in details. Active jobs show the recorded `doing` line (or their recorded state reason) under the title; on short screens the active row shows that activity in place of the title. Finished jobs show worker and outcome on the second line. An abbreviated ID appears only when space remains after the task; details show the full ID. Token counts appear only in details, labelled `Tokens`, and stay `unknown` when no usage was reported. The Jobs list stays attention-first (ASK, attention, and active jobs before history) and selection follows the item ID across refreshes and reorders.
+
+State labels are presentation only; stored state, CLI, and MCP output are unchanged: Needs input, Running, Reserved, Checking, Unverified, Verified, Failed, Cancelled, Stopping (stop requested, waiting for exit), Stop unclear (termination unconfirmed; files held until reconciled), Host stop (the owning host must interrupt a native agent), plus Queued for queue items and Planned for planned workflows. Verified appears only when the parent accepted the current content snapshot. Colours: yellow attention, cyan active or checking, green verified, red failed, plain history. The text label and the `▸` selection marker never depend on colour. `?` lists the full legend.
+
+TUI controls: Tab / Shift-Tab switch tabs; `j`/`k` or arrows select. Enter opens full-screen details for the selected job, queue item, or workflow. Details stay bound to that item ID; if it leaves the list they say "Item no longer available". In details, `j`/`k`, arrows, and PgUp/PgDn scroll; Enter or Esc closes; Tab / Shift-Tab close and switch tabs; `q` quits. For jobs, `l` toggles details and activity and `f` toggles follow; manual scrolling turns follow off and keeps your position as new activity arrives. Details and help are read-only: mutation keys work only on the board. `?` opens the scrollable help (Esc or `?` closes, `q` quits). The Queue tab shows pending text and known capacity/ownership blockers; it does not infer file scope from task text. `e` opens the Unicode editor, Enter commits, Esc cancels the draft, and arrows/Home/End/Delete edit. Bracketed paste treats embedded newlines as spaces and is capped at 2,000 characters. A failed save retains the draft for retry. `x` starts cancellation for the selected job or pending queue item and names that target; it does not run until `y` confirms. Esc or any other key aborts. After confirmation, the request stays non-blocking and repeated requests for the same target are suppressed while pending. `y`/`n` answer the selected job's ASK when not confirming. On wide terminals `l` toggles the activity pane, `f` toggles follow, and PgUp/PgDn scroll activity; on narrow terminals `l` opens activity details. `r` refreshes; `q` closes the board without stopping work. The editor and the cancel confirmation take over the bottom rows with their own hints. Info and success messages clear after four seconds; errors stay until Esc or the next action result. The message row also shows snapshot age and refresh status; snapshot collection and actions run in the background, so a slow or failed refresh leaves the last snapshot visible with its age/error.
 
 In Grok, Codex, OpenCode, OMP, Pi, or agy type `/rig` or `/queue`. `/queue` parks a line in `.rig/queue/` and does **not** spawn.
 
@@ -1125,3 +1130,46 @@ barrier and a memory lock before unique atomic writes. No contradiction detectio
 or automatic rewriting occurs.
 
 For legacy runtime transition, see [the migration runbook](legacy-runtime-migration.md).
+
+
+## Git worktrees
+
+Rig keeps jobs, queues, memory, and ownership under each checkout's own `.rig`.
+Shell and Python commands recognize linked worktrees from nested directories.
+Initialize and enable each checkout explicitly when you want to run Rig there;
+creating or discovering a Git worktree does not initialize Rig.
+
+The discovery commands require Git with `rev-parse --path-format=absolute`
+and `worktree list --porcelain -z` support:
+
+```sh
+rig worktrees list
+rig worktrees list --json
+rig worktrees register --json
+```
+
+`list` discovers the repository's worktrees without writing files. It reports
+branch or detached HEAD, locked/prunable status, availability, local project
+state, and registered identity. Bare repositories cannot serve as execution
+checkouts. Discovery also works in uninitialized or disabled checkouts.
+
+`register` explicitly registers the current checkout. Repository identity and
+the registry live at `<git-common-dir>/rig/worktrees.json`; each checkout's
+identity lives at `<git-dir>/rig-worktree-id`. Git supplies both directories,
+including when the primary checkout's `.git` is a file. Registration is
+idempotent, serialized, and does not create `.rig`, enable Rig, or enable workers.
+A corrupt or unsupported registry fails without being overwritten.
+
+After `git worktree move`, discovery preserves the worktree identity but marks
+its recorded location stale. Run `rig worktrees register` from the moved checkout
+to explicitly refresh its binding. Removed registrations remain visible as
+unresolved records. Recreating a removed worktree receives a new identity.
+
+The JSON `eligible` field means the checkout is available, registered, has a
+current binding, and is locally enabled. It is discovery metadata, not a launch
+authorization or provider-readiness check. Worktree locks are reported as Git
+retention locks; they are not Rig execution reservations.
+
+This foundation does not aggregate scheduling limits or resource locks, launch
+workers across worktrees from one parent, or integrate results between branches.
+Those operations continue to use existing checkout-local behavior.

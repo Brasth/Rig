@@ -166,13 +166,16 @@ class BoardProjection(unittest.TestCase):
             return projected.call_args_list
 
     def test_every_job_can_be_selected_and_remains_visible(self):
-        listing = [self.job(index) for index in range(25)]
+        listing = [{**self.job(index), "task": f"task {index}"} for index in range(25)]
         screen = BoardScr([ord("j")] * 24 + [ord("q")])
         self.paint(screen, [listing])
         for index, frame in enumerate(screen.frames):
             left = [call[2] for call in frame if call[1] == 0 and 2 <= call[0] < screen.h - 1]
-            self.assertTrue(any(f"job-{index:03}" in line for line in left), (index, left))
-        self.assertTrue(any("Jobs 19-25/25" in call[2] for call in screen.frames[-1]))
+            selected = [line for line in left if line.startswith("> ")]
+            self.assertEqual(len(selected), 1)
+            self.assertIn(f"task {index}", selected[0])
+        # Header, tab strip, list heading, message row, and hints leave five list rows.
+        self.assertTrue(any("Jobs 22-25/25" in call[2] for call in screen.frames[-1]))
 
     def test_recovery_overlay_shows_guidance_and_blocks_mutation_keys(self):
         screen = BoardScr(["g", "x", "a", "e", "q"], h=24)
@@ -187,9 +190,10 @@ class BoardProjection(unittest.TestCase):
         first, second = self.job(1), self.job(2)
         screen = BoardScr([ord("j"), ord("q")])
         self.paint(screen, [[first, second], [second, first]], times=[10, 11])
-        detail_id = next(call[2] for call in screen.frames[-1]
-                         if call[0] == 2 and call[1] > 0 and call[2] == second["job_id"])
-        self.assertEqual(detail_id, second["job_id"])
+        detail_heading = next(call[2] for call in screen.frames[-1]
+                              if call[1] > 0 and "Details ·" in call[2])
+        self.assertIn(second['job_id'], detail_heading)
+
 
     def test_visible_rows_share_cache_and_history_is_not_refreshed(self):
         listing = [self.job(index) for index in range(1000)]
@@ -204,16 +208,18 @@ class BoardProjection(unittest.TestCase):
     def test_small_terminal_does_not_refresh_undisplayed_subjects(self):
         screen = BoardScr([ord("q")], h=6, w=30)
         self.assertEqual(self.paint(screen, [[self.job(1)]]), [])
-        self.assertTrue(any("terminal too small" in call[2] for call in screen.frames[0]))
+        self.assertTrue(any("Terminal too small" in call[2] for call in screen.frames[0]))
 
-    def test_narrow_board_keeps_job_identity_visible(self):
+    def test_narrow_board_keeps_title_and_state_visible(self):
         screen = BoardScr([ord("q")], h=10, w=65)
         with mock.patch.object(self, "project", side_effect=lambda job, **kwargs: {
             **job, "display_state": "completed-unverified", "verification_summary": {"state": "pending"},
         }):
             self.paint(screen, [[self.job(1)]])
-        left = [call[2] for call in screen.frames[0] if call[1] == 0 and call[0] == 2]
-        self.assertIn("job-001", left[0])
+        left = [call[2] for call in screen.frames[0] if call[1] == 0 and call[0] == 3]
+        self.assertIn("scoped task", left[0])
+        self.assertNotIn("job-001", left[0])
+        self.assertIn("Unverified", left[0])
 
     def test_details_keep_action_truthful_model_and_literal_scope(self):
         job = {**self.job(1), "display_state": "needs-input", "display_reason": "owner liveness unknown",
@@ -295,7 +301,7 @@ class BoardProjection(unittest.TestCase):
         self.assertIn("job-001", first)
         self.assertNotIn("wf ", title)
         workflow_tab = "\n".join(call[2] for call in screen.frames[2])
-        self.assertIn("No workflows in .rig/workflows", workflow_tab)
+        self.assertIn("No workflows yet.", workflow_tab)
 
     def test_one_active_workflow_summary_and_selected_detail(self):
         workflow = self._workflow("wf-active", title="ship feature")
@@ -303,7 +309,8 @@ class BoardProjection(unittest.TestCase):
         self.paint(screen, [[self.job(1)]], workflows=[workflow])
         header = "\n".join(call[2] for call in screen.frames[0])
         self.assertIn("job-001", header)
-        self.assertIn("wf 1 active / 0 attention", header)
+        tabs = [call[2] for call in screen.frames[0] if call[0] == 1]
+        self.assertIn("  Workflows ", tabs)
         selected = "\n".join(call[2] for call in screen.frames[2])
         self.assertIn("wf-active", selected)
         self.assertIn("accepted/required 1/3", selected)
@@ -326,7 +333,8 @@ class BoardProjection(unittest.TestCase):
         screen = BoardScr(["\t", "\t", "j", "q"], h=18, w=120)
         self.paint(screen, [[self.job(1)]], workflows=workflows)
         header = "\n".join(call[2] for call in screen.frames[0])
-        self.assertIn("wf 3 active / 2 attention", header)
+        tabs = [call[2] for call in screen.frames[0] if call[0] == 1]
+        self.assertIn("  Workflows !2 ", tabs)
         self.assertIn("job-001", header)
         first = "\n".join(call[2] for call in screen.frames[2])
         self.assertIn("wf-block", first)
@@ -356,18 +364,19 @@ class BoardProjection(unittest.TestCase):
         ordered = rig_tui.attention_first_jobs([done, running, ask])
         self.assertEqual([row["job_id"] for row in ordered], ["job-003", "job-002", "job-001"])
         row = rig_tui.format_list_row("Jobs", ask, 48, selected=True, state="needs-input")
-        self.assertIn("ASK", row)
+        self.assertIn("Needs input", row)
         self.assertIn("needs a decision", row)
-        self.assertIn("job-003", row)
-        self.assertTrue(row.startswith("▸"))
+        self.assertNotIn("job-003", row)
+        self.assertTrue(row.startswith(">"))
         screen = BoardScr([ord("q")], h=16, w=100)
         self.paint(screen, [[done, running, ask]])
-        left = [call[2] for call in screen.frames[0] if call[1] == 0 and 2 <= call[0] < 5]
-        self.assertTrue(any("ASK" in line and "needs a decision" in line for line in left), left)
-        self.assertLess(left[0].find("ASK"), left[0].find("needs a decision"))
-        self.assertIn("job-003", left[0])
-        self.assertTrue(any("WORK" in line and "live implementation" in line for line in left), left)
-        self.assertTrue(any("DONE" in line and "historical work" in line for line in left), left)
+        # Two-line entries at this height: rows 3, 5, and 7 hold the first lines.
+        left = [call[2] for call in screen.frames[0] if call[1] == 0 and call[0] in (4, 7, 10)]
+        self.assertTrue(any("Needs input" in line and "needs a decision" in line for line in left), left)
+        self.assertLess(left[0].find("Needs input"), left[0].find("needs a decision"))
+        self.assertNotIn("job-003", left[0])
+        self.assertTrue(any("Running" in line and "live implementation" in line for line in left), left)
+        self.assertTrue(any("Unverified" in line and "historical work" in line for line in left), left)
 
     def test_help_overlay_is_discoverable(self):
         screen = BoardScr(["?", "q"], h=18, w=100)
@@ -383,11 +392,12 @@ class BoardProjection(unittest.TestCase):
     def test_narrow_stack_keeps_task_and_identity_readable(self):
         job = {**self.job(1), "display_state": "needs-input", "effective": "ask",
                "task": "approve the patch"}
-        screen = BoardScr([ord("q")], h=12, w=60)
+        screen = BoardScr(["\n", "q"], h=12, w=60)
         self.paint(screen, [[job]])
         frame = "\n".join(call[2] for call in screen.frames[0])
-        self.assertIn("job-001", frame)
-        self.assertIn("ASK", frame)
+        self.assertNotIn("job-001", frame)
+        self.assertIn("job-001", "\n".join(call[2] for call in screen.frames[1]))
+        self.assertIn("Needs input", frame)
         self.assertIn("approve the patch", frame)
         self.assertNotIn("│", frame)
 

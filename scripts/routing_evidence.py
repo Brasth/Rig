@@ -7,6 +7,7 @@ import time
 from pathlib import Path
 
 import catalog as rig_catalog
+import preparation_routing as prep_routing
 import routing_profiles as rig_profiles
 import routing_domains as domains
 from routing_config import POLICY_VERSION
@@ -83,6 +84,8 @@ def read_sidecar(job_dir: Path, expected_attempt_id: str | None = None) -> dict 
     if "task_domain" in routing and not domains.evidence_ok(routing["task_domain"]):
         return None
     if "picker" in routing and not picker_evidence_ok(routing.get("picker")):
+        return None
+    if not prep_routing.evidence_ok(routing):
         return None
     if expected_attempt_id is not None:
         want = str(expected_attempt_id).strip()
@@ -322,6 +325,7 @@ def explain_lines(choice: dict) -> list[str]:
             shown = "-" if score is None else score
             detail = " ".join(row.get("explanation") or [])
             lines.append(f"canonical {row.get('profile_id') or '-'} score={shown} {detail}".rstrip())
+    lines.extend(prep_routing.explain_lines(routing))
     for row in routing.get("candidate_decisions") or []:
         extra = f" {row['detail']}" if row.get("detail") else ""
         lines.append(f"candidate {row.get('id') or '-'} {row.get('code')}{extra}")
@@ -451,8 +455,13 @@ def validate_launch_tuple(
     live: str = "",
     task_domain: str = "",
     research_sources=None,
+    preparation=None,
 ) -> dict:
-    """Rebuild trusted launch routing. Fingerprint is not an admission credential."""
+    """Rebuild trusted launch routing. Fingerprint is not an admission credential.
+
+    `preparation` is the binding summary validated at launch from fresh repository
+    bytes; recorded routing preparation/effort fields are untrusted and recomputed.
+    """
     import route as rig_route
     import routing_policy as policy
 
@@ -467,7 +476,7 @@ def validate_launch_tuple(
     if routing in (None, "", {}):
         if domains.normalize_domain(task_domain) or research_sources is not None:
             raise ValueError("task domains require smart routing metadata; re-pick")
-        return manual_routing(worker=worker, model=model, effort=effort, mode="manual")
+        return _with_preparation(manual_routing(worker=worker, model=model, effort=effort, mode="manual"), preparation)
     if not isinstance(routing, dict):
         raise ValueError("routing metadata must be an object; re-pick")
     if "preview_only" in routing:
@@ -477,7 +486,7 @@ def validate_launch_tuple(
         if domains.normalize_domain(task_domain) or research_sources is not None or "task_domain" in routing:
             raise ValueError("task domains require smart routing metadata; re-pick")
         sanitized = mode if mode in {"manual", "legacy"} else "manual"
-        return manual_routing(worker=worker, model=model, effort=effort, mode=sanitized)
+        return _with_preparation(manual_routing(worker=worker, model=model, effort=effort, mode=sanitized), preparation)
     if mode != "smart":
         raise ValueError("routing.policy_mode must be smart|legacy|manual; re-pick")
     try:
@@ -527,7 +536,16 @@ def validate_launch_tuple(
             assessed.get("uncertainty"),
         ):
             raise ValueError("assessment conflicts with routing metadata; re-pick")
-    need = "" if kind == "stay" else policy.required_tier(kind, assessed)
+    recorded_prep = routing.get("preparation")
+    if recorded_prep is not None and not isinstance(recorded_prep, dict):
+        raise ValueError("routing preparation evidence is invalid; re-pick")
+    if recorded_prep is not None and preparation is None:
+        raise ValueError("routing was picked with a preparation; launch with the same preparation or re-pick")
+    if preparation is not None and (recorded_prep or {}).get("fingerprint") != preparation.get("fingerprint") \
+            and cfg.preparation_aware_effort:
+        raise ValueError("preparation differs from the one used at pick; re-pick with the current preparation")
+    need = "" if kind == "stay" else prep_routing.raise_floor(
+        policy.required_tier(kind, assessed), prep_routing.floor_tier(cfg, kind, assessed, preparation))
     selected = routing.get("selected_profile")
     read_only_stay = kind == "stay" and access_value == "read"
     if not read_only_stay and domain["name"] in cfg.domains and domain["fallback"] == "none" and selected in (None, "", {}):
@@ -570,6 +588,7 @@ def validate_launch_tuple(
         _require_smart_access(kind, access_value, profile=None)
         domain["selection"] = "parent-boundary" if domain["parent_only"] else out["execution_strategy"]
         out["task_domain"] = domain
+        prep_routing.stamp(out, cfg, kind, assessed, preparation, None, out["execution_strategy"])
         return _accept_recorded_picker(out, routing, cfg, case)
     if not isinstance(selected, dict):
         raise ValueError("routing.selected_profile must be an object; re-pick")
@@ -583,8 +602,14 @@ def validate_launch_tuple(
         raise ValueError("profile is not allowed by the domain fallback policy; re-pick")
     if profile.worker != worker:
         raise ValueError("worker does not match the approved routing profile; re-pick")
-    if profile.effort != (effort or "") and (profile.effort or effort):
+    # Recompute effort from current policy and the fresh launch preparation; a raw
+    # routing override can never select an effort outside this resolution.
+    expected_effort = prep_routing.resolve(cfg, kind, assessed, preparation, profile, "wrapper")["effective"]
+    if expected_effort != (effort or "") and (expected_effort or effort):
         raise ValueError("effort does not match the approved routing profile; re-pick")
+    recorded_effort = routing.get("effort")
+    if isinstance(recorded_effort, dict) and recorded_effort.get("effective") != expected_effort:
+        raise ValueError("routing effort evidence does not match the current preparation/policy; re-pick")
     allowed_models = {key.lower() for key in profile.model_keys()}
     if model.lower() not in allowed_models:
         raise ValueError("model does not match the approved routing profile; re-pick")
@@ -621,7 +646,15 @@ def validate_launch_tuple(
     domain["selection"] = "preferred" if profile_id in domain["preferred_profiles"] else ("scored-fallback" if domain["name"] in cfg.domains else "builtin")
     domain["reason"] = "validated eligible domain profile: " + profile_id
     out["task_domain"] = domain
+    prep_routing.stamp(out, cfg, kind, assessed, preparation, profile, "wrapper")
     return _accept_recorded_picker(out, routing, cfg, case)
+
+
+def _with_preparation(routing: dict, preparation) -> dict:
+    """Manual/legacy launches record a validated preparation but never adjust effort."""
+    if preparation is not None:
+        routing["preparation"] = {key: preparation[key] for key in prep_routing.PREPARATION_FIELDS}
+    return routing
 
 
 def _accept_recorded_picker(out: dict, routing: dict, cfg, case: str) -> dict:

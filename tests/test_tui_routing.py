@@ -209,7 +209,7 @@ class BoardForm(Project):
         self.assertEqual(document.raw["domains"]["general"], {"preferred_profiles": [], "fallback": "parent"})
         self.assertEqual(document.raw["domains"]["frontend"], self.raw["domains"]["frontend"])
         self.assertEqual(sum(key.endswith(":save") for key in runtime.submitted), 2)
-        self.assertTrue(any("Routing Settings" in call[2] for frame in screen.frames for call in frame))
+        self.assertTrue(any("Domain routing" in call[2] for frame in screen.frames for call in frame))
 
     def test_delayed_open_cannot_replace_newer_navigation_and_queue_editor(self):
         self.write()

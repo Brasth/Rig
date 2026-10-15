@@ -9,6 +9,7 @@ import time
 from pathlib import Path
 
 import jobs as rig_jobs
+import preparation_routing
 import routing_policy
 import routing_domains
 import runtime_metrics
@@ -157,6 +158,28 @@ def _is_stale(assessed: dict) -> bool:
     )
 
 
+def _preparation_cohort(routing: dict | None) -> tuple[str, str]:
+    """(preparation, pilot) from bounded evidence; pre-v3 or missing evidence is unknown, never absent."""
+    if not isinstance(routing, dict):
+        return "unknown", "unknown"
+    version = routing.get("policy_version")
+    if type(version) is not int or version < 3:
+        return "unknown", "unknown"
+    preparation = "present" if isinstance(routing.get("preparation"), dict) else "absent"
+    mode = str(routing.get("policy_mode") or "").strip().lower()
+    if mode != "smart":
+        return preparation, "n/a"
+    effort = routing.get("effort")
+    return preparation, ("on" if isinstance(effort, dict) and effort.get("pilot") is True else "off")
+
+
+def _effort_key(routing: dict | None) -> tuple | None:
+    effort = (routing or {}).get("effort") if isinstance(routing, dict) else None
+    if not isinstance(effort, dict):
+        return None
+    return tuple(str(effort.get(name) or "") for name in ("baseline", "requested", "effective", "reason", "floor"))
+
+
 def build_report(repo: Path, *, days: int = 30, now: float | None = None) -> dict:
     if type(days) is not int or days < 1:
         raise ValueError("days must be a positive integer")
@@ -188,6 +211,8 @@ def build_report(repo: Path, *, days: int = 30, now: float | None = None) -> dic
     totals.update(durations=[], completed=0, continuations=0)
     strategies = {name: _empty_bucket() for name in STRATEGIES}
     domains = {}
+    cohorts: dict[tuple, dict] = {}
+    efforts: dict[tuple, dict] = {}
 
     def ensure(key: tuple) -> dict:
         if key not in groups:
@@ -249,6 +274,11 @@ def build_report(repo: Path, *, days: int = 30, now: float | None = None) -> dic
         targets = [bucket, domain_bucket]
         if strategy_bucket is not None:
             targets.append(strategy_bucket)
+        # Cohorts carry only status/level/reason codes; handoff text never enters the report.
+        targets.append(cohorts.setdefault(_preparation_cohort(routing), _empty_bucket()))
+        effort_key = _effort_key(routing)
+        if effort_key is not None:
+            targets.append(efforts.setdefault(effort_key, _empty_bucket()))
         for target in targets:
             target["attempts"] += 1
         usage = rig_tokens.load_token_usage(job.get("token_usage"))
@@ -387,6 +417,19 @@ def build_report(repo: Path, *, days: int = 30, now: float | None = None) -> dic
         "domains": {name: finish(bucket) for name, bucket in sorted(domains.items())},
         "strategies": {name: finish(bucket) for name, bucket in strategies.items()},
         "groups": grouped,
+        "preparation": {
+            "coverage": {
+                "known": sum(row["attempts"] for key, row in cohorts.items() if key[0] != "unknown"),
+                "unknown": sum(row["attempts"] for key, row in cohorts.items() if key[0] == "unknown"),
+                "note": ("evidence before routing policy v3 cannot show preparation and is unknown, not absent; "
+                         "attempt metrics begin at admission and exclude parent preparation time"),
+            },
+            "cohorts": [{"preparation": key[0], "pilot": key[1], **finish(row)}
+                        for key, row in sorted(cohorts.items())],
+            "efforts": [{**dict(zip(("baseline", "requested", "effective", "reason", "floor"), key)), **finish(row)}
+                        for key, row in sorted(efforts.items())],
+            "reasons": list(preparation_routing.REASONS),
+        },
         "legacy": finish(legacy),
         "manual": finish(manual),
         "missing": finish(missing),
@@ -448,6 +491,23 @@ def format_report(report: dict) -> str:
             f"unverified={row['unverified']} pending={row['pending']} stale={row['stale']} "
             f"tokens_known={coverage.get('known', 0)} tokens_unknown={coverage.get('unknown', 0)} "
             f"median={median_s}"
+        )
+    preparation = report.get("preparation") or {}
+    coverage = preparation.get("coverage") or {}
+    if preparation:
+        lines.append(f"preparation coverage known={coverage.get('known', 0)} unknown={coverage.get('unknown', 0)}")
+    for row in preparation.get("cohorts") or []:
+        lines.append(
+            f"  preparation={row['preparation']} pilot={row['pilot']} n={row['attempts']} "
+            f"accepted={row['accepted_numerator']}/{row['accepted_denominator']} "
+            f"fail_exec={row['execution_failures']} cancel={row['cancels']} "
+            f"tokens_known={(row.get('token_coverage') or {}).get('known', 0)}"
+        )
+    for row in preparation.get("efforts") or []:
+        lines.append(
+            f"  effort baseline={row['baseline'] or '-'} requested={row['requested'] or '-'} "
+            f"effective={row['effective'] or '-'} floor={row['floor'] or '-'} reason={row['reason'] or '-'} "
+            f"n={row['attempts']} accepted={row['accepted_numerator']}/{row['accepted_denominator']}"
         )
     legacy = report["legacy"]
     lines.append(

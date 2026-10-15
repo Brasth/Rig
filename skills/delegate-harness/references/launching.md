@@ -12,6 +12,10 @@
    - exit 124: only if you passed `--timeout` and the job was still running when the cap hit. Do not pass a timeout in the normal path.
 4. Never kill, close, finish, or replace a job because it is asking for permission. The same Claude job continues after you allow. Explicit user cancellation follows the cancellation protocol above; only confirmed termination permits close.
 
+Parent findings in the brief: record checked facts as findings (verified with evidence locations, otherwise hypothesis), decisions (or an explicit empty list), per-file changes, reading_order entrypoints and unknowns so the child does not repeat discovery. With `rig_task_prepare`, launch the returned brief unchanged together with files, acceptance_contract and preparation.
+
+Child with Findings/Reading order: start from them, read the affected code and validate each assumption before editing; hypotheses are unconfirmed. On mismatch or missing data, broaden reading only within the admitted files and references. Report contradictions, scope or contract problems with `rig_job_coordination_request` (or `rig_job_ask`) and stop that part. Never re-route yourself, expand scope, retry or cancel work.
+
 Live child: `RIG_LIVE=1`. Default wrapper is dry-run.
 
 Codex sandbox must allow writing `$HOME/.grok` (and `$HOME/.claude` / `$HOME/.cursor` / `$HOME/.opencode` / `$HOME/.omp` / `$HOME/.pi` / `$HOME/.gemini` if used) plus outbound network, or the child fails with `FS_PERMISSION_DENIED` creating a session. `rig setup` adds those writable roots.

@@ -7,6 +7,8 @@ When `.rig/harness.toml` exists and the project is enabled, do not write app cod
 
 Parent checks first: read local files, name the cause, prepare brief TEXT for launch. Parent checks before an implement spawn (name files and the update). Ask / plan / advise stay with the parent. Docs/skills-only: MCP `rig_pick` with `role` mini. If the implement brief already lists files, do not also spawn explore.
 
+Before an implement launch in adaptive mode, assess whether the task spans independently testable modules or deliverables. If it does, read the workflows reference and create a workflow with bounded child tasks instead of one broad writer. The parent defines interfaces, assigns each file/resource to one writer, and supplies per-child acceptance. Use `rig_workflow_advance` to launch ready siblings up to configured capacity; a selected worker is not a one-child limit. Keep a single job when the change is tightly coupled, scopes cannot be separated safely, or mode is `single`; explain the constraint rather than promising parallel execution.
+
 Before `run-worker` / native implement: the brief TEXT MUST list files to modify, what to change, what not to change, and acceptance. Put absolute skill file paths the child must follow. Do not spawn "go find and fix". The child does only those files and changes. Do not hunt extra updates.
 
 ## MCP first

@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import catalog as rig_catalog
+import preparation_routing as prep_routing
 import routing_profiles as rig_profiles
 import routing_domains as domains
 from routing_config import (  # noqa: F401
@@ -760,7 +761,9 @@ def smart_pick(
     research_sources=None,
     preview_config: RoutingConfig | None = None,
     catalog_snapshot=None,
+    preparation: dict | None = None,
 ) -> dict:
+    """Smart pick. `preparation` is a validated binding summary, never a raw object."""
     import route as rig_route
 
     if review_mode not in {"standalone", "independent"}:
@@ -802,6 +805,9 @@ def smart_pick(
         routing["preview_only"] = True
 
     def finish(choice, source: str, selected_id: str = "", canonical=None):
+        if "effort" not in routing:
+            prep_routing.stamp(routing, cfg, kind, assessed, preparation, None,
+                               str(routing.get("execution_strategy") or ""))
         choice["task_domain"] = domain["name"]
         if domain["selection"] == "pending":
             domain["selection"] = "builtin" if not domain_managed else source
@@ -853,7 +859,9 @@ def smart_pick(
             "stay",
         )
 
-    need = required_tier(kind, assessed)
+    # Preparation may raise (never lower) the assessment capability floor.
+    need = prep_routing.raise_floor(required_tier(kind, assessed),
+                                    prep_routing.floor_tier(cfg, kind, assessed, preparation))
     routing["required_tier"] = need
     routing["review_recommendation"] = "independent" if assessed.get("risk") == "high" else "none"
     if not domain_managed and direct_parent_eligible(kind, assessed, cfg, live, blocked):
@@ -963,7 +971,9 @@ def smart_pick(
     if selected:
         routing["execution_strategy"] = "wrapper"
         routing["selected_profile"] = selected_profile_dict(selected, model=selected_model, tier=selected_tier)
-        effort = selected.effort
+        # Effort resolves only among this same selected profile's declared supported efforts.
+        record = prep_routing.stamp(routing, cfg, kind, assessed, preparation, selected, "wrapper")
+        effort = record["effective"] if record else selected.effort
         reason = f"{kind}: {selected.worker} child {selected_model}" + (f" effort={effort}" if effort else "")
         if kind == "review":
             independence, _rejection = rig_route._review_model(selected_model, review_ctx or {})
@@ -1074,7 +1084,7 @@ def resolve_explicit_worker_choice(
         research_sources=research_sources,
         **{key: value for key, value in kwargs.items() if key in {
             "writer_job_id", "writer_cli", "writer_model", "writer_provider", "review_mode",
-            "writer_job_ids", "writer_snapshot_ids", "writer_providers",
+            "writer_job_ids", "writer_snapshot_ids", "writer_providers", "preparation",
         }},
     )
     if choice.get("spawn") != "run-worker" or choice.get("worker") != worker:

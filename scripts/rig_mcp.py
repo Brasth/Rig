@@ -127,7 +127,7 @@ LAUNCH_ARG_NAMES = frozenset({
     "credentials_path",
     "writer_job_id", "writer_snapshot_id", "writer_cli", "writer_model",
     "writer_provider", "review_mode", "routing", "assessment", "task_domain", "research_sources",
-    "continues_job_id", "acceptance_contract", "context_package",
+    "continues_job_id", "acceptance_contract", "context_package", "preparation",
 })
 _LAUNCH_PUBLIC_KEYS = (
     "job_id", "worker", "role", "wrapper_pid", "status",
@@ -223,6 +223,15 @@ def _domain_args(args: dict) -> dict:
     return {"task_domain": domain, "research_sources": sources}
 
 
+def _preparation_arg(args: dict):
+    value = args.get("preparation")
+    if value in (None, ""):
+        return None
+    if not isinstance(value, dict):
+        raise ValueError("preparation must be the object returned by rig_task_prepare")
+    return value
+
+
 def _assessment_args(args: dict) -> dict:
     import routing_policy
 
@@ -316,6 +325,7 @@ def format_session(
     explain: bool = False,
     task_domain: str = "",
     research_sources: list[str] | None = None,
+    preparation: dict | None = None,
 ) -> str:
     if type(compact) is not bool:
         raise ValueError("rig_session: compact must be a boolean")
@@ -343,6 +353,7 @@ def format_session(
             hash_cache=hash_cache, assessment=assessment, complexity=complexity, risk=risk,
             uncertainty=uncertainty, assessment_reason=assessment_reason, policy_mode=policy_mode,
             explain=explain, task_domain=task_domain, research_sources=research_sources,
+            preparation=preparation,
         )
         choice = {key: value for key, value in choice.items() if not str(key).startswith("_")}
     shown = _compact_rows(listing, terminal_limit, repo=repo, cache=hash_cache) if compact else listing
@@ -661,10 +672,15 @@ def run_session_cli(argv: list[str]) -> int:
     for name in ("writer-job-id", "writer-cli", "writer-model", "writer-provider"):
         parser.add_argument("--" + name, default="")
     parser.add_argument("--review-mode", choices=["standalone", "independent"], default="standalone")
+    parser.add_argument("--preparation", default="", help="Preparation JSON file from rig task prepare")
     args = parser.parse_args(argv)
     if not 0 <= args.terminal_limit <= 100:
         parser.error("--terminal-limit must be an integer from 0 to 100")
     repo = rig_jobs.repo_root(args.repo or None)
+    try:
+        preparation = rig_route.load_preparation_file(args.preparation) if args.preparation else None
+    except (ValueError, OSError) as error:
+        parser.error(str(error))
     print(
         format_session(
             repo,
@@ -682,6 +698,7 @@ def run_session_cli(argv: list[str]) -> int:
             complexity=args.complexity, risk=args.risk, uncertainty=args.uncertainty,
             assessment_reason=args.assessment_reason, policy_mode=args.policy_mode or None,
             explain=args.explain, task_domain=args.task_domain, research_sources=args.research_sources,
+            preparation=preparation,
         )
     )
     return 0

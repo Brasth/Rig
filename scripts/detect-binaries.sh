@@ -79,7 +79,7 @@ repo_root() {
         return 0
       fi
     fi
-    if [[ -d "$d/.git" ]]; then
+    if [[ -d "$d/.git" || -f "$d/.git" ]]; then
       printf '%s\n' "$d"
       return 0
     fi

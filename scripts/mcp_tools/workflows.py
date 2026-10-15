@@ -70,11 +70,14 @@ def dispatch(ctx, state):
         return _ok(text)
     if name == "rig_workflow_extend":
         wid = _optional_string(args, "id").strip()
-        nodes = {"nodes": args.get("nodes", []), "context_packages": args.get("context_packages", {})}
+        nodes = {"nodes": args.get("nodes", []), "context_packages": args.get("context_packages", {}),
+                 "preparations": args.get("preparations", {})}
         if not wid:
             return _err("rig_workflow_extend needs id")
         if not isinstance(nodes["nodes"], list) or not isinstance(nodes["context_packages"], dict):
             return _err("nodes must be an array and context_packages a node/reference object")
+        if not isinstance(nodes["preparations"], dict):
+            return _err("preparations must map node ids to preparation objects")
         return _workflow_response(
             rig_workflow.extend(repo, wid, nodes, **_workflow_owner_args(args)),
         )

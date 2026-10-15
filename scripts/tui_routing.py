@@ -3,13 +3,14 @@ from __future__ import annotations
 
 import copy
 import curses
-import textwrap
 import uuid
 
 import routing_config as config
 import routing_domains as domains
 import routing_settings as settings
-from tui_view import _add, _viewport, _cell_width, _text_width
+from tui_view import _add, _viewport, _cell_width, _text_width, _rule
+from tui_text import _pad, wrap_cells
+from tui_style import pair, selection
 
 FIELDS = (
     ("domain", "Domain", domains.DOMAINS),
@@ -150,33 +151,52 @@ class RoutingPanel:
 def render_panel(stdscr, panel):
     h, w = stdscr.getmaxyx()
     stdscr.erase()
-    _add(stdscr, 0, 0, "Routing Settings / task preview", curses.A_REVERSE, width=w)
+    _add(stdscr, 0, 1, "Rig · Domain routing / task preview", pair(5), width=w - 2)
     if h < 8 or w < 40:
         _add(stdscr, 1, 0, "terminal too small; Esc cancels", width=w)
     else:
-        count = min(len(FIELDS), max(2, (h - 5) // 2))
+        _add(stdscr, 1, 1, "Preferences only · editing never enables a worker", pair(5), width=w - 2)
+        split = w >= 100
+        left = max(52, min(72, (w * 52 + 50) // 100)) if split else w
+        count = min(len(FIELDS), max(1, h - 7 if split else (h - 7) // 2))
         panel.offset, stop = _viewport(panel.selected, len(FIELDS), count, panel.offset)
+        _rule(stdscr, 2, 0, left, f"Fields {panel.offset + 1}-{stop}/{len(FIELDS)}", focused=True)
         for i in range(panel.offset, stop):
             name, label, choices = FIELDS[i]
             value = panel.values[name] or ("role default" if choices else "(empty)")
-            if i == panel.selected and not choices:
+            if choices:
+                value = "[" + value + "]"
+            elif i == panel.selected:
                 raw = panel.values[name]
-                room = max(1, w - _text_width(label) - 6)
+                room = max(1, left - _text_width(label) - 7)
                 start, used = panel.cursor, 0
                 while start and used + _cell_width(raw[start - 1]) < room:
                     start -= 1
                     used += _cell_width(raw[start])
                 value = ("…" if start else "") + raw[start:panel.cursor] + "│" + raw[panel.cursor:]
             text = f"{'>' if i == panel.selected else ' '} {label}: {value}"
-            _add(stdscr, i - panel.offset + 1, 0, text,
-                 curses.A_REVERSE if i == panel.selected else curses.A_NORMAL, width=w)
-        y = count + 1
-        _add(stdscr, y, 0, "Tab fields · Enter/←/→ choices · PgUp/PgDn results · Ctrl-R reset domain", width=w)
-        wrapped = [piece for line in panel.output for piece in (textwrap.wrap(str(line), max(1, w - 2)) or [""])]
-        available = max(0, h - y - 4)
+            _add(stdscr, i - panel.offset + 3, 0, _pad(text, left),
+                 selection() if i == panel.selected else pair(5), width=left)
+        if split:
+            x, width, top = left + 2, w - left - 3, 3
+            _rule(stdscr, 2, left + 1, w - left - 1, "Preview / eligible profiles")
+            for y in range(2, h - 3):
+                _add(stdscr, y, left, "┬" if y == 2 else "│", pair(6), width=1)
+        else:
+            x, width, top = 1, w - 2, count + 4
+            _rule(stdscr, top - 1, 0, w, "Preview / eligible profiles")
+        wrapped = [piece for line in panel.output for piece in wrap_cells(line, width)]
+        available = max(0, h - 4 - top)
         panel.output_offset = min(panel.output_offset, max(0, len(wrapped) - available))
         for n, line in enumerate(wrapped[panel.output_offset:panel.output_offset + available]):
-            _add(stdscr, y + 1 + n, 1, line, width=max(0, w - 2))
-        _add(stdscr, h - 2, 0, panel.message, width=w)
-    _add(stdscr, h - 1, 0, "F5 preview · F2 save preferences · Esc cancel/close", curses.A_REVERSE, width=w)
+            _add(stdscr, top + n, x, line, width=width)
+        _rule(stdscr, h - 3, 0, w)
+        message = panel.message
+        if panel.edits:
+            message = "Unsaved preferences · Esc discards · " + message
+        _add(stdscr, h - 2, 1, message, pair(3) if panel.edits else pair(5), width=w - 2)
+    hints = "Tab fields · Enter/←/→ choices · F5 preview · F2 save · Esc close"
+    if w < 70:
+        hints = "Tab fields  F5 preview  F2 save  Esc close"
+    _add(stdscr, h - 1, 0, hints, pair(5), width=w - 1)
     stdscr.refresh()
