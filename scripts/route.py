@@ -14,6 +14,7 @@ if str(HERE) not in sys.path:
     sys.path.insert(0, str(HERE))
 
 import catalog as rig_catalog  # noqa: E402
+import opencode_policy  # noqa: E402
 
 PARENT_ONLY = frozenset(
     {
@@ -62,14 +63,13 @@ MODELS = {
     ("cursor", "hard"): ("cursor-grok-4.6-high", ""),
     ("cursor", "verify"): ("composer-2.5", ""),
     ("cursor", "review"): ("claude-opus-5-5-thinking-high", ""),
-    # OpenCode effort is --variant (minimal/high/max). OMP/Pi --thinking. agy --effort.
-    ("opencode", "explore"): ("openai/gpt-5.4-mini", "minimal"),
-    ("opencode", "mini"): ("openai/gpt-5.4-mini", "minimal"),
-    ("opencode", "bulk"): ("openai/gpt-5.4-mini", "minimal"),
-    ("opencode", "implement"): ("openai/gpt-6-luna", "high"),
-    ("opencode", "hard"): ("openai/gpt-5.6-terra", "max"),
-    ("opencode", "verify"): ("openai/gpt-6-luna", "high"),
-    ("opencode", "review"): ("openai/gpt-5.6-terra", "max"),
+    # OpenCode: exact OpenCode Go selectors, fast/standard roles only, no --variant (see opencode_policy).
+    # OMP/Pi --thinking. agy --effort.
+    ("opencode", "explore"): (opencode_policy.DEFAULT_MODEL, opencode_policy.EFFORT),
+    ("opencode", "mini"): (opencode_policy.DEFAULT_MODEL, opencode_policy.EFFORT),
+    ("opencode", "bulk"): (opencode_policy.DEFAULT_MODEL, opencode_policy.EFFORT),
+    ("opencode", "implement"): (opencode_policy.DEFAULT_MODEL, opencode_policy.EFFORT),
+    ("opencode", "verify"): (opencode_policy.DEFAULT_MODEL, opencode_policy.EFFORT),
     ("omp", "explore"): ("grok-4.5", "low"),
     ("omp", "mini"): ("grok-4.5", "low"),
     ("omp", "bulk"): ("grok-4.5", "low"),
@@ -122,7 +122,6 @@ NATIVE = {
     ("opencode", "mini"): "explore",
     ("opencode", "bulk"): "bulk",
     ("opencode", "implement"): "worker",
-    ("opencode", "hard"): "worker",
     ("omp", "explore"): "explore",
     ("omp", "mini"): "explore",
     ("omp", "bulk"): "bulk",
@@ -145,7 +144,9 @@ LAST_RESORT = ("opencode", "omp", "pi", "agy", "codex", "cursor")
 WORKER_NAMES = frozenset(
     {"grok", "claude", "cursor", "opencode", "omp", "pi", "agy", "devin", "mimo", "codex", "native"}
 )
-PROVIDERS = frozenset({"openai", "anthropic", "xai", "google", "cursor", "cognition", "xiaomi"})
+PROVIDERS = frozenset(
+    {"openai", "anthropic", "xai", "google", "cursor", "cognition", "xiaomi", "zai", "deepseek", "meta"}
+)
 DEVIN_SWE2 = frozenset({"swe-2-medium", "swe-2-high", "swe-2-max"})
 DEVIN_ROLE_MODELS = {
     "explore": "swe-2-medium",
@@ -279,6 +280,9 @@ def provider_for(model: str) -> str:
         ("cursor", r"composer-\d"),
         ("cognition", r"swe-2-(?:medium|high|max)$"),
         ("xiaomi", r"mimo[-\w.]*$"),
+        ("zai", r"glm-\d"),
+        ("deepseek", r"deepseek-\w"),
+        ("meta", r"muse-\w"),
     )
     for provider, pattern in families:
         if re.match(pattern, family):
@@ -286,6 +290,70 @@ def provider_for(model: str) -> str:
     # An explicit provider/model ID is meaningful; custom bare aliases are not.
     parts = raw.split("/")
     return parts[-2] if len(parts) > 1 and parts[-2] in PROVIDERS and parts[-1] else ""
+
+
+def assert_opencode_model(worker: str, model: str, role: str = "", effort: str | None = None) -> str | None:
+    """Reject OpenCode launches outside the Rig-wide cheap-model policy."""
+    return opencode_policy.problem(worker, model, role, effort)
+
+
+def _opencode_catalog_info(catalogs: dict | None) -> dict:
+    """OpenCode catalog info for one pick: injected ids, else a single cached/probed load."""
+    if catalogs is not None and "opencode" in catalogs:
+        ids = catalogs["opencode"]
+        return {
+            "state": "unavailable" if ids is None else ("fresh" if ids else "empty"),
+            "ids": ids, "confirmed_empty": ids == [],
+        }
+    info = rig_catalog.load_catalog_info(opencode_policy.WORKER)
+    if info.get("state") == "stale" and float(info.get("age_s") or 0) > rig_catalog.STALE_MAX_SECONDS:
+        info = rig_catalog.load_catalog_info(opencode_policy.WORKER, require_fresh=True)
+    return info
+
+
+def _opencode_unavailable(kind: str, model: str, catalogs: dict | None, info: dict | None = None) -> str:
+    """Legacy-routing gate: role, exact model, then catalog confirmation. Empty means eligible."""
+    problem = opencode_policy.role_problem(kind) or opencode_policy.model_problem(model)
+    if problem:
+        return problem
+    if info is None:
+        info = _opencode_catalog_info(catalogs)
+    return opencode_policy.catalog_problem(model, info) or ""
+
+
+def _opencode_default_model(kind: str, catalogs: dict | None) -> tuple[str, str]:
+    """First approved selector (GLM, DeepSeek, Muse) the catalog confirms; else (default, problem)."""
+    if opencode_policy.role_problem(kind):
+        return opencode_policy.DEFAULT_MODEL, opencode_policy.role_problem(kind)
+    info = _opencode_catalog_info(catalogs)
+    fallback_problem = ""
+    for selector in opencode_policy.APPROVED:
+        problem = _opencode_unavailable(kind, selector, catalogs, info)
+        if not problem:
+            return selector, ""
+        fallback_problem = fallback_problem or problem
+    return opencode_policy.DEFAULT_MODEL, fallback_problem
+
+
+def _choose_gated_worker(
+    kind: str, effective: list[str], live: str, exclude, catalogs: dict | None,
+) -> tuple[str, str, list[str], str]:
+    """choose_worker with OpenCode removed when its policy or catalog gate fails.
+
+    The fourth value is the catalog-confirmed OpenCode selector (empty otherwise) so callers
+    do not look the catalog up a second time for the same pick.
+    """
+    pool = list(effective)
+    skipped: list[str] = []
+    while True:
+        worker, spawn = choose_worker(kind, pool, live, exclude=exclude)
+        if worker != "opencode" or spawn != "run-worker":
+            return worker, spawn, skipped, ""
+        model, problem = _opencode_default_model(kind, catalogs)
+        if not problem:
+            return worker, spawn, skipped, model
+        skipped.append(f"opencode: {problem}")
+        pool = [name for name in pool if name != "opencode"]
 
 
 def _writer_context(
@@ -448,6 +516,12 @@ def resolved_model_for(
     kind: str,
     catalogs: dict[str, list[str]] | None = None,
 ) -> tuple[str, str]:
+    if worker == "opencode":
+        # Default legacy routing only: first catalog-confirmed approved selector, never a keyword match.
+        if opencode_policy.role_problem(kind):
+            return model_for(worker, kind)
+        model, _problem = _opencode_default_model(kind, catalogs)
+        return model, opencode_policy.EFFORT
     preferred, effort = model_for(worker, kind)
     model = rig_catalog.resolve_model(worker, kind, preferred, catalogs=catalogs)
     return model, effort
@@ -636,13 +710,16 @@ def pick(
         remaining = [w for w in effective if w != live]
         while not reason:
             eligible = {w for w in remaining if w not in blocked}
-            worker, spawn = choose_worker(kind, remaining, live, exclude=exclude)
+            worker, spawn, oc_skipped, oc_model = _choose_gated_worker(kind, remaining, live, exclude, catalogs)
+            failures.extend(oc_skipped)
             if not worker or spawn == "none":
                 reason = "review needs a different vendor; no eligible reviewer"
                 if failures:
                     reason += ": " + "; ".join(failures)
                 break
-            model, effort = resolved_model_for(worker, kind, catalogs)
+            model, effort = (
+                (oc_model, opencode_policy.EFFORT) if oc_model else resolved_model_for(worker, kind, catalogs)
+            )
             independence, rejection = _review_model(model, context)
             if not rejection:
                 choice = _base_choice(
@@ -661,7 +738,7 @@ def pick(
             ),
             assessed, fingerprint, required, explain, kind=kind, case=case,
         )
-    worker, spawn = choose_worker(kind, effective, live, exclude=exclude)
+    worker, spawn, _oc_skipped, oc_model = _choose_gated_worker(kind, effective, live, exclude, catalogs)
     actual_model = (parent_model or "").strip()
     actual_effort = (parent_effort or "").strip() if actual_model else ""
     if spawn == "stay":
@@ -714,7 +791,9 @@ def pick(
             "retain ownership and finish authenticated. do not spawn a second same-CLI session."
         )
     else:
-        model, effort = resolved_model_for(worker, kind, catalogs)
+        model, effort = (
+                (oc_model, opencode_policy.EFFORT) if oc_model else resolved_model_for(worker, kind, catalogs)
+            )
         executor_kind = "native_child" if spawn == "native" else "wrapper"
         model_source = "selected"
         if spawn == "native":
@@ -853,7 +932,13 @@ def main() -> int:
     )
 
     if args.cmd == "allow":
-        err = assert_child_model(args.model) or assert_devin_model(args.worker, args.model, args.role)
+        err = (
+            assert_child_model(args.model)
+            or assert_devin_model(args.worker, args.model, args.role)
+            or assert_opencode_model(args.worker, args.model, args.role)
+        )
+        if not err and args.worker == opencode_policy.WORKER:
+            err = opencode_policy.catalog_problem(args.model)
         provider = provider_for(args.model)
         metadata = {"provider": provider, "provider_source": "model" if provider else "unknown"}
         if args.continues_job_id.strip():

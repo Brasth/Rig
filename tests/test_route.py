@@ -8,8 +8,12 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+import opencode_policy  # noqa: E402
 import route  # noqa: E402
 from repo_test_support import initialize_project
+
+
+OC_CATALOG = {"opencode": list(opencode_policy.APPROVED)}
 
 
 def legacy_pick(*args, **kwargs):
@@ -327,23 +331,21 @@ class Pick(unittest.TestCase):
         self.assertEqual(c["effort"], "high")
 
     def test_opencode_last_resort_when_parent_cannot_native(self):
-        c = legacy_pick("", ["opencode"], "implement", "add a header")
+        c = legacy_pick("", ["opencode"], "implement", "add a header", catalogs=OC_CATALOG)
         self.assertEqual(c["worker"], "opencode")
         self.assertEqual(c["spawn"], "run-worker")
-        self.assertEqual(c["model"], "openai/gpt-6-luna")
-        self.assertEqual(c["effort"], "high")
+        self.assertEqual(c["model"], "opencode-go/glm-5.3-flash")
+        self.assertEqual(c["effort"], "")
 
     def test_grok_still_beats_opencode(self):
         c = legacy_pick("codex", ["grok", "opencode"], "implement", "add a header")
         self.assertEqual(c["worker"], "grok")
 
     def test_opencode_omp_pi_agy_model_pins(self):
-        self.assertEqual(route.model_for("opencode", "explore"), ("openai/gpt-5.4-mini", "minimal"))
-        self.assertEqual(route.model_for("opencode", "mini"), ("openai/gpt-5.4-mini", "minimal"))
-        self.assertEqual(route.model_for("opencode", "bulk"), ("openai/gpt-5.4-mini", "minimal"))
-        self.assertEqual(route.model_for("opencode", "implement"), ("openai/gpt-6-luna", "high"))
-        self.assertEqual(route.model_for("opencode", "hard"), ("openai/gpt-5.6-terra", "max"))
-        self.assertEqual(route.model_for("opencode", "review"), ("openai/gpt-5.6-terra", "max"))
+        for kind in ("explore", "mini", "bulk", "implement", "verify"):
+            self.assertEqual(route.model_for("opencode", kind), ("opencode-go/glm-5.3-flash", ""))
+        for kind in ("hard", "review"):
+            self.assertNotIn(("opencode", kind), route.MODELS)
         self.assertEqual(route.model_for("omp", "explore"), ("grok-4.5", "low"))
         self.assertEqual(route.model_for("omp", "mini"), ("grok-4.5", "low"))
         self.assertEqual(route.model_for("omp", "bulk"), ("grok-4.5", "low"))
@@ -468,7 +470,7 @@ class Pick(unittest.TestCase):
         self.assertEqual(c["worker"], "pi")
 
     def test_opencode_beats_cursor_as_last_resort(self):
-        c = legacy_pick("", ["cursor", "opencode"], "implement", "add a header")
+        c = legacy_pick("", ["cursor", "opencode"], "implement", "add a header", catalogs=OC_CATALOG)
         self.assertEqual(c["worker"], "opencode")
         self.assertEqual(c["spawn"], "run-worker")
         self.assertFalse(c["parent_writes"])
@@ -639,21 +641,86 @@ class Pick(unittest.TestCase):
         self.assertEqual(parent["model"], "gpt-6-astra")
         self.assertEqual(parent["model_source"], "observed")
         # Mini with last-resort wrapper prefers wrapper before parent_writes.
-        wrapped = legacy_pick("codex", ["opencode"], "mini", "docs only")
+        wrapped = legacy_pick("codex", ["opencode"], "mini", "docs only", catalogs=OC_CATALOG)
         self.assertEqual(wrapped["spawn"], "run-worker")
         self.assertEqual(wrapped["worker"], "opencode")
         self.assertFalse(wrapped["parent_writes"])
 
-    def test_only_selected_child_catalog_is_loaded(self):
-        for live, effective, role, expected in (
-            ("", ["opencode", "omp", "pi", "agy"], "implement", "opencode"),
-            ("pi", ["opencode", "omp", "agy"], "explore", "opencode"),
+    def test_default_opencode_routing_uses_first_available_approved_selector(self):
+        glm, deepseek, muse = opencode_policy.APPROVED
+        for ids, expected in (
+            ([deepseek, muse], deepseek),
+            ([muse], muse),
+            ([glm, muse], glm),
+            ([deepseek], deepseek),
         ):
-            with self.subTest(expected=expected):
-                with patch.object(route.rig_catalog, "load_catalog", return_value=[]) as load:
-                    with patch.object(route.rig_catalog, "load_catalogs", side_effect=AssertionError("all-worker discovery")):
-                        legacy_pick(live, effective, role, "task")
-                load.assert_called_once_with(expected)
+            with self.subTest(ids=ids):
+                choice = legacy_pick("", ["opencode"], "implement", "task", catalogs={"opencode": ids})
+                self.assertEqual(choice["worker"], "opencode")
+                self.assertEqual(choice["model"], expected)
+                self.assertEqual(route.resolved_model_for("opencode", "implement", {"opencode": ids})[0], expected)
+
+    def test_default_opencode_routing_rejects_unsupported_only_catalog(self):
+        ids = ["opencode-go/glm-5.3-flash-lite", "openai/gpt-5.4-mini"]
+        choice = legacy_pick("", ["opencode"], "implement", "task", catalogs={"opencode": ids})
+        self.assertEqual(choice["worker"], "")
+        self.assertEqual(choice["spawn"], "none")
+
+    def test_default_opencode_routing_never_serves_hard_or_review(self):
+        for kind in ("hard", "review"):
+            self.assertEqual(route.resolved_model_for("opencode", kind, OC_CATALOG)[1], "")
+            self.assertTrue(route._opencode_unavailable(kind, opencode_policy.DEFAULT_MODEL, OC_CATALOG))
+
+    def test_only_selected_child_catalog_is_loaded(self):
+        info = {"state": "fresh", "ids": list(opencode_policy.APPROVED)}
+        for live, effective, role in (
+            ("", ["opencode", "omp", "pi", "agy"], "implement"),
+            ("pi", ["opencode", "omp", "agy"], "explore"),
+        ):
+            with self.subTest(live=live):
+                with patch.object(route.rig_catalog, "load_catalog_info", return_value=info) as load_info:
+                    with patch.object(route.rig_catalog, "load_catalog", side_effect=AssertionError("exact OpenCode pin")):
+                        with patch.object(route.rig_catalog, "load_catalogs", side_effect=AssertionError("all-worker discovery")):
+                            choice = legacy_pick(live, effective, role, "task")
+                self.assertEqual(choice["worker"], "opencode")
+                self.assertTrue(load_info.call_args_list)
+                for call in load_info.call_args_list:
+                    self.assertEqual(call.args, ("opencode",))
+
+    def test_unconfirmed_opencode_catalog_falls_through_to_next_worker(self):
+        for info in (
+            {"state": "unavailable", "ids": None},
+            {"state": "skipped", "ids": None},
+            {"state": "empty", "ids": [], "confirmed_empty": True},
+            {"state": "fresh", "ids": ["opencode-go/glm-5.3-flash-preview", "opencode-go/other"]},
+        ):
+            with self.subTest(state=info["state"]):
+                with patch.object(route.rig_catalog, "load_catalog_info", return_value=info):
+                    with patch.object(route.rig_catalog, "load_catalog", return_value=["grok-4.6"]):
+                        choice = legacy_pick("", ["opencode", "omp"], "implement", "task")
+                self.assertEqual(choice["worker"], "omp")
+
+    def test_opencode_alone_with_unavailable_catalog_is_unavailable_not_retried(self):
+        info = {"state": "unavailable", "ids": None}
+        with patch.object(route.rig_catalog, "load_catalog_info", return_value=info):
+            choice = legacy_pick("", ["opencode"], "implement", "task")
+        self.assertEqual(choice["worker"], "")
+        self.assertEqual(choice["spawn"], "none")
+
+    def test_legacy_hard_and_review_never_pick_opencode(self):
+        for role in ("hard", "review"):
+            with self.subTest(role=role):
+                choice = legacy_pick("", ["opencode"], role, "task", catalogs=OC_CATALOG)
+                self.assertNotEqual(choice["worker"], "opencode")
+        fallback = legacy_pick("", ["opencode", "omp"], "hard", "task", catalogs={**OC_CATALOG, "omp": ["grok-4.6"]})
+        self.assertEqual(fallback["worker"], "omp")
+
+    def test_unapproved_opencode_catalog_ids_are_never_substituted(self):
+        catalogs = {"opencode": ["opencode-go/glm-5.3", "openai/gpt-6-luna", "opencode-go/glm-5.3-flash-lite"]}
+        choice = legacy_pick("", ["opencode"], "implement", "task", catalogs=catalogs)
+        self.assertEqual(choice["worker"], "")
+        self.assertEqual(route.resolved_model_for("opencode", "implement", catalogs),
+                         ("opencode-go/glm-5.3-flash", ""))
 
     def test_no_worker_has_no_executor_or_catalog(self):
         with patch.object(route.rig_catalog, "resolve_model", side_effect=AssertionError("unexpected discovery")):
@@ -664,10 +731,10 @@ class Pick(unittest.TestCase):
     def test_pick_keeps_existing_optional_positional_arguments(self):
         choice = legacy_pick(
             "grok", ["opencode"], "implement", "task",
-            {"opencode": ["anthropic/claude-sonnet-5-5"]}, "grok",
+            OC_CATALOG, "grok",
         )
         self.assertEqual(choice["worker"], "opencode")
-        self.assertEqual(choice["model"], "anthropic/claude-sonnet-5-5")
+        self.assertEqual(choice["model"], "opencode-go/glm-5.3-flash")
 
 
 class ReviewProvenance(unittest.TestCase):
@@ -704,11 +771,33 @@ class ReviewProvenance(unittest.TestCase):
             ("xai-oauth/grok-4.6", "xai"), ("cursor-grok-4.6-high", "xai"),
             ("google/gemini-3.1-pro-high", "google"), ("composer-2.5-fast", "cursor"),
             ("openai/custom-v2", "openai"),
+            ("opencode-go/glm-5.3-flash", "zai"), ("zai/glm-5.3-flash", "zai"),
+            ("opencode-go/deepseek-v4.1-flash", "deepseek"), ("deepseek/deepseek-v4.1-flash", "deepseek"),
+            ("openrouter/deepseek/deepseek-v4.1-flash", "deepseek"),
+            ("opencode-go/muse-spark-1.3-contributor", "meta"), ("meta/muse-spark-1.3-contributor", "meta"),
+            ("zai/unlisted", "zai"), ("opencode-go/unlisted", ""), ("opencode-go/glm", ""),
             ("sonnet", ""), ("opus", ""), ("grok", ""), ("custom/corporate-best", ""),
             ("gpt-best", ""), ("", ""),
         ):
             with self.subTest(model=model):
                 self.assertEqual(route.provider_for(model), provider)
+
+    def test_opencode_review_independence_uses_actual_model_family(self):
+        for writer_model, provider in (
+            ("opencode-go/glm-5.3-flash", "zai"),
+            ("zai/glm-5.3-flash", "zai"),
+            ("opencode-go/deepseek-v4.1-flash", "deepseek"),
+            ("opencode-go/muse-spark-1.3-contributor", "meta"),
+        ):
+            with self.subTest(model=writer_model):
+                context = {"review_mode": "independent", "writer_providers": [provider], "writer_provider": provider}
+                independence, rejection = route._review_model(writer_model, context)
+                self.assertEqual(independence, "unavailable")
+                self.assertIn(f"matches writer provider {provider}", rejection)
+        context = {"review_mode": "independent", "writer_providers": ["zai"], "writer_provider": "zai"}
+        self.assertEqual(route._review_model("claude-opus-5-5", context), ("confirmed", ""))
+        unknown = {"review_mode": "independent", "writer_providers": ["zai"], "writer_provider": "zai"}
+        self.assertIn("known reviewer", route._review_model("opencode-go/unlisted", unknown)[1])
 
     def test_standalone_unknown_writer_remains_compatible(self):
         choice = self.pick(["claude", "grok"])
@@ -790,8 +879,8 @@ class ReviewProvenance(unittest.TestCase):
 
     def test_unknown_reviewer_provider_cannot_be_independent(self):
         choice = self.pick(
-            ["opencode"], writer_job_id="writer", review_mode="independent",
-            catalogs={"opencode": ["custom/corporate-best"]},
+            ["omp"], writer_job_id="writer", review_mode="independent",
+            catalogs={"omp": ["custom/corporate-best"]},
         )
         self.assertEqual(choice["spawn"], "none")
         self.assertIn("known reviewer model provider", choice["reason"])

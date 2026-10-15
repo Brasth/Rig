@@ -763,6 +763,9 @@ def resolve_model(
 ) -> str:
     if worker not in CATALOG_WORKERS:
         return preferred
+    if worker == "opencode":
+        # Exact approved selector only; confirmation lives in opencode_policy.
+        return preferred
     if worker == "devin":
         if catalogs is not None:
             if worker not in catalogs:

@@ -116,6 +116,11 @@ def parse_policies(raw, profiles: dict) -> dict:
         if not isinstance(value, dict) or set(value) - {"preferred_profiles", "fallback"}:
             raise ValueError("domains." + name + " accepts preferred_profiles and fallback only")
         preferred = value.get("preferred_profiles", [])
+        import opencode_policy
+        for item in preferred if isinstance(preferred, list) else ():
+            removed = opencode_policy.removed_profile_problem(item) if isinstance(item, str) else None
+            if removed:
+                raise ValueError("domains." + name + ".preferred_profiles: " + removed)
         if not isinstance(preferred, list) or any(not isinstance(p, str) or p not in profiles for p in preferred):
             raise ValueError("domains." + name + ".preferred_profiles must contain known profile IDs")
         if len(preferred) != len(set(preferred)):

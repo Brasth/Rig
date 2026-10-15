@@ -29,7 +29,8 @@ class RuntimePackaging(unittest.TestCase):
             entries = json.loads((kit / 'install-manifest.json').read_text())['entries']
             sources = list((ROOT / 'scripts/mcp_tools').glob('*.py')) + [
                 ROOT / 'scripts' / name for name in ('preparation_inputs.py', 'task_preparation.py',
-                                                      'recovery_guide.py', 'recovery_view.py')]
+                                                      'recovery_guide.py', 'recovery_view.py',
+                                                      'opencode_policy.py')]
             for source in sources:
                 target = kit / source.relative_to(ROOT)
                 self.assertEqual(target.read_bytes(), source.read_bytes())

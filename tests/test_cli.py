@@ -4,6 +4,7 @@ import sys
 import os
 import subprocess
 import tempfile
+import time
 import unittest
 from protocol_test_support import read_guidance
 from pathlib import Path
@@ -516,8 +517,12 @@ class InitPresence(unittest.TestCase):
             "agy=on",
             env={"PATH": _stub_path()},
         )
+        # OpenCode needs its exact selector confirmed by a fresh catalog entry.
+        cache = self.repo / ".rig" / "catalog-cache.json"
+        cache.write_text(json.dumps({"opencode": {
+            "ids": ["opencode-go/glm-5.3-flash"], "fetched_at": time.time(), "status": "ok"}}))
         for name in ("opencode", "omp", "pi", "agy"):
-            models = {"opencode": "openai/gpt-5.6-luna", "omp": "grok-4.6",
+            models = {"opencode": "opencode-go/glm-5.3-flash", "omp": "grok-4.6",
                       "pi": "grok-4.6", "agy": "gemini-3.8-flash-high"}
             proc = run_rig(
                 self.repo,
@@ -529,7 +534,8 @@ class InitPresence(unittest.TestCase):
                 "implement",
                 "--model", models[name],
                 "--json", "--owner-session", "worker-availability-test",
-                env={"PATH": _stub_path()},
+                env={"PATH": _stub_path(), "RIG_SKIP_MODEL_CATALOG": "0" if name == "opencode" else "1",
+                     "RIG_MODEL_CATALOG_CACHE": str(cache)},
             )
             self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
             lease = json.loads(proc.stdout)

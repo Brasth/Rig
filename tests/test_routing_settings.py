@@ -186,7 +186,7 @@ class CatalogSnapshot(unittest.TestCase):
 
     def test_preserve_fresh_bounded_stale_expired_empty_missing_invalid(self):
         for age, state in [(0, "fresh"), (3600, "fresh"), (3601, "stale"), (86400, "stale"), (86401, "stale")]:
-            snap = self.capture({"ids": ["openai/gpt-6-luna"], "fetched_at": 1000000-age, "status": "ok"})
+            snap = self.capture({"ids": ["opencode-go/glm-5.3-flash"], "fetched_at": 1000000-age, "status": "ok"})
             row = snap.info("opencode")
             self.assertEqual(row["state"], state)
             self.assertEqual(row["age_s"], age)
@@ -203,7 +203,7 @@ class CatalogSnapshot(unittest.TestCase):
         self.assertEqual(self.capture(None, RIG_SKIP_MODEL_CATALOG="1").info("opencode")["state"], "skipped")
 
     def test_session_fresh_request_never_refreshes_or_upgrades(self):
-        snapshot = self.capture({"ids": ["openai/gpt-6-luna"], "fetched_at": 900000})
+        snapshot = self.capture({"ids": ["opencode-go/glm-5.3-flash"], "fetched_at": 900000})
         with patch.object(catalog, "load_catalog_info", side_effect=AssertionError("probe")), \
              patch.object(catalog, "_schedule_refresh", side_effect=AssertionError("background probe")):
             session = evidence.CatalogSession(snapshot=snapshot)
@@ -248,13 +248,13 @@ class Preview(Project):
 
     def test_live_picker_parity_under_same_catalog_observation_and_gates(self):
         raw = {"schema_version": 4, "domains": {
-            "backend": {"preferred_profiles": ["opencode-gpt-5.6-luna-high"], "fallback": "none"},
+            "backend": {"preferred_profiles": ["opencode-glm-5.3-flash"], "fallback": "none"},
             "frontend": {"preferred_profiles": ["claude-sonnet-5-medium"], "fallback": "scored"},
         }}
         self.write(raw)
         (self.repo / "source.md").write_text("read-only local source")
-        for age, ids in ((0, ["openai/gpt-6-luna"]), (7200, ["openai/gpt-6-luna"]),
-                         (90000, ["openai/gpt-6-luna"]), (0, [])):
+        for age, ids in ((0, ["opencode-go/glm-5.3-flash"]), (7200, ["opencode-go/glm-5.3-flash"]),
+                         (90000, ["opencode-go/glm-5.3-flash"]), (0, [])):
             row = {"worker": "opencode", "ids": ids, "age_s": age,
                    "state": "stale" if age > 3600 else "fresh", "source": "cache",
                    "freshness": "stale" if age > 3600 else "fresh", "confirmed_empty": not ids}
@@ -283,10 +283,10 @@ class Preview(Project):
 
     def test_stripping_preview_marker_still_requires_real_launch_catalog(self):
         raw = {"schema_version": 4, "domains": {"backend": {
-            "preferred_profiles": ["opencode-gpt-5.6-luna-high"], "fallback": "none"}}}
+            "preferred_profiles": ["opencode-glm-5.3-flash"], "fallback": "none"}}}
         self.write(raw)
         snap = catalog.ReadOnlyCatalogSnapshot({"opencode": {
-            "ids": ["openai/gpt-6-luna"], "state": "fresh", "freshness": "fresh", "source": "cache",
+            "ids": ["opencode-go/glm-5.3-flash"], "state": "fresh", "freshness": "fresh", "source": "cache",
             "age_s": 0, "confirmed_empty": False}}, 123)
         c = self.show(raw, task_domain="backend", catalog_snapshot=snap)
         c["routing"].pop("preview_only")
@@ -338,8 +338,8 @@ class Preview(Project):
                     "mcp": "worker-mcp-unavailable", "exclude": "worker-excluded"}[gate])
 
     def test_catalog_exactness_and_freshness_gate(self):
-        raw = {"schema_version": 4, "domains": {"backend": {"preferred_profiles": ["opencode-gpt-5.6-luna-high"], "fallback": "none"}}}
-        profile = config.validate_candidate(raw).profiles["opencode-gpt-5.6-luna-high"]
+        raw = {"schema_version": 4, "domains": {"backend": {"preferred_profiles": ["opencode-glm-5.3-flash"], "fallback": "none"}}}
+        profile = config.validate_candidate(raw).profiles["opencode-glm-5.3-flash"]
         for age, ids, expected in ((0, [profile.selector], "run-worker"), (7200, [profile.selector], "run-worker"),
                                     (90000, [profile.selector], "none"), (0, ["other"], "none"), (0, [], "none")):
             row = {"worker": "opencode", "ids": ids, "age_s": age, "state": "stale" if age > 3600 else "fresh",

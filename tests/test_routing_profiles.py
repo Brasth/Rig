@@ -32,9 +32,7 @@ class BuiltinPins(unittest.TestCase):
             "codex-luna-low": ("codex", "mini"),
             "codex-terra-medium": ("codex", "hard"),
             "codex-terra-high": ("codex", "review"),
-            "opencode-gpt-5.4-mini-minimal": ("opencode", "explore"),
-            "opencode-gpt-5.6-luna-high": ("opencode", "implement"),
-            "opencode-gpt-5.6-terra-max": ("opencode", "hard"),
+            "opencode-glm-5.3-flash": ("opencode", "implement"),
             "omp-grok-4.5-low": ("omp", "explore"),
             "omp-grok-4.6-high": ("omp", "implement"),
             "omp-claude-opus-5-high": ("omp", "review"),
@@ -59,9 +57,10 @@ class BuiltinPins(unittest.TestCase):
         luna = self.rows["codex-luna-low"]
         self.assertEqual(luna.selector, "gpt-6-luna")
         self.assertTrue(set(luna.roles) & set(profiles.WRITE_ROLES))
-        oc = self.rows["opencode-gpt-5.6-luna-high"]
-        self.assertEqual(oc.selector, "openai/gpt-6-luna")
-        self.assertEqual(oc.aliases, ("gpt-6-luna",))
+        oc = self.rows["opencode-glm-5.3-flash"]
+        self.assertEqual(oc.selector, "opencode-go/glm-5.3-flash")
+        self.assertEqual(oc.aliases, ())
+        self.assertEqual(oc.effort, "")
         self.assertTrue(oc.catalog_required)
         self.assertEqual(self.rows["claude-opus-5-high"].selector, "claude-opus-5-5")
         self.assertEqual(self.rows["omp-claude-opus-5-high"].aliases, ("anthropic/claude-opus-5-5",))
@@ -110,9 +109,9 @@ class PreferenceOrder(unittest.TestCase):
             self.assertLess(order.index("mimo"), order.index("opencode"))
             self.assertIn("devin-swe-2-medium" if tier == "fast" else "devin-swe-2-high", ids)
 
-    def test_strong_and_review_priority_omits_mimo(self):
+    def test_strong_and_review_priority_omits_mimo_and_opencode(self):
         rows = profiles.profiles_by_id()
-        expected = ["devin", "claude", "codex", "grok", "opencode", "omp", "pi", "agy", "cursor"]
+        expected = ["devin", "claude", "codex", "grok", "omp", "pi", "agy", "cursor"]
         lists = (
             profiles.default_preference_ids("strong", rows),
             profiles.default_preference_ids("strong", rows, role="review"),
@@ -122,6 +121,7 @@ class PreferenceOrder(unittest.TestCase):
             order = _collapsed_workers(ids, rows)
             self.assertEqual(order, expected)
             self.assertNotIn("mimo", order)
+            self.assertNotIn("opencode", order)
             self.assertFalse(any(pid.startswith("mimo-") for pid in ids))
             self.assertIn("devin-swe-2-max", ids)
 
@@ -132,7 +132,7 @@ class PreferenceOrder(unittest.TestCase):
         self.assertEqual(ordered[0], "claude-haiku-4-5-low")
         self.assertIn("devin-swe-2-medium", ordered)
         self.assertLess(ordered.index("devin-swe-2-medium"), ordered.index("mimo-v2-flash-low"))
-        self.assertLess(ordered.index("mimo-v2-flash-low"), ordered.index("opencode-gpt-5.4-mini-minimal"))
+        self.assertLess(ordered.index("mimo-v2-flash-low"), ordered.index("opencode-glm-5.3-flash"))
 
     def test_fast_default_includes_codex_explorer(self):
         rows = profiles.profiles_by_id()

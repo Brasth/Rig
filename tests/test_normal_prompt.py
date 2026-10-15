@@ -189,9 +189,10 @@ class CompatibilityContracts(unittest.TestCase):
                 self.fixture.prepare_catalog(mode)
                 # Preserve the legacy selected-worker-only catalog contract;
                 # smart policy has separate lazy, ranked-candidate tests.
-                selected = route.pick("codex", ["opencode", "omp", "pi", "agy"], "review", "Review",
+                selected = route.pick("codex", ["opencode", "omp", "pi", "agy"], "explore", "Locate the fixture",
                                       policy_mode="legacy")
-                self.assertEqual(selected["worker"], "opencode")
+                # OpenCode is only launchable once its exact selector is confirmed in the catalog.
+                self.assertEqual(selected["worker"], "omp" if mode == "static" else "opencode")
                 self.assertEqual(self.fixture.counts["catalog_probes"], probes)
                 self.assertEqual(self.fixture.counts["catalog_refresh_schedules"], refreshes)
                 self.assertTrue(set(self.fixture.probed) <= {"opencode", "refresh:opencode"})

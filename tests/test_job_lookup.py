@@ -141,7 +141,7 @@ class JobLookup(unittest.TestCase):
 
     def test_new_native_default_uses_selected_worker_catalog(self):
         cache = self.repo / "catalog.json"
-        available = "anthropic/claude-haiku-4-5"
+        available = "opencode-go/glm-5.3-flash"
         cache.write_text(json.dumps({"opencode": {"ids": [available], "fetched_at": time.time()}}))
         folder = self.root / "catalog-child"
         with patch.dict(os.environ, {

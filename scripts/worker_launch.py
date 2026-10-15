@@ -18,6 +18,7 @@ import context_packages  # noqa: E402
 import child_mcp  # noqa: E402
 import harness as rig_harness  # noqa: E402
 import jobs as rig_jobs  # noqa: E402
+import opencode_policy  # noqa: E402
 import route as rig_route  # noqa: E402
 
 JOB_ID_RE = re.compile(r"^[A-Za-z0-9._-]+$")
@@ -378,6 +379,11 @@ def launch(repo, **kwargs) -> dict:
     if blocked:
         raise LaunchError(blocked)
     blocked = rig_route.assert_devin_model(worker, model, role)
+    if blocked:
+        raise LaunchError(blocked)
+    blocked = rig_route.assert_opencode_model(worker, model, role, effort)
+    if not blocked and worker == opencode_policy.WORKER:
+        blocked = opencode_policy.catalog_problem(model)
     if blocked:
         raise LaunchError(blocked)
     if worker == "devin":

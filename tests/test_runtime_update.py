@@ -131,6 +131,25 @@ class SafeUpdate(unittest.TestCase):
         self.assertIn('Already rolled back', update.execute(self.root, rollback=True))
         self.assertEqual(tree(self.root), before)
 
+    def test_update_ships_opencode_policy_and_preserves_user_config(self):
+        shutil.copyfile(ROOT / 'scripts/opencode_policy.py', self.source / 'scripts/opencode_policy.py')
+        legacy_routing = json.dumps({'schema_version': 4, 'preferences': {'fast': ['opencode-gpt-5.4-mini-minimal']}})
+        (self.repo / '.rig/routing.json').write_text(legacy_routing)
+        opencode_config = self.home / '.config/opencode/opencode.json'
+        opencode_config.parent.mkdir(parents=True)
+        opencode_config.write_text('{"model": "openai/gpt-6-luna"}')
+        result = self.apply()
+        self.assertIn('Update complete', result)
+        installed = self.root / 'scripts/opencode_policy.py'
+        self.assertEqual(installed.read_bytes(), (ROOT / 'scripts/opencode_policy.py').read_bytes())
+        self.assertIn(str(installed), update.read_json(self.root / 'install-manifest.json')['entries'])
+        self.assertEqual((self.repo / '.rig/routing.json').read_text(), legacy_routing)
+        self.assertEqual(opencode_config.read_text(), '{"model": "openai/gpt-6-luna"}')
+        self.assertIn('Rollback complete', update.execute(self.root, rollback=True))
+        self.assertFalse(installed.exists())
+        self.assertEqual((self.repo / '.rig/routing.json').read_text(), legacy_routing)
+        self.assertEqual(opencode_config.read_text(), '{"model": "openai/gpt-6-luna"}')
+
     def test_dry_run_changes_no_installed_or_project_bytes(self):
         before = tree(self.base)
         self.assertIn('no files changed', self.apply(dry_run=True))

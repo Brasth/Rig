@@ -349,8 +349,16 @@ class OpenCodeOmpPiWorkerArgv(unittest.TestCase):
         mcp_test_support.seed_installed_mcp(self.home)
         for name in ("opencode", "omp", "pi", "agy", "devin"):
             path = self.bins / name
+            catalog = (
+                "import sys\n"
+                "if sys.argv[1:] == ['models']:\n"
+                "    print('opencode-go/glm-5.3-flash')\n"
+                "    print('opencode-go/deepseek-v4.1-flash')\n"
+                "    raise SystemExit(0)\n"
+            ) if name == "opencode" else ""
             path.write_text(
                 f"#!{sys.executable}\n"
+                + catalog
                 + mcp_test_support.inbox_handshake_prelude(ROOT)
                 + "print('ok')\n"
                 + "raise SystemExit(0)\n"
@@ -373,9 +381,17 @@ class OpenCodeOmpPiWorkerArgv(unittest.TestCase):
             env.update(extra)
         return env
 
+    def _oc_env(self, extra: dict | None = None) -> dict:
+        """OpenCode tests need a real catalog probe against the stub binary, cached in the temp home."""
+        return self._env({
+            "RIG_SKIP_MODEL_CATALOG": "",
+            "RIG_MODEL_CATALOG_CACHE": str(self.root / "catalog-cache.json"),
+            **(extra or {}),
+        })
+
     def test_opencode_dry_run_run_json_auto(self):
         proc = run_worker(
-            self.repo, "opencode", "print-stream", str(self.brief), env=self._env()
+            self.repo, "opencode", "print-stream", str(self.brief), env=self._oc_env()
         )
         out = proc.stdout + proc.stderr
         self.assertIn(proc.returncode, (0, 127), out)
@@ -384,12 +400,52 @@ class OpenCodeOmpPiWorkerArgv(unittest.TestCase):
         self.assertIn("--format json", out)
         self.assertIn("--dir", out)
         self.assertIn("--auto", out)
-        self.assertIn("-m openai/gpt-6-luna", out)
-        self.assertIn("--variant high", out)
+        self.assertIn("-m opencode-go/glm-5.3-flash", out)
+        self.assertNotIn("--variant", out)
         self.assertNotIn("--interactive", out)
         self.assertNotIn("gpt-5.6-sol", out)
         self.assertNotIn("openai/gpt-5.6-sol", out)
         self.assertNotIn("claude-fable", out)
+
+    def test_opencode_wrapper_accepts_each_approved_model_without_variant(self):
+        for index, model in enumerate(("opencode-go/glm-5.3-flash", "opencode-go/deepseek-v4.1-flash")):
+            with self.subTest(model=model):
+                job = f"approved-{index}"
+                folder = self.repo / ".rig" / "jobs" / job
+                folder.mkdir(parents=True)
+                (folder / "brief.md").write_text(self.brief.read_text())
+                proc = run_worker(
+                    self.repo, "opencode", job, str(folder / "brief.md"),
+                    env=self._oc_env({"RIG_MODEL": model}),
+                )
+                out = proc.stdout + proc.stderr
+                self.assertIn("would run:", out, out)
+                self.assertIn(f"-m {model}", out)
+                self.assertNotIn("--variant", out)
+
+    def test_opencode_wrapper_rejects_policy_violations(self):
+        cases = (
+            ({"RIG_MODEL": "openai/gpt-6-luna"}, "removed"),
+            ({"RIG_MODEL": "opencode-go/glm-5.3-flash-lite"}, "exact OpenCode Go selectors"),
+            ({"RIG_MODEL": "opencode-go/muse-spark-1.3-contributor"}, "OpenCode unavailable"),
+            ({"RIG_MODEL": "opencode-go/glm-5.3-flash", "RIG_EFFORT": "high"}, "no reasoning effort"),
+            ({"RIG_MODEL": "opencode-go/glm-5.3-flash", "RIG_ROLE": "hard"}, "does not support hard"),
+            ({"RIG_MODEL": "opencode-go/glm-5.3-flash", "RIG_ROLE": "review"}, "does not support review"),
+        )
+        for extra, text in cases:
+            with self.subTest(extra=extra):
+                proc = run_worker(self.repo, "opencode", "print-stream", str(self.brief), env=self._env(extra))
+                out = proc.stdout + proc.stderr
+                self.assertNotEqual(proc.returncode, 0, out)
+                self.assertIn(text, out)
+                self.assertNotIn("would run:", out)
+
+    def test_opencode_wrapper_unavailable_catalog_refuses_launch(self):
+        (self.bins / "opencode").write_text(f"#!{sys.executable}\nraise SystemExit(1)\n")
+        proc = run_worker(self.repo, "opencode", "print-stream", str(self.brief), env=self._oc_env())
+        out = proc.stdout + proc.stderr
+        self.assertNotEqual(proc.returncode, 0, out)
+        self.assertIn("OpenCode unavailable", out)
 
     def test_omp_dry_run_print_json_write(self):
         proc = run_worker(self.repo, "omp", "print-stream", str(self.brief), env=self._env())

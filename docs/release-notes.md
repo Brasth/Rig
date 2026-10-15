@@ -1,5 +1,27 @@
 # Release Notes
 
+## OpenCode cheap-model policy (2026-10-15)
+
+Every install and update now limits OpenCode children to three exact OpenCode Go selectors: `opencode-go/glm-5.3-flash` (default, profile `opencode-glm-5.3-flash`), `opencode-go/deepseek-v4.1-flash` (second, `opencode-deepseek-v4.1-flash`), and region-dependent `opencode-go/muse-spark-1.3-contributor` (optional third, `opencode-muse-spark-1.3-contributor`). OpenCode Go is required; the selectors must be listed by `opencode models` for your account and region. Rig does not set up authentication, purchase anything, enable OpenCode, update its binary, or edit your global OpenCode configuration.
+
+Behavior changes:
+
+- OpenCode profiles and legacy defaults cover explore, mini, bulk, implement, and verify only, with an empty effort and no `--variant`. OpenCode no longer has hard, review, or strong-tier profiles; legacy hard/review picks skip OpenCode and use the normal fallback to other workers or the parent.
+- Explicit overrides are enforced on every path: smart and legacy picks, manual and MCP launches, native-child admission, and the direct `run-worker.sh` wrapper. Unsupported, look-alike, or empty models, any effort, and hard/review roles are rejected with the approved list. Nothing is silently substituted, and Rig does not retry another model after a runtime quota or model failure.
+- The exact selector must appear in the OpenCode catalog before launch. A missing CLI, authentication, or catalog entry makes OpenCode unavailable for that pick while other workers keep their existing routing.
+- New canonical providers `zai`, `deepseek`, and `meta` identify the model family across transport prefixes (`opencode-go` is a transport, not a provider), so review independence compares actual families. Billing scopes and provider enums include them.
+- The profiles `opencode-gpt-5.4-mini-minimal`, `opencode-gpt-5.6-luna-high`, and `opencode-gpt-5.6-terra-max`, and OpenCode `openai/gpt-*` selectors, are removed. Smart mode rejects a `.rig/routing.json` that still references them with a migration message; legacy mode ignores it. Files on disk are never rewritten. Disallowed overrides of the new profiles fail validation clearly.
+
+No performance, quality, or pricing claims are made for the approved models; their built-in capability scores are neutral. Schema versions are unchanged. See [OpenCode cheap-model policy](smart-routing.md#opencode-cheap-model-policy).
+
+### Rollout / restart
+
+Install or update the runtime as usual (the new `scripts/opencode_policy.py` ships with the other scripts), then fully restart parent and MCP sessions before the next admission. Replace removed profile IDs in `.rig/routing.json` and any OpenCode selector overrides before using smart mode. Confirm `opencode models` lists the approved selectors.
+
+### Rollback
+
+Reinstall the previous revision with the runtime rollback procedure and restart parent and MCP sessions. Rollback does not delete routing data or touch your OpenCode configuration.
+
 ## Task-domain routing v1 (2026-09-30)
 
 Smart routing now accepts a task domain separately from role and capability tier: `general`, `ui-design`, `frontend`, `ui-verification`, `research`, `backend`, `debugging`, and `review`. CLI pick/session and job start use `--task-domain` and repeatable `--research-source`; MCP pick/session/job start/job launch accept `task_domain` and `research_sources`. Workflow nodes carry the same inputs. Explicit domain wins; omitted domains use bounded English inference without changing an explicit role.
