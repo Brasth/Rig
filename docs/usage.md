@@ -222,7 +222,7 @@ rig doctor --task coding --parent codex
 rig doctor --task research --research-source docs/background.md --json
 rig doctor --task browser --parent codex
 rig doctor --task computer-use --parent codex
-rig doctor --task coding --parent opencode --model openai/gpt-6-luna --json
+rig doctor --task coding --parent opencode --model opencode-go/glm-5.3-flash --json
 rig doctor --task coding --smoke
 ```
 
@@ -753,7 +753,7 @@ See [smart routing](smart-routing.md) for assessment defaults, `.rig/routing.jso
 - Cursor: `composer-2.5-fast` cheap, `composer-2.5` implement, `cursor-grok-4.6-high` hard, `claude-opus-5-5-thinking-high` review
 - Grok: implement `grok-4.7` high; explore `grok-4.5`
 - Codex: cheap/explore `gpt-6-luna` low. Hard Codex work can use `gpt-5.6-terra` medium. Optional `.rig/routing.json` override for exploration only: profile `codex-explorer-low` selector `gpt-5.3-codex-spark`. Spark is not a baseline and cannot be enabled for write roles.
-- OpenCode: cheap `openai/gpt-5.4-mini` `--variant minimal`; implement `openai/gpt-6-luna` `--variant high`; hard/review `openai/gpt-5.6-terra` `--variant max`
+- OpenCode (requires OpenCode Go): exact `opencode-go/glm-5.3-flash` by default, then `opencode-go/deepseek-v4.1-flash`, then region-dependent `opencode-go/muse-spark-1.3-contributor`; explore/mini/bulk/implement/verify only, no `--variant`, no hard/review. See [OpenCode cheap-model policy](smart-routing.md#opencode-cheap-model-policy)
 - OMP / Pi: cheap `grok-4.5` `--thinking low`; implement/hard `grok-4.6` `--thinking high`; review `claude-opus-5-5` `--thinking high`
 - agy: cheap `gemini-3.8-flash-low` `--effort low`; implement `gemini-3.8-flash-high` `--effort high`; hard/review `gemini-3.1-pro-high` `--effort high`
 - Devin (child-only): `swe-2-medium` explore/mini/bulk; `swe-2-high` implement; `swe-2-max` hard/review. No `--effort` flag; never swe aliases / SWE-1.x / Fusion / default
@@ -1050,7 +1050,7 @@ Fully quit the parent app once. Grok: statusline command in `~/.grok/config.toml
 
 **OpenCode / OMP / Pi / agy not spawning**
 
-Need the binary **and** `rig workers opencode=on` (or `omp=on` / `pi=on` / `agy=on`). Existing harness flags stay off. `rig doctor` prints the install hint if the CLI is missing. Smart mode compares their eligible profiles alongside other workers. Being on PATH alone is insufficient: harness flags, scoped MCP and model confirmation still apply. As parents, open that CLI (`rig use opencode|omp|pi|agy`).
+Need the binary **and** `rig workers opencode=on` (or `omp=on` / `pi=on` / `agy=on`). Existing harness flags stay off. `rig doctor` prints the install hint if the CLI is missing. Smart mode compares their eligible profiles alongside other workers. Being on PATH alone is insufficient: harness flags, scoped MCP and model confirmation still apply. OpenCode additionally needs OpenCode Go and an exact approved selector in `opencode models`; see the [OpenCode cheap-model policy](smart-routing.md#opencode-cheap-model-policy). As parents, open that CLI (`rig use opencode|omp|pi|agy`).
 
 ## Parent agents
 
@@ -1066,7 +1066,7 @@ A Claude Code child uses print-mode `stream-json` so the TUI can show tools whil
 
 A Cursor child is `cursor-agent -p` with `stream-json`, `--force`, `--trust`, and `--workspace` set to the repo. It does **not** use `--worktree` (edits would leave the repo). `rig doctor` mentions Grok Bot.app and Cursor.app when they exist; those GUIs cannot be spawned.
 
-An OpenCode child is `opencode run --format json --dir <repo> --auto`. An OMP child is `omp -p --mode json --approval-mode write`. A Pi child is `pi -p --mode json --approve`. An agy child is `agy -p` with `--output-format json --mode accept-edits --print-timeout <RIG_TIMEOUT>s --disable-slash-commands`. A Devin child is `devin --print --prompt-file <brief> --model <swe-2-*> --permission-mode accept-edits --respect-workspace-trust true`. No `--dangerously-skip-permissions`. `run-worker.sh` fills `RIG_MODEL` / `RIG_EFFORT` from `rig pick` when unset (OpenCode `--variant`, OMP/Pi `--thinking`, agy `--effort`; Devin effort is in the SWE-2 selector). OpenCode / OMP / Pi / agy / Devin models are resolved against that CLI’s live catalog (cached). Devin catalog is JSON-only with no fallback. If both OMP and Pi are effective, pick uses OMP. agy `denied_actions` in JSON is a fail even when the process exits 0. Concurrent Devin jobs in one repo are refused.
+An OpenCode child is `opencode run --format json --dir <repo> --auto`. An OMP child is `omp -p --mode json --approval-mode write`. A Pi child is `pi -p --mode json --approve`. An agy child is `agy -p` with `--output-format json --mode accept-edits --print-timeout <RIG_TIMEOUT>s --disable-slash-commands`. A Devin child is `devin --print --prompt-file <brief> --model <swe-2-*> --permission-mode accept-edits --respect-workspace-trust true`. No `--dangerously-skip-permissions`. `run-worker.sh` fills `RIG_MODEL` / `RIG_EFFORT` from `rig pick` when unset (OpenCode takes `-m` only and never `--variant`; OMP/Pi `--thinking`, agy `--effort`; Devin effort is in the SWE-2 selector). OpenCode / OMP / Pi / agy / Devin models are resolved against that CLI’s live catalog (cached); OpenCode only launches its exact approved selectors and is unavailable when the catalog does not list them. Devin catalog is JSON-only with no fallback. If both OMP and Pi are effective, pick uses OMP. agy `denied_actions` in JSON is a fail even when the process exits 0. Concurrent Devin jobs in one repo are refused.
 
 The parent picks **kind**. Pick maps kind to worker, model, and effort. Do not ask the user. Pass the kind: `rig pick implement --case "<task>"` or `rig pick stay --case "<task>"`. `--case` is fallback English when the parent did not choose a kind. Pick does not ship device skill names. Plan/vision/computer-use/chrome-profile/Figma: `rig pick stay`. Native implement/hard: `parent_writes` — this parent writes. Dead spawn: one `rig pick --exclude`. First parent call: `rig session` / MCP `rig_session` when present.
 

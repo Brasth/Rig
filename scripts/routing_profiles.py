@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, fields
 
+import opencode_policy
+
 ROLES = ("explore", "mini", "bulk", "implement", "hard", "review", "verify")
 TIERS = ("fast", "standard", "strong")
 PREF_KEYS = ("fast", "standard", "strong", "review")
@@ -20,12 +22,17 @@ TRAITS = (
     "data",
     "general",
 )
-_MODEL_PREFIXES = ("xai-oauth/", "openai/", "anthropic/", "xai/", "google/", "cursor/", "xiaomi/")
+_MODEL_PREFIXES = (
+    "xai-oauth/", "openai/", "anthropic/", "xai/", "google/", "cursor/", "xiaomi/",
+    "zai/", "deepseek/", "meta/", "opencode-go/",
+)
 WRITER_ROLES = ("mini", "bulk", "implement", "hard")
 FAST_STANDARD_WORKERS = ("codex", "grok", "claude", "devin", "mimo", "opencode", "omp", "pi", "agy", "cursor")
 STRONG_REVIEW_WORKERS = ("devin", "claude", "codex", "grok", "opencode", "omp", "pi", "agy", "cursor")
 CATALOG_WORKERS = frozenset({"opencode", "omp", "pi", "agy", "devin", "mimo"})
-KNOWN_PROVIDERS = frozenset({"openai", "anthropic", "xai", "google", "cursor", "cognition", "xiaomi"})
+KNOWN_PROVIDERS = frozenset(
+    {"openai", "anthropic", "xai", "google", "cursor", "cognition", "xiaomi", "zai", "deepseek", "meta"}
+)
 DEVIN_FAST_ROLES = ("explore", "mini", "bulk")
 DEVIN_IMPLEMENT_ROLES = ("implement", "verify")
 DEVIN_STRONG_ROLES = ("hard", "review")
@@ -151,9 +158,6 @@ def builtin_profiles() -> tuple[Profile, ...]:
     luna_m, luna_e = _pin("codex", "mini")
     terra_hard_m, terra_hard_e = _pin("codex", "hard")
     terra_review_m, terra_review_e = _pin("codex", "review")
-    oc_fast_m, oc_fast_e = _pin("opencode", "explore")
-    oc_std_m, oc_std_e = _pin("opencode", "implement")
-    oc_strong_m, oc_strong_e = _pin("opencode", "hard")
     omp_fast_m, omp_fast_e = _pin("omp", "explore")
     omp_std_m, omp_std_e = _pin("omp", "implement")
     omp_review_m, omp_review_e = _pin("omp", "review")
@@ -203,13 +207,17 @@ def builtin_profiles() -> tuple[Profile, ...]:
             effort=luna_e,
             provider="openai",
         ),
-        _p(
-            "opencode-gpt-5.4-mini-minimal",
-            "opencode",
-            oc_fast_m,
-            aliases=("gpt-5.4-mini",),
-            effort=oc_fast_e,
-            provider="openai",
+        *(
+            _p(
+                pid,
+                "opencode",
+                selector,
+                roles=opencode_policy.ROLES,
+                tiers=("fast", "standard"),
+                effort=opencode_policy.EFFORT,
+                provider=provider,
+            )
+            for pid, selector, provider in opencode_policy.PROFILES
         ),
         _p(
             "omp-grok-4.5-low",
@@ -268,16 +276,6 @@ def builtin_profiles() -> tuple[Profile, ...]:
             tiers=("standard",),
             effort=sonnet_e,
             provider="anthropic",
-        ),
-        _p(
-            "opencode-gpt-5.6-luna-high",
-            "opencode",
-            oc_std_m,
-            aliases=("gpt-6-luna",),
-            roles=STANDARD_ROLES,
-            tiers=("standard",),
-            effort=oc_std_e,
-            provider="openai",
         ),
         _p(
             "omp-grok-4.6-high",
@@ -339,16 +337,6 @@ def builtin_profiles() -> tuple[Profile, ...]:
             tiers=("strong",),
             effort=opus_e,
             provider="anthropic",
-        ),
-        _p(
-            "opencode-gpt-5.6-terra-max",
-            "opencode",
-            oc_strong_m,
-            aliases=("gpt-5.6-terra",),
-            roles=STRONG_ROLES,
-            tiers=("strong",),
-            effort=oc_strong_e,
-            provider="openai",
         ),
         _p(
             "omp-claude-opus-5-high",
@@ -434,6 +422,11 @@ def profiles_by_id(profiles: tuple[Profile, ...] | None = None) -> dict[str, Pro
     return {p.id: p for p in rows}
 
 
+def _default_order(profile: Profile) -> tuple[int, str]:
+    """OpenCode keeps its declared cheap-model order; other workers sort by id."""
+    return (opencode_policy.PROFILE_ORDER.get(profile.id, 0), profile.id)
+
+
 def default_preference_ids(
     tier: str,
     profiles: dict[str, Profile],
@@ -453,7 +446,7 @@ def default_preference_ids(
             continue
         by_worker.setdefault(profile.worker, []).append(profile)
     for worker in workers:
-        for profile in sorted(by_worker.get(worker, []), key=lambda item: item.id):
+        for profile in sorted(by_worker.get(worker, []), key=_default_order):
             if profile.id not in seen:
                 seen.add(profile.id)
                 ordered.append(profile.id)
@@ -530,7 +523,6 @@ def _builtin_capability(pid: str) -> Capability:
         "claude-haiku-4-5-low": _from(fast, documentation=72, speed=88, cost=84),
         "codex-explorer-low": _from(fast, implementation=22, general=72, quality=60),
         "codex-luna-low": _from(fast, implementation=70, quality=64, reasoning=48),
-        "opencode-gpt-5.4-mini-minimal": _from(fast, quality=52, speed=80),
         "omp-grok-4.5-low": _from(fast, debugging=66),
         "pi-grok-4.5-low": _from(fast, debugging=66),
         "agy-gemini-3.8-flash-low": _from(fast, speed=86, cost=88, quality=54),
@@ -538,7 +530,6 @@ def _builtin_capability(pid: str) -> Capability:
         "cursor-composer-2.5-fast": _from(fast, quality=50, speed=82),
         "grok-4.7-high": _from(standard, quality=82, debugging=84, reasoning=78),
         "claude-sonnet-5-medium": _from(standard, quality=80, frontend=84, documentation=80),
-        "opencode-gpt-5.6-luna-high": _from(standard, quality=76, implementation=76),
         "omp-grok-4.6-high": _from(standard, quality=74, implementation=76, reasoning=72),
         "pi-grok-4.6-high": _from(standard, quality=74, implementation=76, reasoning=72),
         "agy-gemini-3.8-flash-high": _from(standard, quality=74, speed=70),
@@ -549,7 +540,6 @@ def _builtin_capability(pid: str) -> Capability:
         "claude-opus-5-high": _from(
             strong, quality=96, architecture=96, security=94, reasoning=96, implementation=92, debugging=90,
         ),
-        "opencode-gpt-5.6-terra-max": _from(strong, quality=91, architecture=88, reasoning=90),
         "omp-claude-opus-5-high": _from(
             strong, quality=96, architecture=96, security=94, reasoning=96, implementation=92,
         ),

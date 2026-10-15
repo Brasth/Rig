@@ -759,6 +759,9 @@ def _validate(root, worker, role, model, access, owner, *, allow_unknown_worker=
         problem = route.assert_child_model(model)
         if not problem:
             problem = route.assert_devin_model(worker, model, role)
+        if not problem and (model or worker != "opencode"):
+            # Legacy adoption passes an unknown (empty) model; the launcher resolves and re-checks it.
+            problem = route.assert_opencode_model(worker, model, role)
         if problem:
             raise AdmissionError(problem)
 

@@ -19,6 +19,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 sys.path.insert(0, str(ROOT / "tests"))
 
 import admission  # noqa: E402
+import catalog  # noqa: E402
 import child_mcp  # noqa: E402
 import jobs  # noqa: E402
 import mcp_test_support  # noqa: E402
@@ -489,6 +490,62 @@ class WorkerLaunchTests(unittest.TestCase):
         self.assertEqual(self._held(), [])
         self.assertFalse((self.repo / ".rig" / "jobs" / "stale-review").exists())
 
+    OC_CATALOG = {"state": "fresh", "ids": [
+        "opencode-go/glm-5.3-flash", "opencode-go/deepseek-v4.1-flash", "opencode-go/muse-spark-1.3-contributor",
+    ]}
+
+    def _oc_launch(self, job, info=None, **kwargs):
+        kwargs.setdefault("model", "opencode-go/glm-5.3-flash")
+        kwargs.setdefault("effort", "")
+        with mock.patch.object(catalog, "load_catalog_info", return_value=info or self.OC_CATALOG):
+            return self._launch(job, worker="opencode", **kwargs)
+
+    def test_opencode_launch_accepts_each_approved_selector_with_empty_effort(self):
+        for index, model in enumerate(self.OC_CATALOG["ids"]):
+            result = self._oc_launch(f"oc-ok-{index}", model=model, files=[f"ok{index}.py"])
+            env_path = self.repo / ".rig" / "jobs" / f"oc-ok-{index}" / "wrapper-env.json"
+            for _ in range(50):
+                if env_path.is_file():
+                    break
+                time.sleep(0.05)
+            dumped = json.loads(env_path.read_text())
+            self.assertEqual(dumped.get("RIG_MODEL"), model)
+            self.assertEqual(dumped.get("RIG_EFFORT", ""), "")
+            self.assertEqual(result["worker"], "opencode")
+
+    def test_opencode_launch_rejects_policy_violations_before_admission(self):
+        bad = (
+            ({"model": "openai/gpt-5.6-luna"}, "removed"),
+            ({"model": "opencode-go/glm-5.3"}, "exact OpenCode Go selectors"),
+            ({"model": "opencode-go/glm-5.3-flash", "effort": "high"}, "no --variant"),
+            ({"role": "hard"}, "does not support hard"),
+            ({"role": "review"}, "does not support review"),
+        )
+        for index, (kwargs, text) in enumerate(bad):
+            with self.subTest(kwargs=kwargs):
+                with self.assertRaisesRegex(worker_launch.LaunchError, text):
+                    self._oc_launch(f"oc-bad-{index}", files=[f"bad{index}.py"], **kwargs)
+                self.assertFalse((self.repo / ".rig" / "jobs" / f"oc-bad-{index}").exists())
+        self.assertEqual(self._held(), [])
+
+    def test_opencode_launch_requires_catalog_confirmation_and_never_retries(self):
+        for index, info in enumerate((
+            {"state": "unavailable", "ids": None},
+            {"state": "empty", "ids": [], "confirmed_empty": True},
+            {"state": "fresh", "ids": ["opencode-go/deepseek-v4.1-flash"]},
+        )):
+            with self.subTest(state=info["state"], ids=info["ids"]):
+                with self.assertRaisesRegex(worker_launch.LaunchError, "OpenCode unavailable"):
+                    self._oc_launch(f"oc-cat-{index}", info=info, files=[f"cat{index}.py"])
+        self.assertEqual(self._held(), [])
+
+    def test_opencode_empty_model_resolves_to_default_not_cli_default(self):
+        result = self._oc_launch("oc-default", model="", files=["d.py"])
+        self.assertEqual(result["worker"], "opencode")
+        meta = json.loads((self.repo / ".rig" / "jobs" / "oc-default" / "meta.json").read_text())
+        self.assertEqual(meta["model"], "opencode-go/glm-5.3-flash")
+        self.assertEqual(meta["effort"], "")
+
     def test_mcp_review_launch_resolves_writer_receipt_not_reviewer_id(self):
         writer = self._launch()
         args = {"repo": str(self.repo), "id": "new-reviewer", "brief": "review",
@@ -513,7 +570,8 @@ class WorkerLaunchTests(unittest.TestCase):
         }))
         os.environ["OPENCODE_CONFIG"] = str(custom)
         self.assertTrue(child_mcp.worker_mcp_ready("opencode")[0])
-        result = self._launch("oc-env", worker="opencode", model="openai/gpt-5.6-luna", effort="high", files=["b.py"])
+        with mock.patch.object(catalog, "load_catalog_info", return_value=self.OC_CATALOG):
+            result = self._launch("oc-env", worker="opencode", model="opencode-go/glm-5.3-flash", effort="", files=["b.py"])
         env_path = self.repo / ".rig" / "jobs" / "oc-env" / "wrapper-env.json"
         for _ in range(50):
             if env_path.is_file():

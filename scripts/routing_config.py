@@ -8,6 +8,7 @@ import json
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import opencode_policy
 import routing_profiles as rig_profiles
 
 # v3: opt-in preparation-aware effort; picks from earlier versions must re-pick.
@@ -315,6 +316,8 @@ def validate_profiles(rows: dict[str, rig_profiles.Profile]) -> None:
             raise ConfigError(f"profile {pid}: unknown worker {profile.worker}")
         if not str(profile.selector).strip():
             raise ConfigError(f"profile {pid}: selector is required")
+        if profile.worker == opencode_policy.WORKER:
+            _validate_opencode_profile(pid, profile)
         banned = rig_route.assert_child_model(profile.selector)
         if banned:
             raise ConfigError(f"profile {pid}: {banned}")
@@ -366,6 +369,24 @@ def validate_profiles(rows: dict[str, rig_profiles.Profile]) -> None:
                     err = rig_route.assert_devin_model("devin", alias, role)
                     if err:
                         raise ConfigError(f"profile {pid}: {err}")
+
+
+def _validate_opencode_profile(pid: str, profile: rig_profiles.Profile) -> None:
+    """OpenCode profiles: exact approved selector, fast/standard roles, no variant."""
+    problem = opencode_policy.model_problem(profile.selector)
+    if problem:
+        raise ConfigError(f"profile {pid}: {problem}")
+    if profile.aliases:
+        raise ConfigError(f"profile {pid}: OpenCode accepts exact selectors only; remove aliases")
+    if profile.effort or any(profile.supported_efforts):
+        raise ConfigError(f"profile {pid}: OpenCode takes no reasoning effort (no --variant)")
+    unsupported = [role for role in profile.roles if role not in opencode_policy.ROLES]
+    if unsupported:
+        raise ConfigError(
+            f"profile {pid}: OpenCode supports roles {', '.join(opencode_policy.ROLES)} only, not {unsupported[0]}"
+        )
+    if "strong" in profile.tiers:
+        raise ConfigError(f"profile {pid}: OpenCode cannot serve the strong tier")
 
 
 def _default_preferences(profiles: dict[str, rig_profiles.Profile]) -> dict[str, list[str]]:
@@ -431,6 +452,9 @@ def _parse_routing_json(path: Path | None, raw: dict | None, profiles: dict[str,
         if not isinstance(pid, str) or not pid.strip():
             raise ConfigError("profile id cannot be empty")
         ident = pid.strip()
+        removed = opencode_policy.removed_profile_problem(ident)
+        if removed:
+            raise ConfigError(f"profiles.{ident}: {removed}")
         if ident in seen:
             raise ConfigError(f"duplicate profile id {ident}")
         seen.add(ident)
@@ -448,6 +472,10 @@ def _parse_routing_json(path: Path | None, raw: dict | None, profiles: dict[str,
         if key not in rig_profiles.PREF_KEYS:
             raise ConfigError(f"preferences key must be fast|standard|strong|review, got {key}")
         ids = _string_list(value, f"preferences.{key}")
+        for item in ids:
+            removed = opencode_policy.removed_profile_problem(item)
+            if removed:
+                raise ConfigError(f"preferences.{key}: {removed}")
         unknown = [item for item in ids if item not in profiles]
         if unknown:
             raise ConfigError(f"preferences.{key} unknown profile id {unknown[0]}")

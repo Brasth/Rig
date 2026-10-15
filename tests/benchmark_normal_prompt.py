@@ -209,7 +209,7 @@ class Fixture:
         else:
             fetched = time.time() - (catalog.TTL_SECONDS + 60 if mode == "stale" else 0)
             self.cache.write_text(json.dumps({"opencode": {
-                "ids": [route.model_for("opencode", "review")[0]], "fetched_at": fetched}}))
+                "ids": [route.model_for("opencode", "implement")[0]], "fetched_at": fetched}}))
         self.counts.clear()
         self.subject_reads.clear()
         self.probed.clear()

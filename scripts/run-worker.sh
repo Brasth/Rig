@@ -661,6 +661,10 @@ if [[ -z "${RIG_MODEL:-}" && -f "$ROUTE_PY" ]]; then
 fi
 MODEL="${RIG_MODEL:-}"
 EFFORT="${RIG_EFFORT:-}"
+if [[ "$WORKER" == "opencode" && -n "$EFFORT" ]]; then
+  echo "run-worker: refuse: OpenCode takes no reasoning effort (no --variant); leave RIG_EFFORT empty" >&2
+  exit 1
+fi
 launch_provenance() {
   python3 "$ROUTE_PY" allow --json --model "$MODEL" --role "$ROLE" --repo "$REPO" \
     --worker "$WORKER" \
@@ -996,8 +1000,8 @@ case "$WORKER" in
       # --session continues that id; --continue is last-session and conflicts.
       CMD+=(--session "$SESSION_ID")
     fi
+    # Rig policy: exact approved OpenCode Go selector, never --variant.
     [[ -n "$MODEL" ]] && CMD+=(-m "$MODEL")
-    [[ -n "$EFFORT" ]] && CMD+=(--variant "$EFFORT")
     CMD+=("$BRIEF_TEXT")
     ;;
   omp)

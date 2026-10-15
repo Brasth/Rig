@@ -2024,6 +2024,8 @@ def write_job_files(
         model_error = rig_route.assert_child_model(model)
         if not model_error:
             model_error = rig_route.assert_devin_model(worker, model, role)
+        if not model_error:
+            model_error = rig_route.assert_opencode_model(worker, model, role)
         if model_error:
             raise SystemExit(model_error)
     job_dir.mkdir(parents=True, exist_ok=True)
@@ -2418,7 +2420,13 @@ def start_job(
         else:
             model, effort = route.resolved_model_for(worker, route.classify(role, ""))
     if model and kind != "parent":
-        error = route.assert_child_model(model) or route.assert_devin_model(worker, model, role)
+        error = (
+            route.assert_child_model(model) or route.assert_devin_model(worker, model, role)
+            or route.assert_opencode_model(worker, model, role, effort)
+        )
+        if not error and worker == "opencode":
+            import opencode_policy
+            error = opencode_policy.catalog_problem(model)
         if error:
             raise SystemExit(error)
     if kind == "native_child" and not str(model or "").strip():

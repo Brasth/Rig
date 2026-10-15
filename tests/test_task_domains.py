@@ -103,11 +103,11 @@ class DomainRouting(unittest.TestCase):
         self.assertEqual(c['worker'], 'grok')
 
     def test_exact_catalog_gate_remains(self):
-        self.configure({'frontend': {'preferred_profiles':['opencode-gpt-5.6-luna-high','grok-4.7-high'], 'fallback':'none'}})
+        self.configure({'frontend': {'preferred_profiles':['opencode-glm-5.3-flash','grok-4.7-high'], 'fallback':'none'}})
         c = self.pick('frontend', effective=['opencode','grok'], catalogs={'opencode':['unrelated']})
         self.assertEqual(c['worker'], 'grok')
         codes={d['id']:d['code'] for d in c['routing']['candidate_decisions']}
-        self.assertEqual(codes['opencode-gpt-5.6-luna-high'],'catalog-miss')
+        self.assertEqual(codes['opencode-glm-5.3-flash'],'catalog-miss')
 
     def test_review_provider_gate_remains(self):
         self.configure({'review': {'preferred_profiles':['claude-opus-5-high','grok-4.7-high'], 'fallback':'none'}})
@@ -120,7 +120,7 @@ class DomainRouting(unittest.TestCase):
 
     def test_scored_parent_and_none_fallbacks(self):
         for fallback, spawn in [('scored','run-worker'),('parent','native'),('none','none')]:
-            self.configure({'frontend': {'preferred_profiles': ['opencode-gpt-5.6-luna-high'], 'fallback':fallback}})
+            self.configure({'frontend': {'preferred_profiles': ['opencode-glm-5.3-flash'], 'fallback':fallback}})
             c = self.pick('frontend')
             self.assertEqual(c['spawn'],spawn)
             if spawn == 'native':

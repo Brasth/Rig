@@ -12,7 +12,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 import catalog  # noqa: E402
 import route  # noqa: E402
 
-OPENCODE_LUNA = "openai/gpt-6-luna"
+OPENCODE_DEFAULT = "opencode-go/glm-5.3-flash"
 OMP_GROK = "grok-4.6"
 AGY_FLASH = "gemini-3.8-flash-high"
 
@@ -80,13 +80,13 @@ class ParseCatalog(unittest.TestCase):
 
     def test_opencode_skips_json_blobs(self):
         text = (
-            "openai/gpt-6-luna\n"
+            "opencode-go/glm-5.3-flash\n"
             '{"type":"model","id":"nope"}\n'
             "anthropic/claude-sonnet-5\n"
         )
         self.assertEqual(
             catalog.parse_opencode(text),
-            ["openai/gpt-6-luna", "anthropic/claude-sonnet-5"],
+            ["opencode-go/glm-5.3-flash", "anthropic/claude-sonnet-5"],
         )
 
     def test_omp_json_prefers_selector(self):
@@ -151,7 +151,7 @@ class PinMatch(unittest.TestCase):
     def test_suffix_and_slash(self):
         self.assertTrue(catalog.pin_matches("grok-4.6", "xai-oauth/grok-4.6"))
         self.assertTrue(catalog.pin_matches("grok-4.6", "grok-cli/grok-4.6"))
-        self.assertTrue(catalog.pin_matches(OPENCODE_LUNA, OPENCODE_LUNA))
+        self.assertTrue(catalog.pin_matches(OPENCODE_DEFAULT, OPENCODE_DEFAULT))
         self.assertFalse(catalog.pin_matches("grok-4", "xai-oauth/grok-4.6"))
         self.assertTrue(catalog.pin_matches("openai/gpt-6-luna", "gpt-6-luna"))
 
@@ -162,10 +162,10 @@ class ResolveAgainstCatalog(unittest.TestCase):
             catalog.resolve_model(
                 "opencode",
                 "implement",
-                OPENCODE_LUNA,
-                [OPENCODE_LUNA, "openai/gpt-5.4-mini"],
+                OPENCODE_DEFAULT,
+                [OPENCODE_DEFAULT, "opencode-go/deepseek-v4.1-flash"],
             ),
-            OPENCODE_LUNA,
+            OPENCODE_DEFAULT,
         )
         self.assertEqual(
             catalog.resolve_model(
@@ -188,9 +188,9 @@ class ResolveAgainstCatalog(unittest.TestCase):
 
     def test_preferred_missing_picks_sonnet(self):
         got = catalog.resolve_model(
-            "opencode",
+            "omp",
             "implement",
-            OPENCODE_LUNA,
+            OMP_GROK,
             ["anthropic/claude-sonnet-5", "openai/gpt-5.4-mini"],
         )
         self.assertEqual(got, "anthropic/claude-sonnet-5")
@@ -200,18 +200,18 @@ class ResolveAgainstCatalog(unittest.TestCase):
         got = catalog.resolve_model(
             "opencode",
             "implement",
-            OPENCODE_LUNA,
+            OPENCODE_DEFAULT,
             ["openai/gpt-5.6-sol", "claude-fable-5"],
         )
-        self.assertEqual(got, OPENCODE_LUNA)
+        self.assertEqual(got, OPENCODE_DEFAULT)
         self.assertNotIn("sol", got.lower())
         self.assertNotIn("fable", got.lower())
         self.assertNotIn("astra", got.lower())
 
     def test_empty_catalog_is_static_pin(self):
         self.assertEqual(
-            catalog.resolve_model("opencode", "implement", OPENCODE_LUNA, []),
-            OPENCODE_LUNA,
+            catalog.resolve_model("opencode", "implement", OPENCODE_DEFAULT, []),
+            OPENCODE_DEFAULT,
         )
 
     def test_devin_never_substitutes_a_catalog_model(self):
@@ -225,8 +225,8 @@ class ResolveAgainstCatalog(unittest.TestCase):
         os.environ["RIG_SKIP_MODEL_CATALOG"] = "1"
         try:
             self.assertEqual(
-                catalog.resolve_model("opencode", "implement", OPENCODE_LUNA),
-                OPENCODE_LUNA,
+                catalog.resolve_model("opencode", "implement", OPENCODE_DEFAULT),
+                OPENCODE_DEFAULT,
             )
         finally:
             if old is None:
@@ -252,18 +252,18 @@ class ResolveAgainstCatalog(unittest.TestCase):
 
     def test_first_remaining_when_no_keyword(self):
         got = catalog.resolve_model(
-            "opencode",
+            "omp",
             "implement",
-            OPENCODE_LUNA,
+            OMP_GROK,
             ["custom/weird-id", "other/also-weird"],
         )
         self.assertEqual(got, "custom/weird-id")
 
     def test_implement_skips_mini_if_stronger_exists(self):
         got = catalog.resolve_model(
-            "opencode",
+            "omp",
             "implement",
-            OPENCODE_LUNA,
+            OMP_GROK,
             ["openai/gpt-5.6-mini", "openai/gpt-5.6-codex"],
         )
         self.assertEqual(got, "openai/gpt-5.6-codex")
@@ -276,12 +276,12 @@ class PickAndEnvCatalog(unittest.TestCase):
             ["opencode"],
             "implement",
             "add a header",
-            catalogs={"opencode": ["anthropic/claude-sonnet-5"]},
+            catalogs={"opencode": ["anthropic/claude-sonnet-5", "opencode-go/glm-5.3-flash"]},
             policy_mode="legacy",
         )
         self.assertEqual(c["worker"], "opencode")
-        self.assertEqual(c["model"], "anthropic/claude-sonnet-5")
-        self.assertEqual(c["effort"], "high")
+        self.assertEqual(c["model"], "opencode-go/glm-5.3-flash")
+        self.assertEqual(c["effort"], "")
 
     def test_pick_effort_stays_on_pin_table(self):
         c = route.pick(
@@ -302,7 +302,7 @@ class PickAndEnvCatalog(unittest.TestCase):
         self.assertEqual(effort, "high")
 
     def test_model_for_stays_static(self):
-        self.assertEqual(route.model_for("opencode", "implement"), (OPENCODE_LUNA, "high"))
+        self.assertEqual(route.model_for("opencode", "implement"), ("opencode-go/glm-5.3-flash", ""))
         self.assertEqual(route.model_for("omp", "implement"), (OMP_GROK, "high"))
         self.assertEqual(route.model_for("agy", "implement"), (AGY_FLASH, "high"))
 
@@ -318,13 +318,13 @@ class ProbeAndCache(CatalogEnv):
         )
 
     def test_probe_opencode_and_cache_hit(self):
-        self._bin("opencode", 'echo "openai/gpt-6-luna"\necho "anthropic/claude-sonnet-5"\n')
+        self._bin("opencode", 'echo "opencode-go/glm-5.3-flash"\necho "anthropic/claude-sonnet-5"\n')
         ids = catalog.load_catalog("opencode")
-        self.assertEqual(ids, [OPENCODE_LUNA, "anthropic/claude-sonnet-5"])
+        self.assertEqual(ids, [OPENCODE_DEFAULT, "anthropic/claude-sonnet-5"])
         self.assertTrue(self.cache.is_file())
         self.bins.joinpath("opencode").write_text("#!/bin/sh\nexit 1\n")
         again = catalog.load_catalog("opencode")
-        self.assertEqual(again, [OPENCODE_LUNA, "anthropic/claude-sonnet-5"])
+        self.assertEqual(again, [OPENCODE_DEFAULT, "anthropic/claude-sonnet-5"])
 
     def test_refresh_bypasses_ttl(self):
         catalog.cache_put("agy", [AGY_FLASH])
@@ -340,7 +340,7 @@ class ProbeAndCache(CatalogEnv):
 
     def test_doctor_only_on_fresh_cache(self):
         self.assertEqual(catalog.doctor_lines(), [])
-        catalog.cache_put("opencode", [OPENCODE_LUNA, "openai/gpt-5.4-mini"])
+        catalog.cache_put("opencode", [OPENCODE_DEFAULT, "opencode-go/deepseek-v4.1-flash"])
         lines = catalog.doctor_lines()
         self.assertEqual(lines[0], "Model catalogs (cached)")
         self.assertIn("opencode: 2 models", "\n".join(lines))
@@ -386,7 +386,7 @@ class ProbeAndCache(CatalogEnv):
         def slow_probe(worker, timeout=8.0):
             time.sleep(0.35)
             return {
-                "opencode": [OPENCODE_LUNA],
+                "opencode": [OPENCODE_DEFAULT],
                 "agy": [AGY_FLASH],
             }.get(worker)
 
@@ -398,7 +398,7 @@ class ProbeAndCache(CatalogEnv):
             elapsed = time.time() - t0
         finally:
             catalog.probe_worker = old
-        self.assertEqual(got["opencode"], [OPENCODE_LUNA])
+        self.assertEqual(got["opencode"], [OPENCODE_DEFAULT])
         self.assertEqual(got["agy"], [AGY_FLASH])
         self.assertLess(elapsed, 0.55)
         self.assertGreater(elapsed, 0.2)

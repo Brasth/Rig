@@ -16,6 +16,12 @@ import jobs
 import rig_mcp
 
 
+def rig_provider(model):
+    import route
+
+    return route.provider_for(model)
+
+
 class NativeHarness(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -140,6 +146,63 @@ class NativeAdmission(NativeHarness):
         self.assertEqual(row["display_model"], "gpt-5.6-luna")
         self.assertFalse(row["model_inferred"])
         self.assertNotIn(lease["owner_token"], json.dumps(payload))
+
+    def _enable_opencode(self):
+        (self.repo / ".rig" / "harness.toml").write_text('parent = "codex"\n[workers]\ncodex = false\nopencode = true\n')
+
+    def test_native_child_opencode_enforces_cheap_model_policy(self):
+        self._enable_opencode()
+        base = {"role": "mini", "executor_kind": "native_child", "native_agent_id": "agent-A",
+                "worker": "opencode", "files": ["subject.txt"]}
+        for index, (extra, text) in enumerate((
+            ({"model": "openai/gpt-6-luna", "effort": ""}, "removed"),
+            ({"model": "opencode-go/glm-5.3-flash-lite", "effort": ""}, "exact OpenCode Go selectors"),
+            ({"model": "opencode-go/glm-5.3-flash", "effort": "high"}, "no --variant"),
+            ({"model": "opencode-go/glm-5.3-flash", "effort": "", "role": "hard"}, "does not support hard"),
+            ({"model": "opencode-go/glm-5.3-flash", "effort": "", "role": "review"}, "does not support review"),
+        )):
+            with self.subTest(extra=extra):
+                result = self.call("rig_job_start", id=f"oc-bad-{index}", **{**base, **extra})
+                self.assertTrue(result.get("isError"), result)
+                self.assertIn(text, result["content"][0]["text"])
+                self.assertFalse((self.repo / ".rig" / "jobs" / f"oc-bad-{index}" / "meta.json").is_file())
+        self.assertEqual(admission.list_reservations(self.repo), [])
+
+    def _opencode_catalog(self, ids):
+        info = {"state": "fresh" if ids else "empty", "ids": ids, "confirmed_empty": ids == []}
+        return patch("catalog.load_catalog_info", return_value=info)
+
+    def test_native_child_opencode_requires_catalog_confirmation(self):
+        self._enable_opencode()
+        model = "opencode-go/deepseek-v4.1-flash"
+        for label, info in (
+            ("missing", {"state": "unavailable", "ids": None}),
+            ("empty", {"state": "empty", "ids": [], "confirmed_empty": True}),
+            ("not-listed", {"state": "fresh", "ids": ["opencode-go/glm-5.3-flash"]}),
+        ):
+            with self.subTest(label=label), patch("catalog.load_catalog_info", return_value=info):
+                result = self.call("rig_job_start", id=f"oc-cat-{label}", role="mini", executor_kind="native_child",
+                                   native_agent_id="agent-A", worker="opencode", model=model, effort="",
+                                   files=["subject.txt"])
+                self.assertTrue(result.get("isError"), result)
+                self.assertIn("OpenCode unavailable", result["content"][0]["text"])
+                self.assertFalse((self.repo / ".rig" / "jobs" / f"oc-cat-{label}" / "meta.json").is_file())
+        self.assertEqual(admission.list_reservations(self.repo), [])
+
+    def test_native_child_opencode_accepts_approved_selector(self):
+        self._enable_opencode()
+        self.enterContext(self._opencode_catalog(list(__import__("opencode_policy").APPROVED)))
+        for index, model in enumerate(("opencode-go/glm-5.3-flash", "opencode-go/deepseek-v4.1-flash",
+                                       "opencode-go/muse-spark-1.3-contributor")):
+            with self.subTest(model=model):
+                lease = self.start(name="oc-" + model.rsplit("/", 1)[-1], files=[f"oc{index}.txt"],
+                                   role="mini", executor_kind="native_child",
+                                   native_agent_id="agent-A", worker="opencode", model=model, effort="")
+                child = jobs.load_job(self.repo / ".rig" / "jobs" / lease["job_id"])
+                self.assertEqual(child["model"], model)
+                self.assertEqual(child["effort"], "")
+                self.assertEqual(child["provider"], rig_provider(model))
+                self.assertFalse(self.finish(lease).get("isError"))
 
     def test_parent_start_allows_unknown_model(self):
         lease = self.start()
