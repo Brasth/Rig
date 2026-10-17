@@ -7,6 +7,14 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+def _review_ownership_args(ctx, args, repo):
+    writer = ctx._optional_string(args, "writer_job_id")
+    review = (args.get("role") in {"review", "reviewer"}
+              and args.get("access", "") in {"", "read"})
+    return ctx._ownership_args(args, repo, job_id=writer or ctx._optional_string(args, "id"),
+                           review_writer_job_id=writer if review else "")
+
+
 def dispatch(ctx, state):
     """Handle this module's tools. Bindings are read from the facade on each call."""
     name = state.name
@@ -268,7 +276,7 @@ def dispatch(ctx, state):
                     native_agent_id=_optional_string(args, "native_agent_id"), return_details=True,
                     routing=args.get("routing"), assessment=args.get("assessment"), **_domain_args(args),
                     preparation=_preparation_arg(args),
-                    **_job_ownership_args(args, repo),
+                    **_review_ownership_args(ctx, args, repo),
             )
             return {**_ok(result["job_id"]), "structuredContent": result}
         status = str(args.get("status") or "ok")
@@ -373,9 +381,7 @@ def dispatch(ctx, state):
                 routing=args.get("routing"),
                 assessment=args.get("assessment"), **_domain_args(args),
                 preparation=_preparation_arg(args),
-                **_ownership_args(args, repo, job_id=(
-                    _optional_string(args, "writer_job_id") or _optional_string(args, "id")
-                )),
+                **_review_ownership_args(ctx, args, repo),
             )
         except rig_launch.LaunchError as exc:
             return _err(str(exc))

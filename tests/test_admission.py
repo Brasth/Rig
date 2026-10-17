@@ -500,10 +500,10 @@ class AdmissionTests(unittest.TestCase):
         verification.accept(self.repo, folder, "accept", snapshot, rationale="Parent checked subject", next="review", **auth)
         return lease, snapshot
 
-    def reviewer(self, writer, snapshot, job="reviewer"):
+    def reviewer(self, writer, snapshot, job="reviewer", *, resources=None):
         return self.reserve(job, worker="claude", role="review", model="claude-sonnet-4-6",
                             access="read", writer_job_id="writer", writer_snapshot_id=snapshot,
-                            **admission.credentials(writer))
+                            resources=resources, **admission.credentials(writer))
 
     def test_review_handoff_has_no_gap_and_rotates_attempt(self):
         writer, snapshot = self.accepted_writer()
@@ -532,6 +532,146 @@ class AdmissionTests(unittest.TestCase):
         self.close(next_reviewer, mode="launch_failed")
         self.close(next_reviewer)
         self.reserve("explicitly-released")
+
+    def launched_failed_reviewer(self, *, close=False):
+        writer, snapshot = self.accepted_writer()
+        reviewer = self.reviewer(writer, snapshot)
+        self.activate(reviewer)
+        self.finish(reviewer, status="fail", completion={"kind": "parent_task", "completed": True})
+        if close:
+            self.close(reviewer)
+        return writer, reviewer, snapshot
+
+    def test_started_failed_reviewer_retries_against_original_writer(self):
+        writer, reviewer, snapshot = self.launched_failed_reviewer()
+        replacement = self.reviewer(reviewer, snapshot, "replacement")
+        self.assertEqual(replacement["writer_job_id"], "writer")
+        self.assertEqual(replacement["writer_snapshot_id"], snapshot)
+        self.assertEqual(replacement["reservation_id"], writer["reservation_id"])
+        self.assertEqual(replacement["access"], "read")
+        self.assertNotEqual(replacement["attempt_id"], reviewer["attempt_id"])
+        with self.assertRaisesRegex(admission.AdmissionError, "credentials mismatch"):
+            self.close(reviewer)
+
+    def test_closed_failed_reviewer_can_authorize_fresh_read_only_replacement(self):
+        writer, reviewer, snapshot = self.launched_failed_reviewer(close=True)
+        replacement = self.reviewer(reviewer, snapshot, "replacement-after-close")
+        self.assertEqual(replacement["reservation_id"], writer["reservation_id"])
+        self.assertEqual(replacement["access"], "read")
+        self.assertNotEqual(replacement["owner_token"], reviewer["owner_token"])
+        self.assertEqual(replacement["history"][-1]["stage"], "released")
+        with self.assertRaisesRegex(admission.AdmissionError, "overlap"):
+            self.reserve("unrelated-writer")
+
+    def test_closed_review_retry_rejects_unauthorized_or_broader_handoffs(self):
+        _writer, reviewer, snapshot = self.launched_failed_reviewer(close=True)
+        auth = admission.credentials(reviewer)
+        for changes in (
+            {"owner_token": "wrong-token"},
+            {"owner": _owner(session="another-owner")},
+            {"writer_job_id": "another-writer"},
+            {"writer_snapshot_id": "0" * 64},
+            {"access": "write"},
+            {"role": "hard"},
+            {"files": ["a.py", "unapproved.py"]},
+            {"resources": [{"name": "unapproved-db", "access": "read"}]},
+            {"resources": [{"name": "unapproved-db", "access": "write"}]},
+            {"model": "gpt-5.3-codex-high"},
+        ):
+            with self.subTest(changes=list(changes)):
+                args = dict(worker="claude", role="review", model="claude-sonnet-4-6",
+                            access="read", writer_job_id="writer", writer_snapshot_id=snapshot, **auth)
+                args.update(changes)
+                with self.assertRaises(admission.AdmissionError):
+                    self.reserve("unauthorized-replacement", **args)
+                current = admission.get_reservation(self.repo, reviewer["reservation_id"])
+                self.assertEqual(current["attempt_id"], reviewer["attempt_id"])
+                self.assertEqual(current["stage"], "released")
+
+    def test_failed_review_retry_retains_resources_and_rejects_escalation(self):
+        writer, snapshot = self.accepted_writer()
+        resources = [{"name": "review-db", "access": "read"}]
+        reviewer = self.reviewer(writer, snapshot, resources=resources)
+        self.activate(reviewer)
+        self.finish(reviewer, status="fail", completion={"kind": "parent_task", "completed": True})
+        self.close(reviewer)
+        with self.assertRaisesRegex(admission.AdmissionError, "resource scope"):
+            self.reviewer(reviewer, snapshot, "escalated-resource", resources=[
+                {"name": "review-db", "access": "write"}])
+        replacement = self.reviewer(reviewer, snapshot, "same-resource")
+        self.assertEqual(replacement["resources"], resources)
+
+    def test_failed_review_retry_rechecks_retained_resource_ownership(self):
+        writer, snapshot = self.accepted_writer()
+        resources = [{"name": "review-db", "access": "read"}]
+        reviewer = self.reviewer(writer, snapshot, resources=resources)
+        self.activate(reviewer)
+        self.finish(reviewer, status="fail", completion={"kind": "parent_task", "completed": True})
+        self.close(reviewer)
+        self.reserve("intervening-db-writer", files=["b.py"], resources=[
+            {"name": "review-db", "access": "write"}])
+        with self.assertRaisesRegex(admission.AdmissionError, "resource overlap"):
+            self.reviewer(reviewer, snapshot, "resource-conflict")
+
+    def test_closed_review_retry_rechecks_content_and_intervening_ownership(self):
+        _writer, reviewer, snapshot = self.launched_failed_reviewer(close=True)
+        (self.repo / "a.py").write_text("changed after review release")
+        with self.assertRaises(admission.AdmissionError):
+            self.reviewer(reviewer, snapshot, "changed-snapshot")
+        (self.repo / "a.py").write_text("protected content")
+
+    def test_closed_review_retry_respects_intervening_writer_ownership(self):
+        _writer, reviewer, snapshot = self.launched_failed_reviewer(close=True)
+        self.reserve("intervening-writer")
+        with self.assertRaisesRegex(admission.AdmissionError, "overlap"):
+            self.reviewer(reviewer, snapshot, "overlapping-replacement")
+
+    def test_live_and_successful_reviewers_are_not_failed_retries(self):
+        writer, snapshot = self.accepted_writer()
+        reviewer = self.reviewer(writer, snapshot)
+        self.activate(reviewer)
+        with self.assertRaises(admission.AdmissionError):
+            self.reviewer(reviewer, snapshot, "live-replacement")
+        self.finish(reviewer, status="ok", completion={"kind": "parent_task", "completed": True})
+        self.close(reviewer)
+        with self.assertRaises(admission.AdmissionError):
+            self.reviewer(reviewer, snapshot, "successful-replacement")
+
+    def test_cancelled_reviewer_does_not_resume_as_failed_review(self):
+        writer, snapshot = self.accepted_writer()
+        reviewer = self.reviewer(writer, snapshot)
+        self.activate(reviewer)
+        self.finish(reviewer, status="cancelled", completion={"kind": "parent_task", "completed": True})
+        self.close(reviewer)
+        with self.assertRaisesRegex(admission.AdmissionError, "released"):
+            self.reviewer(reviewer, snapshot, "cancelled-replacement")
+
+    def test_review_receipt_remains_writer_bound_for_mcp_and_ordinary_operations(self):
+        import rig_mcp
+        import worker_launch
+        _writer, reviewer, snapshot = self.launched_failed_reviewer(close=True)
+        path = admission.write_credentials(self.repo, reviewer)
+        with self.assertRaises(admission.AdmissionError):
+            admission.resolve_ownership(self.repo, credentials_path=str(path), job_id="writer")
+        loaded = admission.resolve_ownership(self.repo, credentials_path=str(path),
+                                             job_id="writer", review_writer_job_id="writer")
+        self.assertEqual(loaded["attempt_id"], reviewer["attempt_id"])
+        with self.assertRaises(admission.AdmissionError):
+            admission.resolve_ownership(self.repo, credentials_path=str(path),
+                                         review_writer_job_id="unrelated-writer")
+        args = {"repo": str(self.repo), "id": "mcp-replacement", "brief": "read-only review",
+                "worker": "claude", "role": "review", "access": "read",
+                "writer_job_id": "writer", "writer_snapshot_id": snapshot,
+                "credentials_path": str(path)}
+        with mock.patch.object(worker_launch, "launch", return_value={"job_id": "mcp-replacement"}) as launch:
+            result = rig_mcp.call_tool("rig_job_launch", args)
+        self.assertFalse(result.get("isError"), result)
+        self.assertEqual(launch.call_args.kwargs["attempt_id"], reviewer["attempt_id"])
+        for changes in ({"writer_job_id": "unrelated-writer"}, {"access": "write"}, {"role": "hard"}):
+            with self.subTest(changes=changes), mock.patch.object(worker_launch, "launch") as launch:
+                result = rig_mcp.call_tool("rig_job_launch", {**args, **changes})
+                self.assertTrue(result.get("isError"))
+                launch.assert_not_called()
 
     def test_review_waiting_for_full_cap_keeps_writer_scope(self):
         writer, snapshot = self.accepted_writer()
