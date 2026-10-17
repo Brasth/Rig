@@ -170,7 +170,8 @@ def _workflow_response(obj, *, include_secrets=False) -> dict:
     return {**_ok(json.dumps(safe, indent=2, default=str)), "structuredContent": obj if include_secrets else safe}
 
 
-def _ownership_args(args: dict, repo: Path, *, job_id: str = "", restore_owner_session: bool = True) -> dict:
+def _ownership_args(args: dict, repo: Path, *, job_id: str = "", restore_owner_session: bool = True,
+                    review_writer_job_id: str = "") -> dict:
     import admission as rig_admission
 
     return rig_admission.resolve_ownership(
@@ -182,6 +183,7 @@ def _ownership_args(args: dict, repo: Path, *, job_id: str = "", restore_owner_s
         credentials_path=_optional_string(args, "credentials_path"),
         job_id=job_id,
         restore_owner_session=restore_owner_session,
+        review_writer_job_id=review_writer_job_id,
     )
 
 

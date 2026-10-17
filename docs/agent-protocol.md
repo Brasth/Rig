@@ -189,6 +189,8 @@ After implement+verify ok means: confirmed stopped execution, all declared requi
 
 A failed reviewer launch still retains the original scope under the failed reviewer credentials with no execution slot. Retry uses a fresh reviewer ID, original writer/snapshot, and current holder credentials. Explicit close may conclude it; failure alone never releases the reviewed files.
 
+A reviewer that launched and then failed uses the same original writer provenance. An explicit fresh read-only replacement may use its current holder receipt even after close, but cannot expand its file or resource scope or escalate resource access; existing resource reservations are retained. Ownership, current writer acceptance/snapshot, capacity and distinct-provider checks run again. Live, successful and cancelled reviewers cannot use this failed-review retry path.
+
 ## Ownership and native completion
 
 Native mini/bulk needs an edit-capable worker; Codex mini uses gpt-6-luna low, while the gpt-6-luna explorer stays read-only.

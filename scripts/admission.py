@@ -338,7 +338,7 @@ def resolve_owner_credentials(repo, credentials_path, *, job_id=""):
 
 
 def resolve_ownership(repo, *, reservation_id="", attempt_id="", owner_token="", owner_session="",
-                      credentials_path="", job_id="", restore_owner_session=True):
+                      credentials_path="", job_id="", restore_owner_session=True, review_writer_job_id=""):
     """Resolve credentials; ordinary operations also resume the saved session.
 
     Replacement-parent recovery opts out of session restoration: its separate
@@ -346,7 +346,13 @@ def resolve_ownership(repo, *, reservation_id="", attempt_id="", owner_token="",
     """
     path = credentials_path if isinstance(credentials_path, str) else ""
     if path.strip():
-        loaded = resolve_owner_credentials(repo, path, job_id=job_id)
+        loaded = resolve_owner_credentials(repo, path, job_id="" if review_writer_job_id else job_id)
+        if review_writer_job_id:
+            record = match_credentials(_root(repo), loaded["reservation_id"], loaded["attempt_id"],
+                                       loaded["owner_token"], job_id=loaded["job_id"])
+            if (record["job_id"] != review_writer_job_id
+                    and _failed_review_writer(record) != review_writer_job_id):
+                raise AdmissionError("review credentials are not bound to the requested writer")
         if restore_owner_session and owner_session and owner_session != loaded["owner_session"]:
             raise AdmissionError("credentials_path does not match supplied owner_session; use the original saved owner context")
         supplied = {
@@ -805,11 +811,21 @@ def _ensure_idle(record):
         raise AdmissionError("an active or interrupted verification operation still holds this reservation")
 
 
+def _failed_review_writer(record):
+    """A stopped failed reader retains its original writer provenance, not authorship."""
+    if (record and not record.get("legacy") and record.get("stopped") is True
+            and record.get("role") in {"review", "reviewer"}
+            and record.get("access") == "read" and record.get("execution_status") == "fail"
+            and record.get("writer_job_id") and record.get("writer_snapshot_id")):
+        return record["writer_job_id"]
+    return ""
+
+
 def _review_gate(root, record, model, snapshot_id):
     import route
     if not record.get("stopped") or record.get("legacy"):
         raise AdmissionError("independent review requires protected, stopped writer execution")
-    writer_id = record.get("writer_job_id") if record.get("review_launch_failed") else record["job_id"]
+    writer_id = _failed_review_writer(record) or record["job_id"]
     folder = root / ".rig" / "jobs" / writer_id
     accepted = _read(folder / "verification.json", required=True)
     if accepted.get("next") != "review":
@@ -1115,7 +1131,9 @@ def reserve(repo, *, job_id="", worker="", role="worker", model="", files=None,
         if supplied:
             source, actor = _auth(root, reservation_id, attempt_id, owner_token, actor, owner_session)
             _ensure_idle(source)
-            if source["stage"] == "released":
+            if source["stage"] == "released" and not (
+                    _failed_review_writer(source) == writer_job_id and writer_job_id
+                    and role in {"review", "reviewer"} and access == "read"):
                 raise AdmissionError("released attempt cannot be launched again")
         continues_job_id = str(continues_job_id or "").strip()
         lineage = None
@@ -1137,9 +1155,20 @@ def reserve(repo, *, job_id="", worker="", role="worker", model="", files=None,
                     root, continues_job_id, worker=worker, files=canonical, actor=actor,
                 )
         if writer_job_id:
-            source_writer = source.get("writer_job_id") if source and source.get("review_launch_failed") else (source or {}).get("job_id")
-            if source is None or source_writer != writer_job_id or access != "read":
+            retry_writer = _failed_review_writer(source)
+            source_writer = retry_writer or (source or {}).get("job_id")
+            if (source is None or source_writer != writer_job_id or access != "read"
+                    or role not in {"review", "reviewer"}):
                 raise AdmissionError("review handoff needs the writer reservation credentials and read access")
+            if retry_writer:
+                if writer_snapshot_id != source["writer_snapshot_id"]:
+                    raise AdmissionError("review retry must retain the original writer snapshot")
+                if set(canonical) - set(source["files"]):
+                    raise AdmissionError("review retry cannot expand the previous read scope")
+                previous_resources = canonical_resources(source.get("resources"))
+                if any(item not in previous_resources for item in held_resources):
+                    raise AdmissionError("review retry cannot expand the previous resource scope")
+                held_resources = previous_resources
             _review_gate(root, source, model, writer_snapshot_id)
             canonical = sorted(set(canonical) | set(source["files"]))
         elif source:
