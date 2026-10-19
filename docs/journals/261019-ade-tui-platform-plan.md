@@ -298,31 +298,109 @@ container and sourced by a wrapper).
 - Exit check (canvas): the shell runs without tmux, and a new worker ships
   as an adapter package alone.
 
-## 4. Decisions needed, in order of when they block
+## 4. Recommendations (decisions resolved)
 
-| # | Decision | Blocks | Recommendation |
+These are the choices this plan assumes. Each can be reversed before the
+phase that depends on it; none is needed for Phase 0.
+
+| # | Decision | Choice | Why |
 | --- | --- | --- | --- |
-| D1 | Where the Go shell lives: `shell/` in this repo, or its own repo | Phase 1 | In this repo under `shell/`, released with the Python core as one tarball, as the canvas's "one release tarball" implies. |
-| D2 | Agent credentials inside containers | Phase 2 | Read-only mounts with one explicit opt-in per worker (canvas recommendation). Keychain-based logins (Claude on macOS) need a token path; document as unsupported in container mode until then. |
-| D3 | Editor-like screens on the canvas (Code, Search/replace, Viewer, Terminal, Preview) | Phase 1 scope | Keep them out, per the Decisions board. Revisit after Phase 3 if the API and evidence drawer are stable. |
-| D4 | Whether `rig-shell` replaces `bin/rig` as the entry point | Phase 4 | Defer; nothing before Phase 4 depends on it. |
-| D5 | dc-cli version pin policy | Phase 1 | Pin an exact release in `pyproject.toml` `[tool.rig]`; `rig doctor` fails on mismatch; `rig update` moves both together. |
+| D1 | Where the Go shell lives | `shell/` in this repo, one release tarball with the Python core | The shell is only useful against this repo's API; a separate repo would re-create the version-drift risk the canvas names. |
+| D2 | Agent credentials inside containers | Read-only bind mount of the agent home, one explicit `credentials = "mount-ro"` per worker in `[sandbox]`; absent means refused in container mode | Matches the canvas and the existing per-worker opt-in style of `[workers]`. Keychain logins (Claude on macOS) are documented as host-only until a token path exists. |
+| D3 | Editor-like screens on the canvas (Code, Search/replace, Viewer, Terminal, Preview, Marketplace, Plans) | Out of the roadmap | The Decisions board's own rule: Rig renders state and evidence, never an editor. Revisit only after Phase 3. |
+| D4 | Does `rig-shell` take over the `rig` name | No. `bin/rig` stays the CLI; `rig shell` launches the UI | Every adapter, hook and doc calls `rig`; renaming buys nothing. Phase 4 may port the dispatcher to Go behind the same name, which is a separate decision. |
+| D5 | dc-cli version policy | Exact pin in `pyproject.toml` `[tool.rig] dc_cli = "vX.Y.Z"`; `rig doctor` fails on mismatch; `rig update` moves both | A frozen contract is the only protection while dc JSON has no `schemaVersion`. |
+| D6 | Adapter manifests | Pull forward from Phase 4 to Phase 2 as a minimal `adapters/<cli>/adapter.json` (command template, permission flags for `host` and `container`) | The container provider needs per-worker permission flags per mode; hard-coding them in `run-worker.sh` twice would be worse than extracting once. |
+| D7 | MCP profile default | `full` for existing repos, `core` written by `rig init` for new ones | Parents lose nothing today; new users get a smaller tool list in the parent's context. |
+| D8 | The curses board's future | Kept alive until Phase 4 as the no-Go, no-tmux fallback over the same API | Two thin surfaces over one API cost little; deleting the board before the shell reaches parity would regress users. |
+| D9 | Local API transport | JSON-RPC 2.0, newline-delimited, over a Unix socket in the existing runtime directory, with a per-runtime 0600 token file sent on every request | Stdlib only, same path-length handling as `control.sock`, and a second user on the machine cannot drive the board. |
 
-## 5. Suggested first PR sequence (Phase 0)
+## 5. PR plan for the whole roadmap
 
-1. `ci: add test and shell workflows` (0.1).
-2. `feat(sandbox): [sandbox] config and host SandboxProvider` (0.2).
-3. `feat(api): local API v1 over a Unix socket` (0.3), docs and generated
-   method table included.
-4. `feat(mcp): tool profiles core and full` (0.4).
-5. `refactor(tui): board reads through the local API` (0.5), retiring the
-   companion-only socket ops.
+Critical path: 0.1 → 0.3 → 0.5 → 1.1 → 1.3 → 2.1 → 2.3 → 3.1. Everything else
+can run beside it. Each PR carries tests and a `docs/release-notes.md` entry.
 
-Each PR carries its tests and a `docs/release-notes.md` entry. After PR 5
-the Phase 0 exit check holds and Phase 1 can start without waiting on
-dc-cli.
+### Phase 0 · Foundation (5 PRs)
 
-## 6. Risks specific to this codebase
+| PR | Title | Depends on | Exit check |
+| --- | --- | --- | --- |
+| 0.1 | `ci: add test and shell workflows` | — | Workflows green on `main`. |
+| 0.2 | `feat(sandbox): [sandbox] config and host SandboxProvider` | 0.1 | All worker dry-run tests pass with byte-identical argv. |
+| 0.3 | `feat(api): local API v1 over a Unix socket` | 0.1 | `rig api call session` equals `rig session --json`. |
+| 0.4 | `feat(mcp): tool profiles core and full` | — | `rig doctor` shows profile and tool count; child set still 8. |
+| 0.5 | `refactor(tui): board and companion read through the local API` | 0.3 | Board process never opens `.rig/jobs`; companion ops retired. |
+
+### Phase 1 · Shell and environment (6 PRs)
+
+| PR | Title | Depends on | Exit check |
+| --- | --- | --- | --- |
+| 1.1 | `feat(shell): Go module with API client and board pane` | 0.5 | `rig-shell --once` renders Jobs/Queue/Workflows from a fake API at 120×36. |
+| 1.2 | `feat(cli): rig shell lays out tmux with parent, shell and log panes` | 1.1 | `rig shell` in a repo shows the parent in its pane and the live board. |
+| 1.3 | `feat(sandbox): devcontainer detection, rig init --sandbox, rig env up/down/status` | 0.2 | A repo with no config gets `.rig/sandbox/override.json`; `.devcontainer` untouched. |
+| 1.4 | `feat(doctor): engine, dc-cli pin and workspace checks` | 1.3 | A mismatched dc-cli is a named blocker with a fix line. |
+| 1.5 | `feat(shell): workspace panel from dc inspect/ls/forward/doctor` | 1.1, 1.3 | Panel shows kind, image, state, ports, doctor from recorded fixtures and live dc. |
+| 1.6 | `feat(update): one tarball with rig-shell and the dc-cli pin` | 1.1 | `rig update` installs or rolls back all three together. |
+
+### Phase 2 · Sandboxed workers (6 PRs)
+
+| PR | Title | Depends on | Exit check |
+| --- | --- | --- | --- |
+| 2.1 | `refactor(adapters): adapter.json manifests drive build_worker_cmd` | 0.2 | Every CLI dry run is byte-identical to before. |
+| 2.2 | `feat(sandbox): devcontainer provider wraps workers with dc exec --no-start` | 2.1, 1.3 | Container-mode dry runs assert the exact `dc exec` argv and env passthrough. |
+| 2.3 | `feat(child-mcp): config resolves inside the container; credentials opt-in` | 2.2 | Child handshake succeeds from inside a container in the integration test. |
+| 2.4 | `feat(acceptance): checks via dc actions; container id and image digest in evidence` | 2.2 | Fingerprint changes when the trust hash changes; evidence carries both ids. |
+| 2.5 | `feat(ui-evidence): URLs only from forwarded ports` | 2.2 | A receipt citing an unforwarded URL is refused. |
+| 2.6 | `feat(shell): evidence drawer v1 and container ids on job rows` | 1.5, 2.4 | One job verified end to end inside a container, visible in the drawer. |
+
+### Phase 3 · Parallel isolation (5 PRs)
+
+| PR | Title | Depends on | Exit check |
+| --- | --- | --- | --- |
+| 3.0 | `docs: design note for reservations at the merge gate` | — | Reviewed before 3.2 starts. |
+| 3.1 | `feat(worktrees): create and remove per job; container per worktree` | 2.2 | A job runs in its own worktree and container; cleanup on close. |
+| 3.2 | `feat(admission): worktree mode admits overlapping writers; accept merges` | 3.0, 3.1 | Two writers on the same files run at once and merge after acceptance. |
+| 3.3 | `feat(shell): evidence drawer full and Fleet tab` | 2.6, 3.1 | Diff, contract, ports and cross-repo containers shown from observed data. |
+| 3.4 | `feat(recovery): dc recover as an environment recovery action` | 1.4 | Engine-down and port-held faults get one audited action. |
+
+### Phase 4 · Native panes and platform (5 PRs)
+
+| PR | Title | Depends on | Exit check |
+| --- | --- | --- | --- |
+| 4.1 | `feat(shell): PTY panes for logs, dc exec shells and worker output` | 1.2 | Shell runs without tmux for plain-text streams. |
+| 4.2 | `feat(adapters): conformance suite; run-worker.sh becomes the launcher` | 2.1 | A new worker ships as an adapter directory alone. |
+| 4.3 | `feat(web): read-only board over the local API` | 0.3 | Same session document rendered in a browser. |
+| 4.4 | `exp(shell): headless parent with Rig-rendered chat` | 4.1 | Behind a flag; no default change. |
+| 4.5 | `chore: decide whether bin/rig dispatch moves to Go` | 4.1 | Decision recorded; no code required. |
+
+## 6. Test and release strategy
+
+- Python: `tests/run_tests.py` on 3.11 and 3.12, Ubuntu and macOS. Dry-run
+  byte equality for every worker CLI in host and container mode.
+- dc-cli: recorded JSON fixtures from the pinned version under
+  `tests/fixtures/dc/`, replayed through `mcp_test_support.stub_path()`
+  style fake binaries; one opt-in live job (`RIG_TEST_LIVE_DC=1`) for
+  maintainers with Docker.
+- Local API: the method registry generates `docs/local-api.md`; a test
+  fails when the doc and the registry differ, as `test_protocol_docs.py`
+  does for the agent protocol today.
+- Go: `go test` with golden renders of each pane at 120×36 and 80×24;
+  `go vet` and `staticcheck` in CI.
+- Release: one tarball per platform holding `bin/`, `scripts/`, `adapters/`,
+  `rig-shell` and the dc-cli pin; `rig update` keeps its transactional
+  install and rollback; `rig doctor` checks that the three versions match.
+
+## 7. What not to do
+
+- No editor, file tree, git UI, marketplace or billing screens in the
+  shell; the canvas's own Decisions board forbids them.
+- No estimated progress, ETA or inferred cost anywhere new; observed
+  values only, as `docs/cost-accounting.md` already requires.
+- No direct `docker` calls from Rig; dc-cli owns engine state.
+- No worker ever starts a container; `rig env up` is the only path.
+- No change to the child rules: inbox first, never spawn children, never
+  browser or computer-use tools.
+
+## 8. Risks specific to this codebase
 
 - The hand-written TOML parser in `harness.py` must learn `[sandbox]` and
   `[mcp]` sections and nested `workers.<name>` keys; test the parser before
