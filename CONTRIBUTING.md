@@ -16,14 +16,17 @@ and isolated installation. See [the read contract and migration map](docs/agent-
 
 ## Test baseline
 
-Use Python 3.11 or newer, Git, Bash, and Node.js. CI explicitly tests Python
-3.12 and Node.js 22 on Ubuntu 24.04 and macOS 14. The Python tests use the
+`pyproject.toml` records project metadata for the shell-installed runtime; Rig
+does not support installation as a Python package or expose a pip console entry point.
+
+Use Python 3.11 or newer, Git, Bash, and Node.js. The recommended baseline is
+Python 3.12 and Node.js 22 on Ubuntu 24.04 or macOS 14. The Python tests use the
 standard library; the Mermaid renderer is bundled. No `pip install`, `npm
 install`, Rig initialization, provider login, or API key is needed. Optional
 real-tmux checks run when tmux is available; their absence is reported as a
 unittest skip. Fake-provider integration tests run on both platforms.
 
-Run the same checks as CI from the repository root:
+Run the local checks from the repository root:
 
 ```sh
 python3 tests/run_tests.py
@@ -79,9 +82,6 @@ state. Tests should create explicit enabled-project fixtures when required;
 lifecycle tests must retain their uninitialized/disabled-project assertions.
 Keep real-provider experiments separate from this baseline.
 
-`.github/workflows/tests.yml` runs on pull requests and pushes to `main`, with
-SHA-pinned official GitHub actions, read-only repository permissions, no
-persisted checkout credentials, no vendor
-secrets, and no publish step. It uploads each platform's logs on success or
-failure. Workflow checkout/runtime setup and artifact upload use GitHub's
-network; the test phase does not need external services.
+GitHub-hosted test workflows are currently deferred. Run the local suite and
+report failures explicitly when submitting a pull request; removing automation
+does not establish a passing test baseline.
