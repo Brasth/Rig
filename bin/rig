@@ -42,7 +42,7 @@ usage() {
   cat <<'EOF'
 usage: rig <command> [args]
 
-  setup [--shell-ui] [--shell bash|zsh] [--rc-file PATH] [--cua-driver|--no-cua-driver] [--browser-skill|--no-browser-skill] [--mimo|--no-mimo]
+  setup [--shell-ui] [--shell bash|zsh] [--rc-file PATH] [--cua-driver|--no-cua-driver] [--browser-skill|--no-browser-skill] [--mimo|--no-mimo] [--shell-binary|--no-shell-binary]
     Optional desktop/browser components ask once (default No); their shared skills install only after opt-in.
   ui [open|status|enable|disable|stop]
   uninstall [--dry-run] [--repo PATH]
@@ -67,7 +67,7 @@ usage: rig <command> [args]
   jobs [--json] [--thread [ID]]
   tui
   env up | down | status [--json]   # workspace container through dc-cli
-  shell [--parent NAME] [--parent-cmd CMD] [--detach] | shell kill | shell print   # parent, board and logs in tmux
+  shell [--parent NAME] [--parent-cmd CMD] [--detach] | shell kill | shell print | shell build   # parent, board and logs in tmux
   api serve | ensure | call METHOD [JSON] | methods | doc   # local JSON-RPC API v1 (docs/local-api.md)
   memory [show]
   memory add "standing fact"
@@ -315,7 +315,7 @@ maybe_copy_queue_adapter() {
 }
 
 cmd_setup() {
-  local shell_ui=0 shell_args=() cua_flags=() bsk_flags=() mimo_flag=""
+  local shell_ui=0 shell_args=() cua_flags=() bsk_flags=() mimo_flag="" shell_bin_flags=()
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --shell-ui) shell_ui=1; shift ;;
@@ -323,6 +323,8 @@ cmd_setup() {
       --cua-driver|--no-cua-driver) cua_flags+=("$1"); shift ;;
       --browser-skill|--no-browser-skill) bsk_flags+=("$1"); shift ;;
       --mimo|--no-mimo) mimo_flag="$1"; shift ;;
+      --shell-binary) shell_bin_flags+=(--shell); shift ;;
+      --no-shell-binary) shell_bin_flags+=(--no-shell); shift ;;
       *) echo "rig setup: unknown flag $1" >&2; return 2 ;;
     esac
   done
@@ -355,6 +357,10 @@ cmd_setup() {
     python3 "$optional_py" ${bsk_flags[@]+"${bsk_flags[@]}"} || true
   else
     echo "browser-skill setup: installer missing; skip. Enable later: rig browser-skill setup"
+  fi
+  optional_py="$(py_script install-shell.py)"
+  if [[ -f "$optional_py" ]]; then
+    python3 "$optional_py" --src "$src" ${shell_bin_flags[@]+"${shell_bin_flags[@]}"} || true
   fi
   local optional_skills=false
   optional_skills="$(python3 "$(py_script optional_skills.py)" "$dest")"
@@ -1574,11 +1580,18 @@ main() {
     on) cmd_project_toggle on; return ;;
     off) cmd_project_toggle off; return ;;
   esac
-  case "$cmd" in init|setup|update|status|doctor|jobs|worktrees|tui|memory|timeline|recovery|task|workflows|workflow|queue|routing|billing|help|-h|--help|"") ;; *) project_guard || return ;; esac
+  case "$cmd" in init|setup|update|status|doctor|jobs|worktrees|tui|memory|timeline|recovery|task|workflows|workflow|queue|routing|billing|help|-h|--help|"") ;; *) [[ "$cmd:${1:-}" == "shell:build" ]] || project_guard || return ;; esac
   case "$cmd" in
     ui) python3 "$(py_script rig_ui.py)" "$@" ;;
     api) python3 "$(py_script local_api.py)" "$@" --repo "$(repo_root)" ;;
-    shell) python3 "$(py_script rig_shell.py)" "$@" ;;
+    shell)
+      if [[ "${1:-}" == "build" ]]; then
+        shift
+        python3 "$(py_script install-shell.py)" --shell --src "$(rig_source_root)" "$@"
+      else
+        python3 "$(py_script rig_shell.py)" "$@"
+      fi
+      ;;
     env) python3 "$(py_script sandbox_env.py)" "$@" --repo "$(repo_root)" ;;
     uninstall) python3 "$(py_script ui_install.py)" "$@" ;;
     setup) cmd_setup "$@" ;;

@@ -62,6 +62,36 @@ def shell_binary() -> str:
     raise ShellError("rig-shell is not built; run: (cd shell && go build -o bin/rig-shell ./cmd/rig-shell)")
 
 
+def core_version() -> str:
+    """The commit the installed runtime was built from (RIG_HOME/VERSION is "v1 <commit>")."""
+    try:
+        parts = (Path(os.environ.get("RIG_HOME") or Path.home() / ".rig") / "VERSION").read_text().split()
+    except OSError:
+        return ""
+    return parts[1] if len(parts) > 1 else ""
+
+
+def shell_status() -> dict:
+    """Is rig-shell present, and was it built from the same commit as the installed core?"""
+    try:
+        path = shell_binary()
+    except ShellError:
+        return {"found": False, "path": "", "version": "", "core": core_version(), "state": "missing"}
+    try:
+        out = subprocess.run([path, "--version"], capture_output=True, text=True, timeout=5, stdin=subprocess.DEVNULL).stdout.split()
+        version = out[1] if len(out) > 1 else ""
+    except (OSError, subprocess.TimeoutExpired):
+        version = ""
+    core = core_version()
+    if not version:
+        state = "unreadable"
+    elif version == "dev" or not core:
+        state = "unverified"  # a local build or a runtime with no recorded commit
+    else:
+        state = "match" if version.startswith(core) or core.startswith(version) else "mismatch"
+    return {"found": True, "path": path, "version": version, "core": core, "state": state}
+
+
 def rig_binary() -> str:
     return os.environ.get("RIG_BIN") or str(ROOT / "bin" / "rig")
 

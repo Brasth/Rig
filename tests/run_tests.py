@@ -130,7 +130,7 @@ except OSError as error:
         "GIT_TERMINAL_PROMPT": "0", "GIT_ALLOW_PROTOCOL": "file",
         "RIG_SKIP_UPDATE_CHECK": "1", "RIG_SKIP_MODEL_CATALOG": "1",
         "RIG_SKIP_TMUX_INSTALL": "1", "RIG_SKIP_BROWSER_SKILL": "1",
-        "RIG_SKIP_CUA_DRIVER": "1",
+        "RIG_SKIP_CUA_DRIVER": "1", "RIG_SKIP_SHELL_BUILD": "1",
     }
 
 

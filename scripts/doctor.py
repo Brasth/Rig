@@ -203,6 +203,24 @@ def workspace_checks(repo: Path, config: dict, *, deep: bool) -> list[dict]:
     return rows
 
 
+def shell_check() -> dict:
+    """Optional: the Go board binary and whether it matches the installed core."""
+    import rig_shell
+    info = rig_shell.shell_status()
+    evidence = {k: info[k] for k in ("path", "version", "core", "state")}
+    if info["state"] == "missing":
+        return check("rig-shell", "missing", "rig-shell is not built; optional. Build it with: rig shell build",
+                     required=False, **evidence)
+    if info["state"] == "mismatch":
+        return check("rig-shell", "failed", f"rig-shell {info['version'][:12]} was built from a different commit than the "
+                     f"installed core {info['core'][:12]}; rebuild with: rig shell build", required=False, **evidence)
+    if info["state"] == "unreadable":
+        return check("rig-shell", "failed", f"{info['path']} did not report a version; rebuild with: rig shell build",
+                     required=False, **evidence)
+    note = "matches the installed core" if info["state"] == "match" else "version not comparable (local build or no recorded core commit)"
+    return check("rig-shell", "ready", f"rig-shell {info['version'][:12]} {note}", required=False, **evidence)
+
+
 def smoke_check() -> dict:
     """Exercise only our Python child server and inbox in a self-owned fixture."""
     with tempfile.TemporaryDirectory(prefix="rig-doctor-") as raw:
@@ -306,6 +324,7 @@ def build_report(repo: Path, *, task: str = "coding", parent: str = "", model: s
                         sandbox_state["error"] or f"{sandbox_state['provider']} provider",
                         required=False))
     checks.extend(workspace_checks(repo, config, deep=bool(workspace)))
+    checks.append(shell_check())
     checks.append(check("scripts", "ready" if script_ready else "missing", "Rig runtime scripts present" if script_ready else "Rig runtime scripts missing"))
     entry = parent_entry(selected, repo)
     configured = child_mcp._stdio_entry_ready(entry)
