@@ -48,6 +48,7 @@ type spawned struct {
 func termModel(t *testing.T) (*Model, *fakeSource, *[]spawned, *[]*fakePane) {
 	t.Helper()
 	m, src := newReady(t)
+	m.w, m.h = 100, 36 // narrower than the composite screen: these tests are about the Session tab as one program
 	press(m, "shift+tab")
 	if m.st.Tab != SessionTab {
 		t.Fatalf("tab %q", m.st.Tab)
@@ -88,8 +89,8 @@ func TestPStartsTheParentCLIInThePaneSizedToTheBody(t *testing.T) {
 	if strings.Join(c.argv, " ") != "/usr/bin/codex" || c.dir != "/repo" || c.env[0] != "RIG_SHELL_ACTIVE=1" {
 		t.Fatalf("spawned %+v", c)
 	}
-	if c.cols != 120 || c.rows != 31 {
-		t.Fatalf("size %dx%d, want the 120x31 body", c.cols, c.rows)
+	if c.cols != 100 || c.rows != 31 {
+		t.Fatalf("size %dx%d, want the 100x31 body", c.cols, c.rows)
 	}
 	if !m.paneFocus || m.paneName != "codex" || len(*panes) != 1 {
 		t.Fatal("a new pane takes the keyboard")

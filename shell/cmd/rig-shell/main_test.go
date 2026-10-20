@@ -93,3 +93,19 @@ func TestOnceWorkspaceFromFixtures(t *testing.T) {
 		t.Error("a missing workspace fixture must fail")
 	}
 }
+
+func TestOnceSessionRendersTheMockupsThreeColumnsFromFixtures(t *testing.T) {
+	var out, errb bytes.Buffer
+	code := run([]string{"--once", "--tab", "Term", "--fixture", "../../testdata/snapshot.json",
+		"--workspace-fixture", "../../testdata/workspace.json", "--evidence-fixture", "../../testdata/evidence.json",
+		"--size", "120x36", "--ascii"}, &out, &errb)
+	if code != 0 {
+		t.Fatalf("exit %d: %s", code, errb.String())
+	}
+	text := out.String()
+	for _, want := range []string{"[Session]", "- Workspace", "- Worktrees", "- Memory", "Jobs 1-7/7 . attention first", "Queue 2 pending", "- Evidence . job-7f2", "diff "} {
+		if !strings.Contains(text, want) {
+			t.Errorf("missing %q in\n%s", want, text)
+		}
+	}
+}

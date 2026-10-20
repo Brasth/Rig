@@ -57,8 +57,11 @@ type State struct {
 	Evidence     *view.Evidence
 	EvidenceE    string
 	EvidenceID   string
-	EvidenceOpen bool // the evidence drawer replaces the board body
-	HelpOpen     bool // the key list replaces the board body
+	EvidenceOpen bool           // the evidence drawer replaces the board body
+	HelpOpen     bool           // the key list replaces the board body
+	DockEvidence *view.Evidence // the selected job's evidence in the Session screen's dock
+	DockID       string
+	DockE        string
 	Styled       bool // apply colour and reverse video to list rows; golden tests leave it off
 }
 
@@ -170,6 +173,9 @@ func frame(v *view.View, st State, w, h int) []string {
 		}
 		return lines[:h]
 	}
+	if st.Tab == SessionTab && sessionGeometry(w, h).ok {
+		return sessionFrame(v, st, w, h)
+	}
 	if st.Tab == SessionTab {
 		lines = append(lines, ruleS(st, termTitle(st), w))
 		lines = append(lines, termBody(st, w, body)...)
@@ -273,7 +279,11 @@ func headerLine(v *view.View, st State, w int) string {
 	if w < 60 {
 		health = fmt.Sprintf("!%d ●%d %d/%d", hd.Attention, hd.Running, hd.Slots, hd.Cap)
 	}
-	left := strings.TrimRight(fit(" Rig · "+clean(hd.Project), max(1, w-lipgloss.Width(health)-3)), " ")
+	title := " Rig · " + clean(hd.Project)
+	if st.Workspace != nil && st.Workspace.Context != "" && w >= 100 {
+		title += " · " + clean(st.Workspace.Context)
+	}
+	left := strings.TrimRight(fit(title, max(1, w-lipgloss.Width(health)-3)), " ")
 	gap := max(2, w-lipgloss.Width(left)-lipgloss.Width(health)-1)
 	return fit(left+strings.Repeat(" ", gap)+health, w)
 }
@@ -606,6 +616,11 @@ func footerLine(rows []view.Row, sel int, st State, w int) string {
 	} else if len(rows) > 0 && st.Tab == "Jobs" && rows[sel].Ask {
 		keys = append([]string{"a allow", "d deny"}, keys...)
 	}
+	return footerWith(keys, st, w)
+}
+
+// footerWith lays out the key hints on one line.
+func footerWith(keys []string, st State, w int) string {
 	return fit(" "+strings.Join(keys, "  "), w)
 }
 

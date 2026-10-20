@@ -172,6 +172,23 @@ func TestGoldenFrames(t *testing.T) {
 			s.PaneTitle = "container shell · exited: exit status 3"
 			s.PaneLines = []string{"bye"}
 		}},
+		{"session-120x36-loading", 120, 36, SessionTab, nil},
+		{"session-120x36", 120, 36, SessionTab, func(s *State) {
+			s.Workspace, s.DockEvidence, s.DockID = loadWorkspace(t), loadEvidence(t), loadView(t).Jobs[0].ID
+			s.PaneTitle, s.PaneRunning = "codex · running (Enter to type)", true
+			s.PaneLines = []string{"> Fix the failing auth tests", "", "  Two writers, then a verify node."}
+		}},
+		{"session-120x36-ascii", 120, 36, SessionTab, func(s *State) {
+			s.ASCII, s.Workspace, s.DockEvidence, s.DockID = true, loadWorkspace(t), loadEvidence(t), loadView(t).Jobs[0].ID
+		}},
+		{"session-140x40-second-selected", 140, 40, SessionTab, func(s *State) {
+			s.Selected["Jobs"], s.Workspace = 1, loadWorkspace(t)
+			s.DockE = "connection refused"
+		}},
+		{"session-120x36-confirm", 120, 36, SessionTab, func(s *State) {
+			s.Mode, s.Prompt = ModeConfirm, "Stop job-7f2 Add supertest dev dep?"
+		}},
+		{"session-100x30-narrow", 100, 30, SessionTab, func(s *State) { s.Workspace = loadWorkspace(t) }},
 		{"workspace-loading", 80, 12, EnvTab, nil},
 		{"workspace-unavailable", 80, 12, EnvTab, func(s *State) { s.WorkspaceE = "dc ls --json failed (2): engine not running" }},
 	}

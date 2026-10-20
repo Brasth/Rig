@@ -53,5 +53,20 @@
    }
   ]
  },
- "error": ""
+ "error": "",
+ "worktrees": [
+  {
+   "job_id": "job-7f2",
+   "kind": "writer"
+  },
+  {
+   "job_id": "job-81c",
+   "kind": "writer"
+  }
+ ],
+ "memory": {
+  "lines": 42,
+  "max": 120,
+  "updated": 0.0
+ }
 }

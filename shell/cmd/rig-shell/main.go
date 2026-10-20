@@ -284,7 +284,13 @@ func renderOnce(stdout, stderr io.Writer, repo, rigBin, fixture, wsFixture, flee
 	st := ui.NewState()
 	st.Tab, st.ASCII, st.Workspace, st.Fleet = tab, ascii, ws, fleetPanel
 	st.WorkspaceE, st.FleetE = wsErr, fleetErr
-	if evidence != nil {
+	switch {
+	case evidence != nil && tab == ui.SessionTab:
+		// the Session screen docks the selected job's evidence instead of opening the drawer
+		if rows := snap.View.Rows("Jobs"); len(rows) > 0 {
+			st.DockID, st.DockEvidence = rows[0].ID, evidence
+		}
+	case evidence != nil:
 		st.EvidenceOpen, st.EvidenceID, st.Evidence = true, evidence.JobID, evidence
 	}
 	fmt.Fprintln(stdout, ui.Render(&snap.View, st, w, h))
