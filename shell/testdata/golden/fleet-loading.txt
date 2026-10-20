@@ -1,7 +1,7 @@
  Rig · my-repo                       ! 1 need attention  ● 1 running  slots 2/3 
-  Jobs !1   Queue 2   Workflows 2   Workspace  [Fleet]  Logs   Term             
-─ Fleet ────────────────────────────────────────────────────────────────────────
- Loading fleet…                                                                 
+  Session   Jobs !1   Queue 2   Workflows 2  [Env]                              
+─ Env ──────────────────────────────────────────────────────────────────────────
+ Loading env…                                                                   
                                                                                 
                                                                                 
                                                                                 
@@ -9,4 +9,4 @@
                                                                                 
                                                                                 
                                                                                 
- Tab pane  j/k scroll  r refresh  q quit                                        
+ Tab pane  j/k scroll  r refresh  ? help  q quit                                

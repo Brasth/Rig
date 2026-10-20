@@ -210,7 +210,7 @@ func (m *Model) fetch() tea.Cmd {
 // showing, at most once per interval unless forced, so dc-cli is not polled
 // for a panel nobody is looking at.
 func (m *Model) fetchWorkspace(force bool) tea.Cmd {
-	if m.st.Tab != WorkspaceTab || m.wsBusy || (!force && m.now().Sub(m.wsLast) < workspaceEvery) {
+	if m.st.Tab != EnvTab || m.wsBusy || (!force && m.now().Sub(m.wsLast) < workspaceEvery) {
 		return nil
 	}
 	m.wsBusy = true
@@ -223,7 +223,7 @@ func (m *Model) fetchWorkspace(force bool) tea.Cmd {
 
 // fetchFleet loads the fleet panel only while its tab is showing, like the workspace panel.
 func (m *Model) fetchFleet(force bool) tea.Cmd {
-	if m.st.Tab != FleetTab || m.flBusy || (!force && m.now().Sub(m.flLast) < workspaceEvery) {
+	if m.st.Tab != EnvTab || m.flBusy || (!force && m.now().Sub(m.flLast) < workspaceEvery) {
 		return nil
 	}
 	m.flBusy = true
@@ -285,7 +285,7 @@ func (m *Model) fetchChat(force bool) tea.Cmd {
 	}
 }
 
-// paneRows is the room the Term tab gives a program: the whole body under the rule.
+// paneRows is the room the Session tab gives a program: the whole body under the rule.
 func (m *Model) paneRows() int { return max(2, m.h-5) }
 
 // waitPane returns a command that reports the next change of the pane's screen.
@@ -311,7 +311,7 @@ func (m *Model) askPane(parent bool) tea.Cmd {
 	}
 }
 
-// startPane runs the plan in the Term tab. A finished pane is replaced; a running one is never replaced silently.
+// startPane runs the plan in the Session tab. A finished pane is replaced; a running one is never replaced silently.
 func (m *Model) startPane(plan *view.ShellPlan) tea.Cmd {
 	if m.pane != nil {
 		if done, _ := m.pane.Exited(); !done {
@@ -335,7 +335,7 @@ func (m *Model) startPane(plan *view.ShellPlan) tea.Cmd {
 	return waitPane(p)
 }
 
-// Close ends a program still running in the Term pane. Call it when the board exits.
+// Close ends a program still running in the Session pane. Call it when the board exits.
 func (m *Model) Close() {
 	if m.pane != nil {
 		m.pane.Close()
@@ -601,7 +601,7 @@ func firstLine(s string) string {
 
 func (m *Model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// While typing into the pane every key belongs to its program, Ctrl-C included, except the one way back.
-	if m.paneFocus && m.pane != nil && m.st.Tab == TermTab {
+	if m.paneFocus && m.pane != nil && m.st.Tab == SessionTab {
 		if k.Type == tea.KeyCtrlCloseBracket {
 			m.paneFocus = false
 			m.st.Message = "back on the board; Enter types into " + m.paneName + " again"
@@ -625,7 +625,7 @@ func (m *Model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.st.Message = "Press e before pasting queue text"
 		return m, nil
 	}
-	if m.st.Tab == TermTab {
+	if m.st.Tab == SessionTab {
 		switch k.String() {
 		case "p":
 			return m, m.askPane(true)
@@ -667,19 +667,28 @@ func (m *Model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.st.HelpOpen = true
 		return m, nil
 	case "w":
-		return m, m.goTab(WorkspaceTab)
+		return m, m.goTab(EnvTab)
 	case "tab", "shift+tab":
 		step := 1
 		if k.String() == "shift+tab" {
 			step = len(TabList(m.st)) - 1
 		}
 		tabs := TabList(m.st)
+		here := m.st.Tab
+		if here == LogsTab {
+			here = "Jobs" // the log is a screen under Jobs
+		}
 		for i, t := range tabs {
-			if t == m.st.Tab {
+			if t == here {
 				return m, m.goTab(tabs[(i+step)%len(tabs)])
 			}
 		}
 		return m, nil
+	case "l":
+		if m.st.Tab != "Jobs" {
+			return m, nil
+		}
+		return m, m.goTab(LogsTab)
 	case "j", "down":
 		if m.st.Tab == ChatTab {
 			m.st.ChatUp = max(0, m.st.ChatUp-1)
@@ -735,6 +744,9 @@ func (m *Model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.st.DetailOff = 0
 		}
 	case "esc":
+		if m.st.Tab == LogsTab && !m.st.EvidenceOpen {
+			return m, m.goTab("Jobs")
+		}
 		m.st.DetailOpen, m.st.EvidenceOpen, m.st.Message = false, false, ""
 	case "v":
 		row, ok := m.selected()
@@ -774,6 +786,9 @@ func (m *Model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// SetTab opens the board on a tab; the first refresh loads whatever it needs.
+func (m *Model) SetTab(name string) { m.st.Tab = name }
+
 // goTab shows a tab and starts whatever it needs loaded.
 func (m *Model) goTab(name string) tea.Cmd {
 	m.st.Tab = name
@@ -799,7 +814,7 @@ func (m *Model) move(delta int) {
 
 // scrollsPanel is true when j/k scroll a panel instead of moving a list selection.
 func (m *Model) scrollsPanel() bool {
-	return m.st.EvidenceOpen || m.st.Tab == WorkspaceTab || m.st.Tab == FleetTab
+	return m.st.EvidenceOpen || m.st.Tab == EnvTab
 }
 
 // askRecover confirms dc-cli's proposed fix. Only a plan the server marked safe is offered; anything
@@ -809,7 +824,7 @@ func (m *Model) askRecover() tea.Cmd {
 	if m.st.Workspace != nil {
 		plan = m.st.Workspace.Recovery
 	}
-	if m.st.Tab != WorkspaceTab || plan == nil || plan.Ready {
+	if m.st.Tab != EnvTab || plan == nil || plan.Ready {
 		return nil
 	}
 	if !plan.Safe {
@@ -823,7 +838,7 @@ func (m *Model) askRecover() tea.Cmd {
 }
 
 func (m *Model) askStop() tea.Cmd {
-	if m.st.Tab == TermTab {
+	if m.st.Tab == SessionTab {
 		if m.pane == nil {
 			m.st.Message = "nothing is running here"
 			return nil

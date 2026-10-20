@@ -42,7 +42,7 @@ type State struct {
 	WorkspaceE   string // why the workspace panel could not load
 	Fleet        *view.Panel
 	FleetE       string
-	PaneLines    []string // the Term pane's screen, already styled by the emulator
+	PaneLines    []string // the Session pane's screen, already styled by the emulator
 	PaneTitle    string
 	PaneFocus    bool
 	PaneRunning  bool
@@ -67,11 +67,15 @@ func NewState() State {
 	return State{Tab: "Jobs", Selected: map[string]int{}, Offsets: map[string]int{}}
 }
 
-// Tabs are the board tabs in order.
-var Tabs = []string{"Jobs", "Queue", "Workflows", WorkspaceTab, FleetTab, LogsTab, TermTab}
+// Tabs are the board tabs in the order the mockup shows them. Logs is a screen under Jobs (key l), not a tab.
+var Tabs = []string{SessionTab, "Jobs", "Queue", "Workflows", EnvTab}
 
-// TermTab hosts one interactive program (the parent CLI, or a shell in the container) on an emulated terminal.
-const TermTab = "Term"
+// SessionTab is the parent's seat: it hosts one interactive program (the parent CLI, or a shell in the
+// container) on an emulated terminal.
+const SessionTab = "Session"
+
+// EnvTab shows the workspace (container, ports, worktrees, doctor) and the fleet of containers on the engine.
+const EnvTab = "Env"
 
 // ChatTab is the EXPERIMENT chat with a headless parent; it exists only while the experiment is on.
 const ChatTab = "Chat"
@@ -87,11 +91,29 @@ func TabList(st State) []string {
 // LogsTab follows the selected job's log as plain text, so the board works without tmux.
 const LogsTab = "Logs"
 
-// FleetTab renders the containers on the engine, observed now.
-const FleetTab = "Fleet"
+// ValidTab is true for the board tabs and for the Logs screen.
+func ValidTab(name string) bool {
+	if name == LogsTab {
+		return true
+	}
+	for _, t := range Tabs {
+		if t == name {
+			return true
+		}
+	}
+	return false
+}
 
-// WorkspaceTab is the tab that renders the workspace panel instead of a list.
-const WorkspaceTab = "Workspace"
+// TabAlias maps the names earlier versions used (and the ones people type) to a current tab.
+func TabAlias(name string) string {
+	switch name {
+	case "Workspace", "Fleet":
+		return EnvTab
+	case "Term":
+		return SessionTab
+	}
+	return name
+}
 
 func glyph(r view.Row) string {
 	if r.Glyph == "" {
@@ -148,7 +170,7 @@ func frame(v *view.View, st State, w, h int) []string {
 		}
 		return lines[:h]
 	}
-	if st.Tab == TermTab {
+	if st.Tab == SessionTab {
 		lines = append(lines, ruleS(st, termTitle(st), w))
 		lines = append(lines, termBody(st, w, body)...)
 		lines = append(lines, messageLine(st, w), footerLine(nil, 0, st, w))
@@ -175,7 +197,7 @@ func frame(v *view.View, st State, w, h int) []string {
 		}
 		return lines[:h]
 	}
-	if st.Tab == WorkspaceTab || st.Tab == FleetTab {
+	if st.Tab == EnvTab {
 		lines = append(lines, ruleS(st, panelTitle(st), w))
 		lines = append(lines, panelBody(st, w, body)...)
 		lines = append(lines, messageLine(st, w), footerLine(nil, 0, st, w))
@@ -257,7 +279,7 @@ func headerLine(v *view.View, st State, w int) string {
 }
 
 // tabShort are distinct three-letter forms for a narrow tab bar ("Wor" would be both Workflows and Workspace).
-var tabShort = map[string]string{"Jobs": "Job", "Queue": "Que", "Workflows": "Flw", WorkspaceTab: "Wks", FleetTab: "Flt", LogsTab: "Log", ChatTab: "Cht", TermTab: "Trm"}
+var tabShort = map[string]string{"Jobs": "Job", "Queue": "Que", "Workflows": "Flw", EnvTab: "Env", LogsTab: "Log", ChatTab: "Cht", SessionTab: "Ses"}
 
 func tabLine(v *view.View, st State, w int) string {
 	if line := tabLineWith(v, st, false); lipgloss.Width(line) <= w {
@@ -269,9 +291,13 @@ func tabLine(v *view.View, st State, w int) string {
 // tabLineWith builds the tab bar; short abbreviates the inactive tabs so the active one is never cut off.
 func tabLineWith(v *view.View, st State, short bool) string {
 	var parts []string
+	active := st.Tab
+	if active == LogsTab {
+		active = "Jobs" // the log is a screen under Jobs
+	}
 	for _, name := range TabList(st) {
 		label := name
-		if short && name != st.Tab {
+		if short && name != active {
 			label = tabShort[name]
 		}
 		if v != nil {
@@ -287,13 +313,10 @@ func tabLineWith(v *view.View, st State, short bool) string {
 				}
 			}
 		}
-		if name == WorkspaceTab && st.Workspace != nil && st.Workspace.Attention {
+		if name == EnvTab && ((st.Workspace != nil && st.Workspace.Attention) || (st.Fleet != nil && st.Fleet.Attention)) {
 			label += " !"
 		}
-		if name == FleetTab && st.Fleet != nil && st.Fleet.Attention {
-			label += " !"
-		}
-		if name == st.Tab {
+		if name == active {
 			label = "[" + label + "]"
 		} else {
 			label = " " + label + " "
@@ -528,6 +551,7 @@ var helpKeys = [][2]string{
 	{"e", "park a task in the queue (Enter saves, Esc discards)"},
 	{"v", "evidence drawer for the selected job"},
 	{"w", "workspace: container, ports, worktrees, doctor"},
+	{"l", "jobs: follow the selected job's log (Esc returns)"},
 	{"s", "shell in the selected job's container"},
 	{"x", "stop the selected job or queue item, after a confirmation"},
 	{"r", "refresh"},
@@ -551,16 +575,16 @@ func helpLines(w, h int) []string {
 
 func footerLine(rows []view.Row, sel int, st State, w int) string {
 	keys := []string{"Tab pane", "Enter details", "e enqueue", "v evidence", "w workspace", "? help", "q quit"}
-	if st.Tab == WorkspaceTab || st.Tab == FleetTab {
-		keys = []string{"Tab pane", "j/k scroll", "r refresh", "q quit"}
-		if st.Tab == WorkspaceTab && st.Workspace != nil && st.Workspace.Recovery != nil && st.Workspace.Recovery.Safe && !st.Workspace.Recovery.Ready {
-			keys = []string{"Tab pane", "j/k scroll", "R recover", "r refresh", "q quit"}
+	if st.Tab == EnvTab {
+		keys = []string{"Tab pane", "j/k scroll", "r refresh", "? help", "q quit"}
+		if st.Workspace != nil && st.Workspace.Recovery != nil && st.Workspace.Recovery.Safe && !st.Workspace.Recovery.Ready {
+			keys = []string{"Tab pane", "j/k scroll", "R recover", "r refresh", "? help", "q quit"}
 		}
 	}
 	if st.Tab == LogsTab {
-		keys = []string{"Tab pane", "k/j scroll", "G follow", "s shell", "r refresh", "q quit"}
+		keys = []string{"Esc back to jobs", "k/j scroll", "G follow", "s shell", "r refresh", "q quit"}
 	}
-	if st.Tab == TermTab {
+	if st.Tab == SessionTab {
 		keys = []string{"Tab pane", "p parent CLI", "s container shell", "Enter type in it", "x close", "q quit"}
 		if st.PaneFocus {
 			keys = []string{"Ctrl-] back to the board (every other key goes to the program)"}
@@ -587,9 +611,9 @@ func footerLine(rows []view.Row, sel int, st State, w int) string {
 
 func termTitle(st State) string {
 	if st.PaneTitle == "" {
-		return "Term"
+		return "Session"
 	}
-	return "Term › " + sanitize(st.PaneTitle)
+	return "Session › " + sanitize(st.PaneTitle)
 }
 
 // termBody is the pane's screen, or the help shown while nothing runs.
@@ -749,26 +773,47 @@ func logLines(st State, w, h int) []string {
 	return out
 }
 
+// envSections is the Env tab: the workspace panel, then the fleet panel, each with its own failure shown in
+// place so one slow or broken source never hides the other. Nil while neither has answered.
+func envSections(st State) *[]view.Section {
+	if st.Workspace == nil && st.Fleet == nil && st.WorkspaceE == "" && st.FleetE == "" {
+		return nil
+	}
+	var all []view.Section
+	part := func(title string, p *view.Panel, errText string) {
+		switch {
+		case p == nil && errText != "":
+			all = append(all, view.Section{Title: title, Lines: []view.Line{{Text: title + " unavailable: " + errText}}})
+		case p == nil:
+			all = append(all, view.Section{Title: title, Lines: []view.Line{{Text: "Loading " + strings.ToLower(title) + "…"}}})
+		default:
+			all = append(all, p.Sections...)
+			if errText != "" {
+				all = append(all, view.Section{Title: title + " (stale)", Lines: []view.Line{{Text: "refresh failed: " + errText}}})
+			}
+		}
+	}
+	var ws *view.Panel
+	if st.Workspace != nil {
+		ws = &view.Panel{Sections: st.Workspace.Sections}
+	}
+	part("Workspace", ws, st.WorkspaceE)
+	part("Fleet", st.Fleet, st.FleetE)
+	return &all
+}
+
 // panelTitle is the first section's title: it labels the rule under the tab bar, so that section
 // does not repeat it.
 func panelTitle(st State) string {
-	p, fallback := st.Workspace, WorkspaceTab
-	if st.Tab == FleetTab {
-		p, fallback = st.Fleet, FleetTab
+	if sections := envSections(st); sections != nil && len(*sections) > 0 {
+		return sanitize((*sections)[0].Title)
 	}
-	if p != nil && len(p.Sections) > 0 {
-		return sanitize(p.Sections[0].Title)
-	}
-	return fallback
+	return EnvTab
 }
 
-// panelBody renders the Workspace or Fleet tab.
+// panelBody renders the Env tab.
 func panelBody(st State, w, h int) []string {
-	p, errText, name := st.Workspace, st.WorkspaceE, "Workspace"
-	if st.Tab == FleetTab {
-		p, errText, name = st.Fleet, st.FleetE, "Fleet"
-	}
-	return sectionLines(p.SectionsOrNil(), errText, name, true, st, w, h)
+	return sectionLines(envSections(st), "", EnvTab, true, st, w, h)
 }
 
 // evidenceLines renders the drawer for one job; every section, including the first, gets its own rule.

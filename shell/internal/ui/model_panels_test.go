@@ -21,8 +21,8 @@ func TestFleetIsFetchedOnlyWhileItsTabShows(t *testing.T) {
 	if cmd := m.fetchFleet(true); cmd != nil {
 		t.Fatal("no fleet fetch while another tab is showing")
 	}
-	press(m, "tab", "tab", "tab", "tab")
-	if m.st.Tab != FleetTab {
+	press(m, "tab", "tab", "tab")
+	if m.st.Tab != EnvTab {
 		t.Fatalf("tab %q", m.st.Tab)
 	}
 	m.flBusy = false // the tab press already asked for one; this test drives the fetch itself
@@ -37,7 +37,7 @@ func TestFleetIsFetchedOnlyWhileItsTabShows(t *testing.T) {
 
 func TestFleetFailureKeepsTheLastGoodPanel(t *testing.T) {
 	m, src := newReady(t)
-	press(m, "tab", "tab", "tab", "tab")
+	press(m, "tab", "tab", "tab")
 	src.fleet = panel("first")
 	m.flBusy = false
 	run(m.fetchFleet(true), m)
@@ -190,7 +190,7 @@ func TestRecoverFailureIsShown(t *testing.T) {
 
 func TestFooterOffersRecoverOnlyForASafePlan(t *testing.T) {
 	st := NewState()
-	st.Tab = WorkspaceTab
+	st.Tab = EnvTab
 	st.Workspace = workspaceWithPlan(&view.RecoveryPlan{ID: "x", Apply: "colima_start", Safe: true})
 	if !strings.Contains(footerLine(nil, 0, st, 100), "R recover") {
 		t.Fatal("safe plan: R recover shown")

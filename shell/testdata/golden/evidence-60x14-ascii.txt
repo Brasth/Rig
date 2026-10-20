@@ -1,5 +1,5 @@
  Rig . my-repo   ! 1 need attention  * 1 running  slots 2/3 
- [Jobs !1]  Que 2   Flw 2   Wks   Flt   Log   Trm           
+  Session  [Jobs !1]  Queue 2   Workflows 2   Env           
 - Evidence > job-7 -----------------------------------------
 - Ran ------------------------------------------------------
  container  quirky_job c0ffee0000  running                  

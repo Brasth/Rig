@@ -1,5 +1,5 @@
  Rig · my-repo   ! 1 need attention  ● 1 running  slots 2/3 
-  Job !1   Que 2   Flw 2   Wks   Flt  [Logs]  Trm           
+  Session  [Jobs !1]  Queue 2   Workflows 2   Env           
 ─ Logs › job-7f2 · Running claude · 2 lines back ───────────
  a long line that has to wrap at the edge of a narrow pane  
  a long line that has to wrap at the edge of a narrow pane  
@@ -9,4 +9,4 @@
  a long line that has to wrap at the edge of a narrow pane  
  newest                                                     
                                                             
- Tab pane  k/j scroll  G follow  s shell  r refresh  q quit 
+ Esc back to jobs  k/j scroll  G follow  s shell  r refresh…

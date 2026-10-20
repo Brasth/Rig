@@ -49,7 +49,7 @@ func termModel(t *testing.T) (*Model, *fakeSource, *[]spawned, *[]*fakePane) {
 	t.Helper()
 	m, src := newReady(t)
 	press(m, "shift+tab")
-	if m.st.Tab != TermTab {
+	if m.st.Tab != SessionTab {
 		t.Fatalf("tab %q", m.st.Tab)
 	}
 	var calls []spawned
@@ -146,7 +146,7 @@ func TestWhileTypingEveryKeyGoesToTheProgramIncludingCtrlC(t *testing.T) {
 	if got != "q\x03\t\r\x1b[A" {
 		t.Fatalf("the program received %q", got)
 	}
-	if m.st.Tab != TermTab {
+	if m.st.Tab != SessionTab {
 		t.Fatal("Tab did not change tabs while typing")
 	}
 	p.app = true
@@ -165,7 +165,7 @@ func TestCtrlBracketReturnsToTheBoardAndEnterGoesBack(t *testing.T) {
 		t.Fatal("Ctrl-] is the board's, never the program's")
 	}
 	press(m, "tab")
-	if m.st.Tab == TermTab {
+	if m.st.Tab == SessionTab {
 		t.Fatal("the board's tab key works again")
 	}
 	press(m, "shift+tab")

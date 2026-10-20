@@ -121,13 +121,13 @@ func TestGoldenFrames(t *testing.T) {
 		{"jobs-120x36-confirm", 120, 36, "Jobs", func(s *State) { s.Mode, s.Prompt = ModeConfirm, "Stop job-81c Rate limit POST /login?" }},
 		{"jobs-120x36-input", 120, 36, "Jobs", func(s *State) { s.Mode, s.Prompt = ModeInput, "Add audit log" }},
 		{"tiny-30x6", 30, 6, "Jobs", nil},
-		{"workspace-120x36", 120, 36, "Workspace", func(s *State) { s.Workspace = loadWorkspace(t) }},
-		{"workspace-60x14", 60, 14, "Workspace", func(s *State) { s.Workspace = loadWorkspace(t) }},
-		{"workspace-80x24-ascii", 80, 24, "Workspace", func(s *State) { s.Workspace, s.ASCII = loadWorkspace(t), true }},
-		{"fleet-120x36", 120, 36, "Fleet", func(s *State) { s.Fleet = loadFleet(t) }},
-		{"fleet-60x14", 60, 14, "Fleet", func(s *State) { s.Fleet = loadFleet(t) }},
-		{"fleet-loading", 80, 12, "Fleet", nil},
-		{"fleet-unavailable", 80, 12, "Fleet", func(s *State) { s.FleetE = "dc ls --all --json failed (1): engine not running" }},
+		{"workspace-120x36", 120, 36, EnvTab, func(s *State) { s.Workspace = loadWorkspace(t) }},
+		{"workspace-60x14", 60, 14, EnvTab, func(s *State) { s.Workspace = loadWorkspace(t) }},
+		{"workspace-80x24-ascii", 80, 24, EnvTab, func(s *State) { s.Workspace, s.ASCII = loadWorkspace(t), true }},
+		{"fleet-120x36", 120, 36, EnvTab, func(s *State) { s.Fleet = loadFleet(t) }},
+		{"fleet-60x14", 60, 14, EnvTab, func(s *State) { s.Fleet = loadFleet(t) }},
+		{"fleet-loading", 80, 12, EnvTab, nil},
+		{"fleet-unavailable", 80, 12, EnvTab, func(s *State) { s.FleetE = "dc ls --all --json failed (1): engine not running" }},
 		{"evidence-100x30", 100, 30, "Jobs", func(s *State) {
 			s.EvidenceOpen, s.EvidenceID, s.Evidence = true, "job-7", loadEvidence(t)
 		}},
@@ -163,17 +163,17 @@ func TestGoldenFrames(t *testing.T) {
 		{"chat-input", 80, 12, "Chat", func(s *State) {
 			s.ChatOn, s.Mode, s.InputLabel, s.Prompt = true, ModeInput, "chat", "summarise the open jobs"
 		}},
-		{"term-help", 80, 12, "Term", nil},
-		{"term-100x24-typing", 100, 24, "Term", func(s *State) {
+		{"term-help", 80, 12, SessionTab, nil},
+		{"term-100x24-typing", 100, 24, SessionTab, func(s *State) {
 			s.PaneTitle, s.PaneFocus, s.PaneRunning = "codex · typing (Ctrl-] returns to the board)", true, true
 			s.PaneLines = []string{"$ rig status", "parent codex  workers claude", "$ \x1b[7m \x1b[0m"}
 		}},
-		{"term-60x12-exited", 60, 12, "Term", func(s *State) {
+		{"term-60x12-exited", 60, 12, SessionTab, func(s *State) {
 			s.PaneTitle = "container shell · exited: exit status 3"
 			s.PaneLines = []string{"bye"}
 		}},
-		{"workspace-loading", 80, 12, "Workspace", nil},
-		{"workspace-unavailable", 80, 12, "Workspace", func(s *State) { s.WorkspaceE = "dc ls --json failed (2): engine not running" }},
+		{"workspace-loading", 80, 12, EnvTab, nil},
+		{"workspace-unavailable", 80, 12, EnvTab, func(s *State) { s.WorkspaceE = "dc ls --json failed (2): engine not running" }},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -267,10 +267,10 @@ func TestWorkspaceTabFlagsAttentionAndNeverShowsListChrome(t *testing.T) {
 	st.Tab = "Jobs"
 	st.Workspace = loadWorkspace(t)
 	out := Render(loadView(t), st, 120, 36)
-	if !strings.Contains(strings.Split(out, "\n")[1], "Workspace !") {
+	if !strings.Contains(strings.Split(out, "\n")[1], "Env !") {
 		t.Errorf("tab bar must flag workspace attention:\n%s", strings.Split(out, "\n")[1])
 	}
-	st.Tab = "Workspace"
+	st.Tab = EnvTab
 	out = Render(loadView(t), st, 120, 36)
 	for _, banned := range []string{"│", "┬", "Enter details", "x stop"} {
 		if strings.Contains(out, banned) {
@@ -292,7 +292,7 @@ func TestWorkspaceTextIsSanitisedAndScrolls(t *testing.T) {
 	}
 	ws.Sections = []view.Section{{Title: "Big\x1b[2J", Lines: lines}}
 	st := NewState()
-	st.Tab, st.Workspace = "Workspace", ws
+	st.Tab, st.Workspace = EnvTab, ws
 	out := Render(nil, st, 80, 20)
 	if strings.ContainsRune(out, '\x1b') {
 		t.Fatal("escape sequence leaked")

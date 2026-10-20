@@ -293,12 +293,12 @@ func TestNavigationTabsDetailAndQuit(t *testing.T) {
 	if m.st.Tab != "Queue" {
 		t.Fatalf("tab %q", m.st.Tab)
 	}
-	press(m, "tab", "tab", "tab", "tab", "tab", "tab")
+	press(m, "tab", "tab", "tab", "tab")
 	if m.st.Tab != "Jobs" {
-		t.Fatalf("tab wraps after Term, got %q", m.st.Tab)
+		t.Fatalf("tab wraps after Env through Session, got %q", m.st.Tab)
 	}
 	press(m, "shift+tab")
-	if m.st.Tab != "Term" {
+	if m.st.Tab != SessionTab {
 		t.Fatalf("shift+tab goes back and wraps, got %q", m.st.Tab)
 	}
 	press(m, "tab")
@@ -346,7 +346,7 @@ func TestWorkspaceIsFetchedOnlyWhileItsTabShowsAndNotMoreThanEveryFiveSeconds(t 
 	}
 	press(m, "tab", "tab")
 	run(press(m, "tab"), m) // switching to Workspace fetches at once
-	if m.st.Tab != WorkspaceTab {
+	if m.st.Tab != EnvTab {
 		t.Fatalf("tab %q", m.st.Tab)
 	}
 	if src.wsCalls != 1 {

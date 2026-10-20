@@ -1,5 +1,5 @@
  Rig · my-repo                       ! 1 need attention  ● 1 running  slots 2/3 
-  Jobs !1   Queue 2   Workflows 2   Workspace   Fleet  [Logs]  Term             
+  Session  [Jobs !1]  Queue 2   Workflows 2   Env                               
 ─ Logs ─────────────────────────────────────────────────────────────────────────
  Logs unavailable: connection refused                                           
                                                                                 
@@ -9,4 +9,4 @@
                                                                                 
                                                                                 
                                                                                 
- Tab pane  k/j scroll  G follow  s shell  r refresh  q quit                     
+ Esc back to jobs  k/j scroll  G follow  s shell  r refresh  q quit             

@@ -37,7 +37,81 @@ func TestWJumpsToTheWorkspaceAndTheFooterNamesIt(t *testing.T) {
 		t.Fatalf("footer: %q", footer)
 	}
 	press(m, "w")
-	if m.st.Tab != WorkspaceTab {
+	if m.st.Tab != EnvTab {
 		t.Fatalf("w went to %q", m.st.Tab)
+	}
+}
+
+func TestTheTabStripIsTheMockupsAndLogsIsAScreenUnderJobs(t *testing.T) {
+	m, src := newReady(t)
+	strip := strings.Split(Render(m.view, m.st, 120, 36), "\n")[1]
+	order := []string{"Session", "Jobs", "Queue", "Workflows", "Env"}
+	last := -1
+	for _, name := range order {
+		at := strings.Index(strip, name)
+		if at <= last {
+			t.Fatalf("%q out of order in %q", name, strip)
+		}
+		last = at
+	}
+	for _, gone := range []string{"Workspace", "Fleet", "Logs", "Term"} {
+		if strings.Contains(strip, gone) {
+			t.Fatalf("%q is not a tab: %q", gone, strip)
+		}
+	}
+	src.logReply = logReply("job-1", "text")
+	press(m, "l")
+	if m.st.Tab != LogsTab {
+		t.Fatalf("l opens the log, got %q", m.st.Tab)
+	}
+	if !strings.Contains(strings.Split(Render(m.view, m.st, 120, 36), "\n")[1], "[Jobs") {
+		t.Fatal("Jobs stays the highlighted tab while its log shows")
+	}
+	press(m, "esc")
+	if m.st.Tab != "Jobs" {
+		t.Fatalf("esc returns to Jobs, got %q", m.st.Tab)
+	}
+	press(m, "l", "tab")
+	if m.st.Tab != "Queue" {
+		t.Fatalf("tab from the log goes to the tab after Jobs, got %q", m.st.Tab)
+	}
+	press(m, "l")
+	if m.st.Tab != "Queue" {
+		t.Fatal("l only opens a log from Jobs")
+	}
+}
+
+func TestOldTabNamesAreAliases(t *testing.T) {
+	for old, want := range map[string]string{"Workspace": EnvTab, "Fleet": EnvTab, "Term": SessionTab, "Jobs": "Jobs", "Logs": "Logs"} {
+		if got := TabAlias(old); got != want {
+			t.Errorf("TabAlias(%q) = %q, want %q", old, got, want)
+		}
+		if !ValidTab(TabAlias(old)) {
+			t.Errorf("%q does not name a tab", old)
+		}
+	}
+	if ValidTab("Nowhere") {
+		t.Error("an unknown tab is not valid")
+	}
+}
+
+func TestTheEnvTabShowsWorkspaceAndFleetAndOneFailureDoesNotHideTheOther(t *testing.T) {
+	st := NewState()
+	st.Tab = EnvTab
+	st.Workspace = loadWorkspace(t)
+	st.FleetE = "engine not running"
+	out := Render(loadView(t), st, 100, 40)
+	for _, want := range []string{"kind     devcontainer", "Fleet unavailable: engine not running"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestSetTabOpensOnThatTab(t *testing.T) {
+	m := NewModel(&fakeSource{}, false)
+	m.SetTab(SessionTab)
+	if m.st.Tab != SessionTab {
+		t.Fatalf("tab %q", m.st.Tab)
 	}
 }
