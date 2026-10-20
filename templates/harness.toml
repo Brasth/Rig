@@ -51,7 +51,7 @@ enabled = false
 provider = "host"
 
 [mcp]
-# Parent tool profile. "full" lists every parent tool. "core" leaves out cost
-# reporting, benchmark and analysis tools. RIG_MCP_PROFILE overrides this.
-# Only the tool list changes; workers always get the same small child set.
-profile = "full"
+# Parent tool list. By default every parent tool is listed ("full"). Add a
+# profile key with the value "core" to hide cost reporting, benchmark and
+# analysis tools; RIG_MCP_PROFILE overrides it. Workers always get the same
+# small child set.
