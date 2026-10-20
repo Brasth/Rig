@@ -37,11 +37,22 @@ MODES = {
 
 
 def mode(worker: str) -> dict:
+    if worker not in MODES:
+        import adapters
+        manifest = adapters.get(worker)
+        if manifest is not None:
+            if not manifest["container"]["supported"]:
+                return {"supported": False, "reason": f"adapter {worker} does not declare container support"}
+            info = adapters.container_mode(manifest)
+            return {"supported": True, "binary": info["binary"], "permission_replace": [],
+                    "credential_paths": info["credential_paths"]}
     return MODES.get(worker) or {"supported": False, "reason": f"unknown worker {worker!r}"}
 
 
 def supported_workers() -> list[str]:
-    return [name for name, value in MODES.items() if value.get("supported")]
+    import adapters
+    found = [name for name, value in MODES.items() if value.get("supported")]
+    return found + [name for name in adapters.names() if mode(name).get("supported")]
 
 
 def apply_permissions(worker: str, argv: list[str]) -> list[str]:

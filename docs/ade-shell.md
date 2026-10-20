@@ -12,6 +12,7 @@ An optional terminal layout for working with a parent agent while Rig runs worke
 | `rig init --sandbox` | Detect the workspace and, for a folder with no devcontainer, store dc-cli's generated config under `.rig/sandbox/override.json`; `--write-devcontainer` turns it into `.devcontainer/devcontainer.json` |
 | `rig env up`, `down`, `status`, `ports [--json]` | Start or stop the workspace container, show what dc-cli reports, and list the ports it forwards |
 | `rig env recover [--apply ID]` | Show the one next step `dc recover` proposes; apply it only by naming the plan id, and only if Rig allows that action (see [Environment recovery](#environment-recovery)) |
+| `rig adapters list`, `validate DIR`, `check DIR` | Add a worker CLI as an adapter package ([reference](adapters.md)) |
 | `rig worktrees status [--json]`, `plan`, `create`, `commit`, `remove --job ID` | Per-job worktrees, below. `status` lists leftover job worktrees and the stopped containers keyed to them, and removes nothing |
 | `rig doctor [--workspace]` | Adds `workspace`, `dc-cli` and `rig-shell` checks. `--workspace` also runs dc-cli's own diagnosis |
 | `rig api serve`, `ensure`, `call`, `methods` | The local API behind all of this ([reference](local-api.md)) |
