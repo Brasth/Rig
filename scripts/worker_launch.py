@@ -590,6 +590,7 @@ def launch(repo, **kwargs) -> dict:
             "RIG_MODEL": model,
             "RIG_EFFORT": effort,
             "RIG_ACCESS": access,
+            "RIG_JOB_TASK": rig_jobs.task_title(case),
             "RIG_JOB_FILES_JSON": json.dumps(listed),
             "RIG_WORKFLOW_ID": workflow_id,
             "RIG_WORKFLOW_NODE_ID": workflow_node_id,

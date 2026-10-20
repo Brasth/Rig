@@ -461,6 +461,13 @@ class Flow(FlowBase):
         self.assertEqual(evidence["out_of_scope_observations"], [])
         self.assertEqual(json.loads((folder / "result.json").read_text())["status"], "ok", out)
 
+    def test_the_launch_task_becomes_the_stored_job_title(self):
+        fake_agent(self.bin, "claude", mcp_test_support.inbox_handshake_prelude(ROOT)
+                   + "_rig_inbox_handshake()\nprint('{\"result\": \"ok\"}')\n")
+        proc = self.run_worker("claude", "t1", RIG_LIVE="1", RIG_TIMEOUT="60", RIG_JOB_TASK="Fix the login tests")
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertEqual(json.loads((self.job("t1") / "meta.json").read_text())["task"], "Fix the login tests")
+
     def test_two_overlapping_writers_run_at_the_same_time(self):
         marker = self.base / "second-started"
         fake_agent(self.bin, "claude", mcp_test_support.inbox_handshake_prelude(ROOT)

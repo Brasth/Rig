@@ -41,6 +41,27 @@ class TaskAndLog(unittest.TestCase):
         )
         self.assertIn("OpenCode Go 400", jobs.task_from_brief(brief, "260908-opencode-session-fix"))
 
+    def test_task_skips_paraphrased_preambles_a_parent_wrote(self):
+        cases = {
+            "You are a read-only reviewer, not orchestrator. First Rig operation rig_job_inbox. "
+            "No agents/browser/computer-use. Review the retry loop in sync.py for races.": "Review the retry loop in sync.py for races.",
+            "Worker only, first Rig operation rig_job_inbox. Work context /Users/me/proj. "
+            "Add a --dry-run flag to the export command.": "Add a --dry-run flag to the export command.",
+            "Workeronlyfirstrigoperation rig_job_inbox.Context /Users/me/proj.Documentation-only, 4 files.": "Documentation-only, 4 files.",
+        }
+        for brief, expected in cases.items():
+            with self.subTest(brief=brief[:40]):
+                self.assertEqual(jobs.task_from_brief(brief, "j"), expected)
+
+    def test_a_brief_that_is_all_instructions_falls_back_to_the_id(self):
+        brief = "Worker only, first Rig operation rig_job_inbox. No agents/browser/computer-use."
+        self.assertEqual(jobs.task_from_brief(brief, "20260908T071315Z-4994"), "20260908T071315Z-4994")
+
+    def test_task_title_is_one_short_line(self):
+        self.assertEqual(jobs.task_title("  # Fix   the login\ntests  "), "Fix the login tests")
+        self.assertTrue(jobs.task_title("x" * 300).endswith("…"))
+        self.assertEqual(jobs.task_title(""), "")
+
     def test_task_falls_back_to_slug(self):
         self.assertEqual(
             jobs.task_from_brief("", "260908-opencode-session-fix"),
