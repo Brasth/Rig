@@ -82,6 +82,7 @@ state. Tests should create explicit enabled-project fixtures when required;
 lifecycle tests must retain their uninitialized/disabled-project assertions.
 Keep real-provider experiments separate from this baseline.
 
-GitHub-hosted test workflows are currently deferred. Run the local suite and
-report failures explicitly when submitting a pull request; removing automation
-does not establish a passing test baseline.
+GitHub Actions (`.github/workflows/tests.yml`) runs `--syntax-only` and then the
+full suite on Ubuntu and macOS with Python 3.11 and 3.12 for every pull request
+and push to `main`. A green run is the baseline; still run the suite locally and
+report any failure explicitly when submitting a pull request.
