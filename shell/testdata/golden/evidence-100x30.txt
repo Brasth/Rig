@@ -1,0 +1,30 @@
+ Rig · my-repo                                           ! 1 need attention  ● 1 running  slots 2/3 
+ [Jobs !1]  Queue 2   Workflows 2   Workspace   Fleet                                               
+─ Evidence › job-7 ─────────────────────────────────────────────────────────────────────────────────
+─ Ran ──────────────────────────────────────────────────────────────────────────────────────────────
+ container  quirky_job c0ffee0000  running                                                          
+ image      python:3.12-slim-bookworm                                                               
+ worktree   rig/job-7  base main aac0a27a70                                                         
+            not merged                                                                              
+─ Change ───────────────────────────────────────────────────────────────────────────────────────────
+ changed     src/app.py                                                                             
+ changed     tests/test_app.py                                                                      
+ outside scope (uncertain)  notes.txt                                                               
+ source: recorded                                                                                   
+─ Contract ─────────────────────────────────────────────────────────────────────────────────────────
+ acceptance unknown                                                                                 
+ no acceptance contract                                                                             
+─ Checks ───────────────────────────────────────────────────────────────────────────────────────────
+ ● unit  exit 0  devcontainer                                                                       
+ ! lint  exit 1  devcontainer                                                                       
+─ Ports ────────────────────────────────────────────────────────────────────────────────────────────
+   localhost:3000  Up 2 minutes                                                                     
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+ Esc close  j/k scroll  r refresh  q quit                                                           

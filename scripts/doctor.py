@@ -236,6 +236,27 @@ def container_worker_checks(repo: Path, config: dict) -> list[dict]:
     return rows
 
 
+def worktree_check(repo: Path, config: dict) -> dict | None:
+    """Only reported when [worktrees] is set: the merge gate needs git 2.38 (merge-tree --write-tree)."""
+    state = config["worktrees"]
+    if state["error"]:
+        return check("worktrees", "failed", state["error"], required=True)
+    if state["mode"] != "per-job":
+        return None
+    import re
+    import subprocess
+    try:
+        text = subprocess.run(["git", "--version"], capture_output=True, text=True, timeout=10).stdout
+    except (OSError, subprocess.TimeoutExpired):
+        text = ""
+    found = re.search(r"(\d+)\.(\d+)", text)
+    version = (int(found.group(1)), int(found.group(2))) if found else (0, 0)
+    label = f"{version[0]}.{version[1]}" if found else "not found"
+    if version < (2, 38):
+        return check("worktrees", "failed", f"per-job worktrees need git 2.38 or newer for the merge gate (found {label})", required=True)
+    return check("worktrees", "ready", f"per-job worktrees (git {label}); containers: {state['container']}", required=False)
+
+
 def shell_check() -> dict:
     """Optional: the Go board binary and whether it matches the installed core."""
     import rig_shell
@@ -365,6 +386,9 @@ def build_report(repo: Path, *, task: str = "coding", parent: str = "", model: s
     else:
         checks.append(check("sandbox", "ready", "host provider", required=False))
     checks.extend(workspace_checks(repo, config, deep=bool(workspace)))
+    worktree_row = worktree_check(repo, config)
+    if worktree_row:
+        checks.append(worktree_row)
     checks.append(shell_check())
     checks.append(check("scripts", "ready" if script_ready else "missing", "Rig runtime scripts present" if script_ready else "Rig runtime scripts missing"))
     entry = parent_entry(selected, repo)

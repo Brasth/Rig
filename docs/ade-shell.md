@@ -11,6 +11,8 @@ An optional terminal layout for working with a parent agent while Rig runs worke
 | `rig shell build` | Build `rig-shell` from a Rig clone with Go 1.24+ (no project needed) |
 | `rig init --sandbox` | Detect the workspace and, for a folder with no devcontainer, store dc-cli's generated config under `.rig/sandbox/override.json`; `--write-devcontainer` turns it into `.devcontainer/devcontainer.json` |
 | `rig env up`, `down`, `status`, `ports [--json]` | Start or stop the workspace container, show what dc-cli reports, and list the ports it forwards |
+| `rig env recover [--apply ID]` | Show the one next step `dc recover` proposes; apply it only by naming the plan id, and only if Rig allows that action (see [Environment recovery](#environment-recovery)) |
+| `rig worktrees plan, create, commit, remove --job ID` | Per-job worktrees, below |
 | `rig doctor [--workspace]` | Adds `workspace`, `dc-cli` and `rig-shell` checks. `--workspace` also runs dc-cli's own diagnosis |
 | `rig api serve`, `ensure`, `call`, `methods` | The local API behind all of this ([reference](local-api.md)) |
 
@@ -18,19 +20,43 @@ An optional terminal layout for working with a parent agent while Rig runs worke
 
 ## The board
 
-Tabs: Jobs, Queue, Workflows, Workspace. Every state shows a glyph and a word, and labels, ordering and counts come from the same code as `rig tui`, so the two never disagree.
+Tabs: Jobs, Queue, Workflows, Workspace, Fleet. Every state shows a glyph and a word, and labels, ordering and counts come from the same code as `rig tui`, so the two never disagree.
 
 | Key | Action |
 | --- | --- |
 | `Tab`, `Shift-Tab` | Next or previous tab |
-| `j`, `k` | Move, or scroll on the Workspace tab |
+| `j`, `k` | Move, or scroll on the Workspace and Fleet tabs and in the evidence drawer |
 | `Enter`, `Esc` | Open or close details on narrow terminals |
 | `a`, `d` | Allow or deny the selected worker prompt |
+| `v` | Evidence drawer for the selected job (`Esc` closes it) |
 | `x` | Stop the selected job or queue item, after a confirmation |
+| `R` | Workspace tab: apply the proposed environment fix, after a confirmation, when Rig allows it |
 | `e` | Park a task in the queue (`Enter` saves, `Esc` discards; a failed save keeps the draft) |
 | `r`, `q` | Refresh, quit |
 
 Pasted text is never run as commands. `RIG_TUI_ASCII=1`, `RIG_TUI_CJK=1` or a non-UTF locale selects ASCII glyphs. If the API server is not running the board starts one and shows "refresh failed" with the snapshot age if it cannot reach it, keeping the last data on screen.
+
+## Evidence drawer, Fleet and recovery
+
+**Evidence drawer** (`v` on a job): where the job ran (host, container with name and state, worktree with branch, base and merge state), what changed (file list with added and removed lines from git for worktree jobs, the recorded changed paths otherwise, files outside the declared scope flagged), the acceptance contract with each criterion's outcome, the checks with their exit codes and where they ran, and the forwarded ports observed now. Everything is read from records Rig wrote or from git and dc-cli as they are at that moment.
+
+**Fleet tab**: every container dc-cli can see on the engine (`dc ls --all`), this repository's first, then other workspaces with their folder. Running ones show CPU and memory as `dc stats` reports them, and the engine's own cpus and memory. These are observed values only: Rig sums nothing, estimates nothing and never turns them into a cost ([cost accounting](cost-accounting.md)).
+
+### Environment recovery
+
+When `dc recover` has a next step, the Workspace tab shows it with the command to run. Rig applies a step itself only when the owner confirms that exact plan id and its action is one of `colima_start`, `create_nets` or `take_ports`, which covers an engine that is down and a port held by one of dc-cli's own containers. Everything else dc-cli offers (installing or launching Docker Desktop, anything needing `sudo`, switching Docker contexts, stopping another engine, pruning, starting a sandbox for a folder with no config) is shown as text for you to run; Rig never prunes. Each attempt, applied, failed or refused, adds one line to `.rig/recovery/environment.jsonl` with who asked, the plan, the action and the outcome. A plan that changed between your confirmation and the apply is refused.
+
+## Parallel writers in worktrees
+
+Off by default. `[worktrees] mode = "per-job"` in `.rig/harness.toml` runs each write job in its own git worktree (`.rig/worktrees/<job>`, branch `rig/<job>`, made from the base checkout's current commit) while all job state stays in the main `.rig`. Two writers may then be admitted on the same files at the same time, because neither edits the base checkout. The overlap is decided when the parent accepts a job:
+
+1. the job's branch must change only the files it declared;
+2. it must merge onto the base branch as it is now without conflict (`git merge-tree`, git 2.38+; nothing is touched to check);
+3. the base checkout must have no staged changes and no uncommitted change in a file the merge touches.
+
+When all three hold, `rig_job_accept` with `next = complete` merges the branch (`--no-ff`), records the merge commit, removes the worktree and deletes the branch. A refused gate names the reason and the paths (`merge_gate:conflict`, `out_of_scope`, `base_dirty`, `base_moved`) and leaves the job, its worktree and its reservation as they were so you can resolve it and accept again. A job that changed nothing is accepted without a merge. Rejecting merges nothing; the worktree is kept until `rig worktrees remove --job ID` (it refuses while a process is running there and keeps an unmerged branch unless `--discard`).
+
+Admission still refuses writers that clash on a resource (a port, a URL), exceed the slot limits, or run outside worktree mode against a worktree writer's files. A reviewer of a worktree job reads that job's worktree until it is merged. With `[worktrees] container = "per-job"` and `[sandbox] provider = "devcontainer"`, the launcher runs `dc up <worktree>` for each job and the worker runs in that container; the project's devcontainer config must mount the main repository (its `.rig` state and its git directory) at its own path as well as the worktree, and the image needs `git` (the probe checks that `git` works there). dc-cli leaves a stopped container behind when a job ends; Rig never removes containers, so clear them with `dc prune`. `rig doctor` reports the mode and checks the git version.
 
 ## Workspace and dc-cli
 

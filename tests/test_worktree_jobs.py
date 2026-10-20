@@ -163,6 +163,52 @@ class Lifecycle(Base):
         self.assertTrue(self.base.is_dir())
 
 
+class Doctor(Base):
+    def rows(self):
+        import doctor
+        return [c for c in doctor.build_report(self.repo)["checks"] if c["name"] == "worktrees"]
+
+    def test_reported_only_when_the_section_is_used(self):
+        self.assertEqual([r["status"] for r in self.rows()], ["ready"])
+        (self.repo / ".rig" / "harness.toml").write_text("[project]\nenabled = true\n")
+        self.assertEqual(self.rows(), [])
+        (self.repo / ".rig" / "harness.toml").write_text('[project]\nenabled = true\n\n[worktrees]\nmode = "later"\n')
+        row = self.rows()[0]
+        self.assertEqual((row["status"], row["required"]), ("failed", True))
+
+    def test_an_old_git_fails_the_check_because_the_merge_gate_needs_merge_tree(self):
+        from unittest import mock
+        old = subprocess.CompletedProcess([], 0, "git version 2.30.1\n", "")
+        with mock.patch("subprocess.run", return_value=old):
+            row = self.rows()[0]
+        self.assertEqual(row["status"], "failed")
+        self.assertIn("2.38", row["detail"])
+
+
+class Cli(Base):
+    def run_cli(self, *args):
+        return subprocess.run([sys.executable, str(ROOT / "scripts" / "worktrees.py"), *args, "--repo", str(self.repo)],
+                              capture_output=True, text=True)
+
+    def test_plan_create_commit_remove_through_the_cli(self):
+        self.job("j1")
+        plan = json.loads(self.run_cli("plan", "--job", "j1").stdout)
+        self.assertTrue(plan["isolated"])
+        created = json.loads(self.run_cli("create", "--job", "j1").stdout)
+        (Path(created["path"]) / "a.txt").write_text("changed\n")
+        self.assertNotEqual(json.loads(self.run_cli("commit", "--job", "j1").stdout)["branch_head"], "")
+        removed = self.run_cli("remove", "--job", "j1", "--discard")
+        self.assertEqual(removed.returncode, 0, removed.stderr)
+        self.assertFalse(Path(created["path"]).exists())
+
+    def test_errors_exit_nonzero_with_a_reason(self):
+        done = self.run_cli("remove", "--job", "never")
+        self.assertEqual(done.returncode, 1)
+        self.assertIn("only removes worktrees it created", done.stderr)
+        (self.repo / ".rig" / "harness.toml").write_text('[project]\nenabled = true\n\n[worktrees]\nmode = "x"\n')
+        self.assertEqual(self.run_cli("plan", "--job", "j2").returncode, 1)
+
+
 class Admit(Base):
     def reserve(self, job_id, files, **extra):
         return admission.reserve(self.repo, job_id=job_id, worker="claude", role="worker", files=files, access="write",
@@ -288,6 +334,43 @@ class Flow(FlowBase):
             self.assertEqual(proc.returncode, 0, out)
         for job in ("p1", "p2"):
             self.assertTrue(git(self.repo, "show", f"rig/{job}:a.txt").endswith(job))
+
+    def test_both_overlapping_writers_merge_after_acceptance(self):
+        """The Phase 3 exit check end to end: run together through run-worker.sh, accepted, merged."""
+        import change_evidence as evidence
+        import verification
+        fake_agent(self.bin, "claude", mcp_test_support.inbox_handshake_prelude(ROOT)
+                   + "import os, time, pathlib\n_rig_inbox_handshake()\n"
+                   "me = os.environ['RIG_JOB_ID']\n"
+                   "pathlib.Path(os.environ['RIG_JOB_DIR'], 'up').write_text('1')\n"
+                   "other = pathlib.Path(os.environ['RIG_REPO'], '.rig', 'jobs', 'm2' if me == 'm1' else 'm1', 'up')\n"
+                   "deadline = time.time() + 40\n"
+                   "while not other.exists() and time.time() < deadline:\n    time.sleep(0.1)\n"
+                   "rows = open('a.txt').read().splitlines()\n"
+                   "rows[0 if me == 'm1' else 2] = me.upper()\n"
+                   "open('a.txt', 'w').write('\\n'.join(rows) + '\\n')\n")
+        for job in ("m1", "m2"):
+            (self.job(job) / "brief.md").write_text("x\n")
+        procs = [subprocess.Popen([str(RUN), "claude", job, str(self.job(job) / "brief.md")], cwd=self.repo,
+                                  env=self.env(RIG_LIVE="1", RIG_TIMEOUT="80"), text=True,
+                                  stdout=subprocess.PIPE, stderr=subprocess.STDOUT) for job in ("m1", "m2")]
+        for proc in procs:
+            out = proc.communicate(timeout=120)[0]
+            self.assertEqual(proc.returncode, 0, out)
+        self.assertEqual((self.repo / "a.txt").read_text(), "one\ntwo\nthree\n", "nothing merges before acceptance")
+        os.environ["RIG_PARENT"] = "grok"
+        for job in ("m1", "m2"):
+            folder = self.job(job)
+            saved = json.loads((folder / "owner-credentials.json").read_text())
+            auth = {**admission.credentials(saved), "owner_session": "wt-parent"}
+            verification.record_requirements(self.repo, folder, [], ["Parent reviewed it"], **auth)
+            snap = evidence.job_snapshot(self.repo, folder, ["a.txt"])["snapshot_id"]
+            accepted = verification.accept(self.repo, folder, "accept", snap, rationale="Reviewed.", **auth)
+            self.assertEqual(accepted["state"], "verified", job)
+            self.assertTrue(accepted["merge_commit"], job)
+        self.assertEqual((self.repo / "a.txt").read_text(), "M1\ntwo\nM2\n")
+        self.assertEqual(git(self.repo, "branch", "--list", "rig/m1", "rig/m2"), "")
+        self.assertFalse((self.repo / ".rig" / "worktrees" / "m1").exists())
 
 
 class PerJobContainer(FlowBase):

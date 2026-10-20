@@ -174,7 +174,7 @@ class DevcontainerProvider(SandboxProvider):
             raise SandboxError("container mode needs the job directory")
         job = Path(raw)
         command = container_modes.apply_permissions(worker, [os.path.basename(cmd[0]), *cmd[1:]])
-        pairs = [f"HOME={self.home}"] + [f"{key}={env[key]}" for key in ENV_KEYS if env.get(key)]
+        pairs = [f"HOME={self.home}", "RIG_RUNTIME_READONLY=1"] + [f"{key}={env[key]}" for key in ENV_KEYS if env.get(key)]
         return supervised(self.dc(), self.workspace, env.get("RIG_WORKDIR") or self.repo, job / STOP_FILE, job / HEARTBEAT_FILE, command, pairs), dict(env)
 
     def _probe_run(self, args: list[str], timeout: float = 60):

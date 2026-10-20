@@ -30,7 +30,7 @@ CLEAR = ("RIG_JOB_ID", "RIG_JOB_DIR", "RIG_OWNER_TOKEN", "RIG_LIVE", "RIG_REPO",
          "RIG_PARENT", "RIG_OWNER_SESSION", "RIG_TIMEOUT")
 
 
-@unittest.skipUnless(LIVE, "set RIG_TEST_LIVE_DC=1 with a running devcontainer workspace")
+@unittest.skipUnless(LIVE and REPO.is_dir(), "set RIG_TEST_LIVE_DC=1 and RIG_TEST_LIVE_REPO (a running devcontainer workspace)")
 class RealEngine(unittest.TestCase):
     def setUp(self):
         (REPO / ".rig").mkdir(exist_ok=True)
@@ -114,6 +114,78 @@ class RealEngine(unittest.TestCase):
         provider.check_url("http://localhost:3000/")
         with self.assertRaises(sandbox_provider.SandboxError):
             provider.check_url("http://localhost:65000/")
+
+
+WT_REPO = Path(os.environ.get("RIG_TEST_LIVE_WT_REPO", "/nonexistent"))
+CLAUDE_STANDIN = os.environ.get("RIG_TEST_LIVE_CLAUDE", "/nonexistent")
+
+
+def _git(repo, *args):
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    return subprocess.run(["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@t", *args],
+                          capture_output=True, text=True, check=True, env=env).stdout.strip()
+
+
+@unittest.skipUnless(LIVE and os.environ.get("RIG_TEST_LIVE_WT_REPO"),
+                     "set RIG_TEST_LIVE_DC=1, RIG_TEST_LIVE_WT_REPO (a new directory) and RIG_TEST_LIVE_CLAUDE (the stand-in)")
+class RealWorktreeContainer(unittest.TestCase):
+    """[worktrees] container = "per-job" against a real engine: each job gets its own dc-cli container."""
+
+    IMAGE = os.environ.get("RIG_TEST_LIVE_IMAGE", "python:3.12-bookworm")  # needs python3, setsid and git
+
+    @classmethod
+    def setUpClass(cls):
+        repo = WT_REPO
+        if not (repo / ".git").exists():
+            repo.mkdir(parents=True)
+            _git(repo, "init", "-q", "-b", "main")
+            (repo / "a.txt").write_text("one\ntwo\n")
+            (repo / ".devcontainer").mkdir()
+            (repo / ".devcontainer" / "devcontainer.json").write_text(json.dumps({
+                "name": "rig-live-worktree", "image": cls.IMAGE, "remoteUser": "root", "runArgs": ["--network=none"],
+                "workspaceMount": "source=${localWorkspaceFolder},target=${localWorkspaceFolder},type=bind",
+                "workspaceFolder": "${localWorkspaceFolder}",
+                "mounts": [f"source={repo},target={repo},type=bind",  # the state root and the git directory
+                           f"source={ROOT},target={ROOT},type=bind,readonly",
+                           f"source={HOME},target={HOME},type=bind,readonly",
+                           f"source={CLAUDE_STANDIN},target=/usr/local/bin/claude,type=bind,readonly"]}, indent=2))
+            _git(repo, "add", "-A")
+            _git(repo, "commit", "-q", "-m", "init")
+        (repo / ".rig").mkdir(exist_ok=True)
+        (repo / ".rig" / "harness.toml").write_text(
+            'parent = "grok"\n\n[project]\nenabled = true\n\n[workers]\nclaude = true\n\n'
+            '[sandbox]\nprovider = "devcontainer"\n\n[sandbox.workers]\nclaude = "mount-ro"\n\n'
+            '[worktrees]\nmode = "per-job"\ncontainer = "per-job"\n')
+
+    def test_a_job_gets_its_own_worktree_and_container(self):
+        job = f"wt{int(time.time() * 1000) % 10**9}"
+        folder = WT_REPO / ".rig" / "jobs" / job
+        folder.mkdir(parents=True)
+        (folder / "brief.md").write_text("Edit a.txt.\n")
+        env = os.environ.copy()
+        for key in CLEAR:
+            env.pop(key, None)
+        env.update({"PATH": mcp_test_support.stub_path() + os.pathsep + os.environ.get("PATH", ""), "HOME": str(HOME),
+                    "RIG_HOME": str(ROOT), "RIG_PARENT": "grok", "RIG_SKIP_MODEL_CATALOG": "1", "RIG_SKIP_UPDATE_CHECK": "1",
+                    "RIG_ROLE": "worker", "RIG_OWNER_SESSION": "live-parent", "RIG_LIVE": "1", "RIG_TIMEOUT": "120",
+                    "RIG_JOB_FILES_JSON": '["a.txt"]'})
+        proc = subprocess.run([str(RUN), "claude", job, str(folder / "brief.md")], cwd=WT_REPO, env=env,
+                              text=True, capture_output=True, timeout=600)
+        out = proc.stdout + proc.stderr
+        self.assertEqual(proc.returncode, 0, out)
+        work = WT_REPO.resolve() / ".rig" / "worktrees" / job
+        self.assertTrue(work.is_dir())
+        ran = (folder / "ran-as.txt").read_text()
+        self.assertTrue(ran.startswith(f"{HOME} {work}"), ran)
+        self.assertNotIn(os.uname().nodename, ran)
+        evidence = json.loads((folder / "sandbox.json").read_text())
+        self.assertTrue(evidence["container"]["found"], evidence)
+        listing = json.loads(subprocess.run([os.environ["RIG_DC_BIN"], "ls", "--all", "--json"], capture_output=True, text=True,
+                                            cwd=WT_REPO, env=env).stdout)
+        mine = [row for row in listing if row["local_folder"] == str(work)]
+        self.assertEqual([row["status"] for row in mine], ["running"], "one running container keyed by the worktree")
+        base = [row for row in listing if row["local_folder"] == str(WT_REPO.resolve())]
+        self.assertFalse(any(row["id"] == mine[0]["id"] for row in base), "not the base workspace's container")
 
 
 if __name__ == "__main__":

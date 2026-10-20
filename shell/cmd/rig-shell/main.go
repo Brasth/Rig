@@ -86,6 +86,18 @@ func (e *ensuringSource) Workspace(deep bool, timeout time.Duration) (*view.Work
 	return e.client.Workspace(deep, timeout)
 }
 
+func (e *ensuringSource) Fleet(timeout time.Duration) (*view.Panel, error) {
+	return e.client.Fleet(timeout)
+}
+
+func (e *ensuringSource) JobEvidence(id string, timeout time.Duration) (*view.Evidence, error) {
+	return e.client.JobEvidence(id, timeout)
+}
+
+func (e *ensuringSource) Recover(confirmID string, timeout time.Duration) (string, error) {
+	return e.client.Recover(confirmID, timeout)
+}
+
 func (e *ensuringSource) Act(method string, params map[string]any, timeout time.Duration) (string, error) {
 	return e.client.Act(method, params, timeout)
 }
@@ -98,7 +110,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 	size := fs.String("size", "120x36", "frame size for --once")
 	fixture := fs.String("fixture", "", "render --once from a board.snapshot JSON file instead of the API")
 	wsFixture := fs.String("workspace-fixture", "", "render the Workspace tab for --once from a workspace.status JSON file")
-	tab := fs.String("tab", "Jobs", "tab to show for --once: Jobs, Queue, Workflows or Workspace")
+	fleetFixture := fs.String("fleet-fixture", "", "render the Fleet tab for --once from a fleet.status JSON file")
+	evFixture := fs.String("evidence-fixture", "", "render the evidence drawer for --once from a job.evidence JSON file")
+	tab := fs.String("tab", "Jobs", "tab to show for --once: Jobs, Queue, Workflows, Workspace or Fleet")
 	ascii := fs.Bool("ascii", false, "use ASCII glyphs")
 	noEnsure := fs.Bool("no-ensure", false, "do not start the API server when it is not running")
 	rigBin := fs.String("rig", os.Getenv("RIG_BIN"), "path to the rig CLI used to start the API server")
@@ -124,7 +138,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	useASCII := wantASCII(*ascii, os.Getenv)
 
 	if *once {
-		return renderOnce(stdout, stderr, *repo, *rigBin, *fixture, *wsFixture, *size, *tab, useASCII, !*noEnsure)
+		return renderOnce(stdout, stderr, *repo, *rigBin, *fixture, *wsFixture, *fleetFixture, *evFixture, *size, *tab, useASCII, !*noEnsure)
 	}
 	client, err := api.New(*repo)
 	if err != nil {
@@ -139,7 +153,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
-func renderOnce(stdout, stderr io.Writer, repo, rigBin, fixture, wsFixture, size, tab string, ascii, ensure bool) int {
+func renderOnce(stdout, stderr io.Writer, repo, rigBin, fixture, wsFixture, fleetFixture, evFixture, size, tab string, ascii, ensure bool) int {
 	w, h, err := parseSize(size)
 	if err != nil {
 		fmt.Fprintln(stderr, "rig-shell:", err)
@@ -150,7 +164,7 @@ func renderOnce(stdout, stderr io.Writer, repo, rigBin, fixture, wsFixture, size
 		valid = valid || t == tab
 	}
 	if !valid {
-		fmt.Fprintln(stderr, "rig-shell: --tab must be Jobs, Queue, Workflows or Workspace")
+		fmt.Fprintln(stderr, "rig-shell: --tab must be Jobs, Queue, Workflows, Workspace or Fleet")
 		return 2
 	}
 	var snap *view.Snapshot
@@ -166,6 +180,31 @@ func renderOnce(stdout, stderr io.Writer, repo, rigBin, fixture, wsFixture, size
 			return 1
 		}
 		ws = &reply.View
+	}
+	var fleetPanel *view.Panel
+	if fleetFixture != "" {
+		raw, err := os.ReadFile(fleetFixture)
+		var reply view.FleetReply
+		if err == nil {
+			err = json.Unmarshal(raw, &reply)
+		}
+		if err != nil {
+			fmt.Fprintln(stderr, "rig-shell:", err)
+			return 1
+		}
+		fleetPanel = &reply.View
+	}
+	var evidence *view.Evidence
+	if evFixture != "" {
+		raw, err := os.ReadFile(evFixture)
+		evidence = &view.Evidence{}
+		if err == nil {
+			err = json.Unmarshal(raw, evidence)
+		}
+		if err != nil {
+			fmt.Fprintln(stderr, "rig-shell:", err)
+			return 1
+		}
 	}
 	if fixture != "" {
 		raw, err := os.ReadFile(fixture)
@@ -188,6 +227,12 @@ func renderOnce(stdout, stderr io.Writer, repo, rigBin, fixture, wsFixture, size
 			fmt.Fprintln(stderr, "rig-shell:", err)
 			return 1
 		}
+		if tab == ui.FleetTab && fleetPanel == nil {
+			if fleetPanel, err = src.Fleet(20 * time.Second); err != nil {
+				fmt.Fprintln(stderr, "rig-shell:", err)
+				return 1
+			}
+		}
 		if tab == ui.WorkspaceTab && ws == nil {
 			if ws, err = src.Workspace(true, 15*time.Second); err != nil {
 				fmt.Fprintln(stderr, "rig-shell:", err)
@@ -200,7 +245,10 @@ func renderOnce(stdout, stderr io.Writer, repo, rigBin, fixture, wsFixture, size
 		snap.View = view.View{Version: view.Version}
 	}
 	st := ui.NewState()
-	st.Tab, st.ASCII, st.Workspace = tab, ascii, ws
+	st.Tab, st.ASCII, st.Workspace, st.Fleet = tab, ascii, ws, fleetPanel
+	if evidence != nil {
+		st.EvidenceOpen, st.EvidenceID, st.Evidence = true, evidence.JobID, evidence
+	}
 	fmt.Fprintln(stdout, ui.Render(&snap.View, st, w, h))
 	return 0
 }

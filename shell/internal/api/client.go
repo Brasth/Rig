@@ -126,7 +126,39 @@ func (c *Client) Workspace(deep bool, timeout time.Duration) (*view.Workspace, e
 	if reply.View.Version != view.WorkspaceVersion {
 		return nil, fmt.Errorf("rig API workspace view version %d is not supported (shell expects %d)", reply.View.Version, view.WorkspaceVersion)
 	}
+	reply.View.Recovery = reply.Status.Recovery
 	return &reply.View, nil
+}
+
+// Fleet fetches the fleet panel.
+func (c *Client) Fleet(timeout time.Duration) (*view.Panel, error) {
+	var reply view.FleetReply
+	if err := c.Call("fleet.status", nil, timeout, &reply); err != nil {
+		return nil, err
+	}
+	return &reply.View, nil
+}
+
+// JobEvidence fetches the evidence drawer for one job.
+func (c *Client) JobEvidence(id string, timeout time.Duration) (*view.Evidence, error) {
+	var ev view.Evidence
+	if err := c.Call("job.evidence", map[string]any{"id": id}, timeout, &ev); err != nil {
+		return nil, err
+	}
+	return &ev, nil
+}
+
+// Recover applies the environment recovery plan the owner confirmed, by id, and says what happened.
+func (c *Client) Recover(confirmID string, timeout time.Duration) (string, error) {
+	var out view.RecoverReply
+	if err := c.Call("env.recover", map[string]any{"confirm_id": confirmID}, timeout, &out); err != nil {
+		return "", err
+	}
+	state := "still needs attention"
+	if out.After.Ready {
+		state = "environment ready"
+	}
+	return fmt.Sprintf("applied %s (exit %d): %s", out.Applied, out.Exit, state), nil
 }
 
 type textResult struct {

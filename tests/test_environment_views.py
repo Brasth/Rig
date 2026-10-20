@@ -236,6 +236,47 @@ class Api(Env):
         self.assertEqual(self.call("job.evidence", {"id": "nope"})["error"]["code"], local_api.INVALID_PARAMS)
 
 
+class GoFixtures(Env):
+    """The Go shell's fleet and evidence goldens come from these builders, so the two sides cannot drift."""
+
+    def check(self, name, fresh):
+        path = ROOT / "shell" / "testdata" / name
+        if os.environ.get("RIG_UPDATE_FIXTURES") == "1":
+            path.write_text(json.dumps(fresh, indent=1, ensure_ascii=False) + "\n")
+        self.assertEqual(json.loads(path.read_text()), fresh,
+                         f"run: RIG_UPDATE_FIXTURES=1 python3 tests/test_environment_views.py GoFixtures")
+
+    def test_fleet_fixture(self):
+        rows = json.loads(self.files["ls-all"].read_text())
+        rows.append({"id": "c0ffee000001", "name": "quirky_job", "status": "running", "kind": "devcontainer",
+                     "local_folder": str(self.repo / ".rig" / "worktrees" / "job-7"), "compose": "", "ports": ""})
+        self.files["ls-all"].write_text(json.dumps(rows))
+        data = fleet.facts(self.repo)
+        for box in data["containers"]:
+            box["folder"] = box["folder"].replace(str(self.repo), "/work/repo")
+        self.check("fleet.json", {"view": fleet.view(data)})
+
+    def test_evidence_fixture(self):
+        folder = self.repo / ".rig" / "jobs" / "job-7"
+        (folder / "checks").mkdir(parents=True)
+        (folder / "sandbox.json").write_text(json.dumps({"provider": "devcontainer", "container": {
+            "found": True, "name": "quirky_job", "id": "c0ffee000001", "image": "python:3.12-slim-bookworm", "state": "running"}}))
+        (folder / "worktree.json").write_text(json.dumps({
+            "version": 1, "job_id": "job-7", "path": str(self.base / "gone"), "branch": "rig/job-7", "base_branch": "main",
+            "base_head": "aac0a27a701611c4c5d11acac85f6ba1deba1eff", "merged": False}))
+        (folder / "change-evidence.json").write_text(json.dumps({
+            "scoped_changed_paths": ["src/app.py", "tests/test_app.py"],
+            "out_of_scope_observations": [{"path": "notes.txt", "attribution": "uncertain"}]}))
+        for number, (name, code) in enumerate((("unit", 0), ("lint", 1)), 1):
+            (folder / "checks" / f"c{number}.json").write_text(json.dumps({
+                "version": 1, "check_id": f"c{number}", "requirement_id": name, "sequence": number, "exit_code": code,
+                "sandbox": {"provider": "devcontainer"}}))
+        view = job_evidence_view.build(self.repo, "job-7")
+        text = json.dumps(view)
+        self.assertNotIn(str(self.repo), text)
+        self.check("evidence.json", view)
+
+
 class Drawer(Gate):
     def sections(self, job_id):
         return {s["title"]: [line["text"] for line in s["lines"]] for s in job_evidence_view.build(self.repo, job_id)["sections"]}

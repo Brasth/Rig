@@ -25,11 +25,28 @@ type fakeSource struct {
 	actErr  error
 	text    string
 	calls   []call
+
+	fleet       *view.Panel
+	fleetErr    error
+	evidence    *view.Evidence
+	evidenceErr error
+	evidenceIDs []string
+	recovered   []string
+	recoverErr  error
 }
 
 func (f *fakeSource) Workspace(bool, time.Duration) (*view.Workspace, error) {
 	f.wsCalls++
 	return f.ws, f.wsErr
+}
+func (f *fakeSource) Fleet(time.Duration) (*view.Panel, error) { return f.fleet, f.fleetErr }
+func (f *fakeSource) JobEvidence(id string, _ time.Duration) (*view.Evidence, error) {
+	f.evidenceIDs = append(f.evidenceIDs, id)
+	return f.evidence, f.evidenceErr
+}
+func (f *fakeSource) Recover(id string, _ time.Duration) (string, error) {
+	f.recovered = append(f.recovered, id)
+	return "applied " + id, f.recoverErr
 }
 func (f *fakeSource) Snapshot(int, int, time.Duration) (*view.Snapshot, error) {
 	return f.snap, f.snapErr
@@ -227,12 +244,12 @@ func TestNavigationTabsDetailAndQuit(t *testing.T) {
 	if m.st.Tab != "Queue" {
 		t.Fatalf("tab %q", m.st.Tab)
 	}
-	press(m, "tab", "tab", "tab")
+	press(m, "tab", "tab", "tab", "tab")
 	if m.st.Tab != "Jobs" {
-		t.Fatalf("tab wraps after Workspace, got %q", m.st.Tab)
+		t.Fatalf("tab wraps after Fleet, got %q", m.st.Tab)
 	}
 	press(m, "shift+tab")
-	if m.st.Tab != "Workspace" {
+	if m.st.Tab != "Fleet" {
 		t.Fatalf("shift+tab goes back and wraps, got %q", m.st.Tab)
 	}
 	press(m, "tab")

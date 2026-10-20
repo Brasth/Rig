@@ -1,0 +1,82 @@
+{
+ "job_id": "job-7",
+ "sections": [
+  {
+   "title": "Ran",
+   "lines": [
+    {
+     "text": "container  quirky_job c0ffee0000  running",
+     "tone": ""
+    },
+    {
+     "text": "image      python:3.12-slim-bookworm",
+     "tone": ""
+    },
+    {
+     "text": "worktree   rig/job-7  base main aac0a27a70",
+     "tone": ""
+    },
+    {
+     "text": "           not merged",
+     "tone": ""
+    }
+   ]
+  },
+  {
+   "title": "Change",
+   "lines": [
+    {
+     "text": "changed     src/app.py",
+     "tone": ""
+    },
+    {
+     "text": "changed     tests/test_app.py",
+     "tone": ""
+    },
+    {
+     "text": "outside scope (uncertain)  notes.txt",
+     "tone": "attention"
+    },
+    {
+     "text": "source: recorded",
+     "tone": ""
+    }
+   ]
+  },
+  {
+   "title": "Contract",
+   "lines": [
+    {
+     "text": "acceptance unknown",
+     "tone": ""
+    },
+    {
+     "text": "no acceptance contract",
+     "tone": ""
+    }
+   ]
+  },
+  {
+   "title": "Checks",
+   "lines": [
+    {
+     "text": "● unit  exit 0  devcontainer",
+     "tone": "ok"
+    },
+    {
+     "text": "! lint  exit 1  devcontainer",
+     "tone": "attention"
+    }
+   ]
+  },
+  {
+   "title": "Ports",
+   "lines": [
+    {
+     "text": "  localhost:3000  Up 2 minutes",
+     "tone": ""
+    }
+   ]
+  }
+ ]
+}
