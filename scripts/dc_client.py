@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """The only place Rig talks to dc-cli. Rig never calls docker itself.
 
-CONTRACT STATUS: assumed, not yet verified against a dc-cli release.
+CONTRACT STATUS: checked against dc-cli 0.23.0 (outputs in tests/fixtures/dc/).
 What Rig relies on:
   * ``dc --version`` prints a semantic version.
-  * ``dc up`` / ``dc down`` signal success with exit status 0.
-  * ``dc up --override-config FILE`` accepts a config file for a folder without one.
-  * ``dc try --print`` writes a generated devcontainer config as a JSON object to stdout.
-  * ``dc ls --json``, ``dc doctor --json`` and ``dc forward --status --json`` print JSON.
+  * ``dc up`` / ``dc down`` signal success with exit status 0; ``dc up`` refuses a folder with no
+    devcontainer or compose file.
+  * ``dc exec --no-start WORKSPACE -- CMD...`` runs CMD in the existing container and passes the exit code through.
+  * ``dc try --print`` prints ``override:  PATH`` naming the JSON config it generated.
+  * ``dc ls --json`` and ``dc doctor --json`` print JSON; ``dc forward --status`` prints text only.
 Every field read from dc JSON goes through ``pick`` so a renamed key degrades to
 "unknown" instead of a crash. When a dc-cli release adds schemaVersion, check it
 here and refuse unknown majors.
@@ -94,6 +95,14 @@ def run(args: list[str], cwd: Path, *, timeout: float = 120, stream: bool = Fals
         raise DcError(f"dc {' '.join(args)} timed out after {timeout:.0f}s") from error
     except OSError as error:
         raise DcError(f"could not run dc: {error}") from error
+
+
+def run_text(args: list[str], cwd: Path, *, timeout: float = 30) -> str:
+    done = run(args, cwd, timeout=timeout)
+    if done.returncode != 0:
+        detail = (done.stderr or done.stdout).strip().splitlines()
+        raise DcError(f"dc {' '.join(args)} failed ({done.returncode}): {detail[-1] if detail else 'no output'}")
+    return done.stdout
 
 
 def run_json(args: list[str], cwd: Path, *, timeout: float = 30):

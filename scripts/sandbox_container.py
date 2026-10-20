@@ -86,10 +86,11 @@ _PROBE_MESSAGES = {
 }
 
 
-def supervised(binary: str, cwd, stop_file, heartbeat_file, command: list[str], env_pairs: list[str],
+def supervised(binary: str, workspace, cwd, stop_file, heartbeat_file, command: list[str], env_pairs: list[str],
                lease: int = LEASE_SECONDS) -> list[str]:
-    """The argv that runs ``command`` supervised inside the container."""
-    return [binary, "exec", "--no-start", "--", "sh", "-c", SUPERVISOR, "rig-supervisor",
+    """The argv that runs ``command`` supervised inside the container. dc takes the workspace as a
+    positional argument, so the target never depends on the caller's working directory."""
+    return [binary, "exec", "--no-start", str(workspace), "--", "sh", "-c", SUPERVISOR, "rig-supervisor",
             str(cwd), str(stop_file), str(heartbeat_file), str(lease), "env", *env_pairs, *command]
 
 
@@ -172,12 +173,12 @@ class DevcontainerProvider(SandboxProvider):
         job = Path(raw)
         command = container_modes.apply_permissions(worker, [os.path.basename(cmd[0]), *cmd[1:]])
         pairs = [f"HOME={self.home}"] + [f"{key}={env[key]}" for key in ENV_KEYS if env.get(key)]
-        return supervised(self.dc(), self.repo, job / STOP_FILE, job / HEARTBEAT_FILE, command, pairs), dict(env)
+        return supervised(self.dc(), self.repo, self.repo, job / STOP_FILE, job / HEARTBEAT_FILE, command, pairs), dict(env)
 
     def _probe_run(self, args: list[str], timeout: float = 60):
         import subprocess
         try:
-            return subprocess.run([self.dc(), "exec", "--no-start", "--", "sh", "-c", args[0], "rig-probe", *args[1:]],
+            return subprocess.run([self.dc(), "exec", "--no-start", str(self.repo), "--", "sh", "-c", args[0], "rig-probe", *args[1:]],
                                   capture_output=True, text=True, timeout=timeout, stdin=subprocess.DEVNULL)
         except subprocess.TimeoutExpired as error:
             raise SandboxError(f"the container did not answer within {timeout:.0f}s") from error
@@ -235,7 +236,7 @@ class DevcontainerProvider(SandboxProvider):
         if done.returncode != 0:
             raise SandboxError(f"the check directory {cwd} is not visible inside the workspace container; "
                                "is it running (rig env up) with the repository mounted at the same path?")
-        return supervised(self.dc(), cwd, stop_file, heartbeat_file, list(argv), [])
+        return supervised(self.dc(), self.repo, cwd, stop_file, heartbeat_file, list(argv), [])
 
     LOCAL_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", "0.0.0.0"})
 
@@ -243,10 +244,10 @@ class DevcontainerProvider(SandboxProvider):
         """Host ports dc-cli currently forwards to the container. Fails closed when it cannot say."""
         import workspace
         try:
-            data = dc_client.run_json(["forward", "--status", "--json"], self.repo, timeout=10)
+            text = dc_client.run_text(["forward", "--status"], self.repo, timeout=10)
         except dc_client.DcError as error:
             raise SandboxError(f"cannot list forwarded ports, so localhost URLs are refused: {error}") from error
-        return sorted({int(p["port"]) for p in workspace.ports_view(data) if str(p["port"]).isdigit()})
+        return sorted({int(p["port"]) for p in workspace.parse_forward_status(text) if not p["problem"]})
 
     def check_url(self, url: str) -> None:
         """A localhost URL on a port dc-cli does not forward points at the HOST, not the app in the

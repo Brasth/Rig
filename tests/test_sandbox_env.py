@@ -22,7 +22,9 @@ echo "$*" >> "$FAKE_DC_LOG"
 case "$1" in
   --version) echo "dc ${FAKE_DC_VERSION:-0.23.0}" ;;
   try)  if [ -n "$FAKE_DC_FAIL" ]; then echo "boom" >&2; exit 1; fi
-        if [ "${FAKE_DC_TRY+set}" = set ]; then printf '%s\n' "$FAKE_DC_TRY"; else printf '%s\n' '{"image": "node:22-bookworm"}'; fi ;;
+        # the real dc try --print writes the config to a state file and prints its path (tests/fixtures/dc)
+        if [ "${FAKE_DC_TRY+set}" = set ]; then printf '%s\n' "$FAKE_DC_TRY" > "$FAKE_DC_STATE"; else printf '%s\n' '{"image": "node:22-bookworm"}' > "$FAKE_DC_STATE"; fi
+        if [ -z "$FAKE_DC_NO_PATH" ]; then printf 'dc-try: sandbox (does not edit the project)\n  override:  %s\n' "$FAKE_DC_STATE"; fi ;;
   up|down) if [ -n "$FAKE_DC_FAIL" ]; then echo "engine not running" >&2; exit 2; fi; echo "dc $1 ok" ;;
   ls) if [ -n "$FAKE_DC_FAIL" ]; then echo "engine not running" >&2; exit 2; fi
       if [ "${FAKE_DC_LS+set}" = set ]; then printf '%s\n' "$FAKE_DC_LS"; else echo '[]'; fi ;;
@@ -55,11 +57,12 @@ class Base(unittest.TestCase):
         self.fake = self.base / "dc"
         self.fake.write_text(FAKE_DC)
         self.fake.chmod(0o755)
-        self.env = mock.patch.dict(os.environ, {"RIG_DC_BIN": str(self.fake), "FAKE_DC_LOG": str(self.log)})
+        self.env = mock.patch.dict(os.environ, {"RIG_DC_BIN": str(self.fake), "FAKE_DC_LOG": str(self.log),
+                                                "FAKE_DC_STATE": str(self.base / "state-override.json")})
         self.env.start()
         self.empty = self.base / "empty-path"
         self.empty.mkdir()
-        for key in ("FAKE_DC_FAIL", "FAKE_DC_TRY", "FAKE_DC_LS", "FAKE_DC_VERSION"):
+        for key in ("FAKE_DC_FAIL", "FAKE_DC_TRY", "FAKE_DC_LS", "FAKE_DC_VERSION", "FAKE_DC_NO_PATH"):
             os.environ.pop(key, None)
 
     def tearDown(self):
@@ -123,6 +126,11 @@ class InitSandbox(Base):
         os.environ["FAKE_DC_FAIL"] = "1"
         with self.assertRaisesRegex(dc_client.DcError, "failed"):
             sandbox_env.init_sandbox(self.repo)
+        os.environ.pop("FAKE_DC_FAIL", None)
+        os.environ["FAKE_DC_NO_PATH"] = "1"
+        with self.assertRaisesRegex(dc_client.DcError, "did not name an override file"):
+            sandbox_env.init_sandbox(self.repo)
+        os.environ.pop("FAKE_DC_NO_PATH")
         for bad in ("not json", "[]", "{}", ""):
             os.environ.pop("FAKE_DC_FAIL", None)
             os.environ["FAKE_DC_TRY"] = bad
@@ -141,17 +149,33 @@ class InitSandbox(Base):
 
 
 class Lifecycle(Base):
-    def test_up_passes_the_override_only_for_folders_without_config(self):
+    def test_up_refuses_a_folder_without_config_like_dc_does(self):
         sandbox_env.init_sandbox(self.repo)
         self.log.unlink()
+        self.assertEqual(sandbox_env.env_up(self.repo), 1)
+        self.assertEqual(self.calls(), [], "dc up would refuse; Rig does not pass a flag dc rejects for this kind")
+
+    def test_write_devcontainer_gives_dc_up_a_config_and_never_overwrites(self):
+        sandbox_env.init_sandbox(self.repo)
+        target = sandbox_env.write_devcontainer(self.repo)
+        config = json.loads(target.read_text())
+        self.assertEqual((config["image"], config["workspaceFolder"]), ("node:22-bookworm", str(self.repo.resolve())))
+        self.assertIn(f"target={self.repo.resolve()}", config["workspaceMount"])
+        self.assertEqual(sandbox_env.detect_kind(self.repo), "devcontainer")
+        with self.assertRaisesRegex(dc_client.DcError, "does not overwrite"):
+            sandbox_env.write_devcontainer(self.repo)
+        self.log.unlink(missing_ok=True)
         self.assertEqual(sandbox_env.env_up(self.repo), 0)
-        self.assertEqual(self.calls(), [f"up --override-config {self.repo.resolve()}/.rig/sandbox/effective.json"])
+        self.assertEqual(self.calls(), ["up"])
+
+    def test_up_for_compose_passes_no_flags(self):
         (self.repo / "compose.yaml").write_text("services: {}\n")
-        self.log.unlink()
+        self.log.unlink(missing_ok=True)
         sandbox_env.env_up(self.repo)
         self.assertEqual(self.calls(), ["up"])
 
     def test_down_and_exit_status_pass_through(self):
+        (self.repo / "compose.yaml").write_text("services: {}\n")
         self.assertEqual(sandbox_env.env_down(self.repo), 0)
         os.environ["FAKE_DC_FAIL"] = "1"
         self.assertEqual(sandbox_env.env_up(self.repo), 2)
@@ -207,11 +231,11 @@ class Effective(Base):
         harness_path.write_text('[project]\nenabled = true\n\n[sandbox.workers]\nclaude = "mount-ro"\n')
         sandbox_env.init_sandbox(self.repo)
         with mock.patch.dict(os.environ, {"HOME": str(self.home)}):
-            sandbox_env.env_up(self.repo)
+            sandbox_env.write_effective(self.repo)
             first = json.loads(sandbox_env.effective_path(self.repo).read_text())
             self.assertTrue(any(".claude" in m for m in first["mounts"]))
             harness_path.write_text('[project]\nenabled = true\n\n[sandbox.workers]\nclaude = "none"\n')
-            sandbox_env.env_up(self.repo)
+            sandbox_env.write_effective(self.repo)
         second = json.loads(sandbox_env.effective_path(self.repo).read_text())
         self.assertFalse(any(".claude" in m for m in second["mounts"]), "stale mounts must not survive a config change")
         self.assertEqual(json.loads(sandbox_env.override_path(self.repo).read_text()), {"image": "node:22-bookworm"})
@@ -242,7 +266,7 @@ class Effective(Base):
         path.parent.mkdir(parents=True)
         path.write_text("[1]")
         with self.assertRaisesRegex(dc_client.DcError, "not a JSON object"):
-            sandbox_env.env_up(self.repo)
+            sandbox_env.write_devcontainer(self.repo)
         self.assertEqual(self.calls(), [])
 
 
@@ -319,6 +343,8 @@ class Cli(Base):
         failed = self.run_cli("init", "--force")
         self.assertEqual(failed.returncode, 1)
         self.assertIn("rig env:", failed.stderr)
+        self.assertEqual(self.run_cli("up").returncode, 1, "none-kind: dc up would refuse")
+        (self.repo / "compose.yaml").write_text("services: {}\n")
         self.assertEqual(self.run_cli("up").returncode, 2)
 
 

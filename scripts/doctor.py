@@ -140,7 +140,12 @@ def optional_check(repo: Path, task: str, *, required: bool) -> dict:
                  required=required, **evidence)
 
 
-_BAD_STATES = frozenset({"fail", "failed", "error", "missing", "unhealthy", "down"})
+_BAD_STATES = frozenset({"fail", "failed", "error", "missing", "unhealthy", "down", "blocker"})
+
+
+def fix_text(recover: str) -> str:
+    """dc-cli's own remediation sentence as is; a bare diagnosis id becomes the dc recover command."""
+    return recover if " " in recover else f"dc recover {recover}"
 
 
 def engine_check(repo: Path) -> dict:
@@ -164,10 +169,11 @@ def engine_check(repo: Path) -> dict:
         state = dc_client.pick(row, "status", "state", "result", default="")
         ok = dc_client.pick(row, "ok", default=None)
         if ok is False or (isinstance(state, str) and state.lower() in _BAD_STATES):
-            problems.append({"name": str(dc_client.pick(row, "name", "check", "id", default="check")),
-                             "recover": str(dc_client.pick(row, "recover", "recover_id", "diagnosis", "diagnosis_id", default="") or "")})
+            problems.append({"name": str(dc_client.pick(row, "id", "name", "check", default="check")),
+                             "summary": str(dc_client.pick(row, "summary", default="") or ""),
+                             "recover": str(dc_client.pick(row, "remediation", "recover", "recover_id", "diagnosis", "diagnosis_id", default="") or "")})
     if problems:
-        text = "; ".join(p["name"] + (f" (fix: dc recover {p['recover']})" if p["recover"] else "") for p in problems)
+        text = "; ".join((p["summary"] or p["name"]) + (f" (fix: {fix_text(p['recover'])})" if p["recover"] else "") for p in problems)
         return check("engine", "failed", f"{len(problems)} problem(s): {text}", required=True, problems=problems)
     if done.returncode != 0:
         return check("engine", "failed", f"dc doctor exited {done.returncode} without naming a problem", required=True)

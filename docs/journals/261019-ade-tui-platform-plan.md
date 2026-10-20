@@ -244,11 +244,13 @@ own theme and adopts the shared package later.
 - Exit check (canvas): `rig shell` in a repo opens the shell with the parent
   in its pane and the board live over the API. Jobs still run on the host.
 
-### Phase 2 · Sandboxed workers (size L) · BUILT 2026-10-20, container behavior unverified
+### Phase 2 · Sandboxed workers (size L) · BUILT 2026-10-20, verified with a stand-in agent; real claude/codex run pending
 
 > **Delivered:** 2.1 container modes and `[sandbox.workers]`, 2.2 the devcontainer provider with probe, evidence, stop supervisor and generated config, 2.3 child MCP inside the container, 2.4 checks run in the container, 2.5 forwarded-port guard and `rig env ports`, 2.6 evidence on the board and `rig doctor --workspace` per worker. Verified by the real supervisor, probe and `run-worker.sh` against a fake `dc` whose `exec` runs locally, including live completion, live cancel with the whole agent tree gone, refusal before launch, and every acceptance-verification test re-run under the container provider.
 >
-> **Not verified, and the exit check is therefore not met:** a real dc-cli (`exec --no-start`, exit-code passthrough, `forward --status --json`), a real Docker engine, and real `claude` and `codex` CLIs in a container. "One job verified end to end inside a container" needs those.
+> **Verified against a real dc-cli 0.23.0, devcontainer CLI 0.89.0 and a Docker engine** (`tests/test_live_dc.py`, recorded outputs in `tests/fixtures/dc/`): a job completes inside the container and records where it ran, cancel ends the agent and its child in the container, checks run there with the exit code passed through, and the port guard reads the real `dc forward --status`. The agent was a stand-in that does the real MCP handshake. **Still not verified, so the exit check is not fully met:** a real `claude` or `codex` in a container, which needs the owner's credentials.
+>
+> **Corrections the real dc-cli forced:** `dc forward --status` has no `--json` (text is parsed); `dc try --print` prints the path of its config rather than the JSON; `dc up` refuses a folder with no config and has no `--override-config` for such folders (`rig env init --write-devcontainer` writes a `.devcontainer`); `dc exec` takes the workspace as a positional argument, which Rig now passes instead of relying on the working directory (a probe run from another directory reached the wrong workspace); `dc doctor --json` uses `id`, `summary`, `remediation` and the status `blocker`; `dc ls --json` carries no image or digest, so those stay empty in evidence; an existing container is reused, so changed mounts need a recreated container.
 >
 > **Deviations**
 > - **A hard problem the plan missed: stopping.** Killing the host-side `dc exec` client does not stop the agent in the container, so files could be released under a running agent. A supervisor in the container kills the process group on a stop file or after a 15 second heartbeat lease (content-compared, so clock drift cannot expire it); `run-worker.sh` stops through it first. This bounds, but cannot remove, the window if the engine itself hangs.

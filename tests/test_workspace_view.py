@@ -11,9 +11,11 @@ from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
+sys.path.insert(0, str(ROOT / "tests"))
 
 import local_api  # noqa: E402
 import workspace  # noqa: E402
+from container_test_support import forward_status  # noqa: E402
 
 FAKE_DC = r'''#!/bin/sh
 echo "$*" >> "$FAKE_DC_LOG"
@@ -21,7 +23,7 @@ out() { if [ "$(eval echo \${$1+set})" = set ]; then eval printf '%s\\n' "\"\$$1
 case "$1" in
   --version) echo "dc 0.23.0" ;;
   ls) out FAKE_DC_LS '[]' ;;
-  forward) if [ -n "$FAKE_DC_FORWARD_FAIL" ]; then echo "no sidecars" >&2; exit 2; fi; out FAKE_DC_FORWARD '[]' ;;
+  forward) if [ -n "$FAKE_DC_FORWARD_FAIL" ]; then echo "no sidecars" >&2; exit 2; fi; out FAKE_DC_FORWARD 'desired:\nactual:\n  (none)' ;;
   doctor) out FAKE_DC_DOCTOR '{"checks": []}'; exit "${FAKE_DC_DOCTOR_EXIT:-0}" ;;
   *) exit 64 ;;
 esac
@@ -68,13 +70,15 @@ class Parsing(unittest.TestCase):
         self.assertEqual(out[1]["name"], "abc")
         self.assertEqual(workspace.containers_view(None), [])
 
-    def test_ports_from_list_or_wrapped_object_with_problems(self):
-        data = [{"port": 3000, "name": "web"}, {"host_port": 9229, "held_by": "node"}, {"local_port": 1, "state": "conflict"}, "x"]
-        ports = workspace.ports_view(data)
-        self.assertEqual([p["port"] for p in ports], ["3000", "9229", "1"])
-        self.assertEqual([p["problem"] for p in ports], [False, True, True])
-        self.assertEqual(len(workspace.ports_view({"forwards": [{"port": 1}]})), 1)
-        self.assertEqual(workspace.ports_view({"nope": 1}), [])
+    def test_forward_status_text_from_the_real_dc_cli(self):
+        real = (ROOT / "tests" / "fixtures" / "dc" / "forward-status.txt").read_text()
+        ports = workspace.parse_forward_status(real)
+        self.assertEqual([(p["port"], p["state"][:2], p["problem"]) for p in ports], [("3000", "Up", False)])
+        down = workspace.parse_forward_status(real.split("actual:")[0] + "actual:\n  (none)\n")
+        self.assertEqual([(p["port"], p["problem"]) for p in down], [("3000", True)])
+        bound = "desired:\n  8080:80  (explicit)\nactual:\nsidecar  dc-fwd-x-8080\tUp 1 hour\t0.0.0.0:8080->80/tcp\n"
+        self.assertEqual(workspace.parse_forward_status(bound)[0]["port"], "8080")
+        self.assertEqual(workspace.parse_forward_status(""), [])
 
 
 class Facts(Base):
@@ -84,7 +88,7 @@ class Facts(Base):
         self.assertEqual(sorted(c.split()[0] for c in self.calls()), ["--version", "ls"])
 
     def test_deep_status_adds_ports_and_the_dc_diagnosis(self):
-        os.environ["FAKE_DC_FORWARD"] = '[{"port": 3000, "name": "web"}]'
+        os.environ["FAKE_DC_FORWARD"] = forward_status(3000)
         os.environ["FAKE_DC_DOCTOR"] = '{"checks": [{"name": "engine", "status": "fail", "recover": "engine-down"}]}'
         status = workspace.status(self.repo, deep=True)
         self.assertEqual(status["ports"][0]["port"], "3000")

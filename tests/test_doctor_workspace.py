@@ -99,6 +99,18 @@ class WorkspaceChecks(unittest.TestCase):
         self.assertEqual((engine["status"], engine["required"]), ("ready", True))
         self.assertIn("doctor --json", self.calls())
 
+    def test_real_dc_doctor_output_ready_and_blocked(self):
+        fixtures = ROOT / "tests" / "fixtures" / "dc"
+        os.environ["FAKE_DC_DOCTOR"] = (fixtures / "doctor-ok.json").read_text()
+        engine = rows(doctor.build_report(self.repo, workspace=True), "engine")[0]
+        self.assertEqual(engine["status"], "ready", "warnings alone are not problems")
+        os.environ["FAKE_DC_DOCTOR"] = (fixtures / "doctor-blocked.json").read_text()
+        os.environ["FAKE_DC_DOCTOR_EXIT"] = "1"
+        engine = rows(doctor.build_report(self.repo, workspace=True), "engine")[0]
+        self.assertEqual(engine["status"], "failed")
+        self.assertEqual([p["name"] for p in engine["problems"]], ["docker_daemon", "devcontainer_cli"])
+        self.assertIn("No Docker engine is installed (fix: Install Docker Engine", engine["detail"])
+
     def test_engine_problems_name_the_dc_recover_fix(self):
         os.environ["FAKE_DC_DOCTOR"] = json.dumps({"checks": [
             {"name": "engine", "status": "fail", "recover": "engine-down"},

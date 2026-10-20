@@ -43,7 +43,7 @@ class ContainerChecks(ParentVerification):
         checked = self.check("tests", self.command())
         self.assertEqual((checked["status"], checked["exit_code"]), ("passed", 0))
         log = "\n".join(self.calls())  # the supervisor script spans several lines
-        self.assertIn("exec --no-start -- sh -c", log)
+        self.assertIn("-- sh -c", log)
         self.assertIn("rig-supervisor", log)
         self.assertEqual(checked["sandbox"]["provider"], "devcontainer")
         self.assertFalse(checked["sandbox"]["container"]["found"], "no container facts are invented")

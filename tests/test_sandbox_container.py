@@ -80,11 +80,11 @@ class Modes(unittest.TestCase):
 class Wrap(Base):
     def test_exact_argv_shape(self):
         argv, env = self.provider.wrap_worker_cmd(["/usr/local/bin/claude", "-p", "do it"], self.job_env, worker="claude")
-        self.assertEqual(argv[:6], [str(self.dc), "exec", "--no-start", "--", "sh", "-c"])
-        self.assertEqual(argv[6], sc.SUPERVISOR)
-        self.assertEqual(argv[7:12], ["rig-supervisor", str(self.repo.resolve()), str(self.job / "container-stop"),
+        self.assertEqual(argv[:7], [str(self.dc), "exec", "--no-start", str(self.repo.resolve()), "--", "sh", "-c"])
+        self.assertEqual(argv[7], sc.SUPERVISOR)
+        self.assertEqual(argv[8:13], ["rig-supervisor", str(self.repo.resolve()), str(self.job / "container-stop"),
                                       str(self.job / "container-heartbeat"), "15"])
-        self.assertEqual(argv[12:], ["env", f"HOME={self.home}", "RIG_JOB_ID=j1", f"RIG_JOB_DIR={self.job}",
+        self.assertEqual(argv[13:], ["env", f"HOME={self.home}", "RIG_JOB_ID=j1", f"RIG_JOB_DIR={self.job}",
                                      f"RIG_REPO={self.repo}", "RIG_ROLE=worker", "claude", "-p", "do it"])
         self.assertEqual(env, self.job_env)
 
@@ -129,7 +129,7 @@ class SupervisorBehaviour(Base):
         return fake_agent(self.bin, "claude", body)
 
     def start(self, command, lease=15):
-        argv = sc.supervised(str(self.dc), self.repo, self.job / sc.STOP_FILE, self.job / sc.HEARTBEAT_FILE,
+        argv = sc.supervised(str(self.dc), self.repo, self.repo, self.job / sc.STOP_FILE, self.job / sc.HEARTBEAT_FILE,
                              command, [f"HOME={self.home}", "RIG_JOB_ID=j1"], lease=lease)
         return subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
 
@@ -302,7 +302,7 @@ class LeaseAndChecks(Base):
 
     def test_check_command_probes_then_returns_a_supervised_argv(self):
         argv = self.provider.check_command(["pytest", "-q"], self.repo, self.job / "c.stop", self.job / "c.hb")
-        self.assertEqual(argv[:4], [str(self.dc), "exec", "--no-start", "--"])
+        self.assertEqual(argv[:5], [str(self.dc), "exec", "--no-start", str(self.repo.resolve()), "--"])
         self.assertEqual(argv[-2:], ["pytest", "-q"])
         self.assertEqual(argv[argv.index("env") + 1], "pytest")  # no env pairs for checks
         with self.assertRaisesRegex(sandbox_provider.SandboxError, "not visible"):

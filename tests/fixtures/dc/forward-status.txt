@@ -1,0 +1,5 @@
+target  d4df5881472b  workspace=/work/repo
+desired:
+  3000:3000  (fallback)
+actual:
+sidecar  dc-fwd-d4df5881472b-3000	Up 2 minutes	

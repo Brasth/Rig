@@ -75,7 +75,7 @@ class DryRun(Flow):
         out = proc.stdout + proc.stderr
         self.assertEqual(proc.returncode, 0, out)
         would = out.split("would run:", 1)[1]
-        for fragment in ("exec --no-start -- sh -c", "rig-supervisor", f"HOME={self.home}", "RIG_JOB_ID=cj",
+        for fragment in ("-- sh -c", "rig-supervisor", f"HOME={self.home}", "RIG_JOB_ID=cj",
                          "env HOME=", "claude -p", "--mcp-config", "--strict-mcp-config"):
             self.assertIn(fragment, would)
         self.assertNotIn("--dangerously-skip-permissions", would)

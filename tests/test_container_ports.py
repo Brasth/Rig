@@ -17,7 +17,7 @@ import computer_use  # noqa: E402
 import sandbox_container as sc  # noqa: E402
 import sandbox_env  # noqa: E402
 import sandbox_provider  # noqa: E402
-from container_test_support import install_fake_dc  # noqa: E402
+from container_test_support import forward_status, install_fake_dc  # noqa: E402
 
 
 class Base(unittest.TestCase):
@@ -31,7 +31,7 @@ class Base(unittest.TestCase):
         self.dc = install_fake_dc(self.base / "bin")
         self.log = self.base / "dc.log"
         self.env = mock.patch.dict(os.environ, {"RIG_DC_BIN": str(self.dc), "FAKE_DC_LOG": str(self.log),
-                                                "FAKE_DC_FORWARD": json.dumps([{"port": 3000, "name": "web"}, {"port": 5173, "name": "vite"}])})
+                                                "FAKE_DC_FORWARD": forward_status(3000, 5173)})
         self.env.start()
 
     def tearDown(self):
@@ -65,7 +65,7 @@ class CheckUrl(Base):
                           ("http://[::1]:8080/", 8080)):
             with self.assertRaisesRegex(sandbox_provider.SandboxError, f":{port} is not a forwarded port"):
                 self.provider().check_url(url)
-        os.environ["FAKE_DC_FORWARD"] = json.dumps([{"port": 443}])
+        os.environ["FAKE_DC_FORWARD"] = forward_status(443)
         self.provider().check_url("https://localhost/")
 
     def test_non_local_hosts_are_not_dc_cli_business(self):
@@ -86,8 +86,8 @@ class CheckUrl(Base):
         self.dc.write_text("#!/bin/sh\necho 'no sidecars' >&2\nexit 2\n")
         with self.assertRaisesRegex(sandbox_provider.SandboxError, "cannot list forwarded ports"):
             self.provider().check_url("http://localhost:3000/")
-        self.dc.write_text("#!/bin/sh\necho not-json\n")
-        with self.assertRaisesRegex(sandbox_provider.SandboxError, "cannot list forwarded ports"):
+        self.dc.write_text("#!/bin/sh\necho 'unrecognised output'\n")
+        with self.assertRaisesRegex(sandbox_provider.SandboxError, r"not a forwarded port \(forwarded: none\)"):
             self.provider().check_url("http://localhost:3000/")
 
     def test_malformed_urls_are_refused(self):
@@ -146,11 +146,11 @@ class Lanes(Base):
 
 class EnvPorts(Base):
     def test_ports_listing_text_and_json(self):
-        os.environ["FAKE_DC_FORWARD"] = json.dumps([{"port": 3000, "name": "web"}, {"port": 9229, "held_by": "node"}])
+        os.environ["FAKE_DC_FORWARD"] = forward_status(3000, down=(9229,))
         ports = sandbox_env.forwarded_ports(self.repo)
         self.assertEqual([p["port"] for p in ports], ["3000", "9229"])
         text = sandbox_env.format_ports(ports)
-        self.assertEqual(text.splitlines(), ["  localhost:3000  web", "! localhost:9229  held by node"])
+        self.assertEqual(text.splitlines(), ["  localhost:3000  dc-fwd-d4df5881472b-3000", "! localhost:9229  not running"])
         self.assertEqual(sandbox_env.format_ports([]), "no forwarded ports")
 
     def test_cli(self):
