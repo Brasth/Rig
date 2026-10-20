@@ -66,6 +66,7 @@ usage: rig <command> [args]
   run "prompt"
   jobs [--json] [--thread [ID]]
   tui
+  shell [--parent NAME] [--parent-cmd CMD] [--detach] | shell kill | shell print   # parent, board and logs in tmux
   api serve | ensure | call METHOD [JSON] | methods | doc   # local JSON-RPC API v1 (docs/local-api.md)
   memory [show]
   memory add "standing fact"
@@ -1568,6 +1569,7 @@ main() {
   case "$cmd" in
     ui) python3 "$(py_script rig_ui.py)" "$@" ;;
     api) python3 "$(py_script local_api.py)" "$@" --repo "$(repo_root)" ;;
+    shell) python3 "$(py_script rig_shell.py)" "$@" ;;
     uninstall) python3 "$(py_script ui_install.py)" "$@" ;;
     setup) cmd_setup "$@" ;;
     update) cmd_update "$@" ;;
