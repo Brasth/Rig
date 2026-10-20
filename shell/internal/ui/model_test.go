@@ -373,3 +373,20 @@ func TestWorkspaceTabScrollsAndIgnoresJobActions(t *testing.T) {
 		t.Fatalf("job actions must not apply on the workspace tab: mode=%v calls=%v", m.st.Mode, src.calls)
 	}
 }
+
+func TestMultiCharacterKeyOutsideTheEditorIsTreatedAsPaste(t *testing.T) {
+	m, src := newReady(t)
+	_, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("xyaed")})
+	if m.st.Mode != ModeNormal || len(src.calls) != 0 || !strings.Contains(m.st.Message, "pasting") {
+		t.Fatalf("mode=%v calls=%v message=%q", m.st.Mode, src.calls, m.st.Message)
+	}
+}
+
+func TestMultiCharacterKeyInsideTheEditorIsTyped(t *testing.T) {
+	m, _ := newReady(t)
+	press(m, "e")
+	_, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("pasted text")})
+	if m.st.Prompt != "pasted text" {
+		t.Fatalf("prompt %q", m.st.Prompt)
+	}
+}

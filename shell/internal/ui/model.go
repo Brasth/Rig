@@ -217,7 +217,9 @@ func (m *Model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case ModeConfirm:
 		return m.confirmKey(k)
 	}
-	if k.Paste {
+	// A paste, or several characters arriving as one key when the terminal has no
+	// bracketed paste, must never run as commands.
+	if k.Paste || (k.Type == tea.KeyRunes && len(k.Runes) > 1) {
 		m.st.Message = "Press e before pasting queue text"
 		return m, nil
 	}
