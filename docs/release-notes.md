@@ -1,5 +1,9 @@
 # Release Notes
 
+## Sandbox provider seam (2026-10-20)
+
+`.rig/harness.toml` gains an optional `[sandbox]` section with `provider = "host"` (the default and today's behavior). `scripts/sandbox_provider.py` defines the provider interface a container backend will implement; the host provider changes nothing. `provider = "devcontainer"` is reserved: `run-worker.sh` refuses to launch with it, and so does any unknown value, rather than silently running on the host. `rig doctor` lists the provider as an optional check. Existing repos need no change.
+
 ## OpenCode cheap-model policy (2026-10-15)
 
 Every install and update now limits OpenCode children to three exact OpenCode Go selectors: `opencode-go/glm-5.3-flash` (default, profile `opencode-glm-5.3-flash`), `opencode-go/deepseek-v4.1-flash` (second, `opencode-deepseek-v4.1-flash`), and region-dependent `opencode-go/muse-spark-1.3-contributor` (optional third, `opencode-muse-spark-1.3-contributor`). OpenCode Go is required; the selectors must be listed by `opencode models` for your account and region. Rig does not set up authentication, purchase anything, enable OpenCode, update its binary, or edit your global OpenCode configuration.

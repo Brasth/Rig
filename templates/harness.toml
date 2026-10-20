@@ -44,3 +44,8 @@ enabled = false
 # Effective on = ~/.rig/browser-skill.json opt_in + bsk on PATH + extension connected + enabled=true.
 [browser-skill]
 enabled = false
+
+[sandbox]
+# Where workers run. "host" is today's behaviour. "devcontainer" is reserved for
+# the dc-cli backend and is refused at launch until that backend ships.
+provider = "host"

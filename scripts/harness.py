@@ -37,6 +37,7 @@ def parse_harness(path: Path) -> dict:
         "routing": {"mode": "smart", "engine": "", "local_policy": "", "objective": ""},
         "orchestration": {"mode": "adaptive", "max_nodes": 12},
         "computer_use": {"enabled": False},
+        "sandbox": {"provider": "host", "error": ""},
         "project": {"state": "uninitialized", "enabled": False, "error": ""},
     }
     if not path.is_file():
@@ -76,6 +77,14 @@ def parse_harness(path: Path) -> dict:
             else:
                 out["project"] = {"state": "disabled", "enabled": False,
                                   "error": "invalid [project] enabled value"}
+            continue
+        if section == "sandbox" and key == "provider":
+            choice = val.strip().strip('"\'').lower()
+            if choice in {"host", "devcontainer"}:
+                out["sandbox"] = {"provider": choice, "error": ""}
+            else:
+                # Never fall back to the host silently when a boundary was requested.
+                out["sandbox"] = {"provider": "host", "error": f"unknown [sandbox] provider {choice!r}"}
             continue
         val = val.strip('"')
         if section == "" and key == "parent":

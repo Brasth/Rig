@@ -112,7 +112,15 @@ has started since it was written; the rest is open.
 Each phase ends on a named check, following the canvas. Sizes are relative
 (S, M, L). Phase 0 needs no decision from anyone; it is the next work.
 
-### Phase 0 · Foundation (size M, 5 PRs)
+### Phase 0 · Foundation (size M, 4 PRs; 0.1 dropped)
+
+> Status 2026-10-20: PR 0.1 (CI and packaging workflows) is **dropped**. The repo
+> does not use GitHub Actions; the local `tests/run_tests.py` remains the
+> baseline. Wherever later phases say "CI" read "the local suite". The dc-cli
+> pin lives in `pyproject.toml` `[tool.rig]` once a version is chosen.
+> PR 0.2 is implemented as one flat module, `scripts/sandbox_provider.py`,
+> instead of a `scripts/sandbox/` package, so the installer copy lists are
+> untouched; split it when the devcontainer backend lands.
 
 **0.1 CI and packaging (S).**
 - Add `.github/workflows/tests.yml`: `python3 tests/run_tests.py` on Ubuntu
@@ -324,7 +332,7 @@ can run beside it. Each PR carries tests and a `docs/release-notes.md` entry.
 
 | PR | Title | Depends on | Exit check |
 | --- | --- | --- | --- |
-| 0.1 | `ci: add test and shell workflows` | — | Workflows green on `main`. |
+| ~~0.1~~ | ~~`ci: add test and shell workflows`~~ dropped | — | — |
 | 0.2 | `feat(sandbox): [sandbox] config and host SandboxProvider` | 0.1 | All worker dry-run tests pass with byte-identical argv. |
 | 0.3 | `feat(api): local API v1 over a Unix socket` | 0.1 | `rig api call session` equals `rig session --json`. |
 | 0.4 | `feat(mcp): tool profiles core and full` | — | `rig doctor` shows profile and tool count; child set still 8. |

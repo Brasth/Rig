@@ -230,6 +230,10 @@ def build_report(repo: Path, *, task: str = "coding", parent: str = "", model: s
     except ValueError as exc:
         checks.append(check("routing", "missing", str(exc)))
     script_ready = all((HERE / name).is_file() for name in ("rig_mcp.py", "run-worker.sh"))
+    sandbox_state = config["sandbox"]
+    checks.append(check("sandbox", "missing" if sandbox_state["error"] or sandbox_state["provider"] != "host" else "ready",
+                        sandbox_state["error"] or f"{sandbox_state['provider']} provider",
+                        required=False))
     checks.append(check("scripts", "ready" if script_ready else "missing", "Rig runtime scripts present" if script_ready else "Rig runtime scripts missing"))
     entry = parent_entry(selected, repo)
     configured = child_mcp._stdio_entry_ready(entry)
