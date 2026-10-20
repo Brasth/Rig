@@ -32,10 +32,10 @@ def _parse(done) -> dict:
             "host_code": str(host.get("code") or "")}
 
 
-def plan(repo) -> dict:
+def plan(repo, timeout: float = 60) -> dict:
     """The plan dc-cli would follow now. The exit status is 1 whenever something is wrong, so it is not an error here."""
     repo = Path(repo).resolve()
-    return _parse(dc_client.run(["recover", "--json", str(repo)], repo, timeout=60))
+    return _parse(dc_client.run(["recover", "--json", str(repo)], repo, timeout=timeout))
 
 
 def _audit(repo: Path, entry: dict) -> None:

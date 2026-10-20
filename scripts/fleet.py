@@ -14,6 +14,7 @@ import dc_client
 
 CACHE_SECONDS = 5.0
 MAX_STATS = 12
+STATS_BUDGET = 12.0  # seconds for all stats calls together; a slow engine must not stall the panel
 _lock = threading.Lock()
 _cache: dict = {}
 
@@ -56,9 +57,13 @@ def facts(repo, *, now=time.monotonic) -> dict:
                 result["containers"].append(entry)
                 if entry["status"].lower().startswith("running") and folder and len(running) < MAX_STATS:
                     running.setdefault(folder, []).append(entry)
+            deadline = time.monotonic() + STATS_BUDGET
             for folder, entries in running.items():
+                left = deadline - time.monotonic()
+                if left <= 1:
+                    break
                 try:
-                    stats = dc_client.run_json(["stats", "--json", folder], repo, timeout=20)
+                    stats = dc_client.run_json(["stats", "--json", folder], repo, timeout=min(5.0, left))
                 except dc_client.DcError:
                     continue
                 if result["guest"] is None and isinstance(stats.get("guest"), dict):

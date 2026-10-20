@@ -80,6 +80,14 @@ class Lifecycle(Base):
         (folder / "worktree.json").write_text(json.dumps(record))
         self.assertEqual(worktrees.plan(self.repo, "r3", role="reviewer", writer_job="w1")["path"], str(self.repo.resolve()))
 
+    def test_continuations_and_odd_job_ids_are_refused(self):
+        with self.assertRaisesRegex(worktrees.WorktreeError, "continuations are not supported"):
+            worktrees.plan(self.repo, "j2", continues="j1")
+        self.assertFalse(worktrees.plan(self.repo, "j2", role="reviewer", continues="j1")["isolated"])
+        for bad in ("..", ".", ".hidden", "a/b", ""):
+            with self.assertRaises(worktrees.WorktreeError, msg=bad):
+                worktrees.job_path(self.repo, bad)
+
     def test_create_makes_a_branch_and_worktree_and_is_idempotent(self):
         folder = self.job("j1")
         record = worktrees.create_job(self.repo, folder)

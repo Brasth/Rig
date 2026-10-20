@@ -106,7 +106,7 @@ def status(repo: Path, *, deep: bool = False, now=time.monotonic) -> dict:
         result["doctor"] = _doctor_summary(repo)
         try:
             import env_recovery
-            result["recovery"] = env_recovery.plan(repo)
+            result["recovery"] = env_recovery.plan(repo, timeout=15)
         except (dc_client.DcError, ValueError) as error:
             result["recovery"] = {"ready": True, "error": str(error)}
     with _lock:

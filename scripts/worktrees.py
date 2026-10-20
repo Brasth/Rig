@@ -9,6 +9,7 @@ import argparse
 import fcntl
 import json
 import os
+import re
 from pathlib import Path
 import subprocess
 import sys
@@ -195,15 +196,20 @@ def job_branch(job_id):
 
 
 def job_path(repo, job_id):
+    if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]*', str(job_id)):
+        raise WorktreeError(f'job id {job_id!r} cannot name a worktree')
     return Path(repo).resolve() / '.rig' / 'worktrees' / job_id
 
 
-def plan(repo, job_id, role='worker', access='', writer_job=''):
+def plan(repo, job_id, role='worker', access='', writer_job='', continues=''):
     """Where a job's worker edits. Isolated only for write jobs when [worktrees] mode is per-job."""
     root = Path(repo).resolve()
     config = settings(root)
     access = access or ('read' if role.lower() in READ_ROLES else 'write')
     isolated = config['mode'] == 'per-job' and access == 'write' and not config['error']
+    if isolated and continues:
+        # A successor would start from the base without the predecessor's unmerged edits; refuse rather than lose them.
+        raise WorktreeError('continuations are not supported in [worktrees] mode = "per-job"; accept or discard the earlier job first')
     path = job_path(root, job_id) if isolated else root
     if not isolated and access == 'read' and writer_job and not config['error']:
         # A reviewer reads the writer's work, which lives in the writer's worktree until it is merged.
@@ -382,6 +388,7 @@ def job_main(argv):
     parser.add_argument('--role', default='worker')
     parser.add_argument('--access', default='')
     parser.add_argument('--writer-job', default='')
+    parser.add_argument('--continues', default='')
     parser.add_argument('--discard', action='store_true')
     args = parser.parse_args(argv)
     try:
@@ -389,7 +396,7 @@ def job_main(argv):
         repo = jobs.repo_root(args.repo)
         folder = Path(repo) / '.rig' / 'jobs' / args.job
         if args.command == 'plan':
-            result = plan(repo, args.job, args.role, args.access, args.writer_job)
+            result = plan(repo, args.job, args.role, args.access, args.writer_job, args.continues)
             if result['error']:
                 raise WorktreeError(result['error'])
         elif args.command == 'create':

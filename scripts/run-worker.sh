@@ -67,8 +67,8 @@ parse_harness "$HARNESS"
 JOB_DIR="$REPO/.rig/jobs/$JOB_ID"
 WORKTREES_PY="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/worktrees.py"
 # Where the worker edits. $REPO stays the state root; a write job in [worktrees] mode = "per-job" edits its own worktree.
-WORKTREE_PLAN="$(python3 "$WORKTREES_PY" plan --repo "$REPO" --job "$JOB_ID" --role "$ROLE" --access "${RIG_ACCESS:-}" --writer-job "${RIG_WRITER_JOB_ID:-}")" || {
-  echo "run-worker: refuse: invalid [worktrees] configuration" >&2
+WORKTREE_PLAN="$(python3 "$WORKTREES_PY" plan --repo "$REPO" --job "$JOB_ID" --role "$ROLE" --access "${RIG_ACCESS:-}" --writer-job "${RIG_WRITER_JOB_ID:-}" --continues "${RIG_CONTINUES_JOB_ID:-}" 2>&1)" || {
+  echo "run-worker: refuse: ${WORKTREE_PLAN#rig worktrees: }" >&2
   exit 1
 }
 WORK="$(printf '%s' "$WORKTREE_PLAN" | python3 -c 'import json,sys; print(json.load(sys.stdin)["path"])')"
