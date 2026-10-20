@@ -53,7 +53,7 @@ usage: rig <command> [args]
   update --migrate (--latest|--revision SHA) [--project PATH] [--new-root PATH] [--dry-run] [--yes]
   update --restore-migration DIR [--dry-run] [--yes] [--force]
     Legacy installs: run a checkout's bin/rig (older installed CLIs lack --migrate).
-  init [--patch-agents|--no-patch-agents] [--patch-claude]
+  init [--patch-agents|--no-patch-agents] [--patch-claude] [--sandbox]
   doctor [--task coding|research|browser|computer-use] [--parent NAME] [--model MODEL] [--json] [--smoke]
     Task doctor is offline; --smoke checks only a temporary child MCP fixture.
   computer-use [status|setup|on|off|doctor|unlock|serve]
@@ -66,6 +66,7 @@ usage: rig <command> [args]
   run "prompt"
   jobs [--json] [--thread [ID]]
   tui
+  env up | down | status [--json]   # workspace container through dc-cli
   shell [--parent NAME] [--parent-cmd CMD] [--detach] | shell kill | shell print   # parent, board and logs in tmux
   api serve | ensure | call METHOD [JSON] | methods | doc   # local JSON-RPC API v1 (docs/local-api.md)
   memory [show]
@@ -586,9 +587,10 @@ PY
 }
 
 cmd_init() {
-  local patch_agents=1 patch_claude=0 arg
+  local patch_agents=1 patch_claude=0 sandbox_init=0 arg
   for arg in "$@"; do
     case "$arg" in
+      --sandbox) sandbox_init=1 ;;
       --patch-agents) patch_agents=1 ;;
       --no-patch-agents) patch_agents=0 ;;
       --patch-claude) patch_claude=1 ;;
@@ -743,6 +745,13 @@ cmd_init() {
     else
       cp "$stub" "$claude"
       echo "wrote $claude"
+    fi
+  fi
+
+  if [[ "$sandbox_init" -eq 1 ]]; then
+    if ! python3 "$(py_script sandbox_env.py)" init --repo "$root"; then
+      echo "rig init: sandbox setup failed; the rest of init completed" >&2
+      return 1
     fi
   fi
 
@@ -1570,6 +1579,7 @@ main() {
     ui) python3 "$(py_script rig_ui.py)" "$@" ;;
     api) python3 "$(py_script local_api.py)" "$@" --repo "$(repo_root)" ;;
     shell) python3 "$(py_script rig_shell.py)" "$@" ;;
+    env) python3 "$(py_script sandbox_env.py)" "$@" --repo "$(repo_root)" ;;
     uninstall) python3 "$(py_script ui_install.py)" "$@" ;;
     setup) cmd_setup "$@" ;;
     update) cmd_update "$@" ;;
