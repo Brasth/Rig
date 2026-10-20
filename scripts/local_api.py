@@ -47,6 +47,7 @@ METHODS = {
     "queue.list": ("rig_queue_list", False, "List queue items"),
     "queue.add": ("rig_queue_add", True, "Park a task in the queue"),
     "queue.cancel": ("rig_queue_cancel", True, "Cancel a pending queue item"),
+    "recovery.guide": ("rig_recovery_guide", False, "Recorded recovery evidence for a job or workflow"),
     "workflows.list": ("rig_workflows", False, "List workflows"),
     "workflows.show": ("rig_workflow_show", False, "Show one workflow"),
     "job.allow": ("rig_job_allow", True, "Allow a worker's pending command"),
@@ -54,9 +55,15 @@ METHODS = {
     "job.cancel": ("rig_job_cancel", True, "Request a job stop; not confirmation"),
     "job.message": ("rig_job_message", True, "Send a message to a running worker"),
 }
-LOCAL_METHODS = {"api.ping": "Check the server and protocol version",
-                 "api.methods": "List the methods this server offers",
-                 "board.snapshot": "Board view: jobs window, pending queue, slots, settings rows and workflows"}
+# method -> (mutates state, one-line summary); handled by the server itself.
+LOCAL_METHODS = {
+    "api.ping": (False, "Check the server and protocol version"),
+    "api.methods": (False, "List the methods this server offers"),
+    "board.snapshot": (False, "Board view: jobs window, pending queue, slots, settings rows and workflows"),
+    "events.list": (False, "Notices for a companion session: approvals, finished work, verification, stop progress"),
+    "events.ack": (True, "Acknowledge one notice, or all, for a companion session"),
+    "ui.request": (True, "Companion operations (snapshot, enqueue, stop, reply, details, sessions) on the hosted UI service"),
+}
 
 _SECRET = re.compile(r'("owner_token"\s*:\s*)"[^"]*"')
 
@@ -95,6 +102,37 @@ class Api:
     def __init__(self, repo, token):
         self.repo = Path(repo).resolve()
         self.token = token
+        self._service = None
+        self._service_lock = threading.Lock()
+
+    @property
+    def service(self):
+        """The companion UI service, created on first use so plain API clients
+        never create ``.rig/ui`` or start an observer."""
+        with self._service_lock:
+            if self._service is None:
+                import ui_service
+                service = ui_service.Service(self.repo)
+                threading.Thread(target=service.collect, daemon=True, name="rig-ui-observer").start()
+
+                def maintain():
+                    while not service.closed.wait(5):
+                        service.prune_sessions()
+
+                threading.Thread(target=maintain, daemon=True, name="rig-ui-session-check").start()
+                self._service = service
+            return self._service
+
+    def busy(self) -> bool:
+        """True while companion sessions or accepted actions need the server alive."""
+        service = self._service
+        return bool(service and (service.sessions or service.actions.running))
+
+    def close(self):
+        service = self._service
+        if service is not None:
+            service.closed.set()
+            service.refresh.set()
 
     def dispatch(self, message):
         if not isinstance(message, dict) or message.get("jsonrpc") != "2.0" or not isinstance(message.get("method"), str):
@@ -114,10 +152,13 @@ class Api:
         if method == "api.methods":
             rows = [{"method": name, "mutates": mutates, "summary": summary}
                     for name, (_, mutates, summary) in sorted(METHODS.items())]
-            rows += [{"method": name, "mutates": False, "summary": summary} for name, summary in sorted(LOCAL_METHODS.items())]
+            rows += [{"method": name, "mutates": mutates, "summary": summary}
+                     for name, (mutates, summary) in sorted(LOCAL_METHODS.items())]
             return _reply(request_id, result={"version": API_VERSION, "methods": rows})
         if method == "board.snapshot":
             return self._board_snapshot(request_id, params)
+        if method in ("ui.request", "events.list", "events.ack"):
+            return self._companion(request_id, method, params)
         entry = METHODS.get(method)
         if entry is None:
             return _reply(request_id, error=_error(METHOD_NOT_FOUND, f"unknown method {method}"))
@@ -131,6 +172,9 @@ class Api:
         if outcome.get("isError"):
             return _reply(request_id, error=_error(SERVER_ERROR, text or "request failed"))
         result = {"text": text}
+        structured = outcome.get("structuredContent")
+        if isinstance(structured, (dict, list)):
+            result["structured"] = scrub(structured)
         try:
             parsed = json.loads(text)
         except ValueError:
@@ -172,6 +216,36 @@ def _board_snapshot(self, request_id, params):
 Api._board_snapshot = _board_snapshot
 
 
+def _companion(self, request_id, method, params):
+    if method == "ui.request":
+        payload = params.get("payload")
+        if not isinstance(payload, dict) or not isinstance(payload.get("op"), str):
+            return _reply(request_id, error=_error(INVALID_PARAMS, "payload must be an object with an op"))
+        if payload["op"] == "ping":
+            return _reply(request_id, result={"ok": True, "repo": str(self.repo)})
+        try:
+            result = self.service.handle(payload)
+        except (Exception, SystemExit) as error:
+            # Same shape the companion socket always returned for a failed operation.
+            result = {"error": str(error) or "UI request failed", "status": "error"}
+        return _reply(request_id, result=json.loads(json.dumps(scrub(result), default=str)))
+    session = params.get("session", "")
+    if not isinstance(session, str) or len(session) > 160:
+        return _reply(request_id, error=_error(INVALID_PARAMS, "session must be a short string"))
+    service = self.service
+    with service.lock:
+        if method == "events.list":
+            return _reply(request_id, result={"notices": json.loads(json.dumps(service.notices.list(session), default=str))})
+        notice_id = params.get("notice_id", "")
+        if not isinstance(notice_id, str) or params.get("all", False) not in (True, False):
+            return _reply(request_id, error=_error(INVALID_PARAMS, "notice_id must be a string and all a boolean"))
+        service.notices.ack(session, notice_id, all=bool(params.get("all", False)))
+        return _reply(request_id, result={"ok": True})
+
+
+Api._companion = _companion
+
+
 def _receive(connection):
     data = bytearray()
     while b"\n" not in data:
@@ -191,7 +265,8 @@ def serve(repo, idle: float = 0.0) -> int:
     import fcntl
     import harness
     repo = Path(repo).resolve()
-    harness.assert_project_enabled(repo)
+    if harness.project_state(repo)["state"] == "uninitialized":
+        raise ValueError("Rig is uninitialized for this project; run rig init")
     endpoint, token_path = runtime_paths(repo)
     with (endpoint.parent / "api.run.lock").open("a") as lock:
         try:
@@ -199,6 +274,10 @@ def serve(repo, idle: float = 0.0) -> int:
         except BlockingIOError:
             print("rig api: already running for this repository", file=sys.stderr)
             return 2
+        import admission
+        from ui_store import write as write_private
+        write_private(endpoint.parent / "owner.json", {"pid": os.getpid(),
+                      "start_id": admission.process_identity(os.getpid()).get("start_id"), "repo": str(repo)})
         token = secrets.token_hex(32)
         descriptor = os.open(token_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         with os.fdopen(descriptor, "w") as stream:
@@ -242,7 +321,7 @@ def serve(repo, idle: float = 0.0) -> int:
                     try:
                         connection, _ = listener.accept()
                     except socket.timeout:
-                        if idle and time.monotonic() - last_request[0] > idle:
+                        if idle and time.monotonic() - last_request[0] > idle and not api.busy():
                             break
                         continue
                     if slots.acquire(blocking=False):
@@ -252,8 +331,10 @@ def serve(repo, idle: float = 0.0) -> int:
             except (KeyboardInterrupt, SystemExit):
                 pass
             finally:
+                api.close()
                 endpoint.unlink(missing_ok=True)
                 token_path.unlink(missing_ok=True)
+                (endpoint.parent / "owner.json").unlink(missing_ok=True)
     return 0
 
 
@@ -278,8 +359,12 @@ def ensure(repo, idle: float = 60.0) -> bool:
 def call(repo, method, params=None, timeout=10.0) -> dict:
     """Client helper: returns the full JSON-RPC response."""
     endpoint, token_path = runtime_paths(Path(repo).resolve())
+    return call_at(endpoint, token_path, method, params, timeout)
+
+
+def call_at(endpoint, token_path, method, params=None, timeout=10.0) -> dict:
     try:
-        token = token_path.read_text().strip()
+        token = Path(token_path).read_text().strip()
     except OSError as error:
         raise ConnectionError("Rig API is not running; start it with rig api serve") from error
     payload = json.dumps({"jsonrpc": "2.0", "id": 1, "method": method, "params": params or {}, "token": token}).encode() + b"\n"
@@ -309,15 +394,16 @@ def render_doc() -> str:
              "JSON-RPC 2.0, one JSON object per line, over `api.sock` in the private runtime",
              "directory. Start it with `rig api serve`. Each request carries `token` (the",
              "contents of `api.token` beside the socket, mode 0600). Every response carries",
-             f"`\"rig_api\": {API_VERSION}`. A method returns `{{\"text\": ..., \"json\": ...}}` where `json`",
-             "is present when the tool's text parses as a JSON object or array. Tool errors",
+             f"`\"rig_api\": {API_VERSION}`. A method returns `{{\"text\": ...}}` plus `json` when the text",
+             "parses as a JSON object or array and `structured` when the tool returns a",
+             "structured result (queue items, recovery guidance). Tool errors",
              f"are JSON-RPC errors with code {SERVER_ERROR}. `repo` in params is ignored: the server is bound to one",
              "repository. Owner tokens are never returned, and workers may not serve the API.", "",
              "| Method | Mutates | MCP tool | Summary |", "| --- | --- | --- | --- |"]
     for name, (tool, mutates, summary) in sorted(METHODS.items()):
         lines.append(f"| `{name}` | {'yes' if mutates else 'no'} | `{tool}` | {summary} |")
-    for name, summary in sorted(LOCAL_METHODS.items()):
-        lines.append(f"| `{name}` | no | none | {summary} |")
+    for name, (mutates, summary) in sorted(LOCAL_METHODS.items()):
+        lines.append(f"| `{name}` | {'yes' if mutates else 'no'} | none | {summary} |")
     return "\n".join(lines) + "\n"
 
 

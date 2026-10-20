@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
+import inspect
 import os
+import socket
 import subprocess
 import sys
 import tempfile
@@ -14,7 +16,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 import local_api  # noqa: E402
 import rig_tui  # noqa: E402
 import tui_runtime  # noqa: E402
-from tui_runtime import ApiLoader, BoardRuntime, Snapshot  # noqa: E402
+from tui_runtime import ApiBoard, ApiLoader, BoardRuntime, DirectBoard, Snapshot  # noqa: E402
 
 
 def make_repo(root: Path) -> Path:
@@ -161,6 +163,110 @@ class LoaderBehaviour(unittest.TestCase):
     def test_snapshot_defaults_keep_existing_callers_working(self):
         snap = Snapshot()
         self.assertEqual((snap.workflows, snap.source), (None, "local"))
+
+
+class BoardActionsThroughApi(Served):
+    """Phase 0 exit check: with the API up, the board needs no direct state access."""
+
+    def setUp(self):
+        super().setUp()
+        self.serve()
+        banned = AssertionError("direct state access while the API is available")
+        self.patches = [mock.patch.object(DirectBoard, name, side_effect=banned)
+                        for name in ("snapshot", "enqueue", "cancel_job", "cancel_queue", "answer", "recovery")]
+        self.patches.append(mock.patch.object(tui_runtime, "load_snapshot", side_effect=banned))
+        for patch in self.patches:
+            patch.start()
+        self.board = ApiBoard(spawn=False)
+
+    def tearDown(self):
+        for patch in self.patches:
+            patch.stop()
+        super().tearDown()
+
+    def test_enqueue_snapshot_cancel_roundtrip(self):
+        item = self.board.enqueue(self.repo, "Fix login bug", "key-1")
+        self.assertEqual(item["text"], "Fix login bug")
+        again = self.board.enqueue(self.repo, "Fix login bug", "key-1")
+        self.assertEqual(again["id"], item["id"], "idempotency key must dedupe")
+        snap = self.board.snapshot(self.repo, start=0, rows=10)
+        self.assertEqual((snap.source, [row["id"] for row in snap.pending]), ("api", [item["id"]]))
+        cancelled = self.board.cancel_queue(self.repo, item["id"])
+        self.assertEqual(cancelled["status"], "cancelled")
+        self.assertEqual(self.board.snapshot(self.repo, start=0, rows=10).pending, [])
+
+    def test_api_errors_are_raised_not_bypassed_by_direct_calls(self):
+        for call in (lambda: self.board.cancel_queue(self.repo, "no-such-item"),
+                     lambda: self.board.cancel_job(self.repo, "no-such-job"),
+                     lambda: self.board.answer(self.repo, {"job_id": "no-such-job"}, "allow"),
+                     lambda: self.board.answer(self.repo, {"job_id": "no-such-job"}, "deny")):
+            with self.assertRaises(RuntimeError):
+                call()
+
+    def test_recovery_guidance_arrives_as_the_structured_dict(self):
+        guide = self.board.recovery(self.repo, job_id="no-such-job")
+        self.assertIsInstance(guide, dict)
+        self.assertEqual(guide["scope"], {"job_id": "no-such-job"})
+        self.assertEqual(guide["state"], "unknown")
+
+    def test_paint_has_no_direct_state_access(self):
+        source = inspect.getsource(rig_tui._paint)
+        for forbidden in ("rig_queue.", "rig_jobs.", "recovery_guide."):
+            self.assertNotIn(forbidden, source)
+
+
+class ActionFallbackRules(unittest.TestCase):
+    def board(self, call, **kw):
+        ensure = mock.Mock()
+        return ApiBoard(call=call, ensure=ensure, **kw), ensure
+
+    def test_unreachable_server_runs_the_direct_action_once_and_spawns_throttled(self):
+        def down(*a, **k):
+            raise ConnectionError("not running")
+
+        board, ensure = self.board(down)
+        with mock.patch.object(DirectBoard, "enqueue", return_value={"id": "q1"}) as direct:
+            self.assertEqual(board.enqueue(Path("/x"), "t", "k"), {"id": "q1"})
+            board.enqueue(Path("/x"), "t", "k")
+        self.assertEqual(direct.call_count, 2)
+        ensure.assert_called_once()
+
+    def test_failure_after_sending_never_reruns_directly(self):
+        def slow(*a, **k):
+            raise socket.timeout("timed out")
+
+        board, _ = self.board(slow)
+        with mock.patch.object(DirectBoard, "cancel_job") as direct:
+            with self.assertRaises(socket.timeout):
+                board.cancel_job(Path("/x"), "j1")
+        direct.assert_not_called()
+
+    def test_error_response_is_raised_with_its_message(self):
+        board, _ = self.board(lambda *a, **k: {"error": {"code": -32000, "message": "Rig is disabled"}})
+        with mock.patch.object(DirectBoard, "enqueue") as direct:
+            with self.assertRaisesRegex(RuntimeError, "Rig is disabled"):
+                board.enqueue(Path("/x"), "t", "k")
+        direct.assert_not_called()
+
+    def test_action_parameters_and_result_shapes(self):
+        seen = []
+
+        def fake(repo, method, params, timeout=0):
+            seen.append((method, params))
+            return {"result": {"text": "ok text", "structured": {"id": "q9", "status": "cancelled"}}}
+
+        board, _ = self.board(fake)
+        self.assertEqual(board.cancel_job(Path("/x"), "j1"), "ok text")
+        self.assertEqual(board.cancel_queue(Path("/x"), "q9")["status"], "cancelled")
+        board.answer(Path("/x"), {"job_id": "j1"}, "allow")
+        board.answer(Path("/x"), {"job_id": "j1"}, "deny")
+        board.recovery(Path("/x"), job_id="j1", workflow_id=None)
+        self.assertEqual(seen, [("job.cancel", {"id": "j1", "reason": "tui"}), ("queue.cancel", {"id": "q9"}),
+                                ("job.allow", {"id": "j1"}), ("job.deny", {"id": "j1"}),
+                                ("recovery.guide", {"job_id": "j1"})])
+
+    def test_direct_board_is_the_default_so_existing_behaviour_is_kept(self):
+        self.assertIn("backend or DirectBoard()", inspect.getsource(rig_tui._paint))
 
 
 if __name__ == "__main__":

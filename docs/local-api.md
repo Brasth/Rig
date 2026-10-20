@@ -5,8 +5,9 @@
 JSON-RPC 2.0, one JSON object per line, over `api.sock` in the private runtime
 directory. Start it with `rig api serve`. Each request carries `token` (the
 contents of `api.token` beside the socket, mode 0600). Every response carries
-`"rig_api": 1`. A method returns `{"text": ..., "json": ...}` where `json`
-is present when the tool's text parses as a JSON object or array. Tool errors
+`"rig_api": 1`. A method returns `{"text": ...}` plus `json` when the text
+parses as a JSON object or array and `structured` when the tool returns a
+structured result (queue items, recovery guidance). Tool errors
 are JSON-RPC errors with code -32000. `repo` in params is ignored: the server is bound to one
 repository. Owner tokens are never returned, and workers may not serve the API.
 
@@ -23,6 +24,7 @@ repository. Owner tokens are never returned, and workers may not serve the API.
 | `queue.add` | yes | `rig_queue_add` | Park a task in the queue |
 | `queue.cancel` | yes | `rig_queue_cancel` | Cancel a pending queue item |
 | `queue.list` | no | `rig_queue_list` | List queue items |
+| `recovery.guide` | no | `rig_recovery_guide` | Recorded recovery evidence for a job or workflow |
 | `session` | no | `rig_session` | Routing and session view for a case |
 | `status` | no | `rig_status` | Parent and worker availability |
 | `workflows.list` | no | `rig_workflows` | List workflows |
@@ -30,3 +32,6 @@ repository. Owner tokens are never returned, and workers may not serve the API.
 | `api.methods` | no | none | List the methods this server offers |
 | `api.ping` | no | none | Check the server and protocol version |
 | `board.snapshot` | no | none | Board view: jobs window, pending queue, slots, settings rows and workflows |
+| `events.ack` | yes | none | Acknowledge one notice, or all, for a companion session |
+| `events.list` | no | none | Notices for a companion session: approvals, finished work, verification, stop progress |
+| `ui.request` | yes | none | Companion operations (snapshot, enqueue, stop, reply, details, sessions) on the hosted UI service |

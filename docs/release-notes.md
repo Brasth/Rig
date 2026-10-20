@@ -1,5 +1,11 @@
 # Release Notes
 
+## One local API for the board and the companion (2026-10-20)
+
+The board's enqueue, stop, answer and recovery-guidance actions now go through the local API (`queue.add`, `queue.cancel`, `job.cancel`, `job.allow`, `job.deny`, `recovery.guide`). An action falls back to the old direct call only when the API server cannot be reached at all; a request that may already have reached the server is never re-run, and an error the API reports (a disabled project, an unknown item) is shown, not bypassed. Tool results now include a `structured` field where the MCP tool returns one.
+
+The tmux companion's separate `control.sock` is gone. The API server now hosts the same companion service: `ui.request` carries the old operations unchanged, `events.list` and `events.ack` expose notices, and every call needs the API token. `rig ui serve` starts that server. It stays up while a companion session is registered or an action is running and exits after 15 idle seconds otherwise. Companion behavior, receipts and notices are unchanged. Curses board settings panels (Jev key, picker engine, objective, routing domains) still edit configuration directly.
+
 ## Board reads through the local API (2026-10-20)
 
 `rig tui` now fetches its jobs, queue, slot, settings and workflow data from the local API (new read-only `board.snapshot` method). If no API server answers, the board starts a detached one that exits after 60 idle seconds and, for that frame and until the server is up, falls back to the previous direct reads, labelled "direct read, API unavailable" in the status line, so the board never blanks. `rig api serve --idle SECONDS` sets the idle exit (default: never). Set `RIG_TUI_API=0` to keep fully direct reads. Board actions (enqueue, stop, answer, routing and key settings, recovery guidance) and the tmux companion are unchanged in this step.

@@ -112,7 +112,7 @@ has started since it was written; the rest is open.
 Each phase ends on a named check, following the canvas. Sizes are relative
 (S, M, L). Phase 0 needs no decision from anyone; it is the next work.
 
-### Phase 0 · Foundation (size M, 4 PRs; 0.1 dropped)
+### Phase 0 · Foundation (size M, 4 PRs; 0.1 dropped) · COMPLETE 2026-10-20
 
 > Status 2026-10-20: PR 0.1 (CI and packaging workflows) is **dropped**. The repo
 > does not use GitHub Actions; the local `tests/run_tests.py` remains the
@@ -192,17 +192,11 @@ Each phase ends on a named check, following the canvas. Sizes are relative
   profile.
 - Exit check: `rig doctor` prints the active profile and the tool count.
 
-**0.5 The curses board reads through the API (M).** *Status 2026-10-20: slice 0.5a done (board snapshot reads via `board.snapshot`, API-first `ApiLoader` with labelled direct-read fallback, idle-limited auto-start). Still open for 0.5b/0.5c: board actions (enqueue, cancel, answer, routing and jev settings, recovery guide) and detail views through the API, `events.subscribe`, and moving `ui_popup.py` and the status row off `control.sock`. The "board never opens `.rig/jobs`" exit check is therefore not yet met.*
-- `tui_runtime.load_snapshot` becomes an API client; the in-process
-  loader stays as a fallback flagged `stale: true` only when the API is
-  unreachable, and the board shows that state (the existing "refresh
-  failed, snapshot stale" path in `docs/tui-design.md`).
-- Actions in `BoardRuntime.submit` go through `job.*` and `queue.*` methods.
-- Migrate `ui_popup.py` and the status row to the same client; retire the
-  bespoke ops in `ui_service.py` once nothing calls them.
-- Tests: existing TUI tests run against a fake API server; one test proves
-  the board process never opens `.rig/jobs` directly (patch `open`/`Path`
-  in `jobs.list_jobs` to raise).
+**0.5 The curses board reads through the API (M).** *Status 2026-10-20: done as 0.5a to 0.5c.*
+- *0.5a: board snapshot reads via `board.snapshot`; `ApiLoader` falls back to direct reads, labelled in the status line.*
+- *0.5b: board actions via `ApiBoard` (`DirectBoard` stays the default for `_paint`, tests and `RIG_TUI_API=0`). Actions fall back to direct calls only when the server is unreachable, never after a request may have been sent; API errors are raised. `_paint` contains no direct job, queue or recovery access, and a test enforces it.*
+- *0.5c: the API server hosts `ui_service.Service`; `ui_service.request` and `ensure_service` target it, `control.sock` and its listener are removed, and `events.list` / `events.ack` expose notices (this replaces the planned `events.subscribe` stream, which no consumer needs before the Phase 1 shell). The popup, status row and launcher needed no code change.*
+- *Out of scope by decision: the Settings tab's Jev key, picker engine, objective and routing-domain editors still write configuration directly, since they edit `~/.rig` and `harness.toml`, not job, queue or workflow state.*
 - Exit check (canvas Phase 0 exit): the curses board reads state only
   through the API, and the contract tests pass.
 

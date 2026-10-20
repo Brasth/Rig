@@ -45,7 +45,7 @@ def main(argv=None):
         from ui_service import request
         from ui_store import runtime_directory
         try:
-            value = request(runtime_directory(Path(args.repo)) / "control.sock",
+            value = request(runtime_directory(Path(args.repo)) / "api.sock",
                             {"op": "snapshot", "session": args.session, "width": args.width,
                              "manager_key": args.manager_key, "add_key": args.add_key}, timeout=0.3)
             line = value.get("status_line") or "Rig · status unavailable · F8 Manage"

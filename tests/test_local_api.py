@@ -194,6 +194,77 @@ class Served(unittest.TestCase):
         self.assertIn("uninitialized", bare.stderr)
 
 
+class HostedCompanion(Served):
+    """The API server hosts the companion UI service that control.sock used to."""
+
+    def call(self, method, params=None):
+        return local_api.call(self.repo, method, params or {})
+
+    def test_plain_api_use_does_not_create_ui_state(self):
+        self.start()
+        self.call("api.ping")
+        self.assertEqual(self.call("ui.request", {"payload": {"op": "ping"}})["result"]["ok"], True)
+        self.assertFalse((self.repo / ".rig" / "ui").exists())
+
+    def test_ui_request_snapshot_enqueue_and_unknown_op(self):
+        self.start()
+        snap = self.call("ui.request", {"payload": {"op": "snapshot", "session": "s1", "width": 120}})["result"]
+        self.assertIn("status_line", snap)
+        receipt = self.call("ui.request", {"payload": {"op": "enqueue", "text": "hosted queue",
+                                                       "submission_id": "sub", "action_id": "act1"}})["result"]
+        self.assertIn(receipt["status"], ("pending", "done"))
+        deadline = time.monotonic() + 5
+        while receipt["status"] == "pending" and time.monotonic() < deadline:
+            time.sleep(0.05)
+            receipt = self.call("ui.request", {"payload": {"op": "action", "action_id": "act1"}})["result"]
+        self.assertEqual((receipt["status"], receipt["result"]["text"]), ("done", "hosted queue"))
+        bad = self.call("ui.request", {"payload": {"op": "nope"}})["result"]
+        self.assertEqual(bad["status"], "error")
+        self.assertIn("Unknown UI operation", bad["error"])
+
+    def test_ui_request_rejects_malformed_payloads(self):
+        self.start()
+        for payload in (None, [], {}, {"op": 5}):
+            reply = self.call("ui.request", {"payload": payload})
+            self.assertEqual(reply["error"]["code"], local_api.INVALID_PARAMS, payload)
+
+    def test_events_list_and_ack_validate_and_work(self):
+        self.start()
+        listed = self.call("events.list", {"session": "s1"})["result"]
+        self.assertEqual(listed["notices"], [])
+        self.assertTrue(self.call("events.ack", {"session": "s1", "all": True})["result"]["ok"])
+        for method, params in (("events.list", {"session": 5}), ("events.list", {"session": "x" * 161}),
+                               ("events.ack", {"session": "s", "notice_id": 3}),
+                               ("events.ack", {"session": "s", "all": "yes"})):
+            self.assertEqual(self.call(method, params)["error"]["code"], local_api.INVALID_PARAMS, (method, params))
+
+    def test_registered_session_keeps_an_idle_server_alive_until_it_leaves(self):
+        endpoint, _ = self.start_with("--idle", "1")
+        self.call("ui.request", {"payload": {"op": "register", "session": "keep"}})
+        time.sleep(3.5)
+        self.assertIsNone(self.proc.poll(), "server must stay up while a session is registered")
+        self.call("ui.request", {"payload": {"op": "unregister", "session": "keep"}})
+        self.proc.wait(timeout=15)
+        self.assertFalse(endpoint.exists())
+
+    def test_old_control_socket_is_gone(self):
+        self.start()
+        self.assertFalse((local_api.runtime_paths(self.repo)[0].parent / "control.sock").exists())
+
+    def start_with(self, *extra):
+        self.proc = subprocess.Popen([sys.executable, self.script, "serve", "--repo", str(self.repo), *extra],
+                                     env=self.env, stderr=subprocess.PIPE, text=True)
+        endpoint, _ = local_api.runtime_paths(self.repo)
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            try:
+                local_api.call(self.repo, "api.ping")
+                return endpoint, None
+            except OSError:
+                time.sleep(0.05)
+        self.fail("API did not start")
+
+
 class Doc(unittest.TestCase):
     def test_generated_doc_is_current(self):
         self.assertEqual((ROOT / "docs" / "local-api.md").read_text(), local_api.render_doc(),
