@@ -101,7 +101,7 @@ def parent_command(repo: Path, parent: str = "", override: str = "") -> list[str
         return shlex.split(override)
     name = parent or harness.preferred_parent(repo)
     if not name:
-        raise ShellError("no parent set; run rig parent NAME or pass --parent NAME")
+        raise ShellError('no parent set; pass --parent NAME or add parent = "NAME" above the first section of .rig/harness.toml')
     if name not in PANE_PARENTS:
         raise ShellError(f"parent {name!r} cannot run in a pane; use one of {', '.join(PANE_PARENTS)}")
     binary = harness.find_worker_bin(name)
