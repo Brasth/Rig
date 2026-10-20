@@ -60,6 +60,7 @@ usage: rig <command> [args]
   browser-skill [status|setup|on|off|doctor]
   status
   worktrees list|register [--json]   # discovery/identity only; does not enable execution
+  web [--port N] [--open]                # read-only board in the browser, 127.0.0.1 only
   adapters list|validate DIR|check DIR   # worker CLIs shipped as adapter packages (docs/adapters.md)
   worktrees status [--json] | plan|create|commit|remove --job ID   # per-job worktrees ([worktrees] mode = "per-job")
   use codex|grok|opencode|omp|pi|agy
@@ -1602,6 +1603,7 @@ main() {
     doctor) cmd_doctor "$@" ;;
     status) cmd_status "$@" ;;
     worktrees) python3 "$(py_script worktrees.py)" "$@" --repo "$PWD" ;;
+    web) python3 "$(py_script web_board.py)" "$@" --repo "$PWD" ;;
     adapters)
       if [[ "${1:-}" == "check" ]]; then shift; python3 "$(py_script adapter_check.py)" "$@"
       else python3 "$(py_script adapters.py)" "$@"; fi ;;

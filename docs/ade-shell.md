@@ -13,6 +13,7 @@ An optional terminal layout for working with a parent agent while Rig runs worke
 | `rig init --sandbox` | Detect the workspace and, for a folder with no devcontainer, store dc-cli's generated config under `.rig/sandbox/override.json`; `--write-devcontainer` turns it into `.devcontainer/devcontainer.json` |
 | `rig env up`, `down`, `status`, `ports [--json]` | Start or stop the workspace container, show what dc-cli reports, and list the ports it forwards |
 | `rig env recover [--apply ID]` | Show the one next step `dc recover` proposes; apply it only by naming the plan id, and only if Rig allows that action (see [Environment recovery](#environment-recovery)) |
+| `rig web [--port N] [--open]` | A read-only board in the browser: the same Jobs, Queue, Workflows, Workspace, Fleet and Logs views, and the evidence drawer, from the same server-built data. 127.0.0.1 only |
 | `rig adapters list`, `validate DIR`, `check DIR` | Add a worker CLI as an adapter package ([reference](adapters.md)) |
 | `rig worktrees status [--json]`, `plan`, `create`, `commit`, `remove --job ID` | Per-job worktrees, below. `status` lists leftover job worktrees and the stopped containers keyed to them, and removes nothing |
 | `rig doctor [--workspace]` | Adds `workspace`, `dc-cli` and `rig-shell` checks. `--workspace` also runs dc-cli's own diagnosis |
@@ -47,6 +48,14 @@ The **Logs** tab follows the log of the job selected on the Jobs tab (the job wo
 **`s`** opens a real interactive shell in the job's container. The server decides the command: `dc exec --no-start <workspace>`, where the workspace is the job's own worktree when its container is keyed by that worktree and the repository otherwise. `--no-start` means a shell can enter a container that is running and never start one. If there is no running container, or dc-cli is missing, the board says why and runs nothing. While the shell is open the board is suspended and the terminal is the shell's; exiting returns to the board.
 
 What this deliberately does not do: embed the parent CLI in a pane. That needs a terminal emulator inside the board, which is a large dependency for little gain. Without tmux, run the parent in another terminal. The tmux layout is unchanged.
+
+## Web board
+
+`rig web` prints a URL such as `http://127.0.0.1:41603/?token=…` and serves until you stop it (`--idle N` exits after N quiet seconds, `--open` opens your browser). The first visit trades the token for a cookie and drops it from the address bar. The page polls the local API every two seconds while it is visible and shows exactly what the server built: labels, tones, glyphs, ordering, sections. It never works out job state itself. Deep links work: `#Fleet`, `#Jobs/<job id>`, `#Jobs/<job id>/evidence`, `#Logs`.
+
+It cannot change anything. The only methods reachable are `api.ping`, `board.snapshot`, `workspace.status`, `fleet.status`, `job.evidence` and `log.follow`, from an allowlist (so a method added to the API later is not reachable until someone lists it), each with validated parameters; every request that is not GET or HEAD gets 405. Hardening: it binds 127.0.0.1 and has no host option; the token is 256 bits and compared in constant time; the `Host` header must be the bound address (DNS rebinding); cross-site requests are refused; there are no CORS headers; the Content-Security-Policy allows scripts and styles only from the page's own origin (no inline code, no external loads); and worker-supplied text only ever enters the page as text, never as HTML.
+
+What it is not: a way to answer a prompt, stop a job or enqueue work. Those stay in the terminal board, where a confirmation can be given at the keyboard that is running the project.
 
 ## Evidence drawer, Fleet and recovery
 
