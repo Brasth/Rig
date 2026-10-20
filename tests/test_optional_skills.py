@@ -177,7 +177,8 @@ fi
         wrapper.write_text(f'#!/bin/bash\nexec bash "{ROOT / "install.sh"}" --no-mimo\n')
         self.run_rig("init")
         result = self.run_rig("update", expected_code=2, RIG_INSTALL_SH=str(wrapper))
-        self.assertIn("--revision", result.stderr)
+        # The installer leaves an unversioned kit, so the guided helper prints the migration hint (on stdout).
+        self.assertIn("update --migrate --latest --dry-run", result.stdout)
         self.run_rig("init")
         self.assert_global(False)
         self.assert_project(False)

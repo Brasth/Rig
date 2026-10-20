@@ -77,7 +77,10 @@ def requested(job_dir, attempt_id="", reservation_id=""):
         if reservation_id:
             import admission
             import workflow_cancellation
-            root = folder.resolve().parents[2]
+            parents = folder.resolve().parents
+            if len(parents) < 3:  # not shaped like <root>/.rig/jobs/<id>, so no reservation can name it
+                return False
+            root = parents[2]
             admitted = admission.get_reservation(root, reservation_id)
             if (admitted and admitted.get("attempt_id") == attempt_id
                     and admitted.get("job_id") == folder.name):

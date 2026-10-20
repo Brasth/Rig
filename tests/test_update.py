@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import os
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -94,6 +95,21 @@ class RigUpdate(unittest.TestCase):
             "RIG_REPO_URL": str(self.root / "no-such-remote.git"),
         }
 
+    def _seed_versioned_kit(self):
+        """An installed runtime at a known commit, so bare `rig update` has a baseline to describe."""
+        sys.path.insert(0, str(ROOT / "scripts"))
+        import runtime_update as update
+        owned = self.rig_home / "VERSION"
+        owned.write_text("fixture\n")
+        after = update.snapshot(owned)
+        manifest = {"version": 1, "runtime_owned": True, "repos": [],
+                    "entries": {str(owned): {"before": {"kind": "missing"}, "after": after}}}
+        update.write_json(self.rig_home / "install-manifest.json", manifest)
+        update.write_json(self.rig_home / "runtime-state.json", {
+            "schema_version": 1, "commit": "a" * 40, "compatibility": update.COMPAT, "last_transaction": None,
+            "owned_hashes": {str(owned): update.digest(after)}})
+        (self.rig_home / "updates").mkdir(mode=0o700)
+
     def tearDown(self):
         self.td.cleanup()
 
@@ -116,9 +132,10 @@ class RigUpdate(unittest.TestCase):
                 self.assertFalse((self.repo / ".rig").exists())
 
     def test_bare_update_requires_explicit_operation_and_never_runs_installer(self):
+        self._seed_versioned_kit()
         proc = _run(self.repo, "update", env=self.base_env)
         self.assertEqual(proc.returncode, 2, proc.stdout + proc.stderr)
-        self.assertIn("--revision", proc.stderr)
+        self.assertIn("--revision", proc.stdout)  # the guided helper prints its instructions on stdout
         self.assertFalse((self.rig_home / "install-ran").exists())
         self.assertFalse((self.repo / ".rig").exists())
 
