@@ -15,6 +15,10 @@ echo-agent = true
 
 An adapter worker is chosen by name (`worker = "echo-agent"` on a launch); smart routing never picks it, and Rig has no model catalog for it, so the model you pass is used as given. Continuing a job with a native session (resume) is not supported.
 
+## Trust
+
+An adapter names the program Rig runs and the arguments it gets, so installing one is as trusted as installing any program you run: only add adapters you have read. The validator refuses secrets in argv and paths for `binary`, but it cannot tell a harmless executable from a harmful one. A project still has to opt in by listing the worker under `[workers]`.
+
 ## The manifest
 
 ```json
