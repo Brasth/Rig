@@ -21,6 +21,8 @@ from pathlib import Path
 
 import change_evidence as evidence
 import acceptance_contract as contracts
+import worktree_merge
+import worktrees
 from admission import mutation_guard
 
 
@@ -52,7 +54,12 @@ def _meta(folder):
 
 
 def _scope(repo, folder):
-    return evidence.normalize_files(repo, _meta(folder).get("files", []))
+    return evidence.normalize_files(evidence.work_root(repo, folder), _meta(folder).get("files", []))
+
+
+def _snapshot(repo, folder, cache=None):
+    """The subject snapshot, read from the checkout the job's files live in (its worktree, if any)."""
+    return evidence.job_snapshot(repo, folder, _scope(repo, folder), cache=cache)
 
 
 def _argv(argv):
@@ -195,12 +202,12 @@ def _container_check(root, folder, command, directory):
     """
     import sandbox_provider
     try:
-        provider = sandbox_provider.provider_for(root)
+        provider = sandbox_provider.provider_for(root, folder)
         if provider.name == "host":
             return None, None, None
         token = uuid.uuid4().hex
         stop, beat = folder / "checks" / f".{token}.stop", folder / "checks" / f".{token}.hb"
-        argv = provider.check_command(command, root / directory, stop, beat)
+        argv = provider.check_command(command, evidence.work_root(root, folder) / directory, stop, beat)
         return argv, (stop, beat), {"provider": provider.name, "container": provider.container_info()}
     except sandbox_provider.SandboxError as error:
         raise VerificationError(f"cannot run this check in the sandbox: {error}") from error
@@ -210,7 +217,8 @@ def run_check(repo, job_dir, name, argv, cwd=None, on_tick=None, *,
               reservation_id="", attempt_id="", owner_token="", owner_session=""):
     _parent_only()
     root, folder = evidence.repository(repo), evidence.job_directory(repo, job_dir)
-    command, directory, name = _argv(argv), evidence.normalize_cwd(root, cwd), _name(name)
+    work = evidence.work_root(root, folder)
+    command, directory, name = _argv(argv), evidence.normalize_cwd(work, cwd), _name(name)
     container_argv, lease_files, sandbox_record = _container_check(root, folder, command, directory)
     with mutation_guard(root, folder, "check", reservation_id=reservation_id,
                         attempt_id=attempt_id, owner_token=owner_token, owner_session=owner_session):
@@ -221,7 +229,7 @@ def run_check(repo, job_dir, name, argv, cwd=None, on_tick=None, *,
             wanted = next((row for row in manifest["requirements"] if row["id"] == name), None)
             if wanted != {"id": name, "argv": command, "cwd": directory}:
                 raise VerificationError("check name, argv, and cwd must match its declared requirement exactly")
-            subject = evidence.snapshot(root, _scope(root, folder))
+            subject = _snapshot(root, folder)
             check_id = name + "-" + uuid.uuid4().hex
             checks = folder / "checks"
             checks.mkdir(exist_ok=True)
@@ -252,7 +260,7 @@ def run_check(repo, job_dir, name, argv, cwd=None, on_tick=None, *,
                 if container_argv:
                     from sandbox_container import Lease
                     lease = Lease(lease_files[1], lease_files[0]).__enter__()
-                process = subprocess.Popen(container_argv or command, cwd=root / directory, shell=False,
+                process = subprocess.Popen(container_argv or command, cwd=work / directory, shell=False,
                                            stdout=stdout, stderr=stderr)
                 active["process_pid"] = process.pid
                 evidence.write_json(folder / "check-running.json", active)
@@ -284,7 +292,7 @@ def run_check(repo, job_dir, name, argv, cwd=None, on_tick=None, *,
             try:
                 record["ended_at"] = evidence.now()
                 try:
-                    record["after_snapshot_id"] = evidence.snapshot(root, _scope(root, folder))["snapshot_id"]
+                    record["after_snapshot_id"] = _snapshot(root, folder)["snapshot_id"]
                 except (OSError, ValueError) as error:
                     record["snapshot_error"] = str(error)
                 record["status"] = "error" if failure else "passed" if record["exit_code"] == 0 else "failed"
@@ -384,7 +392,7 @@ def record_criterion(repo, job_dir, criterion_id, contract_fingerprint, snapshot
         criterion = next((row for row in frozen["contract"]["criteria"] if row["id"] == criterion_id), None)
         if not criterion or criterion["evidence_type"] != "review_assertion":
             raise VerificationError("criterion is not a declared review assertion; checks require actual execution")
-        current = evidence.snapshot(root, _scope(root, folder))
+        current = _snapshot(root, folder)
         if not snapshot_id or current["snapshot_id"] != snapshot_id:
             raise VerificationError("content_changed: review assertion requires the current subject snapshot")
         refs = contracts.artifact_refs(folder, evidence_refs, criterion["artifact_kind"], criterion_id=criterion_id)
@@ -420,9 +428,14 @@ def accept(repo, job_dir, decision, snapshot_id, check_ids=None, rationale="", n
     with mutation_guard(root, folder, "accept", reservation_id=reservation_id,
                         attempt_id=attempt_id, owner_token=owner_token, owner_session=owner_session) as reservation, _lock(folder):
         _idle(folder)
+        isolated = worktrees.job_record(folder)
+        if isolated and (isolated.get("merged") or isolated.get("nothing_to_merge")) and decision == "accept":
+            stored = evidence.read_json(folder / "verification.json") or {}
+            if stored.get("acceptance") == "accepted" and stored.get("snapshot_id") == snapshot_id:
+                return stored  # already merged: the files now live in the base checkout
         meta, manifest = _meta(folder), _manifest(root, folder)
         frozen = contracts.load(root, folder, meta)
-        current = evidence.snapshot(root, _scope(root, folder))
+        current = _snapshot(root, folder)
         if not snapshot_id or current["snapshot_id"] != snapshot_id:
             raise VerificationError("content_changed: acceptance requires the current subject snapshot")
         selected = set(check_ids or [])
@@ -452,6 +465,15 @@ def accept(repo, job_dir, decision, snapshot_id, check_ids=None, rationale="", n
             return previous
         if reservation.get("stage") == "released":
             raise VerificationError("released attempt permits only an identical accepted completion; start a fresh attempt")
+        if isolated and decision == "accept" and next == "complete":
+            # The overlap check admission skipped for worktree writers happens here, before acceptance is written.
+            try:
+                merged = worktree_merge.merge(root, folder, snapshot_id)
+            except worktree_merge.GateRefused as error:
+                raise VerificationError(f"merge_gate:{error.reason}: {error}") from error
+            except worktrees.WorktreeError as error:
+                raise VerificationError(f"merge_gate: {error}") from error
+            values.update(merge_commit=merged.get("merge_commit", ""), merged_paths=merged.get("changed", []))
         values.update(accepted_at=evidence.now() if decision == "accept" else "",
                       parent_identity={"pid": os.getpid(), "cli": os.environ.get("RIG_PARENT", ""),
                                        "thread": owner_session or reservation.get("owner", {}).get("session_id", "")})
@@ -543,7 +565,7 @@ def assessment(repo, job, refresh=False, cache=None):
     if not refresh:
         return result
     try:
-        current = evidence.snapshot(root, _scope(root, folder), cache=cache)
+        current = _snapshot(root, folder, cache=cache)
         result["current_snapshot_id"] = current["snapshot_id"]
         result["freshness"] = "current"
         if stored.get("snapshot_id") != current["snapshot_id"]:

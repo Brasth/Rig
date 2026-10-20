@@ -50,6 +50,13 @@ enabled = false
 # the dc-cli backend and is refused at launch until that backend ships.
 provider = "host"
 
+[worktrees]
+# "off" keeps every writer in this checkout under file reservations. "per-job"
+# runs each write job in its own git worktree and branch and checks for
+# conflicts when the parent accepts the work. Only mode is read by default;
+# container = "per-job" gives each worktree its own dc-cli container.
+mode = "off"
+
 [mcp]
 # Parent tool list. By default every parent tool is listed ("full"). Add a
 # profile key with the value "core" to hide cost reporting, benchmark and

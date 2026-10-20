@@ -1183,7 +1183,7 @@ def _job_acceptance(root, job_id, files, acceptance_contract=None):
         return matches and current.get("state") == "verified", current.get("snapshot_id") or ""
     try:
         import change_evidence as evidence
-        current = evidence.snapshot(root, files or [])["snapshot_id"]
+        current = evidence.job_snapshot(root, root / ".rig" / "jobs" / job_id, files or [])["snapshot_id"]
     except (OSError, ValueError, TypeError, RuntimeError, KeyError):
         return False, ""
     if not stored.get("snapshot_id") or stored.get("snapshot_id") != current:

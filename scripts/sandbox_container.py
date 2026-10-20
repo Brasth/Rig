@@ -31,7 +31,7 @@ RUNTIME = HERE.parent  # RIG_HOME when installed, the checkout when run from one
 LEASE_SECONDS = 15
 STOP_FILE = "container-stop"
 HEARTBEAT_FILE = "container-heartbeat"
-ENV_KEYS = ("RIG_JOB_ID", "RIG_JOB_DIR", "RIG_REPO", "RIG_ROLE")
+ENV_KEYS = ("RIG_JOB_ID", "RIG_JOB_DIR", "RIG_REPO", "RIG_ROLE", "RIG_WORKDIR")
 
 # argv: cwd stop-file heartbeat-file lease command...
 # The heartbeat is compared by content, not by time, so clock drift between a
@@ -142,8 +142,10 @@ class Lease:
 class DevcontainerProvider(SandboxProvider):
     name = "devcontainer"
 
-    def __init__(self, repo, credentials: dict | None = None):
+    def __init__(self, repo, credentials: dict | None = None, workspace=None):
         self.repo = Path(repo).resolve()
+        # The folder dc-cli keys the container by: the repository, or a job's worktree in per-job container mode.
+        self.workspace = Path(workspace).resolve() if workspace else self.repo
         self.credentials = dict(credentials or {})
         self.home = Path(os.path.expanduser("~"))
 
@@ -173,12 +175,12 @@ class DevcontainerProvider(SandboxProvider):
         job = Path(raw)
         command = container_modes.apply_permissions(worker, [os.path.basename(cmd[0]), *cmd[1:]])
         pairs = [f"HOME={self.home}"] + [f"{key}={env[key]}" for key in ENV_KEYS if env.get(key)]
-        return supervised(self.dc(), self.repo, self.repo, job / STOP_FILE, job / HEARTBEAT_FILE, command, pairs), dict(env)
+        return supervised(self.dc(), self.workspace, env.get("RIG_WORKDIR") or self.repo, job / STOP_FILE, job / HEARTBEAT_FILE, command, pairs), dict(env)
 
     def _probe_run(self, args: list[str], timeout: float = 60):
         import subprocess
         try:
-            return subprocess.run([self.dc(), "exec", "--no-start", str(self.repo), "--", "sh", "-c", args[0], "rig-probe", *args[1:]],
+            return subprocess.run([self.dc(), "exec", "--no-start", str(self.workspace), "--", "sh", "-c", args[0], "rig-probe", *args[1:]],
                                   capture_output=True, text=True, timeout=timeout, stdin=subprocess.DEVNULL)
         except subprocess.TimeoutExpired as error:
             raise SandboxError(f"the container did not answer within {timeout:.0f}s") from error
@@ -205,7 +207,7 @@ class DevcontainerProvider(SandboxProvider):
         """Facts about the container for evidence. Unknown fields stay empty, never invented."""
         import sandbox_env
         import workspace
-        status = sandbox_env.env_status(self.repo)
+        status = sandbox_env.env_status(self.workspace)
         rows = status["containers"]
         if not rows:
             return {"found": False, "note": status["error"] or "dc ls reported no container for this repository"}
@@ -217,7 +219,14 @@ class DevcontainerProvider(SandboxProvider):
     def prepare(self, worker: str, job_dir, job_id: str = "") -> dict:
         """Probe the container and record where this job runs. Called once before a live launch."""
         self.check_worker(worker)
+        if self.workspace != self.repo:
+            self.ensure_workspace_up()
         self.probe(worker)
+        if self.workspace != self.repo:
+            done = self._probe_run(['git -C "$1" rev-parse --git-dir >/dev/null 2>&1', str(self.workspace)], timeout=30)
+            if done.returncode != 0:
+                raise SandboxError(f"git does not work in {self.workspace} inside its container: the container config must "
+                                   "mount the repository's git directory at its own path (per-job worktree containers)")
         import datetime
         evidence = {"version": 1, "provider": "devcontainer", "worker": worker, "job_id": job_id,
                     "container": self.container_info(),
@@ -229,6 +238,13 @@ class DevcontainerProvider(SandboxProvider):
         os.replace(temporary, path)
         return evidence
 
+    def ensure_workspace_up(self) -> None:
+        """Start the per-job container for a worktree. Rig's own launcher does this, never the worker."""
+        done = dc_client.run(["up", str(self.workspace)], self.repo, timeout=900)
+        if done.returncode != 0:
+            tail = (done.stderr or done.stdout).strip().splitlines()
+            raise SandboxError(f"dc up {self.workspace} failed ({done.returncode}): {tail[-1] if tail else 'no output'}")
+
     # -- checks ----------------------------------------------------------
     def check_command(self, argv: list[str], cwd, stop_file, heartbeat_file) -> list[str]:
         """Probe that the check's directory is visible, then return the supervised argv."""
@@ -236,7 +252,7 @@ class DevcontainerProvider(SandboxProvider):
         if done.returncode != 0:
             raise SandboxError(f"the check directory {cwd} is not visible inside the workspace container; "
                                "is it running (rig env up) with the repository mounted at the same path?")
-        return supervised(self.dc(), self.repo, cwd, stop_file, heartbeat_file, list(argv), [])
+        return supervised(self.dc(), self.workspace, cwd, stop_file, heartbeat_file, list(argv), [])
 
     LOCAL_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", "0.0.0.0"})
 
@@ -244,7 +260,7 @@ class DevcontainerProvider(SandboxProvider):
         """Host ports dc-cli currently forwards to the container. Fails closed when it cannot say."""
         import workspace
         try:
-            text = dc_client.run_text(["forward", "--status"], self.repo, timeout=10)
+            text = dc_client.run_text(["forward", "--status"], self.workspace, timeout=10)
         except dc_client.DcError as error:
             raise SandboxError(f"cannot list forwarded ports, so localhost URLs are refused: {error}") from error
         return sorted({int(p["port"]) for p in workspace.parse_forward_status(text) if not p["problem"]})

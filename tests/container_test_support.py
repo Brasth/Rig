@@ -19,6 +19,7 @@ case "$1" in
     [ "$1" != "--" ] && shift  # the workspace positional
     [ "$1" = "--" ] && shift
     exec "$@" ;;
+  up|down) if [ -n "$FAKE_DC_UP_FAIL" ]; then echo "build failed" >&2; exit 3; fi; echo "dc $1 ok" ;;
   ls)
     if [ "${FAKE_DC_LS+set}" = set ]; then printf '%s\n' "$FAKE_DC_LS"; else echo '[]'; fi ;;
   forward)

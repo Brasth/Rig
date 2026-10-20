@@ -9,6 +9,7 @@ never a silent fall back to the host.
 from __future__ import annotations
 
 import argparse
+import os
 import json
 import subprocess
 import sys
@@ -64,7 +65,7 @@ class HostProvider(SandboxProvider):
         return {"provider": "host"}
 
 
-def provider_for(repo) -> SandboxProvider:
+def provider_for(repo, job_dir=None, workdir=None) -> SandboxProvider:
     config = harness.parse_harness(harness.harness_path(Path(repo)))["sandbox"]
     if config["error"]:
         raise SandboxError(config["error"])
@@ -76,7 +77,20 @@ def provider_for(repo) -> SandboxProvider:
             raise SandboxError("[sandbox] provider = \"devcontainer\" needs dc-cli, which is not installed (no `dc` on PATH); "
                                "install it or set provider = \"host\"")
         from sandbox_container import DevcontainerProvider
-        return DevcontainerProvider(repo, config["credentials"])
+        workspace = None
+        if workdir:  # launch time: the worktree is planned (and may not exist yet); the container follows the setting
+            import worktrees
+            if worktrees.settings(repo)["container"] == "per-job":
+                workspace = workdir
+        elif job_dir:
+            import worktrees
+            try:
+                record = worktrees.job_record(job_dir)
+            except worktrees.WorktreeError as error:
+                raise SandboxError(str(error)) from error
+            if record and record.get("container") == "per-job" and not (record.get("merged") or record.get("removed")):
+                workspace = record["path"]
+        return DevcontainerProvider(repo, config["credentials"], workspace)
     raise SandboxError(f"[sandbox] provider {config['provider']!r} is not available in this Rig runtime")
 
 
@@ -102,7 +116,8 @@ def main(argv=None) -> int:
                 raise SandboxError(config["error"])
             print(config["provider"])
             return 0
-        provider = provider_for(args.repo)
+        workdir = os.environ.get("RIG_WORKDIR") if os.environ.get("RIG_ISOLATION") == "worktree" else None
+        provider = provider_for(args.repo, getattr(args, "job_dir", None) or None, workdir)
         if args.command == "status":
             print(json.dumps(provider.status(Path(args.repo)), sort_keys=True))
         elif args.command == "prepare":
@@ -114,6 +129,8 @@ def main(argv=None) -> int:
                 raise SandboxError("wrap needs the worker command after --")
             env = {"RIG_JOB_ID": args.job_id, "RIG_JOB_DIR": args.job_dir,
                    "RIG_REPO": str(Path(args.repo).resolve()), "RIG_ROLE": args.role}
+            if os.environ.get("RIG_WORKDIR"):  # a worktree job edits its own checkout
+                env["RIG_WORKDIR"] = os.environ["RIG_WORKDIR"]
             wrapped, _ = provider.wrap_worker_cmd(args.argv, env, worker=args.worker, job_dir=args.job_dir or None)
             sys.stdout.buffer.write(b"".join(item.encode() + b"\0" for item in wrapped))
     except SandboxError as error:

@@ -258,7 +258,7 @@ def _binding(root, folder, pack):
                 if row.get("evidence_type") == "review_assertion" and row.get("artifact_kind") == "ui-pack"}
     if any(_identifier(value, "criterion ID") not in eligible for value in criteria):
         raise UIEvidenceError("UI pack must reference ui-pack review assertion criteria")
-    current = evidence.snapshot(root, meta.get("files", []))["snapshot_id"]
+    current = evidence.job_snapshot(root, folder, meta.get("files", []))["snapshot_id"]
     if pack.get("content_snapshot_id") != current:
         raise UIEvidenceError("UI pack content snapshot is not current")
     identity = {key: _text(artifact[key], "attempt identity", 200)

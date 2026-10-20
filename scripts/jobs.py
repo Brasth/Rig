@@ -1756,7 +1756,7 @@ def format_show(job: dict, log_lines: int = 24) -> str:
         if rec != "none":
             lines.append(f"review_recommendation  {rec} (not a completion gate)")
     try:
-        snapshot = change_evidence.snapshot(repo, job.get("files") or [], cache=hash_cache)
+        snapshot = change_evidence.job_snapshot(repo, job_dir, job.get("files") or [], cache=hash_cache)
         lines.append(f"snapshot_id  {snapshot['snapshot_id']}")
     except (OSError, ValueError):
         lines.append("snapshot_id  unavailable (declare a concrete file scope)")

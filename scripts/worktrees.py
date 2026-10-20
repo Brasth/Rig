@@ -11,6 +11,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import time
 import uuid
@@ -22,13 +23,13 @@ class WorktreeError(ValueError):
     pass
 
 
-def _git(repo, *args, allow_failure=False):
+def _git(repo, *args, allow_failure=False, timeout=15):
     # Caller Git environment must not redirect discovery into another checkout.
     env = {key: value for key, value in os.environ.items() if not key.startswith('GIT_')}
     env['GIT_OPTIONAL_LOCKS'] = '0'
     try:
         result = subprocess.run(['git', '-C', str(repo), *args], env=env,
-                                capture_output=True, timeout=15)
+                                capture_output=True, timeout=timeout)
     except (OSError, subprocess.TimeoutExpired) as error:
         raise WorktreeError(f'Git discovery failed: {error}') from error
     if result.returncode and allow_failure:
@@ -177,7 +178,176 @@ def register(repo):
         return {'repository_id': registry['repository_id'], 'worktree_id': identity, **context}
 
 
+# -- per-job worktrees (Phase 3) ------------------------------------------------------
+# The state root (the main checkout's .rig) never moves. A worktree job also has a work root, the
+# checkout its worker edits; <job dir>/worktree.json is the only record and the proof Rig made it.
+JOB_RECORD = 'worktree.json'
+READ_ROLES = {'review', 'reviewer', 'explore', 'explorer', 'verify'}
+COMMIT_IDENTITY = ('-c', 'user.name=rig', '-c', 'user.email=rig@localhost', '-c', 'commit.gpgsign=false')
+
+
+def settings(repo):
+    return harness.parse_harness(harness.harness_path(Path(repo)))['worktrees']
+
+
+def job_branch(job_id):
+    return f'rig/{job_id}'
+
+
+def job_path(repo, job_id):
+    return Path(repo).resolve() / '.rig' / 'worktrees' / job_id
+
+
+def plan(repo, job_id, role='worker', access='', writer_job=''):
+    """Where a job's worker edits. Isolated only for write jobs when [worktrees] mode is per-job."""
+    root = Path(repo).resolve()
+    config = settings(root)
+    access = access or ('read' if role.lower() in READ_ROLES else 'write')
+    isolated = config['mode'] == 'per-job' and access == 'write' and not config['error']
+    path = job_path(root, job_id) if isolated else root
+    if not isolated and access == 'read' and writer_job and not config['error']:
+        # A reviewer reads the writer's work, which lives in the writer's worktree until it is merged.
+        try:
+            record = job_record(root / '.rig' / 'jobs' / writer_job)
+        except WorktreeError:
+            record = None
+        if record and not (record.get('merged') or record.get('removed')) and Path(record['path']).is_dir():
+            path = Path(record['path'])
+    return {'isolated': isolated, 'error': config['error'], 'container': config['container'],
+            'path': str(path), 'branch': job_branch(job_id) if isolated else ''}
+
+
+def job_record(job_dir):
+    path = Path(job_dir) / JOB_RECORD
+    if not path.is_file():
+        return None
+    try:
+        value = json.loads(path.read_text())
+    except (OSError, ValueError) as error:
+        raise WorktreeError(f'worktree record is unreadable: {error}') from error
+    if not isinstance(value, dict) or value.get('version') != 1 or not isinstance(value.get('path'), str):
+        raise WorktreeError('worktree record is malformed')
+    return value
+
+
+def work_root(repo, job_dir):
+    """The checkout whose files a job's evidence, scope and checks refer to."""
+    record = job_record(job_dir)
+    # Once merged (or nothing to merge) the job's files live in the base checkout again.
+    if record and not (record.get('merged') or record.get('nothing_to_merge')):
+        return Path(record['path'])
+    return Path(repo).resolve()
+
+
+def _write_record(job_dir, record):
+    _atomic_json(Path(job_dir) / JOB_RECORD, record)
+
+
+def _exclude(common_dir, pattern):
+    path = Path(common_dir) / 'info' / 'exclude'
+    path.parent.mkdir(exist_ok=True)
+    current = path.read_text() if path.exists() else ''
+    if pattern not in current.splitlines():
+        path.write_text(current + ('' if current.endswith('\n') or not current else '\n') + pattern + '\n')
+
+
+def create_job(repo, job_dir):
+    """Make the job's worktree and branch from the base HEAD. Idempotent for the same job."""
+    root = Path(repo).resolve()
+    folder = Path(job_dir).resolve()
+    job_id = folder.name
+    existing = job_record(folder)
+    if existing:
+        if not Path(existing['path']).is_dir():
+            raise WorktreeError(f'worktree {existing["path"]} for job {job_id} is gone; the job cannot continue')
+        return existing
+    context = resolve(root)
+    if not context['head']:
+        raise WorktreeError('worktree mode needs at least one commit in the repository')
+    base_branch = os.fsdecode(_git(root, 'symbolic-ref', '--quiet', '--short', 'HEAD', allow_failure=True)).strip()
+    if not base_branch:
+        raise WorktreeError('worktree mode needs the base checkout on a branch, not a detached HEAD')
+    path, branch = job_path(root, job_id), job_branch(job_id)
+    if path.exists():
+        raise WorktreeError(f'{path} already exists and is not this job\'s recorded worktree')
+    if _git(root, 'rev-parse', '--verify', '--quiet', f'refs/heads/{branch}', allow_failure=True).strip():
+        raise WorktreeError(f'branch {branch} already exists')
+    path.parent.mkdir(parents=True, exist_ok=True)
+    _exclude(context['common_dir'], '/.rig/worktrees/')
+    _git(root, 'worktree', 'add', '-b', branch, str(path), context['head'], timeout=120)
+    record = {'version': 1, 'job_id': job_id, 'path': str(path.resolve()), 'branch': branch,
+              'base_branch': base_branch, 'base_head': context['head'], 'common_dir': context['common_dir'],
+              'created_at': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
+              'container': settings(root)['container'], 'branch_head': '', 'merged': False, 'merge_commit': ''}
+    _write_record(folder, record)
+    return record
+
+
+def commit_job(repo, job_dir):
+    """Commit what the worker left in its worktree so the merge gate has a commit. Never merges."""
+    folder = Path(job_dir).resolve()
+    record = job_record(folder)
+    if not record:
+        raise WorktreeError('this job has no worktree')
+    work = record['path']
+    _git(work, 'add', '-A', timeout=120)
+    if _git(work, 'diff', '--cached', '--name-only').strip():
+        _git(work, *COMMIT_IDENTITY, 'commit', '-q', '-m', f'rig job {record["job_id"]}', timeout=120)
+    record['branch_head'] = os.fsdecode(_git(work, 'rev-parse', 'HEAD')).strip()
+    _write_record(folder, record)
+    return record
+
+
+def _busy(path):
+    """PIDs whose working directory is inside path (Linux; elsewhere the caller relies on job state)."""
+    proc, found = Path('/proc'), []
+    if not proc.is_dir():
+        return found
+    target = str(Path(path).resolve())
+    for entry in proc.iterdir():
+        if not entry.name.isdigit() or int(entry.name) == os.getpid():
+            continue
+        try:
+            cwd = os.readlink(entry / 'cwd')
+        except OSError:
+            continue
+        if cwd == target or cwd.startswith(target + os.sep):
+            found.append(int(entry.name))
+    return found
+
+
+def remove_job(repo, job_dir, *, discard=False):
+    """Remove the worktree Rig made for a job. Never forces, never touches one Rig did not create."""
+    root = Path(repo).resolve()
+    folder = Path(job_dir).resolve()
+    record = job_record(folder)
+    if not record:
+        raise WorktreeError('this job has no recorded worktree; Rig only removes worktrees it created')
+    path = Path(record['path'])
+    expected = job_path(root, folder.name)
+    if path.resolve() != expected.resolve():
+        raise WorktreeError('recorded worktree path is not the job\'s own path; refusing')
+    busy = _busy(path) if path.exists() else []
+    if busy:
+        raise WorktreeError(f'processes are still running in the worktree (pid {", ".join(map(str, busy))})')
+    if path.exists():
+        if _git(path, 'status', '--porcelain').strip():
+            raise WorktreeError('the worktree has uncommitted changes; commit_job first or inspect them')
+        _git(root, 'worktree', 'remove', str(path), timeout=60)
+    branch = record['branch']
+    flag = '-D' if discard else '-d'
+    result = subprocess.run(['git', '-C', str(root), 'branch', flag, branch], capture_output=True, text=True,
+                            env={k: v for k, v in os.environ.items() if not k.startswith('GIT_')})
+    if result.returncode:
+        raise WorktreeError(f'worktree removed, but branch {branch} was kept (unmerged work; --discard deletes it)')
+    record.update(removed=True)
+    _write_record(folder, record)
+    return record
+
+
 def main():
+    if len(sys.argv) > 1 and sys.argv[1] in JOB_COMMANDS:
+        return job_main(sys.argv[1:])
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('command', choices=('list', 'register'))
     parser.add_argument('--repo', default=os.getcwd())
@@ -201,5 +371,39 @@ def main():
             print(f"{row['worktree_id']}  unresolved registration  {row['root']}")
 
 
+JOB_COMMANDS = ('plan', 'create', 'commit', 'remove')
+
+
+def job_main(argv):
+    parser = argparse.ArgumentParser(prog='rig worktrees', description='Per-job worktrees')
+    parser.add_argument('command', choices=JOB_COMMANDS)
+    parser.add_argument('--repo', default=os.getcwd())
+    parser.add_argument('--job', required=True)
+    parser.add_argument('--role', default='worker')
+    parser.add_argument('--access', default='')
+    parser.add_argument('--writer-job', default='')
+    parser.add_argument('--discard', action='store_true')
+    args = parser.parse_args(argv)
+    try:
+        import jobs
+        repo = jobs.repo_root(args.repo)
+        folder = Path(repo) / '.rig' / 'jobs' / args.job
+        if args.command == 'plan':
+            result = plan(repo, args.job, args.role, args.access, args.writer_job)
+            if result['error']:
+                raise WorktreeError(result['error'])
+        elif args.command == 'create':
+            result = create_job(repo, folder)
+        elif args.command == 'commit':
+            result = commit_job(repo, folder)
+        else:
+            result = remove_job(repo, folder, discard=args.discard)
+    except (WorktreeError, ValueError, SystemExit) as error:
+        print(f'rig worktrees: {error}', file=sys.stderr)
+        return 1
+    print(json.dumps(result))
+    return 0
+
+
 if __name__ == '__main__':
-    main()
+    sys.exit(main())
