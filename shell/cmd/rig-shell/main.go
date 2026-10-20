@@ -102,6 +102,10 @@ func (e *ensuringSource) Log(id string, lines int, timeout time.Duration) (*view
 	return e.client.Log(id, lines, timeout)
 }
 
+func (e *ensuringSource) Parent(timeout time.Duration) (*view.ShellPlan, error) {
+	return e.client.Parent(timeout)
+}
+
 func (e *ensuringSource) Shell(id string, timeout time.Duration) (*view.ShellPlan, error) {
 	return e.client.Shell(id, timeout)
 }
@@ -136,7 +140,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	wsFixture := fs.String("workspace-fixture", "", "render the Workspace tab for --once from a workspace.status JSON file")
 	fleetFixture := fs.String("fleet-fixture", "", "render the Fleet tab for --once from a fleet.status JSON file")
 	evFixture := fs.String("evidence-fixture", "", "render the evidence drawer for --once from a job.evidence JSON file")
-	tab := fs.String("tab", "Jobs", "tab to show for --once: Jobs, Queue, Workflows, Workspace, Fleet or Logs")
+	tab := fs.String("tab", "Jobs", "tab to show for --once: Jobs, Queue, Workflows, Workspace, Fleet, Logs or Term")
 	ascii := fs.Bool("ascii", false, "use ASCII glyphs")
 	noEnsure := fs.Bool("no-ensure", false, "do not start the API server when it is not running")
 	rigBin := fs.String("rig", os.Getenv("RIG_BIN"), "path to the rig CLI used to start the API server")
@@ -170,7 +174,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	src := &ensuringSource{client: client, rigBin: *rigBin, repo: *repo, enabled: !*noEnsure}
-	if _, err := tea.NewProgram(ui.NewModel(src, useASCII), tea.WithAltScreen()).Run(); err != nil {
+	model := ui.NewModel(src, useASCII)
+	_, err = tea.NewProgram(model, tea.WithAltScreen()).Run()
+	model.Close() // a program running in the Term pane ends with the board
+	if err != nil {
 		fmt.Fprintln(stderr, "rig-shell:", err)
 		return 1
 	}
@@ -188,7 +195,7 @@ func renderOnce(stdout, stderr io.Writer, repo, rigBin, fixture, wsFixture, flee
 		valid = valid || t == tab
 	}
 	if !valid {
-		fmt.Fprintln(stderr, "rig-shell: --tab must be Jobs, Queue, Workflows, Workspace, Fleet or Logs")
+		fmt.Fprintln(stderr, "rig-shell: --tab must be Jobs, Queue, Workflows, Workspace, Fleet, Logs or Term")
 		return 2
 	}
 	var snap *view.Snapshot

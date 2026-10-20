@@ -7,7 +7,7 @@ An optional terminal layout for working with a parent agent while Rig runs worke
 | Command | What it does |
 | --- | --- |
 | `rig shell` | One tmux window: the parent CLI unchanged in its own pane, the board (`rig-shell`) beside it, and a log pane following the most relevant job |
-| `rig shell --no-tmux` | The board in this terminal with nothing else installed: no tmux, no parent pane. The Logs tab and the `dc exec` shell cover what the tmux log pane and a second terminal did |
+| `rig shell --no-tmux` | The board in this terminal with nothing else installed, no tmux: its Term tab runs the parent CLI or a container shell on an emulated terminal, and the Logs tab replaces the log pane |
 | `rig shell print`, `rig shell kill` | Show the tmux commands it would run, or remove this repository's session |
 | `rig shell build` | Build `rig-shell` from a Rig clone with Go 1.24+ (no project needed) |
 | `rig init --sandbox` | Detect the workspace and, for a folder with no devcontainer, store dc-cli's generated config under `.rig/sandbox/override.json`; `--write-devcontainer` turns it into `.devcontainer/devcontainer.json` |
@@ -24,7 +24,7 @@ An optional terminal layout for working with a parent agent while Rig runs worke
 
 ## The board
 
-Tabs: Jobs, Queue, Workflows, Workspace, Fleet, Logs. Every state shows a glyph and a word, and labels, ordering and counts come from the same code as `rig tui`, so the two never disagree.
+Tabs: Jobs, Queue, Workflows, Workspace, Fleet, Logs, Term. Every state shows a glyph and a word, and labels, ordering and counts come from the same code as `rig tui`, so the two never disagree.
 
 | Key | Action |
 | --- | --- |
@@ -46,9 +46,13 @@ Pasted text is never run as commands. `RIG_TUI_ASCII=1`, `RIG_TUI_CJK=1` or a no
 
 The **Logs** tab follows the log of the job selected on the Jobs tab (the job worth watching if none is) as plain text, refreshed every two seconds while the tab shows, with terminal escape sequences removed. Scrolling back stops following; `G` follows the tail again.
 
-**`s`** opens a real interactive shell in the job's container. The server decides the command: `dc exec --no-start <workspace>`, where the workspace is the job's own worktree when its container is keyed by that worktree and the repository otherwise. `--no-start` means a shell can enter a container that is running and never start one. If there is no running container, or dc-cli is missing, the board says why and runs nothing. While the shell is open the board is suspended and the terminal is the shell's; exiting returns to the board.
+**`s`** (outside the Term tab) opens a real interactive shell in the job's container. The server decides the command: `dc exec --no-start <workspace>`, where the workspace is the job's own worktree when its container is keyed by that worktree and the repository otherwise. `--no-start` means a shell can enter a container that is running and never start one. If there is no running container, or dc-cli is missing, the board says why and runs nothing. While the shell is open the board is suspended and the terminal is the shell's; exiting returns to the board.
 
-What this deliberately does not do: embed the parent CLI in a pane. That needs a terminal emulator inside the board, which is a large dependency for little gain. Without tmux, run the parent in another terminal. The tmux layout is unchanged.
+### The Term tab
+
+The **Term** tab runs one interactive program on a pseudo-terminal inside the board, so the parent CLI and a container shell work without tmux. `p` starts the parent CLI for the project (the server decides which; the same one `rig shell` puts in its tmux pane), `s` starts a shell in the project's container (`dc exec --no-start`). A program starts with the keyboard: **every key goes to it, Ctrl-C included**, except **Ctrl-]**, which returns to the board; **Enter** types into it again. The program sees the real size and is resized with the window; a full-screen program such as `vi` works. `x` closes it (after a confirmation), a program that exits keeps its last screen until you start another, and quitting the board ends it.
+
+Limits: one program at a time; the live screen only, with no scrollback; the mouse is not forwarded; pasted text goes in as plain input (newlines become Enter), so a paste into a shell runs; wide characters (CJK, emoji) take one cell and can misalign. The tmux layout is unchanged and still gives the side-by-side view; the Term tab is a full-screen tab, not a split.
 
 ## Experiment: headless parent chat
 

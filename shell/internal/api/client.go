@@ -170,6 +170,15 @@ func (c *Client) Log(id string, lines int, timeout time.Duration) (*view.LogRepl
 	return &out, nil
 }
 
+// Parent asks the server for the command that runs the parent CLI in a pane.
+func (c *Client) Parent(timeout time.Duration) (*view.ShellPlan, error) {
+	var out view.ShellPlan
+	if err := c.Call("shell.parent", nil, timeout, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 // Shell asks the server for the command that opens a shell in a job's container.
 func (c *Client) Shell(id string, timeout time.Duration) (*view.ShellPlan, error) {
 	var out view.ShellPlan

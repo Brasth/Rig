@@ -339,7 +339,7 @@ container and sourced by a wrapper).
 >
 > **Deviations**
 > - **Built-in workers did not move to manifests, so `run-worker.sh` did not shrink.** Porting ten workers' launch code to data would risk every worker's byte-identical argv for no user benefit; the launcher gained one generic branch instead, and adapters are for new workers. Adapter workers are chosen explicitly: no smart routing, no model catalog, no resume.
-> - **No terminal emulator.** The parent CLI is not embedded in a pane without tmux; the board, logs and a shell cover plain-text streams. The tmux layout is unchanged.
+> - **Terminal panes came in a second step** (the Term tab: a pseudo-terminal plus the `vt10x` emulator, one program at a time, no scrollback, no mouse), so the parent CLI and a container shell run inside the board without tmux. The tmux layout is unchanged and remains the only split view.
 > - **The web board cannot send chat messages.** The plan had a send box; read-only is the web board's guarantee, so sending stays in the terminal board and `rig chat`.
 > - **`bin/rig` stays bash** (measured: the dispatcher is not where time goes).
 > - **An example adapter ships under `examples/adapters/`, not `adapters/`,** so a fake worker is never discovered on a normal install.

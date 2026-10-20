@@ -1,5 +1,5 @@
  Rig · my-repo                                                               ! 1 need attention  ● 1 running  slots 2/3 
- [Jobs !1]  Queue 2   Workflows 2   Workspace   Fleet   Logs                                                            
+ [Jobs !1]  Queue 2   Workflows 2   Workspace   Fleet   Logs   Term                                                     
 ─ Jobs 1-7/7 ─────────────────────────────────────────────────┬─────────────────────────────────────────────────────────
 > ! Needs input   Add supertest dev dep                       │ ! Needs input                                           
     permission: npm i -D supertest                            │ Worker is waiting for a permission answer (y allows, n  

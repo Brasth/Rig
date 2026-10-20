@@ -66,6 +66,7 @@ LOCAL_METHODS = {
     "chat.send": (True, "EXPERIMENT: send one message to the headless parent; the answer arrives in the transcript (params: message, session, parent)"),
     "chat.cancel": (True, "EXPERIMENT: stop a chat session's running turn (params: session)"),
     "log.follow": (False, "Tail of a job's log as plain text; without an id, the job worth watching (params: id, lines)"),
+    "shell.parent": (False, "The command that runs the parent CLI in a board pane, or why there is none"),
     "env.shell": (False, "The dc exec --no-start command for an interactive shell in a job's container, or why there is none (params: id)"),
     "job.evidence": (False, "Evidence drawer for one job: where it ran, change, contract, checks, ports (params: id)"),
     "fleet.status": (False, "Fleet panel: workspace containers on the engine with observed CPU and memory, ready to render"),
@@ -170,7 +171,7 @@ class Api:
             return self._board_snapshot(request_id, params)
         if method == "workspace.status":
             return self._workspace(request_id, params)
-        if method in ("job.evidence", "fleet.status", "env.recovery", "env.recover", "log.follow", "env.shell",
+        if method in ("job.evidence", "fleet.status", "env.recovery", "env.recover", "log.follow", "env.shell", "shell.parent",
                       "chat.status", "chat.transcript", "chat.send", "chat.cancel"):
             return self._environment(request_id, method, params)
         if method in ("ui.request", "events.list", "events.ack"):
@@ -265,6 +266,9 @@ def _environment(self, request_id, method, params):
                 return _reply(request_id, error=_error(INVALID_PARAMS, "lines must be 1 to 500 and id a string"))
             import rig_shell
             result = rig_shell.follow_frame(self.repo, job_id, lines)
+        elif method == "shell.parent":
+            import rig_shell
+            result = rig_shell.parent_pane_plan(self.repo)
         elif method == "env.shell":
             job_id = params.get("id", "")
             if not isinstance(job_id, str):

@@ -1,5 +1,5 @@
  Rig · my-repo                       ! 1 need attention  ● 1 running  slots 2/3 
-  Jobs !1   Queue 2   Workflows 2   Workspace   Fleet   Logs  [Chat]            
+  Jobs !1   Queue 2   Workflows 2   Workspace   Fleet   Logs   Term  [Chat]     
 ─ Chat (experiment) ────────────────────────────────────────────────────────────
  Chat unavailable: no such chat session: c-1a2b3c4d                             
                                                                                 
