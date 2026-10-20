@@ -61,6 +61,7 @@ usage: rig <command> [args]
   status
   worktrees list|register [--json]   # discovery/identity only; does not enable execution
   web [--port N] [--open]                # read-only board in the browser, 127.0.0.1 only
+  chat send|show|sessions|cancel|status  # EXPERIMENT (RIG_EXPERIMENT_CHAT=1): headless parent, Rig-rendered chat
   adapters list|validate DIR|check DIR   # worker CLIs shipped as adapter packages (docs/adapters.md)
   worktrees status [--json] | plan|create|commit|remove --job ID   # per-job worktrees ([worktrees] mode = "per-job")
   use codex|grok|opencode|omp|pi|agy
@@ -1604,6 +1605,7 @@ main() {
     status) cmd_status "$@" ;;
     worktrees) python3 "$(py_script worktrees.py)" "$@" --repo "$PWD" ;;
     web) python3 "$(py_script web_board.py)" "$@" --repo "$PWD" ;;
+    chat) python3 "$(py_script rig_chat.py)" "$@" ;;
     adapters)
       if [[ "${1:-}" == "check" ]]; then shift; python3 "$(py_script adapter_check.py)" "$@"
       else python3 "$(py_script adapters.py)" "$@"; fi ;;

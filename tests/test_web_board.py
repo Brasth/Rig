@@ -27,10 +27,10 @@ import web_board  # noqa: E402
 FIXTURES = ROOT / "tests" / "fixtures" / "dc"
 
 
-def make_repo(root: Path) -> Path:
+def make_repo(root: Path, extra: str = "") -> Path:
     (root / ".git").mkdir(parents=True, exist_ok=True)
     (root / ".rig").mkdir(exist_ok=True)
-    (root / ".rig" / "harness.toml").write_text("[project]\nenabled = true\n\n[workers]\nclaude = true\n")
+    (root / ".rig" / "harness.toml").write_text("[project]\nenabled = true\n\n[workers]\nclaude = true\n" + extra)
     return root
 
 
@@ -215,9 +215,10 @@ class ApiFixture:
     """A real local API server for a real repository with one running job, and the web server in front of it."""
 
     DOING = "reading the code"
+    HARNESS_EXTRA = ""
 
     def start(self, base: Path):
-        self.repo = make_repo(base / "repo").resolve()
+        self.repo = make_repo(base / "repo", self.HARNESS_EXTRA).resolve()
         job = self.repo / ".rig" / "jobs" / "job-7"
         job.mkdir(parents=True)
         (job / "meta.json").write_text(json.dumps({"job_id": "job-7", "worker": "claude", "role": "worker", "status": "running",
@@ -281,6 +282,13 @@ class RealApi(ApiFixture, unittest.TestCase):
         self.assertEqual([s["title"] for s in body["result"]["sections"]], ["Ran", "Change", "Contract", "Checks", "Ports"])
         self.assertEqual(self.fetch("/api/job.evidence?id=ghost")[1]["error"]["code"], local_api.INVALID_PARAMS)
 
+    def test_the_chat_experiment_reads_as_off_and_its_transcript_is_not_served(self):
+        status, body = self.fetch("/api/chat.status")
+        self.assertEqual((status, body["result"]["enabled"], body["result"]["sessions"]), (200, False, []))
+        status, body = self.fetch("/api/chat.transcript?session=c-00000000")
+        self.assertIn("experiment is off", body["error"]["message"])
+        self.assertEqual(self.fetch("/api/chat.transcript?session=bad")[0], 400)
+
     def test_a_token_in_a_log_never_reaches_the_browser(self):
         (self.repo / ".rig" / "jobs" / "job-7" / "stdout.log").write_text('{"owner_token": "abcdef0123456789abcdef"}\n')
         self.assertNotIn("abcdef0123456789abcdef", json.dumps(self.fetch("/api/log.follow?id=job-7")[1]))
@@ -314,6 +322,7 @@ class RealBrowser(ApiFixture, unittest.TestCase):
     """Headless Chromium loads the page for real: cookie hand-off, fetches, scripts, DOM."""
 
     DOING = "<img src=x onerror=document.title='pwned'> & <script>document.title='pwned'</script>"
+    HARNESS_EXTRA = "\n[experiments]\nchat = true\n"
 
     def setUp(self):
         self.td = tempfile.TemporaryDirectory()
@@ -364,6 +373,20 @@ class RealBrowser(ApiFixture, unittest.TestCase):
         logs = self.text(self.dom("#Logs"))
         self.assertIn("Logs · job-7", logs)
         self.assertIn("working &lt;b&gt;hard&lt;/b&gt;", logs, "log text is shown literally (the serializer escapes it)")
+
+    def test_the_chat_tab_appears_with_the_experiment_and_shows_a_transcript_as_text(self):
+        import rig_chat
+        with mock.patch.dict(os.environ, {"RIG_EXPERIMENT_CHAT": ""}):
+            meta = rig_chat.new_session(self.repo, "claude")
+            rig_chat.append(self.repo, meta["id"], "user", "what is <b>in</b> a.txt?")
+            rig_chat.append(self.repo, meta["id"], "assistant", "It says one.")
+            rig_chat.append(self.repo, meta["id"], "tool", "Read /repo/a.txt")
+        dom = self.dom("#Chat")
+        text = self.text(dom)
+        for expected in ("Chat", "EXPERIMENT", "you › what is &lt;b&gt;in&lt;/b&gt; a.txt?", "assistant › It says one.", "tool › Read /repo/a.txt", meta["id"]):
+            self.assertIn(expected, text)
+        self.assertNotIn("<b>in</b>", dom)
+        self.assertNotIn("send-box", dom.lower(), "this page has no way to send")
 
     def test_a_dead_api_keeps_the_page_and_says_so(self):
         self.api.terminate()

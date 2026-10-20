@@ -57,6 +57,13 @@ def _job_id(query, required):
     return raw
 
 
+def _chat_session(query):
+    raw = query.get("session", [""])[0]
+    if not re.fullmatch(r"c-[0-9a-f]{8}", raw):
+        raise BadParams("session must look like c-1a2b3c4d")
+    return raw
+
+
 def _boolean(query, name):
     raw = query.get(name, ["false"])[0]
     if raw not in ("true", "false"):
@@ -71,6 +78,8 @@ READ_METHODS = {
     "board.snapshot": lambda q: {"rows": _int(q, "rows", 100, 0, 500), "start": _int(q, "start", 0, 0, 1_000_000)},
     "workspace.status": lambda q: {"deep": _boolean(q, "deep")},
     "fleet.status": lambda q: {},
+    "chat.status": lambda q: {},
+    "chat.transcript": lambda q: {"session": _chat_session(q), "tail": _int(q, "tail", 200, 1, 5000)},
     "job.evidence": lambda q: {"id": _job_id(q, True)},
     "log.follow": lambda q: {"id": _job_id(q, False), "lines": _int(q, "lines", 60, 1, 500)},
 }

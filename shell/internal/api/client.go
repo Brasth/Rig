@@ -179,6 +179,42 @@ func (c *Client) Shell(id string, timeout time.Duration) (*view.ShellPlan, error
 	return &out, nil
 }
 
+// ChatStatus asks whether the chat experiment is on. An older server without it answers with an error.
+func (c *Client) ChatStatus(timeout time.Duration) (*view.ChatStatus, error) {
+	var out view.ChatStatus
+	if err := c.Call("chat.status", nil, timeout, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// ChatTranscript fetches the tail of one chat session.
+func (c *Client) ChatTranscript(session string, tail int, timeout time.Duration) (*view.ChatTranscript, error) {
+	var out view.ChatTranscript
+	if err := c.Call("chat.transcript", map[string]any{"session": session, "tail": tail}, timeout, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// ChatSend starts one turn; an empty session starts a new one. The answer arrives in the transcript.
+func (c *Client) ChatSend(message, session string, timeout time.Duration) (*view.ChatStarted, error) {
+	var out view.ChatStarted
+	params := map[string]any{"message": message}
+	if session != "" {
+		params["session"] = session
+	}
+	if err := c.Call("chat.send", params, timeout, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// ChatCancel stops a session's running turn.
+func (c *Client) ChatCancel(session string, timeout time.Duration) error {
+	return c.Call("chat.cancel", map[string]any{"session": session}, timeout, nil)
+}
+
 type textResult struct {
 	Text string `json:"text"`
 }

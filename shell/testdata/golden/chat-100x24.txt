@@ -1,0 +1,24 @@
+ Rig · my-repo                                           ! 1 need attention  ● 1 running  slots 2/3 
+  Jobs !1   Queue 2   Workflows 2   Workspace   Fleet   Logs  [Chat]                                
+─ Chat (experiment) › c-1a2b3c4d · claude · idle ───────────────────────────────────────────────────
+ you › what is in a.txt?                                                                            
+ claude › Looking at it.                                                                            
+   · Read /repo/a.txt                                                                               
+ claude › It says one.                                                                              
+          Nothing else is in the file.                                                              
+ you › thanks                                                                                       
+ ! the parent exited with status 3: not logged in                                                   
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+ Tab pane  c write  N new session  x stop  k/j scroll  G follow  q quit                             

@@ -42,6 +42,11 @@ type State struct {
 	WorkspaceE   string // why the workspace panel could not load
 	Fleet        *view.Panel
 	FleetE       string
+	ChatOn       bool // the chat experiment is on: the Chat tab exists
+	Chat         *view.ChatTranscript
+	ChatE        string
+	ChatUp       int    // lines scrolled back from the newest
+	InputLabel   string // what the input line is for; empty means enqueue
 	Log          *view.LogReply
 	LogE         string
 	LogUp        int // lines scrolled back from the newest; 0 follows the tail
@@ -59,6 +64,17 @@ func NewState() State {
 
 // Tabs are the board tabs in order.
 var Tabs = []string{"Jobs", "Queue", "Workflows", WorkspaceTab, FleetTab, LogsTab}
+
+// ChatTab is the EXPERIMENT chat with a headless parent; it exists only while the experiment is on.
+const ChatTab = "Chat"
+
+// TabList is the tabs to show: the board tabs, plus Chat while the experiment is on.
+func TabList(st State) []string {
+	if st.ChatOn {
+		return append(append([]string(nil), Tabs...), ChatTab)
+	}
+	return Tabs
+}
 
 // LogsTab follows the selected job's log as plain text, so the board works without tmux.
 const LogsTab = "Logs"
@@ -109,6 +125,15 @@ func frame(v *view.View, st State, w, h int) []string {
 	if st.EvidenceOpen {
 		lines = append(lines, rule("Evidence › "+sanitize(st.EvidenceID), w))
 		lines = append(lines, evidenceLines(st, w, body)...)
+		lines = append(lines, messageLine(st, w), footerLine(nil, 0, st, w))
+		for len(lines) < h {
+			lines = append(lines, fit("", w))
+		}
+		return lines[:h]
+	}
+	if st.Tab == ChatTab {
+		lines = append(lines, rule(chatTitle(st), w))
+		lines = append(lines, chatBody(st, w, body)...)
 		lines = append(lines, messageLine(st, w), footerLine(nil, 0, st, w))
 		for len(lines) < h {
 			lines = append(lines, fit("", w))
@@ -206,7 +231,7 @@ func headerLine(v *view.View, st State, w int) string {
 }
 
 // tabShort are distinct three-letter forms for a narrow tab bar ("Wor" would be both Workflows and Workspace).
-var tabShort = map[string]string{"Jobs": "Job", "Queue": "Que", "Workflows": "Flw", WorkspaceTab: "Wks", FleetTab: "Flt", LogsTab: "Log"}
+var tabShort = map[string]string{"Jobs": "Job", "Queue": "Que", "Workflows": "Flw", WorkspaceTab: "Wks", FleetTab: "Flt", LogsTab: "Log", ChatTab: "Cht"}
 
 func tabLine(v *view.View, st State, w int) string {
 	if line := tabLineWith(v, st, false); lipgloss.Width(line) <= w {
@@ -218,7 +243,7 @@ func tabLine(v *view.View, st State, w int) string {
 // tabLineWith builds the tab bar; short abbreviates the inactive tabs so the active one is never cut off.
 func tabLineWith(v *view.View, st State, short bool) string {
 	var parts []string
-	for _, name := range Tabs {
+	for _, name := range TabList(st) {
 		label := name
 		if short && name != st.Tab {
 			label = tabShort[name]
@@ -393,7 +418,11 @@ func messageLine(st State, w int) string {
 	case ModeConfirm:
 		return fit(" "+st.Prompt+"  y yes · n no", w)
 	case ModeInput:
-		return fit(" enqueue › "+st.Prompt+"▏", w)
+		label := "enqueue"
+		if st.InputLabel != "" {
+			label = st.InputLabel
+		}
+		return fit(" "+label+" › "+st.Prompt+"▏", w)
 	}
 	switch {
 	case st.Stale != "":
@@ -415,6 +444,9 @@ func footerLine(rows []view.Row, sel int, st State, w int) string {
 	if st.Tab == LogsTab {
 		keys = []string{"Tab pane", "k/j scroll", "G follow", "s shell", "r refresh", "q quit"}
 	}
+	if st.Tab == ChatTab {
+		keys = []string{"Tab pane", "c write", "N new session", "x stop", "k/j scroll", "G follow", "q quit"}
+	}
 	if st.EvidenceOpen {
 		keys = []string{"Esc close", "j/k scroll", "r refresh", "q quit"}
 	}
@@ -426,6 +458,81 @@ func footerLine(rows []view.Row, sel int, st State, w int) string {
 		keys = append([]string{"a allow", "d deny"}, keys...)
 	}
 	return fit(" "+strings.Join(keys, "  "), w)
+}
+
+func chatTitle(st State) string {
+	if st.Chat != nil {
+		c := st.Chat
+		title := "Chat (experiment) › " + sanitize(c.Session) + " · " + sanitize(c.Parent) + " · " + sanitize(c.State)
+		if c.Note != "" {
+			title += " (" + sanitize(c.Note) + ")"
+		}
+		if st.ChatUp > 0 {
+			title += fmt.Sprintf(" · %d lines back", st.ChatUp)
+		}
+		return title
+	}
+	return "Chat (experiment)"
+}
+
+// chatBody renders the transcript: you, the parent, and its tool calls, wrapped, newest at the bottom.
+func chatBody(st State, w, h int) []string {
+	var all []string
+	switch {
+	case st.Chat == nil && st.ChatE != "":
+		for _, l := range wrap("Chat unavailable: "+st.ChatE, w-2, "  ") {
+			all = append(all, " "+l)
+		}
+	case st.Chat == nil:
+		all = []string{" No chat session yet. Press c to write the first message; it starts a headless parent turn."}
+	default:
+		parent := sanitize(st.Chat.Parent)
+		for _, e := range st.Chat.Entries {
+			prefix := parent + " › "
+			switch e.Role {
+			case "user":
+				prefix = "you › "
+			case "tool":
+				prefix = "  · "
+			case "error":
+				prefix = "! "
+			case "system":
+				prefix = "  – "
+			}
+			rows := strings.Split(strings.TrimRight(e.Text, "\n"), "\n")
+			for i, raw := range rows {
+				lead := prefix
+				if i > 0 {
+					lead = strings.Repeat(" ", lipgloss.Width(prefix))
+				}
+				for j, l := range wrap(sanitize(raw), max(8, w-2-lipgloss.Width(prefix)), "") {
+					if j > 0 {
+						lead = strings.Repeat(" ", lipgloss.Width(prefix))
+					}
+					all = append(all, " "+lead+l)
+				}
+			}
+		}
+		if len(st.Chat.Entries) == 0 {
+			all = []string{" (empty session)"}
+		}
+		if st.ChatE != "" {
+			all = append(all, rule("stale", w))
+			for _, l := range wrap("refresh failed: "+st.ChatE, w-2, "  ") {
+				all = append(all, " "+l)
+			}
+		}
+	}
+	end := len(all) - min(st.ChatUp, max(0, len(all)-h))
+	start := max(0, end-h)
+	out := make([]string, 0, h)
+	for _, line := range all[start:end] {
+		out = append(out, fit(line, w))
+	}
+	for len(out) < h {
+		out = append(out, fit("", w))
+	}
+	return out
 }
 
 func logTitle(st State) string {

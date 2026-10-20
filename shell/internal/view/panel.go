@@ -62,3 +62,39 @@ type ShellPlan struct {
 	Argv      []string `json:"argv"`
 	Workspace string   `json:"workspace"`
 }
+
+// ChatStatus is chat.status: whether the headless-parent chat experiment is on, and its recent sessions.
+type ChatStatus struct {
+	Enabled   bool     `json:"enabled"`
+	Available []string `json:"available"`
+	Sessions  []struct {
+		ID     string `json:"id"`
+		Parent string `json:"parent"`
+		State  string `json:"state"`
+		Turns  int    `json:"turns"`
+	} `json:"sessions"`
+}
+
+// ChatEntry is one line of a chat transcript.
+type ChatEntry struct {
+	Role string `json:"role"`
+	Text string `json:"text"`
+	At   string `json:"at"`
+}
+
+// ChatTranscript is chat.transcript.
+type ChatTranscript struct {
+	Session string      `json:"session"`
+	Parent  string      `json:"parent"`
+	State   string      `json:"state"`
+	Turns   int         `json:"turns"`
+	Note    string      `json:"note"`
+	Entries []ChatEntry `json:"entries"`
+}
+
+// ChatStarted is the chat.send result.
+type ChatStarted struct {
+	Session string `json:"session"`
+	Parent  string `json:"parent"`
+	State   string `json:"state"`
+}

@@ -39,6 +39,17 @@ type fakeSource struct {
 	shellPlan   *view.ShellPlan
 	shellErr    error
 	shellIDs    []string
+
+	chatStatus      *view.ChatStatus
+	chatStatusErr   error
+	chatStatusCalls int
+	chatView        *view.ChatTranscript
+	chatErr         error
+	chatReads       []string
+	chatStarted     *view.ChatStarted
+	chatSendErr     error
+	chatSent        [][2]string
+	chatCancelled   []string
 }
 
 func (f *fakeSource) Workspace(bool, time.Duration) (*view.Workspace, error) {
@@ -61,6 +72,22 @@ func (f *fakeSource) Log(id string, lines int, _ time.Duration) (*view.LogReply,
 func (f *fakeSource) Shell(id string, _ time.Duration) (*view.ShellPlan, error) {
 	f.shellIDs = append(f.shellIDs, id)
 	return f.shellPlan, f.shellErr
+}
+func (f *fakeSource) ChatStatus(time.Duration) (*view.ChatStatus, error) {
+	f.chatStatusCalls++
+	return f.chatStatus, f.chatStatusErr
+}
+func (f *fakeSource) ChatTranscript(session string, tail int, _ time.Duration) (*view.ChatTranscript, error) {
+	f.chatReads = append(f.chatReads, session)
+	return f.chatView, f.chatErr
+}
+func (f *fakeSource) ChatSend(message, session string, _ time.Duration) (*view.ChatStarted, error) {
+	f.chatSent = append(f.chatSent, [2]string{message, session})
+	return f.chatStarted, f.chatSendErr
+}
+func (f *fakeSource) ChatCancel(session string, _ time.Duration) error {
+	f.chatCancelled = append(f.chatCancelled, session)
+	return nil
 }
 func (f *fakeSource) Snapshot(int, int, time.Duration) (*view.Snapshot, error) {
 	return f.snap, f.snapErr

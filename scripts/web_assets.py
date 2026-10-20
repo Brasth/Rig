@@ -61,7 +61,7 @@ pre.log { margin:0; padding:.6rem .8rem; border:1px solid var(--line); overflow:
 APP_JS = r"""(function () {
   'use strict';
   var TABS = ['Jobs', 'Queue', 'Workflows', 'Workspace', 'Fleet', 'Logs'];
-  var state = { tab: 'Jobs', view: null, selected: {}, panel: {}, log: null, evidence: null, evidenceId: '', lastOK: 0, error: '' };
+  var state = { tab: 'Jobs', view: null, selected: {}, panel: {}, log: null, evidence: null, evidenceId: '', lastOK: 0, error: '', chat: null, chatView: null };
 
   function el(tag, attrs, text) {
     var node = document.createElement(tag);
@@ -94,10 +94,12 @@ APP_JS = r"""(function () {
     document.getElementById('project').textContent = v ? 'Rig · ' + v.header.project : 'Rig';
     document.getElementById('health').textContent = v ? '! ' + v.header.attention + ' need attention · ● ' + v.header.running + ' running · slots ' + v.header.slots + '/' + v.header.cap : '';
   }
+  // The Chat tab exists only while the headless-parent chat experiment is on.
+  function visibleTabs() { return state.chat && state.chat.enabled ? TABS.concat(['Chat']) : TABS; }
   function renderTabs() {
     var nav = document.getElementById('tabs');
     nav.textContent = '';
-    TABS.forEach(function (name) {
+    visibleTabs().forEach(function (name) {
       var label = name, info = state.view && state.view.tabs.filter(function (t) { return t.name === name; })[0];
       if (info) { label += info.attention > 0 ? ' !' + info.attention : info.count > 0 ? ' ' + info.count : ''; }
       var button = el('button', { role: 'tab', 'aria-selected': name === state.tab ? 'true' : 'false', 'data-tab': name }, label);
@@ -157,6 +159,17 @@ APP_JS = r"""(function () {
     main.appendChild(el('h3', { 'class': 'muted' }, 'Logs · ' + state.log.job.id + ' ' + ((state.log.job.label || '') + ' ' + (state.log.job.worker || '')).trim()));
     main.appendChild(el('pre', { 'class': 'log' }, state.log.text));
   }
+  function renderChat(main) {
+    main.appendChild(el('p', { 'class': 'muted' }, 'EXPERIMENT: headless parent chat. This page only reads; send messages from the terminal board (c on the Chat tab) or with rig chat send.'));
+    var view = state.chatView;
+    if (!view) { main.appendChild(el('p', { 'class': 'muted' }, state.chat && state.chat.sessions.length ? 'Loading transcript…' : 'No chat sessions yet.')); return; }
+    main.appendChild(el('h3', { 'class': 'muted' }, 'Chat · ' + view.session + ' · ' + view.parent + ' · ' + view.state + (view.note ? ' (' + view.note + ')' : '')));
+    var box = el('div', { 'class': 'section' });
+    (view.entries || []).forEach(function (entry) {
+      box.appendChild(el('div', { 'class': entry.role === 'error' ? 'tone-failed' : entry.role === 'tool' || entry.role === 'system' ? 'muted' : '' }, (entry.role === 'user' ? 'you' : entry.role) + ' › ' + entry.text));
+    });
+    main.appendChild(box);
+  }
   function render() {
     renderHeader(); renderTabs(); writeHash();
     document.getElementById('banner').textContent = state.error;
@@ -166,6 +179,7 @@ APP_JS = r"""(function () {
     if (state.tab === 'Workspace') { renderPanel(main, 'workspace', 'Loading workspace…'); }
     else if (state.tab === 'Fleet') { renderPanel(main, 'fleet', 'Loading fleet…'); }
     else if (state.tab === 'Logs') { renderLogs(main); }
+    else if (state.tab === 'Chat') { renderChat(main); }
     else { renderList(main); }
   }
   function fail(error) {
@@ -174,11 +188,21 @@ APP_JS = r"""(function () {
     render();
   }
   function refreshBoard() {
+    // Asking the experiment's status is cheap and tells the page whether to offer the Chat tab at all.
+    api('chat.status').then(function (s) { state.chat = s; }).catch(function () { /* an older server has no chat; the tab stays hidden */ });
     return api('board.snapshot', { rows: 200 }).then(function (r) { state.view = r.view; state.lastOK = Date.now(); state.error = ''; render(); }).catch(fail);
   }
   function refreshTab() {
     if (state.tab === 'Workspace') { return api('workspace.status', { deep: 'true' }).then(function (r) { state.panel.workspace = r.view; render(); }).catch(fail); }
     if (state.tab === 'Fleet') { return api('fleet.status').then(function (r) { state.panel.fleet = r.view; render(); }).catch(fail); }
+    if (state.tab === 'Chat') {
+      return api('chat.status').then(function (s) {
+        state.chat = s;
+        var latest = s.sessions && s.sessions[0];
+        if (!latest) { state.chatView = null; render(); return null; }
+        return api('chat.transcript', { session: latest.id, tail: 200 }).then(function (v) { state.chatView = v; render(); });
+      }).catch(fail);
+    }
     if (state.tab === 'Logs') {
       var job = selectedRow('Jobs');
       return api('log.follow', { id: job ? job.id : '', lines: 200 }).then(function (r) { state.log = r; render(); }).catch(fail);
@@ -193,7 +217,7 @@ APP_JS = r"""(function () {
   // Deep links: #Fleet, #Jobs/<job id>, #Jobs/<job id>/evidence. The hash follows the page, so a view can be shared.
   function applyHash() {
     var parts = decodeURIComponent((location.hash || '').slice(1)).split('/');
-    if (TABS.indexOf(parts[0]) >= 0) { state.tab = parts[0]; }
+    if (TABS.indexOf(parts[0]) >= 0 || parts[0] === 'Chat') { state.tab = parts[0]; }
     if (parts[1]) { state.selected[state.tab] = parts[1]; }
     if (parts[2] === 'evidence' && parts[1]) { openEvidence(parts[1]); }
   }

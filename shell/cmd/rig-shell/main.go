@@ -106,6 +106,22 @@ func (e *ensuringSource) Shell(id string, timeout time.Duration) (*view.ShellPla
 	return e.client.Shell(id, timeout)
 }
 
+func (e *ensuringSource) ChatStatus(timeout time.Duration) (*view.ChatStatus, error) {
+	return e.client.ChatStatus(timeout)
+}
+
+func (e *ensuringSource) ChatTranscript(session string, tail int, timeout time.Duration) (*view.ChatTranscript, error) {
+	return e.client.ChatTranscript(session, tail, timeout)
+}
+
+func (e *ensuringSource) ChatSend(message, session string, timeout time.Duration) (*view.ChatStarted, error) {
+	return e.client.ChatSend(message, session, timeout)
+}
+
+func (e *ensuringSource) ChatCancel(session string, timeout time.Duration) error {
+	return e.client.ChatCancel(session, timeout)
+}
+
 func (e *ensuringSource) Act(method string, params map[string]any, timeout time.Duration) (string, error) {
 	return e.client.Act(method, params, timeout)
 }

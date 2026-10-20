@@ -1,0 +1,12 @@
+ Rig · my-repo   ! 1 need attention  ● 1 running  slots 2/3 
+  Job !1   Que 2   Flw 2   Wks   Flt   Log  [Chat]          
+─ Chat (experiment) › c-1a2b3c4d · claude · running ────────
+ you › a question long enough to need wrapping at this      
+       narrow width of pane                                 
+   · Bash ls                                                
+                                                            
+                                                            
+                                                            
+                                                            
+                                                            
+ Tab pane  c write  N new session  x stop  k/j scroll  G fo…

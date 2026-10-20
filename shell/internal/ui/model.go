@@ -25,12 +25,18 @@ type Source interface {
 	Recover(confirmID string, timeout time.Duration) (string, error)
 	Log(id string, lines int, timeout time.Duration) (*view.LogReply, error)
 	Shell(id string, timeout time.Duration) (*view.ShellPlan, error)
+	ChatStatus(timeout time.Duration) (*view.ChatStatus, error)
+	ChatTranscript(session string, tail int, timeout time.Duration) (*view.ChatTranscript, error)
+	ChatSend(message, session string, timeout time.Duration) (*view.ChatStarted, error)
+	ChatCancel(session string, timeout time.Duration) error
 }
 
 const (
 	pollEvery      = time.Second
 	workspaceEvery = 5 * time.Second
 	logEvery       = 2 * time.Second
+	chatEvery      = time.Second
+	chatStatEvery  = 10 * time.Second
 	logFetchRows   = 200
 	callTimeout    = 5 * time.Second
 	snapshotRows   = 200
@@ -69,6 +75,23 @@ type logMsg struct {
 	at  time.Time
 }
 
+type chatStatusMsg struct {
+	status *view.ChatStatus
+	err    error
+}
+
+type chatMsg struct {
+	chat *view.ChatTranscript
+	err  error
+}
+
+type chatSentMsg struct {
+	started *view.ChatStarted
+	err     error
+}
+
+type chatCancelMsg struct{ err error }
+
 type shellPlanMsg struct {
 	plan *view.ShellPlan
 	err  error
@@ -100,6 +123,12 @@ type Model struct {
 	flLast   time.Time
 	lgBusy   bool
 	lgLast   time.Time
+	chBusy   bool
+	chLast   time.Time
+	csBusy   bool
+	csLast   time.Time
+	chatID   string // the session the Chat tab follows; empty until one exists
+	inputFor string // "chat" while the input line is a chat message, else enqueue
 	// exec hands the terminal to a command and returns when it exits; tests replace it.
 	exec     func(argv []string, done func(error) tea.Msg) tea.Cmd
 	lastOK   time.Time
@@ -198,6 +227,32 @@ func (m *Model) fetchLog(force bool) tea.Cmd {
 	}
 }
 
+// fetchChatStatus learns whether the experiment is on (and which session is newest). Cheap, and the only call a
+// board makes for the experiment while its tab is not showing.
+func (m *Model) fetchChatStatus() tea.Cmd {
+	if m.csBusy || m.now().Sub(m.csLast) < chatStatEvery {
+		return nil
+	}
+	m.csBusy = true
+	src := m.src
+	return func() tea.Msg {
+		s, err := src.ChatStatus(callTimeout)
+		return chatStatusMsg{status: s, err: err}
+	}
+}
+
+func (m *Model) fetchChat(force bool) tea.Cmd {
+	if m.st.Tab != ChatTab || m.chBusy || m.chatID == "" || (!force && m.now().Sub(m.chLast) < chatEvery) {
+		return nil
+	}
+	m.chBusy = true
+	src, id := m.src, m.chatID
+	return func() tea.Msg {
+		c, err := src.ChatTranscript(id, 300, callTimeout)
+		return chatMsg{chat: c, err: err}
+	}
+}
+
 func (m *Model) askShell() tea.Cmd {
 	id := ""
 	if m.st.Tab == "Jobs" {
@@ -270,7 +325,46 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.w, m.h = msg.Width, msg.Height
 	case tickMsg:
-		return m, tea.Batch(m.fetch(), m.fetchWorkspace(false), m.fetchFleet(false), m.fetchLog(false), tick())
+		return m, tea.Batch(m.fetch(), m.fetchWorkspace(false), m.fetchFleet(false), m.fetchLog(false), m.fetchChatStatus(), m.fetchChat(false), tick())
+	case chatStatusMsg:
+		m.csBusy, m.csLast = false, m.now()
+		if msg.err != nil || msg.status == nil || !msg.status.Enabled {
+			m.st.ChatOn = false // off, or a server that predates the experiment: no tab
+			if m.st.Tab == ChatTab {
+				m.st.Tab = "Jobs"
+			}
+			return m, nil
+		}
+		m.st.ChatOn = true
+		if m.chatID == "" && len(msg.status.Sessions) > 0 {
+			m.chatID = msg.status.Sessions[0].ID
+		}
+	case chatMsg:
+		m.chBusy, m.chLast = false, m.now()
+		if msg.err != nil {
+			m.st.ChatE = msg.err.Error()
+			return m, nil
+		}
+		m.st.Chat, m.st.ChatE = msg.chat, ""
+	case chatSentMsg:
+		if msg.err != nil {
+			m.st.InputLabel, m.inputFor = "chat", "chat"
+			m.st.Mode = ModeInput // keep the draft, as a failed enqueue does
+			m.st.Message = "Chat send failed: " + msg.err.Error() + "; draft retained"
+			return m, nil
+		}
+		m.chatID, m.st.Prompt, m.st.ChatUp = msg.started.Session, "", 0
+		m.st.Message = "sent to " + clean(msg.started.Parent)
+		m.chLast = time.Time{}
+		return m, m.fetchChat(true)
+	case chatCancelMsg:
+		if msg.err != nil {
+			m.st.Message = "Stop failed: " + msg.err.Error()
+		} else {
+			m.st.Message = "turn stopped"
+		}
+		m.chLast = time.Time{}
+		return m, m.fetchChat(true)
 	case logMsg:
 		m.lgBusy, m.lgLast = false, m.now()
 		if msg.err != nil {
@@ -384,6 +478,10 @@ func (m *Model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.st.Message = "Press e before pasting queue text"
 		return m, nil
 	}
+	if k.String() == "c" && m.st.Tab == ChatTab {
+		m.st.Mode, m.st.InputLabel, m.inputFor, m.st.Message = ModeInput, "chat", "chat", ""
+		return m, nil
+	}
 	if m.view == nil {
 		if k.String() == "q" {
 			return m, tea.Quit
@@ -396,18 +494,23 @@ func (m *Model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "tab", "shift+tab":
 		step := 1
 		if k.String() == "shift+tab" {
-			step = len(Tabs) - 1
+			step = len(TabList(m.st)) - 1
 		}
-		for i, t := range Tabs {
+		tabs := TabList(m.st)
+		for i, t := range tabs {
 			if t == m.st.Tab {
-				m.st.Tab = Tabs[(i+step)%len(Tabs)]
+				m.st.Tab = tabs[(i+step)%len(tabs)]
 				break
 			}
 		}
 		m.st.DetailOpen, m.st.DetailOff, m.st.Message = false, 0, ""
 		m.st.EvidenceOpen = false
-		return m, tea.Batch(m.fetchWorkspace(true), m.fetchFleet(true), m.fetchLog(true))
+		return m, tea.Batch(m.fetchWorkspace(true), m.fetchFleet(true), m.fetchLog(true), m.fetchChat(true))
 	case "j", "down":
+		if m.st.Tab == ChatTab {
+			m.st.ChatUp = max(0, m.st.ChatUp-1)
+			return m, nil
+		}
 		if m.st.Tab == LogsTab && !m.st.EvidenceOpen {
 			m.st.LogUp = max(0, m.st.LogUp-1)
 			return m, nil
@@ -418,6 +521,10 @@ func (m *Model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		m.move(1)
 	case "k", "up":
+		if m.st.Tab == ChatTab {
+			m.st.ChatUp++
+			return m, nil
+		}
 		if m.st.Tab == LogsTab && !m.st.EvidenceOpen {
 			m.st.LogUp++
 			return m, nil
@@ -440,7 +547,12 @@ func (m *Model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		m.st.DetailOff = max(0, m.st.DetailOff-8)
 	case "G":
-		m.st.LogUp = 0
+		m.st.LogUp, m.st.ChatUp = 0, 0
+	case "N":
+		if m.st.Tab == ChatTab {
+			m.chatID, m.st.Chat, m.st.ChatUp = "", nil, 0
+			m.st.Message = "next message starts a new session"
+		}
 	case "s":
 		return m, m.askShell()
 	case "enter":
@@ -529,6 +641,15 @@ func (m *Model) askRecover() tea.Cmd {
 }
 
 func (m *Model) askStop() tea.Cmd {
+	if m.st.Tab == ChatTab {
+		if m.chatID == "" || m.st.Chat == nil || m.st.Chat.State != "running" {
+			m.st.Message = "no turn is running"
+			return nil
+		}
+		m.pendingX, m.pendingI = "chat.cancel", m.chatID
+		m.st.Mode, m.st.Prompt = ModeConfirm, "Stop the running chat turn "+m.chatID+"?"
+		return nil
+	}
 	row, ok := m.selected()
 	if !ok || (m.st.Tab != "Jobs" && m.st.Tab != "Queue") {
 		return nil
@@ -551,6 +672,11 @@ func (m *Model) confirmKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "y":
 		method, id := m.pendingX, m.pendingI
 		m.st.Mode, m.st.Prompt, m.pendingX, m.pendingI = ModeNormal, "", "", ""
+		if method == "chat.cancel" {
+			m.st.Message = "stopping " + id
+			src := m.src
+			return m, func() tea.Msg { return chatCancelMsg{err: src.ChatCancel(id, callTimeout)} }
+		}
 		if method == "env.recover" {
 			m.st.Message = "recovering: " + id
 			return m, m.recover(id)
@@ -570,13 +696,21 @@ func (m *Model) confirmKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m *Model) inputKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch k.Type {
 	case tea.KeyEsc:
-		m.st.Mode, m.st.Prompt = ModeNormal, ""
+		m.st.Mode, m.st.Prompt, m.st.InputLabel, m.inputFor = ModeNormal, "", "", ""
 	case tea.KeyEnter:
 		text := strings.TrimSpace(m.st.Prompt)
 		if text == "" {
 			return m, nil
 		}
 		m.st.Mode = ModeNormal
+		if m.inputFor == "chat" {
+			m.st.InputLabel, m.inputFor = "", ""
+			src, session := m.src, m.chatID
+			return m, func() tea.Msg {
+				started, err := src.ChatSend(text, session, 10*time.Second)
+				return chatSentMsg{started: started, err: err}
+			}
+		}
 		return m, m.act("queue.add", map[string]any{"text": text, "idempotency_key": m.draftKey}, true)
 	case tea.KeyBackspace:
 		if r := []rune(m.st.Prompt); len(r) > 0 {

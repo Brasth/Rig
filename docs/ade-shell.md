@@ -13,6 +13,7 @@ An optional terminal layout for working with a parent agent while Rig runs worke
 | `rig init --sandbox` | Detect the workspace and, for a folder with no devcontainer, store dc-cli's generated config under `.rig/sandbox/override.json`; `--write-devcontainer` turns it into `.devcontainer/devcontainer.json` |
 | `rig env up`, `down`, `status`, `ports [--json]` | Start or stop the workspace container, show what dc-cli reports, and list the ports it forwards |
 | `rig env recover [--apply ID]` | Show the one next step `dc recover` proposes; apply it only by naming the plan id, and only if Rig allows that action (see [Environment recovery](#environment-recovery)) |
+| `rig chat send, show, sessions, cancel, status` | EXPERIMENT, off unless `RIG_EXPERIMENT_CHAT=1` or `[experiments] chat = true`: a headless parent CLI with a Rig-rendered chat ([details](#experiment-headless-parent-chat)) |
 | `rig web [--port N] [--open]` | A read-only board in the browser: the same Jobs, Queue, Workflows, Workspace, Fleet and Logs views, and the evidence drawer, from the same server-built data. 127.0.0.1 only |
 | `rig adapters list`, `validate DIR`, `check DIR` | Add a worker CLI as an adapter package ([reference](adapters.md)) |
 | `rig worktrees status [--json]`, `plan`, `create`, `commit`, `remove --job ID` | Per-job worktrees, below. `status` lists leftover job worktrees and the stopped containers keyed to them, and removes nothing |
@@ -49,11 +50,21 @@ The **Logs** tab follows the log of the job selected on the Jobs tab (the job wo
 
 What this deliberately does not do: embed the parent CLI in a pane. That needs a terminal emulator inside the board, which is a large dependency for little gain. Without tmux, run the parent in another terminal. The tmux layout is unchanged.
 
+## Experiment: headless parent chat
+
+**Experimental and off by default.** With `RIG_EXPERIMENT_CHAT=1` (or `[experiments] chat = true`, exactly `true`), the board gains a Chat tab and `rig chat` works. A message runs the parent CLI once in its headless mode (`claude -p --output-format stream-json --verbose`, or `codex exec --json`), a detached runner decodes the event stream into a transcript under `.rig/chat/<session>.jsonl` (directory mode 0700), and the board renders it: your messages, the parent's text, and one short line per tool call. A later message in the same session resumes the parent's own session. The parent is the `parent` in `.rig/harness.toml` when that is `claude` or `codex`; `rig chat send --parent` picks another.
+
+On the Chat tab: `c` writes a message (`Enter` sends, `Esc` discards, a failed send keeps the draft), `N` starts a new session on the next message, `x` stops a running turn after a confirmation, `k`/`j`/`G` scroll. The web board shows the same transcript read-only; it has no way to send.
+
+What it does not do: Rig adds no permission flags, so the parent runs with your own configuration, and in these modes a tool you have not allowed is refused rather than asked about. Messages reach the parent as one argument after `--` (or on the runner's standard input), never through a shell. Only one turn per session runs at a time.
+
+**Not verified:** the event formats are the ones `run-worker.sh` already relies on for these CLIs, but no real parent CLI or credentials are available where this was built, so it was tested against stand-in parents that print recorded-shape streams. `rig doctor` says so while the experiment is on. Treat the first real run as the first verification.
+
 ## Web board
 
 `rig web` prints a URL such as `http://127.0.0.1:41603/?token=…` and serves until you stop it (`--idle N` exits after N quiet seconds, `--open` opens your browser). The first visit trades the token for a cookie and drops it from the address bar. The page polls the local API every two seconds while it is visible and shows exactly what the server built: labels, tones, glyphs, ordering, sections. It never works out job state itself. Deep links work: `#Fleet`, `#Jobs/<job id>`, `#Jobs/<job id>/evidence`, `#Logs`.
 
-It cannot change anything. The only methods reachable are `api.ping`, `board.snapshot`, `workspace.status`, `fleet.status`, `job.evidence` and `log.follow`, from an allowlist (so a method added to the API later is not reachable until someone lists it), each with validated parameters; every request that is not GET or HEAD gets 405. Hardening: it binds 127.0.0.1 and has no host option; the token is 256 bits and compared in constant time; the `Host` header must be the bound address (DNS rebinding); cross-site requests are refused; there are no CORS headers; the Content-Security-Policy allows scripts and styles only from the page's own origin (no inline code, no external loads); and worker-supplied text only ever enters the page as text, never as HTML.
+It cannot change anything. The only methods reachable are `api.ping`, `board.snapshot`, `workspace.status`, `fleet.status`, `job.evidence`, `log.follow` and, with the chat experiment on, `chat.status` and `chat.transcript`, from an allowlist (so a method added to the API later is not reachable until someone lists it), each with validated parameters; every request that is not GET or HEAD gets 405. Hardening: it binds 127.0.0.1 and has no host option; the token is 256 bits and compared in constant time; the `Host` header must be the bound address (DNS rebinding); cross-site requests are refused; there are no CORS headers; the Content-Security-Policy allows scripts and styles only from the page's own origin (no inline code, no external loads); and worker-supplied text only ever enters the page as text, never as HTML.
 
 What it is not: a way to answer a prompt, stop a job or enqueue work. Those stay in the terminal board, where a confirmation can be given at the keyboard that is running the project.
 

@@ -53,6 +53,7 @@ def parse_harness(path: Path) -> dict:
         "sandbox": {"provider": "host", "error": "", "credentials": {}},
         "mcp": {"profile": "full", "error": ""},
         "worktrees": {"mode": "off", "container": "shared", "error": ""},
+        "experiments": {"chat": False},
         "project": {"state": "uninitialized", "enabled": False, "error": ""},
     }
     if not path.is_file():
@@ -99,6 +100,9 @@ def parse_harness(path: Path) -> dict:
                 out["mcp"] = {"profile": choice, "error": ""}
             else:
                 out["mcp"] = {"profile": "full", "error": f"unknown [mcp] profile {choice!r}"}
+            continue
+        if section == "experiments" and key == "chat":
+            out["experiments"]["chat"] = _toml_exact_true(val)  # exact true only: an experiment is never enabled by a typo
             continue
         if section == "worktrees" and key in {"mode", "container"}:
             choice = val.strip().strip('"\'').lower()

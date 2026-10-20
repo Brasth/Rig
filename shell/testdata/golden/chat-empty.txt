@@ -1,0 +1,12 @@
+ Rig · my-repo                       ! 1 need attention  ● 1 running  slots 2/3 
+  Jobs !1   Queue 2   Workflows 2   Workspace   Fleet   Logs  [Chat]            
+─ Chat (experiment) ────────────────────────────────────────────────────────────
+ No chat session yet. Press c to write the first message; it starts a headless …
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+ Tab pane  c write  N new session  x stop  k/j scroll  G follow  q quit         
