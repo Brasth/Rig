@@ -59,7 +59,7 @@ func TestOnceFromFixture(t *testing.T) {
 func TestOnceRejectsBadArguments(t *testing.T) {
 	for _, args := range [][]string{
 		{"--once", "--fixture", "../../testdata/snapshot.json", "--size", "nope"},
-		{"--once", "--fixture", "../../testdata/snapshot.json", "--tab", "Settings"},
+		{"--once", "--fixture", "../../testdata/snapshot.json", "--tab", "Nowhere"},
 		{"--once", "--fixture", "/no/such/file.json"},
 	} {
 		var out, errb bytes.Buffer
@@ -84,12 +84,28 @@ func TestOnceWorkspaceFromFixtures(t *testing.T) {
 		t.Fatalf("exit %d: %s", code, errb.String())
 	}
 	text := out.String()
-	for _, want := range []string{"Rig . my-repo", "[Workspace !]", "! 9229  held by node"} {
+	for _, want := range []string{"Rig . my-repo", "[Env !]", "! 9229  held by node"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("missing %q in\n%s", want, text)
 		}
 	}
 	if run([]string{"--once", "--tab", "Workspace", "--workspace-fixture", "/no/such.json"}, &out, &errb) == 0 {
 		t.Error("a missing workspace fixture must fail")
+	}
+}
+
+func TestOnceSessionRendersTheMockupsThreeColumnsFromFixtures(t *testing.T) {
+	var out, errb bytes.Buffer
+	code := run([]string{"--once", "--tab", "Term", "--fixture", "../../testdata/snapshot.json",
+		"--workspace-fixture", "../../testdata/workspace.json", "--evidence-fixture", "../../testdata/evidence.json",
+		"--size", "120x36", "--ascii"}, &out, &errb)
+	if code != 0 {
+		t.Fatalf("exit %d: %s", code, errb.String())
+	}
+	text := out.String()
+	for _, want := range []string{"[Session]", "- Workspace", "- Worktrees", "- Memory", "Jobs 1-7/7 . attention first", "Queue 2 pending", "- Evidence . job-7f2", "diff "} {
+		if !strings.Contains(text, want) {
+			t.Errorf("missing %q in\n%s", want, text)
+		}
 	}
 }

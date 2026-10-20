@@ -1,0 +1,36 @@
+ Rig · my-repo                                                               ! 1 need attention  ● 1 running  slots 2/3 
+ [Session]  Jobs !1   Queue 2   Workflows 2   Env   Settings                                                            
+─ Workspace ──────────────│━ Session ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━│─ Jobs 1-7/7 · attention first ─────────
+ Loading workspace…       │                                                    │> ! Needs input   Add supertest dev dep 
+                          │ p  start the parent CLI for this project here      │    permission: npm i -D supertest      
+                          │ s  a shell in this project's container             │  ● Running       Rate limit POST /login
+                          │                                                    │    editing src/middleware/limit.ts     
+                          │ Enter types into it; Ctrl-] returns to the board.  │  ● Checking      Verify wf-12 auth tes…
+                          │ Jobs and their evidence stay in view while it runs.│    running npm test -- login           
+                          │                                                    │  Finished                              
+                          │                                                    │  ○ Unverified    Session store refactor
+                          │                                                    │    opencode · finished 4m ago; not acc…
+                          │                                                    │  ✗ Failed        Bump eslint config    
+                          │                                                    │    pi · check npm run lint failed      
+                          │                                                    │  ✓ Verified      Settings loader       
+                          │                                                    │    claude · Parent accepted the curren…
+                          │                                                    │  – Cancelled     Spike: SSE logs       
+                          │                                                    │    grok · Stop confirmed; the worker i…
+                          │                                                    │                                        
+                          │                                                    │─ Queue 2 pending ──────────────────────
+                          │                                                    │  · Queued       Add /logout audit      
+                          │                                                    │  · Queued       Docs for rate limit    
+                          │                                                    │                                        
+                          │                                                    │                                        
+                          │                                                    │                                        
+                          │                                                    │                                        
+                          │                                                    │                                        
+                          │                                                    │                                        
+ w the full env view      │                                                    │                                        
+─ Evidence · job-7f2 · Add supertest dev dep ───────────────────────────────────────────────────────────────────────────
+ Loading evidence…                                                                                                      
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+ Stop job-7f2 Add supertest dev dep?  y yes · n no                                                                      
+ y confirm  n cancel                                                                                                    

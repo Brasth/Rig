@@ -22,6 +22,7 @@ type Source interface {
 	Act(method string, params map[string]any, timeout time.Duration) (string, error)
 	Workspace(deep bool, timeout time.Duration) (*view.Workspace, error)
 	Fleet(timeout time.Duration) (*view.Panel, error)
+	Settings(timeout time.Duration) (*view.Panel, error)
 	JobEvidence(id string, timeout time.Duration) (*view.Evidence, error)
 	Recover(confirmID string, timeout time.Duration) (string, error)
 	Log(id string, lines int, timeout time.Duration) (*view.LogReply, error)
@@ -63,6 +64,11 @@ type fleetMsg struct {
 	panel *view.Panel
 	err   error
 	at    time.Time
+}
+
+type settingsMsg struct {
+	panel *view.Panel
+	err   error
 }
 
 type evidenceMsg struct {
@@ -155,6 +161,10 @@ type Model struct {
 	chLast    time.Time
 	csBusy    bool
 	csLast    time.Time
+	dkBusy    bool
+	stBusy    bool
+	stLast    time.Time
+	dkLast    time.Time
 	pane      Pane
 	paneName  string
 	paneFocus bool
@@ -210,7 +220,7 @@ func (m *Model) fetch() tea.Cmd {
 // showing, at most once per interval unless forced, so dc-cli is not polled
 // for a panel nobody is looking at.
 func (m *Model) fetchWorkspace(force bool) tea.Cmd {
-	if m.st.Tab != WorkspaceTab || m.wsBusy || (!force && m.now().Sub(m.wsLast) < workspaceEvery) {
+	if !m.showsWorkspace() || m.wsBusy || (!force && m.now().Sub(m.wsLast) < workspaceEvery) {
 		return nil
 	}
 	m.wsBusy = true
@@ -223,7 +233,7 @@ func (m *Model) fetchWorkspace(force bool) tea.Cmd {
 
 // fetchFleet loads the fleet panel only while its tab is showing, like the workspace panel.
 func (m *Model) fetchFleet(force bool) tea.Cmd {
-	if m.st.Tab != FleetTab || m.flBusy || (!force && m.now().Sub(m.flLast) < workspaceEvery) {
+	if m.st.Tab != EnvTab || m.flBusy || (!force && m.now().Sub(m.flLast) < workspaceEvery) {
 		return nil
 	}
 	m.flBusy = true
@@ -231,6 +241,63 @@ func (m *Model) fetchFleet(force bool) tea.Cmd {
 	return func() tea.Msg {
 		p, err := src.Fleet(20 * time.Second)
 		return fleetMsg{panel: p, err: err, at: time.Now()}
+	}
+}
+
+// composite is true while the Session tab shows the mockup's three columns and dock.
+func (m *Model) composite() bool {
+	return m.st.Tab == SessionTab && sessionGeometry(m.w, m.h).ok
+}
+
+// showsWorkspace: the workspace panel is on screen (the Env tab, or the Session screen's left column).
+func (m *Model) showsWorkspace() bool { return m.st.Tab == EnvTab || m.composite() }
+
+// listTab is the tab whose rows the keyboard moves through: the Session screen shows the Jobs list.
+func (m *Model) listTab() string {
+	if m.st.Tab == SessionTab {
+		return "Jobs"
+	}
+	return m.st.Tab
+}
+
+// dockMsg is the evidence for the job the Session screen's dock follows.
+type dockMsg struct {
+	ev  *view.Evidence
+	err error
+	id  string
+}
+
+// fetchDock loads the selected job's evidence for the dock, while the Session screen shows: at once when the
+// selection changes, and at most every workspaceEvery after that.
+func (m *Model) fetchDock(force bool) tea.Cmd {
+	id := m.selectedJobID()
+	if !m.composite() || id == "" || m.dkBusy {
+		return nil
+	}
+	if id == m.st.DockID && !force && m.now().Sub(m.dkLast) < workspaceEvery {
+		return nil
+	}
+	if id != m.st.DockID {
+		m.st.DockEvidence, m.st.DockE, m.st.DockID = nil, "", id
+	}
+	m.dkBusy = true
+	src := m.src
+	return func() tea.Msg {
+		ev, err := src.JobEvidence(id, 15*time.Second)
+		return dockMsg{ev: ev, err: err, id: id}
+	}
+}
+
+// fetchSettings loads the settings panel while its tab shows; it is a local read, so the interval is short.
+func (m *Model) fetchSettings(force bool) tea.Cmd {
+	if m.st.Tab != SettingsTab || m.stBusy || (!force && m.now().Sub(m.stLast) < workspaceEvery) {
+		return nil
+	}
+	m.stBusy = true
+	src := m.src
+	return func() tea.Msg {
+		p, err := src.Settings(callTimeout)
+		return settingsMsg{panel: p, err: err}
 	}
 }
 
@@ -285,8 +352,13 @@ func (m *Model) fetchChat(force bool) tea.Cmd {
 	}
 }
 
-// paneRows is the room the Term tab gives a program: the whole body under the rule.
-func (m *Model) paneRows() int { return max(2, m.h-5) }
+// paneSize is the room the Session tab gives a program: the middle column, or the whole body under the rule.
+func (m *Model) paneSize() (cols, rows int) {
+	if cols, rows, ok := SessionPaneSize(m.w, m.h); ok {
+		return cols, max(2, rows)
+	}
+	return m.w, max(2, m.h-5)
+}
 
 // waitPane returns a command that reports the next change of the pane's screen.
 func waitPane(p Pane) tea.Cmd {
@@ -311,7 +383,7 @@ func (m *Model) askPane(parent bool) tea.Cmd {
 	}
 }
 
-// startPane runs the plan in the Term tab. A finished pane is replaced; a running one is never replaced silently.
+// startPane runs the plan in the Session tab. A finished pane is replaced; a running one is never replaced silently.
 func (m *Model) startPane(plan *view.ShellPlan) tea.Cmd {
 	if m.pane != nil {
 		if done, _ := m.pane.Exited(); !done {
@@ -321,7 +393,8 @@ func (m *Model) startPane(plan *view.ShellPlan) tea.Cmd {
 		m.pane.Close()
 		m.pane = nil
 	}
-	p, err := m.spawn(plan.Argv, plan.Dir, plan.Env, m.w, m.paneRows())
+	cols, rows := m.paneSize()
+	p, err := m.spawn(plan.Argv, plan.Dir, plan.Env, cols, rows)
 	if err != nil {
 		m.st.Message = "Could not start: " + clean(err.Error())
 		return nil
@@ -335,7 +408,7 @@ func (m *Model) startPane(plan *view.ShellPlan) tea.Cmd {
 	return waitPane(p)
 }
 
-// Close ends a program still running in the Term pane. Call it when the board exits.
+// Close ends a program still running in the Session pane. Call it when the board exits.
 func (m *Model) Close() {
 	if m.pane != nil {
 		m.pane.Close()
@@ -400,19 +473,19 @@ func (m *Model) act(method string, params map[string]any, enqueue bool) tea.Cmd 
 	}
 }
 
-func (m *Model) rows() []view.Row { return m.view.Rows(m.st.Tab) }
+func (m *Model) rows() []view.Row { return m.view.Rows(m.listTab()) }
 
 func (m *Model) selected() (view.Row, bool) {
 	rows := m.rows()
 	if len(rows) == 0 {
 		return view.Row{}, false
 	}
-	return rows[clampSel(m.st.Selected[m.st.Tab], len(rows))], true
+	return rows[clampSel(m.st.Selected[m.listTab()], len(rows))], true
 }
 
 func (m *Model) remember() {
 	if row, ok := m.selected(); ok {
-		m.selID[m.st.Tab] = row.ID
+		m.selID[m.listTab()] = row.ID
 	}
 }
 
@@ -436,7 +509,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.w, m.h = msg.Width, msg.Height
 		if m.pane != nil {
-			m.pane.Resize(m.w, m.paneRows())
+			m.pane.Resize(m.paneSize())
 		}
 	case panePlanMsg:
 		switch {
@@ -462,7 +535,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, waitPane(m.pane)
 	case tickMsg:
-		return m, tea.Batch(m.fetch(), m.fetchWorkspace(false), m.fetchFleet(false), m.fetchLog(false), m.fetchChatStatus(), m.fetchChat(false), tick())
+		return m, tea.Batch(m.fetch(), m.fetchWorkspace(false), m.fetchFleet(false), m.fetchSettings(false), m.fetchLog(false), m.fetchDock(false), m.fetchChatStatus(), m.fetchChat(false), tick())
 	case chatStatusMsg:
 		m.csBusy, m.csLast = false, m.now()
 		if msg.err != nil || msg.status == nil || !msg.status.Enabled {
@@ -502,6 +575,23 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.chLast = time.Time{}
 		return m, m.fetchChat(true)
+	case settingsMsg:
+		m.stBusy, m.stLast = false, m.now()
+		if msg.err != nil {
+			m.st.SettingsE = msg.err.Error() // keep the last good panel, say why it is stale
+			return m, nil
+		}
+		m.st.Settings, m.st.SettingsE = msg.panel, ""
+	case dockMsg:
+		m.dkBusy, m.dkLast = false, m.now()
+		if msg.id != m.st.DockID {
+			return m, m.fetchDock(false) // the selection moved on while this was loading
+		}
+		if msg.err != nil {
+			m.st.DockE = msg.err.Error()
+			return m, nil
+		}
+		m.st.DockEvidence, m.st.DockE = msg.ev, ""
 	case logMsg:
 		m.lgBusy, m.lgLast = false, m.now()
 		if msg.err != nil {
@@ -601,7 +691,7 @@ func firstLine(s string) string {
 
 func (m *Model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// While typing into the pane every key belongs to its program, Ctrl-C included, except the one way back.
-	if m.paneFocus && m.pane != nil && m.st.Tab == TermTab {
+	if m.paneFocus && m.pane != nil && m.st.Tab == SessionTab {
 		if k.Type == tea.KeyCtrlCloseBracket {
 			m.paneFocus = false
 			m.st.Message = "back on the board; Enter types into " + m.paneName + " again"
@@ -625,7 +715,7 @@ func (m *Model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.st.Message = "Press e before pasting queue text"
 		return m, nil
 	}
-	if m.st.Tab == TermTab {
+	if m.st.Tab == SessionTab {
 		switch k.String() {
 		case "p":
 			return m, m.askPane(true)
@@ -645,6 +735,15 @@ func (m *Model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.st.Mode, m.st.InputLabel, m.inputFor, m.st.Message = ModeInput, "chat", "chat", ""
 		return m, nil
 	}
+	if m.st.HelpOpen {
+		switch k.String() {
+		case "?", "esc":
+			m.st.HelpOpen = false
+		case "q":
+			return m, tea.Quit
+		}
+		return m, nil
+	}
 	if m.view == nil {
 		if k.String() == "q" {
 			return m, tea.Quit
@@ -654,21 +753,32 @@ func (m *Model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch k.String() {
 	case "q":
 		return m, tea.Quit
+	case "?":
+		m.st.HelpOpen = true
+		return m, nil
+	case "w":
+		return m, m.goTab(EnvTab)
 	case "tab", "shift+tab":
 		step := 1
 		if k.String() == "shift+tab" {
 			step = len(TabList(m.st)) - 1
 		}
 		tabs := TabList(m.st)
+		here := m.st.Tab
+		if here == LogsTab {
+			here = "Jobs" // the log is a screen under Jobs
+		}
 		for i, t := range tabs {
-			if t == m.st.Tab {
-				m.st.Tab = tabs[(i+step)%len(tabs)]
-				break
+			if t == here {
+				return m, m.goTab(tabs[(i+step)%len(tabs)])
 			}
 		}
-		m.st.DetailOpen, m.st.DetailOff, m.st.Message = false, 0, ""
-		m.st.EvidenceOpen = false
-		return m, tea.Batch(m.fetchWorkspace(true), m.fetchFleet(true), m.fetchLog(true), m.fetchChat(true))
+		return m, nil
+	case "l":
+		if m.st.Tab != "Jobs" {
+			return m, nil
+		}
+		return m, m.goTab(LogsTab)
 	case "j", "down":
 		if m.st.Tab == ChatTab {
 			m.st.ChatUp = max(0, m.st.ChatUp-1)
@@ -683,6 +793,7 @@ func (m *Model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.move(1)
+		return m, m.fetchDock(false)
 	case "k", "up":
 		if m.st.Tab == ChatTab {
 			m.st.ChatUp++
@@ -697,6 +808,7 @@ func (m *Model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.move(-1)
+		return m, m.fetchDock(false)
 	case "pgdown":
 		if m.st.Tab == LogsTab {
 			m.st.LogUp = max(0, m.st.LogUp-8)
@@ -724,10 +836,13 @@ func (m *Model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.st.DetailOff = 0
 		}
 	case "esc":
+		if m.st.Tab == LogsTab && !m.st.EvidenceOpen {
+			return m, m.goTab("Jobs")
+		}
 		m.st.DetailOpen, m.st.EvidenceOpen, m.st.Message = false, false, ""
 	case "v":
 		row, ok := m.selected()
-		if !ok || m.st.Tab != "Jobs" {
+		if !ok || m.listTab() != "Jobs" {
 			return m, nil
 		}
 		m.st.EvidenceOpen, m.st.EvidenceID, m.st.Evidence, m.st.EvidenceE, m.st.DetailOff = true, row.ID, nil, "", 0
@@ -736,14 +851,14 @@ func (m *Model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, m.askRecover()
 	case "r":
 		m.st.Message = "refreshing"
-		cmds := []tea.Cmd{m.fetch(), m.fetchWorkspace(true), m.fetchFleet(true), m.fetchLog(true)}
+		cmds := []tea.Cmd{m.fetch(), m.fetchWorkspace(true), m.fetchFleet(true), m.fetchSettings(true), m.fetchLog(true)}
 		if m.st.EvidenceOpen {
 			cmds = append(cmds, m.fetchEvidence(m.st.EvidenceID))
 		}
 		return m, tea.Batch(cmds...)
 	case "a", "d":
 		row, ok := m.selected()
-		if !ok || m.st.Tab != "Jobs" || !row.Ask {
+		if !ok || m.listTab() != "Jobs" || !row.Ask {
 			return m, nil
 		}
 		method, word := "job.allow", "allow"
@@ -754,6 +869,10 @@ func (m *Model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, m.act(method, map[string]any{"id": row.ID}, false)
 	case "x":
 		return m, m.askStop()
+	case "X":
+		if m.composite() {
+			return m, m.askClosePane()
+		}
 	case "e":
 		m.st.Mode, m.st.Message = ModeInput, ""
 		if m.draftKey == "" {
@@ -763,24 +882,36 @@ func (m *Model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// SetTab opens the board on a tab; the first refresh loads whatever it needs.
+func (m *Model) SetTab(name string) { m.st.Tab = name }
+
+// goTab shows a tab and starts whatever it needs loaded.
+func (m *Model) goTab(name string) tea.Cmd {
+	m.st.Tab = name
+	m.st.DetailOpen, m.st.DetailOff, m.st.Message = false, 0, ""
+	m.st.EvidenceOpen = false
+	return tea.Batch(m.fetchWorkspace(true), m.fetchFleet(true), m.fetchSettings(true), m.fetchLog(true), m.fetchDock(true), m.fetchChat(true))
+}
+
 func (m *Model) move(delta int) {
 	rows := m.rows()
 	if len(rows) == 0 {
 		return
 	}
-	m.st.Selected[m.st.Tab] = clampSel(m.st.Selected[m.st.Tab]+delta, len(rows))
+	tab := m.listTab()
+	m.st.Selected[tab] = clampSel(m.st.Selected[tab]+delta, len(rows))
 	m.st.DetailOff = 0
 	m.remember()
 	eh := 1
-	if (m.st.Tab == "Jobs" || m.st.Tab == "Queue") && m.h-5 >= twoLineMinBody {
+	if (tab == "Jobs" || tab == "Queue") && m.h-5 >= twoLineMinBody {
 		eh = 2
 	}
-	m.st.Offsets[m.st.Tab] = WindowStart(m.st.Offsets[m.st.Tab], m.st.Selected[m.st.Tab], m.h-5, eh, len(rows))
+	m.st.Offsets[tab] = WindowStart(m.st.Offsets[tab], m.st.Selected[tab], m.h-5, eh, len(rows))
 }
 
 // scrollsPanel is true when j/k scroll a panel instead of moving a list selection.
 func (m *Model) scrollsPanel() bool {
-	return m.st.EvidenceOpen || m.st.Tab == WorkspaceTab || m.st.Tab == FleetTab
+	return m.st.EvidenceOpen || m.st.Tab == EnvTab || m.st.Tab == SettingsTab
 }
 
 // askRecover confirms dc-cli's proposed fix. Only a plan the server marked safe is offered; anything
@@ -790,7 +921,7 @@ func (m *Model) askRecover() tea.Cmd {
 	if m.st.Workspace != nil {
 		plan = m.st.Workspace.Recovery
 	}
-	if m.st.Tab != WorkspaceTab || plan == nil || plan.Ready {
+	if m.st.Tab != EnvTab || plan == nil || plan.Ready {
 		return nil
 	}
 	if !plan.Safe {
@@ -803,15 +934,20 @@ func (m *Model) askRecover() tea.Cmd {
 	return nil
 }
 
-func (m *Model) askStop() tea.Cmd {
-	if m.st.Tab == TermTab {
-		if m.pane == nil {
-			m.st.Message = "nothing is running here"
-			return nil
-		}
-		m.pendingX, m.pendingI = "pane.close", "pane"
-		m.st.Mode, m.st.Prompt = ModeConfirm, "Close "+m.paneName+" (this ends the program)?"
+// askClosePane confirms ending the program in the Session pane.
+func (m *Model) askClosePane() tea.Cmd {
+	if m.pane == nil {
+		m.st.Message = "nothing is running here"
 		return nil
+	}
+	m.pendingX, m.pendingI = "pane.close", "pane"
+	m.st.Mode, m.st.Prompt = ModeConfirm, "Close "+m.paneName+" (this ends the program)?"
+	return nil
+}
+
+func (m *Model) askStop() tea.Cmd {
+	if m.st.Tab == SessionTab && !m.composite() {
+		return m.askClosePane() // the narrow Session tab is only the program: x closes it
 	}
 	if m.st.Tab == ChatTab {
 		if m.chatID == "" || m.st.Chat == nil || m.st.Chat.State != "running" {
@@ -823,15 +959,16 @@ func (m *Model) askStop() tea.Cmd {
 		return nil
 	}
 	row, ok := m.selected()
-	if !ok || (m.st.Tab != "Jobs" && m.st.Tab != "Queue") {
+	tab := m.listTab()
+	if !ok || (tab != "Jobs" && tab != "Queue") {
 		return nil
 	}
-	if m.st.Tab == "Jobs" && strings.Contains(finishedLabels, row.Label) && row.Label != "" {
+	if tab == "Jobs" && strings.Contains(finishedLabels, row.Label) && row.Label != "" {
 		m.st.Message = row.ID + " already finished"
 		return nil
 	}
 	m.pendingX, m.pendingI = "job.cancel", row.ID
-	if m.st.Tab == "Queue" {
+	if tab == "Queue" {
 		m.pendingX = "queue.cancel"
 	}
 	m.st.Mode = ModeConfirm

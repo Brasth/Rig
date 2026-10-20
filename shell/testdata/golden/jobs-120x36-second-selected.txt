@@ -1,21 +1,21 @@
  Rig · my-repo                                                               ! 1 need attention  ● 1 running  slots 2/3 
- [Jobs !1]  Queue 2   Workflows 2   Workspace   Fleet   Logs   Term                                                     
-─ Jobs 1-7/7 ─────────────────────────────────────────────────┬─────────────────────────────────────────────────────────
+  Session  [Jobs !1]  Queue 2   Workflows 2   Env   Settings                                                            
+─ Jobs 1-7/7 · attention first ───────────────────────────────┬─────────────────────────────────────────────────────────
   ! Needs input   Add supertest dev dep                       │ ● Running                                               
     permission: npm i -D supertest                            │ Worker process is executing.                            
 > ● Running       Rate limit POST /login                      │                                                         
     editing src/middleware/limit.ts                           │ job-81c                                                 
   ● Checking      Verify wf-12 auth tests                     │ status working                                          
     running npm test -- login                                 │ agent codex model unknown                               
-  ○ Unverified    Session store refactor                      │ sandbox devcontainer · a3f9c1d2e4b5 · node:22-bookworm  
-    opencode · finished 4m ago; not accepted                  │   · sha256:9f1c2d3e4a5b                                 
-  ✗ Failed        Bump eslint config                          │ verification unknown / not accepted                     
-    pi · check npm run lint failed                            │ independent review unknown; not completed               
-  ✓ Verified      Settings loader                             │ role implement                                          
-    claude · Parent accepted the current, unchanged content s…│ task Rate limit POST /login                             
-  – Cancelled     Spike: SSE logs                             │ doing editing src/middleware/limit.ts                   
-    grok · Stop confirmed; the worker is no longer running.   │ pid 4242 (alive)                                        
-                                                              │                                                         
+  Finished                                                    │ sandbox devcontainer · a3f9c1d2e4b5 · node:22-bookworm  
+  ○ Unverified    Session store refactor                      │   · sha256:9f1c2d3e4a5b                                 
+    opencode · finished 4m ago; not accepted                  │ verification unknown / not accepted                     
+  ✗ Failed        Bump eslint config                          │ independent review unknown; not completed               
+    pi · check npm run lint failed                            │ role implement                                          
+  ✓ Verified      Settings loader                             │ task Rate limit POST /login                             
+    claude · Parent accepted the current, unchanged content s…│ doing editing src/middleware/limit.ts                   
+  – Cancelled     Spike: SSE logs                             │ pid 4242 (alive)                                        
+    grok · Stop confirmed; the worker is no longer running.   │                                                         
                                                               │                                                         
                                                               │                                                         
                                                               │                                                         
@@ -33,4 +33,4 @@
                                                               │                                                         
                                                               │                                                         
                                                                                                                         
- Tab pane  Enter details  v evidence  s shell  e enqueue  x stop  r refresh  q quit                                     
+ Tab pane  Enter details  e enqueue  v evidence  w workspace  ? help  q quit                                            

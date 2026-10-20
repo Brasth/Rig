@@ -1,6 +1,6 @@
  Rig · my-repo                                           ! 1 need attention  ● 1 running  slots 2/3 
-  Jobs !1   Queue 2   Workflows 2   Workspace   Fleet   Logs  [Term]                                
-─ Term › codex · typing (Ctrl-] returns to the board) ──────────────────────────────────────────────
+ [Session]  Jobs !1   Queue 2   Workflows 2   Env   Settings                                        
+─ Session › codex · typing (Ctrl-] returns to the board) ───────────────────────────────────────────
 $ rig status                                                                                        
 parent codex  workers claude                                                                        
 $ [7m [0m                                                                                                 

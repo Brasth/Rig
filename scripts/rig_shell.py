@@ -101,7 +101,7 @@ def parent_command(repo: Path, parent: str = "", override: str = "") -> list[str
         return shlex.split(override)
     name = parent or harness.preferred_parent(repo)
     if not name:
-        raise ShellError("no parent set; run rig parent NAME or pass --parent NAME")
+        raise ShellError('no parent set; pass --parent NAME or add parent = "NAME" above the first section of .rig/harness.toml')
     if name not in PANE_PARENTS:
         raise ShellError(f"parent {name!r} cannot run in a pane; use one of {', '.join(PANE_PARENTS)}")
     binary = harness.find_worker_bin(name)
@@ -296,9 +296,11 @@ def main(argv=None) -> int:
         if args.no_tmux and args.command in ("start", "print"):
             command = [shell_binary(), "--repo", str(repo)]
             if args.command == "print":
-                print(shlex.join(pane_env(repo) + command))
+                print(shlex.join(pane_env(repo) + ["RIG_SHELL_START=Session"] + command))
                 return 0
-            os.execvpe(command[0], command, {**os.environ, "RIG_SHELL_ACTIVE": "1", "RIG_REPO": str(repo), "RIG_BIN": rig_binary()})
+            # Without tmux there is no parent pane beside the board, so it opens on the Session tab, where the parent runs.
+            os.execvpe(command[0], command, {**os.environ, "RIG_SHELL_ACTIVE": "1", "RIG_REPO": str(repo), "RIG_BIN": rig_binary(),
+                                             "RIG_SHELL_START": "Session"})
         if args.command == "print":
             steps = plan(repo, parent_command(repo, args.parent, args.parent_cmd), shell_binary())
             print("\n".join(shlex.join(["tmux", *server_args(), *step]) for step in steps))

@@ -1,5 +1,5 @@
  Rig · my-repo   ! 1 need attention  ● 1 running  slots 2/3 
-  Job !1   Que 2   Flw 2  [Workspace !]  Flt   Log   Trm    
+  Ses   Job !1   Que 2   Flw 2  [Env !]  Set                
 ─ Workspace ────────────────────────────────────────────────
  kind     devcontainer                                      
  override none                                              
@@ -11,4 +11,4 @@
    5173  vite                                               
  ! 9229  held by node                                       
                                                             
- Tab pane  j/k scroll  r refresh  q quit                    
+ Tab pane  j/k scroll  r refresh  ? help  q quit            

@@ -2,6 +2,7 @@
  "view": {
   "version": 1,
   "attention": true,
+  "context": "devcontainer a3f9c1",
   "sections": [
    {
     "title": "Workspace",
@@ -46,11 +47,37 @@
     ]
    },
    {
+    "title": "Worktrees",
+    "lines": [
+     {
+      "text": "  main",
+      "tone": ""
+     },
+     {
+      "text": "  job-7f2  ● writer",
+      "tone": "ok"
+     },
+     {
+      "text": "  job-81c  ● writer",
+      "tone": "ok"
+     }
+    ]
+   },
+   {
     "title": "Doctor",
     "lines": [
      {
       "text": "! engine  (fix: dc recover engine-slow)",
       "tone": "attention"
+     }
+    ]
+   },
+   {
+    "title": "Memory",
+    "lines": [
+     {
+      "text": "42/120 lines",
+      "tone": ""
      }
     ]
    }

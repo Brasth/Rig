@@ -422,9 +422,8 @@ def remove_job(repo, job_dir, *, discard=False):
     return job_record(folder)
 
 
-def job_status(repo):
-    """Every job worktree Rig made, whether it is still there, and the dc-cli containers keyed to them.
-    Read-only: it lists what could be cleaned up and never removes anything."""
+def job_rows(repo):
+    """Every job worktree Rig made and whether it is still there. Local reads only: no dc, nothing removed."""
     root = Path(repo).resolve()
     rows = []
     for folder in sorted((root / '.rig' / 'jobs').glob('*/')):
@@ -442,16 +441,24 @@ def job_status(repo):
             pass
         present = Path(record['path']).is_dir()
         if record.get('merged') or record.get('nothing_to_merge'):
-            state = 'merged' if present is False else 'merged, worktree still present'
+            state, kind = ('merged' if present is False else 'merged, worktree still present'), 'merged'
         elif record.get('removed'):
-            state = 'removed without merge'
+            state, kind = 'removed without merge', 'removed'
         else:
-            state = 'unmerged' if present else 'unmerged, worktree missing'
+            state, kind = ('unmerged' if present else 'unmerged, worktree missing'), ('writer' if present else 'missing')
         if record.get('continues'):
             state += f" (continues {record['continues']}, same worktree)"
-        rows.append({'job_id': folder.name, 'state': state, 'branch': record.get('branch', ''), 'present': present,
+        rows.append({'job_id': folder.name, 'state': state, 'kind': kind, 'branch': record.get('branch', ''), 'present': present,
                      'job_status': meta.get('status', ''), 'path': record['path'], 'created_at': record.get('created_at', ''),
                      'cleanup': ('' if state == 'merged' else f'rig worktrees remove --job {folder.name}')})
+    return rows
+
+
+def job_status(repo):
+    """Every job worktree Rig made, whether it is still there, and the dc-cli containers keyed to them.
+    Read-only: it lists what could be cleaned up and never removes anything."""
+    root = Path(repo).resolve()
+    rows = job_rows(root)
     containers = []
     try:
         import dc_client

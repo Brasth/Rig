@@ -208,7 +208,7 @@ Each phase ends on a named check, following the canvas. Sizes are relative
 > - **dc-cli contract is assumed.** dc-cli was out of scope for this work, so the commands and JSON fields in `scripts/dc_client.py` are unverified guesses read tolerantly. Nothing about them has been checked against a real release. Verify before relying on `rig env` or the Workspace tab.
 > - **No dc-cli pin chosen.** `templates/dc-cli.json` is empty (unpinned) until a release is picked.
 > - **Parsing lives in Python, not Go.** The plan had a Go `dc` client; instead `workspace.status` returns ready-to-render sections, so there is one parser, one language, and a Python fake-dc test suite. The Go shell renders text.
-> - **Workspace is a tab,** not a left column: the shell pane is narrow in the tmux layout.
+> - **Workspace is a tab,** not a left column: the shell pane is narrow in the tmux layout. *(Later closed: on a terminal of 120x30 or more the Session screen is the mockup's three columns with the workspace on the left and the evidence docked below; the tmux board pane stays narrow, so there Workspace is part of the Env tab.)*
 > - **Board presentation comes from the server** (`scripts/board_view.py`, reusing the curses board's label, ordering and count code) with a fixture test against Go, instead of re-deriving state in Go.
 > - **1.6 is build-from-source, not a tarball.** No release hosting exists in this repo. `rig setup` builds `rig-shell` (stamped with the commit) when Go is present; `rig update` is unchanged because it carries no shell sources, so `rig doctor` reports a stale binary and `rig shell build` rebuilds it. A real one-tarball release needs a release process outside this repo.
 > - **Not done from the Phase 1 list:** retiring the F8/F9 popups (the new layout simply does not use them), `dc forward`-only UI evidence URLs (Phase 2), and dc-cli changes (out of scope).
@@ -343,6 +343,7 @@ container and sourced by a wrapper).
 > - **The web board cannot send chat messages.** The plan had a send box; read-only is the web board's guarantee, so sending stays in the terminal board and `rig chat`.
 > - **`bin/rig` stays bash** (measured: the dispatcher is not where time goes).
 > - **An example adapter ships under `examples/adapters/`, not `adapters/`,** so a fake worker is never discovered on a normal install.
+> - **Board aligned to the mockup afterwards** (tabs Session/Jobs/Queue/Workflows/Env/Settings; the three-column Session screen with a docked evidence drawer at 120x30; the mockup's palette, selected-row bar, key footer and `?` list). Left as they are: the mockup's Settings pages for approvals, billing, notifications, editor and git belong to product surfaces outside this repository, so Settings shows only what `.rig/harness.toml` really configures, read-only; there is no `~/.rig/config.toml` to show; the centre column is the agent's own terminal rather than a Rig-rendered conversation (the chat experiment stays opt-in); the mockup's `u up  x shell  d doctor` hints are not keys (`w` opens Env).
 
 
 - Bubble Tea PTY panes for logs, `dc exec` shells and worker output; tmux

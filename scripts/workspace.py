@@ -97,7 +97,8 @@ def status(repo: Path, *, deep: bool = False, now=time.monotonic) -> dict:
             return hit[1]
     base = sandbox_env.env_status(repo)
     result = {"kind": base["kind"], "override": base["override"], "dc": base["dc"],
-              "containers": containers_view(base["containers"]), "ports": [], "doctor": None, "recovery": None, "error": base["error"]}
+              "containers": containers_view(base["containers"]), "ports": [], "doctor": None, "recovery": None, "error": base["error"],
+              "worktrees": _worktree_rows(repo), "memory": _memory_stats(repo)}
     if deep and base["dc"]["found"]:
         try:
             result["ports"] = parse_forward_status(dc_client.run_text(["forward", "--status"], repo, timeout=10))
@@ -112,6 +113,42 @@ def status(repo: Path, *, deep: bool = False, now=time.monotonic) -> dict:
     with _lock:
         _cache[key] = (now(), result)
     return result
+
+
+def _worktree_rows(repo: Path) -> list[dict]:
+    """The job worktrees still in play (local reads only; a broken record is shown, not fatal)."""
+    try:
+        import worktrees
+        return [{"job_id": r["job_id"], "kind": r.get("kind", "")} for r in worktrees.job_rows(repo)
+                if r.get("kind") in ("writer", "missing") or r.get("state") == "unreadable"]
+    except Exception:  # the side panel must never fail because a record is odd
+        return []
+
+
+def _memory_stats(repo: Path) -> dict:
+    try:
+        import memory
+        return memory.stats(repo)
+    except Exception:
+        return {"lines": 0, "max": 0, "updated": 0.0}
+
+
+def _ago(seconds: float) -> str:
+    minutes = int(max(0, seconds) // 60)
+    if minutes < 1:
+        return "just now"
+    if minutes < 60:
+        return f"{minutes}m ago"
+    hours = minutes // 60
+    return f"{hours}h ago" if hours < 48 else f"{hours // 24}d ago"
+
+
+def _context(status: dict) -> str:
+    """The short container identity the board's header shows: 'devcontainer a3f9c1'."""
+    for box in status.get("containers") or []:
+        if str(box.get("state", "")).lower().startswith(("up", "run")):
+            return f"{status['kind']} {(box.get('id') or box.get('name') or '')[:6]}".strip()
+    return ""
 
 
 def _line(text: str, tone: str = "") -> dict:
@@ -142,7 +179,9 @@ def view(status: dict) -> dict:
     if not status["containers"] and dc["found"] and not status["error"]:
         work.append(_line("no container for this repository"))
     if status["error"]:
-        work.append(_line("! " + status["error"], "attention"))
+        text = "! " + status["error"]
+        if text not in [line["text"] for line in work]:  # "dc-cli is not installed" is already said above
+            work.append(_line(text, "attention"))
         attention = True
     sections.append({"title": "Workspace", "lines": work})
     if status["ports"]:
@@ -156,6 +195,18 @@ def view(status: dict) -> dict:
             lines.append(_line(("! " if port["problem"] else "  ") + text, "attention" if port["problem"] else ""))
             attention = attention or port["problem"]
         sections.append({"title": "Ports", "lines": lines})
+    rows = status.get("worktrees") or []
+    if rows:
+        lines = [_line("  main")]
+        for row in rows[:6]:
+            if row.get("kind") == "writer":
+                lines.append(_line(f"  {row['job_id']}  ● writer", "ok"))
+            else:
+                lines.append(_line(f"! {row['job_id']}  worktree {row.get('kind') or 'unreadable'}", "attention"))
+                attention = True
+        if len(rows) > 6:
+            lines.append(_line(f"  +{len(rows) - 6} more"))
+        sections.append({"title": "Worktrees", "lines": lines})
     if status["doctor"] is not None:
         from doctor import fix_text
         doctor = status["doctor"]
@@ -175,4 +226,10 @@ def view(status: dict) -> dict:
             lines.append(_line(f"  R applies {recovery['apply']} (confirm)", "attention"))
         sections.append({"title": "Recovery", "lines": lines})
         attention = True
-    return {"version": VIEW_VERSION, "attention": attention, "sections": sections}
+    memory = status.get("memory")
+    if memory and memory.get("max"):
+        lines = [_line(f"{memory['lines']}/{memory['max']} lines")]
+        if memory.get("updated"):
+            lines.append(_line(f"updated {_ago(time.time() - memory['updated'])}"))
+        sections.append({"title": "Memory", "lines": lines})
+    return {"version": VIEW_VERSION, "attention": attention, "context": _context(status), "sections": sections}

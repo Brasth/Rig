@@ -472,6 +472,9 @@ if session_id:
 continues_id = os.environ.get("RIG_CONTINUES_JOB_ID", "")
 if continues_id:
     overlay["continues_job_id"] = continues_id
+task_title = os.environ.get("RIG_JOB_TASK", "").strip()
+if task_title:
+    overlay["task"] = task_title  # the short name the board shows, not the first line of the brief
 for key, env_key in (
     ("continuation_root_id", "RIG_CONTINUATION_ROOT_ID"),
     ("continuation_mode", "RIG_CONTINUATION_MODE"),
@@ -612,6 +615,9 @@ if session_id:
 continues_id = os.environ.get("RIG_CONTINUES_JOB_ID", "")
 if continues_id:
     overlay["continues_job_id"] = continues_id
+task_title = os.environ.get("RIG_JOB_TASK", "").strip()
+if task_title:
+    overlay["task"] = task_title  # the short name the board shows, not the first line of the brief
 for key, env_key in (
     ("continuation_root_id", "RIG_CONTINUATION_ROOT_ID"),
     ("continuation_mode", "RIG_CONTINUATION_MODE"),

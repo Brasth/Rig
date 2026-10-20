@@ -168,7 +168,7 @@ class LogFollow(Base):
 class NoTmux(Base):
     def run_shell(self, *args, path):
         binary = self.base / "rig-shell"
-        binary.write_text("#!/bin/sh\necho \"args=$* active=$RIG_SHELL_ACTIVE repo=$RIG_REPO\" > \"$OUT\"\n")
+        binary.write_text("#!/bin/sh\necho \"args=$* active=$RIG_SHELL_ACTIVE repo=$RIG_REPO start=$RIG_SHELL_START\" > \"$OUT\"\n")
         binary.chmod(0o755)
         out = self.base / "out.txt"
         env = dict(os.environ, RIG_SHELL_BIN=str(binary), OUT=str(out), PATH=path)
@@ -181,13 +181,14 @@ class NoTmux(Base):
         empty.mkdir()
         done, out = self.run_shell("start", "--no-tmux", path=str(empty))
         self.assertEqual(done.returncode, 0, done.stderr)
-        self.assertEqual(out.read_text().strip(), f"args=--repo {self.repo} active=1 repo={self.repo}")
+        self.assertEqual(out.read_text().strip(), f"args=--repo {self.repo} active=1 repo={self.repo} start=Session")
 
     def test_print_shows_the_one_command(self):
         done, _ = self.run_shell("print", "--no-tmux", path=os.environ["PATH"])
         self.assertEqual(done.returncode, 0, done.stderr)
         self.assertEqual(len(done.stdout.strip().splitlines()), 1)
         self.assertIn("--repo", done.stdout)
+        self.assertIn("RIG_SHELL_START=Session", done.stdout)  # no parent pane beside the board, so it opens on Session
         self.assertNotIn("tmux", done.stdout)
 
     def test_without_tmux_the_default_layout_explains_the_alternative(self):

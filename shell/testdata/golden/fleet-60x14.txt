@@ -1,5 +1,7 @@
  Rig · my-repo   ! 1 need attention  ● 1 running  slots 2/3 
-  Job !1   Que 2   Flw 2   Wks  [Fleet]  Log   Trm          
+  Ses   Job !1   Que 2   Flw 2  [Env]  Set                  
+─ Workspace ────────────────────────────────────────────────
+ Loading workspace…                                         
 ─ This repository ──────────────────────────────────────────
  ● repo  running  cpu 0.3%  mem 6.1M/15.7G                  
  ● job job-7  running                                       
@@ -9,6 +11,4 @@
 ─ Engine ───────────────────────────────────────────────────
  host  4 cpus  15.7G memory  in use cpu 8.8% mem 544.8M     
                                                             
-                                                            
-                                                            
- Tab pane  j/k scroll  r refresh  q quit                    
+ Tab pane  j/k scroll  r refresh  ? help  q quit            

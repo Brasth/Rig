@@ -1,5 +1,5 @@
- Rig · my-repo                                                               ! 1 need attention  ● 1 running  slots 2/3 
-  Jobs !1   Queue 2   Workflows 2  [Workspace !]  Fleet   Logs   Term                                                   
+ Rig · my-repo · devcontainer a3f9c1                                         ! 1 need attention  ● 1 running  slots 2/3 
+  Session   Jobs !1   Queue 2   Workflows 2  [Env !]  Settings                                                          
 ─ Workspace ────────────────────────────────────────────────────────────────────────────────────────────────────────────
  kind     devcontainer                                                                                                  
  override none                                                                                                          
@@ -10,8 +10,16 @@
    3000  web                                                                                                            
    5173  vite                                                                                                           
  ! 9229  held by node                                                                                                   
+─ Worktrees ────────────────────────────────────────────────────────────────────────────────────────────────────────────
+   main                                                                                                                 
+   job-7f2  ● writer                                                                                                    
+   job-81c  ● writer                                                                                                    
 ─ Doctor ───────────────────────────────────────────────────────────────────────────────────────────────────────────────
  ! engine  (fix: dc recover engine-slow)                                                                                
+─ Memory ───────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ 42/120 lines                                                                                                           
+─ Fleet ────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ Loading fleet…                                                                                                         
                                                                                                                         
                                                                                                                         
                                                                                                                         
@@ -25,12 +33,4 @@
                                                                                                                         
                                                                                                                         
                                                                                                                         
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
- Tab pane  j/k scroll  r refresh  q quit                                                                                
+ Tab pane  j/k scroll  r refresh  ? help  q quit                                                                        

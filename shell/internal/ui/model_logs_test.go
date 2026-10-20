@@ -19,7 +19,7 @@ func logReply(id, text string) *view.LogReply {
 	}{ID: id, Label: "Running", Worker: "claude"}, Text: text}
 }
 
-func toLogs(m *Model) { press(m, "shift+tab", "shift+tab") }
+func toLogs(m *Model) { press(m, "l") }
 
 func TestLogsFollowTheSelectedJobAndPollOnlyWhileShowing(t *testing.T) {
 	m, src := newReady(t)

@@ -42,7 +42,9 @@ type State struct {
 	WorkspaceE   string // why the workspace panel could not load
 	Fleet        *view.Panel
 	FleetE       string
-	PaneLines    []string // the Term pane's screen, already styled by the emulator
+	Settings     *view.Panel
+	SettingsE    string
+	PaneLines    []string // the Session pane's screen, already styled by the emulator
 	PaneTitle    string
 	PaneFocus    bool
 	PaneRunning  bool
@@ -57,7 +59,11 @@ type State struct {
 	Evidence     *view.Evidence
 	EvidenceE    string
 	EvidenceID   string
-	EvidenceOpen bool // the evidence drawer replaces the board body
+	EvidenceOpen bool           // the evidence drawer replaces the board body
+	HelpOpen     bool           // the key list replaces the board body
+	DockEvidence *view.Evidence // the selected job's evidence in the Session screen's dock
+	DockID       string
+	DockE        string
 	Styled       bool // apply colour and reverse video to list rows; golden tests leave it off
 }
 
@@ -66,11 +72,18 @@ func NewState() State {
 	return State{Tab: "Jobs", Selected: map[string]int{}, Offsets: map[string]int{}}
 }
 
-// Tabs are the board tabs in order.
-var Tabs = []string{"Jobs", "Queue", "Workflows", WorkspaceTab, FleetTab, LogsTab, TermTab}
+// Tabs are the board tabs in the order the mockup shows them. Logs is a screen under Jobs (key l), not a tab.
+var Tabs = []string{SessionTab, "Jobs", "Queue", "Workflows", EnvTab, SettingsTab}
 
-// TermTab hosts one interactive program (the parent CLI, or a shell in the container) on an emulated terminal.
-const TermTab = "Term"
+// SessionTab is the parent's seat: it hosts one interactive program (the parent CLI, or a shell in the
+// container) on an emulated terminal.
+const SessionTab = "Session"
+
+// EnvTab shows the workspace (container, ports, worktrees, doctor) and the fleet of containers on the engine.
+const EnvTab = "Env"
+
+// SettingsTab shows what the project's configuration makes effective. It is read-only.
+const SettingsTab = "Settings"
 
 // ChatTab is the EXPERIMENT chat with a headless parent; it exists only while the experiment is on.
 const ChatTab = "Chat"
@@ -86,11 +99,29 @@ func TabList(st State) []string {
 // LogsTab follows the selected job's log as plain text, so the board works without tmux.
 const LogsTab = "Logs"
 
-// FleetTab renders the containers on the engine, observed now.
-const FleetTab = "Fleet"
+// ValidTab is true for the board tabs and for the Logs screen.
+func ValidTab(name string) bool {
+	if name == LogsTab {
+		return true
+	}
+	for _, t := range Tabs {
+		if t == name {
+			return true
+		}
+	}
+	return false
+}
 
-// WorkspaceTab is the tab that renders the workspace panel instead of a list.
-const WorkspaceTab = "Workspace"
+// TabAlias maps the names earlier versions used (and the ones people type) to a current tab.
+func TabAlias(name string) string {
+	switch name {
+	case "Workspace", "Fleet":
+		return EnvTab
+	case "Term":
+		return SessionTab
+	}
+	return name
+}
 
 func glyph(r view.Row) string {
 	if r.Glyph == "" {
@@ -129,8 +160,17 @@ func frame(v *view.View, st State, w, h int) []string {
 	}
 	body := h - 5
 	lines := []string{headerLine(v, st, w), tabLine(v, st, w)}
+	if st.HelpOpen {
+		lines = append(lines, ruleS(st, "Keys", w))
+		lines = append(lines, helpLines(w, body)...)
+		lines = append(lines, messageLine(st, w), footerLine(nil, 0, st, w))
+		for len(lines) < h {
+			lines = append(lines, fit("", w))
+		}
+		return lines[:h]
+	}
 	if st.EvidenceOpen {
-		lines = append(lines, rule("Evidence › "+sanitize(st.EvidenceID), w))
+		lines = append(lines, ruleS(st, "Evidence › "+sanitize(st.EvidenceID), w))
 		lines = append(lines, evidenceLines(st, w, body)...)
 		lines = append(lines, messageLine(st, w), footerLine(nil, 0, st, w))
 		for len(lines) < h {
@@ -138,8 +178,11 @@ func frame(v *view.View, st State, w, h int) []string {
 		}
 		return lines[:h]
 	}
-	if st.Tab == TermTab {
-		lines = append(lines, rule(termTitle(st), w))
+	if st.Tab == SessionTab && sessionGeometry(w, h).ok {
+		return sessionFrame(v, st, w, h)
+	}
+	if st.Tab == SessionTab {
+		lines = append(lines, ruleS(st, termTitle(st), w))
 		lines = append(lines, termBody(st, w, body)...)
 		lines = append(lines, messageLine(st, w), footerLine(nil, 0, st, w))
 		for len(lines) < h {
@@ -148,7 +191,7 @@ func frame(v *view.View, st State, w, h int) []string {
 		return lines[:h]
 	}
 	if st.Tab == ChatTab {
-		lines = append(lines, rule(chatTitle(st), w))
+		lines = append(lines, ruleS(st, chatTitle(st), w))
 		lines = append(lines, chatBody(st, w, body)...)
 		lines = append(lines, messageLine(st, w), footerLine(nil, 0, st, w))
 		for len(lines) < h {
@@ -157,7 +200,7 @@ func frame(v *view.View, st State, w, h int) []string {
 		return lines[:h]
 	}
 	if st.Tab == LogsTab {
-		lines = append(lines, rule(logTitle(st), w))
+		lines = append(lines, ruleS(st, logTitle(st), w))
 		lines = append(lines, logLines(st, w, body)...)
 		lines = append(lines, messageLine(st, w), footerLine(nil, 0, st, w))
 		for len(lines) < h {
@@ -165,8 +208,8 @@ func frame(v *view.View, st State, w, h int) []string {
 		}
 		return lines[:h]
 	}
-	if st.Tab == WorkspaceTab || st.Tab == FleetTab {
-		lines = append(lines, rule(panelTitle(st), w))
+	if st.Tab == EnvTab || st.Tab == SettingsTab {
+		lines = append(lines, ruleS(st, panelTitle(st), w))
 		lines = append(lines, panelBody(st, w, body)...)
 		lines = append(lines, messageLine(st, w), footerLine(nil, 0, st, w))
 		for len(lines) < h {
@@ -185,27 +228,27 @@ func frame(v *view.View, st State, w, h int) []string {
 
 	switch {
 	case st.DetailOpen && !split && !stacked:
-		lines = append(lines, rule(fmt.Sprintf("%s › %s", st.Tab, selID(rows, sel)), w))
+		lines = append(lines, ruleS(st, fmt.Sprintf("%s › %s", st.Tab, selID(rows, sel)), w))
 		lines = append(lines, detailLines(rows, sel, st.DetailOff, w, body)...)
 	case split:
 		lw := (w*52 + 50) / 100
 		lw = max(52, min(72, lw))
 		dw := w - lw - 1
-		lines = append(lines, rule(rangeText(st.Tab, rows, st.Offsets[st.Tab], sel, body, eh), lw)+"┬"+rule("", dw))
-		list := listLines(rows, sel, st.Offsets[st.Tab], lw, body, eh, st.Styled)
+		lines = append(lines, ruleS(st, rangeText(st.Tab, rows, st.Offsets[st.Tab], sel, body, eh), lw)+sepTop(st)+ruleS(st, "", dw))
+		list := listLines(rows, sel, st.Offsets[st.Tab], lw, body, eh, st.Styled, st.Tab == "Jobs")
 		det := detailLines(rows, sel, st.DetailOff, dw, body)
 		for i := 0; i < body; i++ {
-			lines = append(lines, list[i]+"│"+det[i])
+			lines = append(lines, list[i]+bar(st)+det[i])
 		}
 	case stacked:
 		lb := (body*60 + 50) / 100
-		lines = append(lines, rule(rangeText(st.Tab, rows, st.Offsets[st.Tab], sel, lb, eh), w))
-		lines = append(lines, listLines(rows, sel, st.Offsets[st.Tab], w, lb, eh, st.Styled)...)
-		lines = append(lines, rule("Detail", w))
+		lines = append(lines, ruleS(st, rangeText(st.Tab, rows, st.Offsets[st.Tab], sel, lb, eh), w))
+		lines = append(lines, listLines(rows, sel, st.Offsets[st.Tab], w, lb, eh, st.Styled, st.Tab == "Jobs")...)
+		lines = append(lines, ruleS(st, "Detail", w))
 		lines = append(lines, detailLines(rows, sel, st.DetailOff, w, body-lb-1)...)
 	default:
-		lines = append(lines, rule(rangeText(st.Tab, rows, st.Offsets[st.Tab], sel, body, eh), w))
-		lines = append(lines, listLines(rows, sel, st.Offsets[st.Tab], w, body, eh, st.Styled)...)
+		lines = append(lines, ruleS(st, rangeText(st.Tab, rows, st.Offsets[st.Tab], sel, body, eh), w))
+		lines = append(lines, listLines(rows, sel, st.Offsets[st.Tab], w, body, eh, st.Styled, st.Tab == "Jobs")...)
 	}
 	lines = append(lines, messageLine(st, w), footerLine(rows, sel, st, w))
 	for len(lines) < h {
@@ -241,13 +284,17 @@ func headerLine(v *view.View, st State, w int) string {
 	if w < 60 {
 		health = fmt.Sprintf("!%d ●%d %d/%d", hd.Attention, hd.Running, hd.Slots, hd.Cap)
 	}
-	left := strings.TrimRight(fit(" Rig · "+clean(hd.Project), max(1, w-lipgloss.Width(health)-3)), " ")
+	title := " Rig · " + clean(hd.Project)
+	if st.Workspace != nil && st.Workspace.Context != "" && w >= 100 {
+		title += " · " + clean(st.Workspace.Context)
+	}
+	left := strings.TrimRight(fit(title, max(1, w-lipgloss.Width(health)-3)), " ")
 	gap := max(2, w-lipgloss.Width(left)-lipgloss.Width(health)-1)
 	return fit(left+strings.Repeat(" ", gap)+health, w)
 }
 
 // tabShort are distinct three-letter forms for a narrow tab bar ("Wor" would be both Workflows and Workspace).
-var tabShort = map[string]string{"Jobs": "Job", "Queue": "Que", "Workflows": "Flw", WorkspaceTab: "Wks", FleetTab: "Flt", LogsTab: "Log", ChatTab: "Cht", TermTab: "Trm"}
+var tabShort = map[string]string{"Jobs": "Job", "Queue": "Que", "Workflows": "Flw", EnvTab: "Env", SettingsTab: "Set", LogsTab: "Log", ChatTab: "Cht", SessionTab: "Ses"}
 
 func tabLine(v *view.View, st State, w int) string {
 	if line := tabLineWith(v, st, false); lipgloss.Width(line) <= w {
@@ -259,9 +306,13 @@ func tabLine(v *view.View, st State, w int) string {
 // tabLineWith builds the tab bar; short abbreviates the inactive tabs so the active one is never cut off.
 func tabLineWith(v *view.View, st State, short bool) string {
 	var parts []string
+	active := st.Tab
+	if active == LogsTab {
+		active = "Jobs" // the log is a screen under Jobs
+	}
 	for _, name := range TabList(st) {
 		label := name
-		if short && name != st.Tab {
+		if short && name != active {
 			label = tabShort[name]
 		}
 		if v != nil {
@@ -277,13 +328,13 @@ func tabLineWith(v *view.View, st State, short bool) string {
 				}
 			}
 		}
-		if name == WorkspaceTab && st.Workspace != nil && st.Workspace.Attention {
+		if name == SettingsTab && st.Settings != nil && st.Settings.Attention {
 			label += " !"
 		}
-		if name == FleetTab && st.Fleet != nil && st.Fleet.Attention {
+		if name == EnvTab && ((st.Workspace != nil && st.Workspace.Attention) || (st.Fleet != nil && st.Fleet.Attention)) {
 			label += " !"
 		}
-		if name == st.Tab {
+		if name == active {
 			label = "[" + label + "]"
 		} else {
 			label = " " + label + " "
@@ -312,10 +363,12 @@ func rangeText(tab string, rows []view.Row, off, sel, capRows, eh int) string {
 	if n == 0 {
 		return tab
 	}
-	per := max(1, capRows/eh)
-	start := windowStart(off, sel, per, n)
-	end := min(n, start+per)
-	return fmt.Sprintf("%s %d-%d/%d", tab, start+1, end, n)
+	start, end := windowRange(rows, off, sel, capRows, eh, tab == "Jobs")
+	text := fmt.Sprintf("%s %d-%d/%d", tab, start+1, end, n)
+	if tab == "Jobs" {
+		text += " · attention first"
+	}
+	return text
 }
 
 func windowStart(off, sel, per, n int) int {
@@ -334,14 +387,69 @@ func WindowStart(off, sel, bodyRows, eh, n int) int {
 	return windowStart(off, sel, max(1, bodyRows/eh), n)
 }
 
-func listLines(rows []view.Row, sel, off, w, capRows, eh int, styled bool) []string {
+// firstFinished is the index where the "Finished" group starts, or -1 when the list has no such boundary
+// (everything is finished, or nothing is).
+func firstFinished(rows []view.Row) int {
+	for i, r := range rows {
+		for _, name := range strings.Fields(finishedLabels) {
+			if r.Label == name {
+				if i == 0 {
+					return -1
+				}
+				return i
+			}
+		}
+	}
+	return -1
+}
+
+// windowRange is the rows [start, end) that fit capRows lines, counting the one-line "Finished" divider
+// before the first finished row, and always including the selected row.
+func windowRange(rows []view.Row, off, sel, capRows, eh int, groups bool) (int, int) {
+	n := len(rows)
+	fs := -1
+	if groups {
+		fs = firstFinished(rows)
+	}
+	start := windowStart(off, sel, max(1, capRows/eh), n)
+	for {
+		used, end := 0, start
+		for i := start; i < n; i++ {
+			need := eh
+			if i == fs {
+				need++
+			}
+			if used+need > capRows {
+				break
+			}
+			used += need
+			end = i + 1
+		}
+		if sel < end || start >= sel {
+			return start, max(end, min(n, start+1))
+		}
+		start++
+	}
+}
+
+func listLines(rows []view.Row, sel, off, w, capRows, eh int, styled, groups bool) []string {
 	out := make([]string, 0, capRows)
 	if len(rows) == 0 {
 		out = append(out, fit("  Nothing here yet.", w))
 	} else {
-		per := max(1, capRows/eh)
-		start := windowStart(off, sel, per, len(rows))
-		for i := start; i < min(len(rows), start+per); i++ {
+		start, end := windowRange(rows, off, sel, capRows, eh, groups)
+		fs := -1
+		if groups {
+			fs = firstFinished(rows)
+		}
+		for i := start; i < end; i++ {
+			if i == fs {
+				div := fit("  Finished", w)
+				if styled {
+					div = muted(div)
+				}
+				out = append(out, div)
+			}
 			out = append(out, entry(rows[i], i == sel, w, eh, styled)...)
 		}
 	}
@@ -377,11 +485,14 @@ func entry(r view.Row, selected bool, w, eh int, styled bool) []string {
 		second = fit("    "+clean(r.Second), w)
 	}
 	if styled {
-		label = tone(r.Tone).Render(label)
 		if selected {
-			first := marker + " " + label + "  " + rest
-			return paintSelected(first, second, eh)
+			return selectedRow(marker, label, r.Tone, rest, second, eh)
 		}
+		lines := []string{marker + " " + tone(r.Tone).Render(label) + "  " + rest}
+		if eh == 2 {
+			lines = append(lines, muted(second))
+		}
+		return lines
 	}
 	lines := []string{marker + " " + label + "  " + rest}
 	if eh == 2 {
@@ -449,18 +560,52 @@ func messageLine(st State, w int) string {
 	return fit("", w)
 }
 
+// helpKeys is every key, grouped, for the ? screen; the footer shows only the few a row of text has room for.
+var helpKeys = [][2]string{
+	{"Tab, Shift-Tab", "next or previous tab"},
+	{"j, k", "move (scroll on panels, logs and the evidence drawer)"},
+	{"Enter, Esc", "open or close details"},
+	{"a, d", "allow or deny the selected worker's prompt"},
+	{"e", "park a task in the queue (Enter saves, Esc discards)"},
+	{"v", "evidence drawer for the selected job"},
+	{"w", "workspace: container, ports, worktrees, doctor"},
+	{"l", "jobs: follow the selected job's log (Esc returns)"},
+	{"s", "shell in the selected job's container"},
+	{"x", "stop the selected job or queue item, after a confirmation"},
+	{"r", "refresh"},
+	{"R", "workspace: apply the proposed fix, after a confirmation"},
+	{"G", "logs: follow the tail again"},
+	{"?", "this list"},
+	{"q", "quit"},
+}
+
+func helpLines(w, h int) []string {
+	out := make([]string, 0, h)
+	for _, kv := range helpKeys {
+		out = append(out, fit(fmt.Sprintf(" %-16s %s", kv[0], kv[1]), w))
+	}
+	out = append(out, fit("", w), fit(" Esc or ? closes this list.", w))
+	for len(out) < h {
+		out = append(out, fit("", w))
+	}
+	return out[:h]
+}
+
 func footerLine(rows []view.Row, sel int, st State, w int) string {
-	keys := []string{"Tab pane", "Enter details", "v evidence", "s shell", "e enqueue", "x stop", "r refresh", "q quit"}
-	if st.Tab == WorkspaceTab || st.Tab == FleetTab {
-		keys = []string{"Tab pane", "j/k scroll", "r refresh", "q quit"}
-		if st.Tab == WorkspaceTab && st.Workspace != nil && st.Workspace.Recovery != nil && st.Workspace.Recovery.Safe && !st.Workspace.Recovery.Ready {
-			keys = []string{"Tab pane", "j/k scroll", "R recover", "r refresh", "q quit"}
+	keys := []string{"Tab pane", "Enter details", "e enqueue", "v evidence", "w workspace", "? help", "q quit"}
+	if st.Tab == EnvTab {
+		keys = []string{"Tab pane", "j/k scroll", "r refresh", "? help", "q quit"}
+		if st.Workspace != nil && st.Workspace.Recovery != nil && st.Workspace.Recovery.Safe && !st.Workspace.Recovery.Ready {
+			keys = []string{"Tab pane", "j/k scroll", "R recover", "r refresh", "? help", "q quit"}
 		}
 	}
-	if st.Tab == LogsTab {
-		keys = []string{"Tab pane", "k/j scroll", "G follow", "s shell", "r refresh", "q quit"}
+	if st.Tab == SettingsTab {
+		keys = []string{"Tab pane", "j/k scroll", "r refresh", "read-only: edit .rig/harness.toml", "? help", "q quit"}
 	}
-	if st.Tab == TermTab {
+	if st.Tab == LogsTab {
+		keys = []string{"Esc back to jobs", "k/j scroll", "G follow", "s shell", "r refresh", "q quit"}
+	}
+	if st.Tab == SessionTab {
 		keys = []string{"Tab pane", "p parent CLI", "s container shell", "Enter type in it", "x close", "q quit"}
 		if st.PaneFocus {
 			keys = []string{"Ctrl-] back to the board (every other key goes to the program)"}
@@ -472,6 +617,9 @@ func footerLine(rows []view.Row, sel int, st State, w int) string {
 	if st.EvidenceOpen {
 		keys = []string{"Esc close", "j/k scroll", "r refresh", "q quit"}
 	}
+	if st.HelpOpen {
+		keys = []string{"Esc close", "q quit"}
+	}
 	if st.Mode == ModeInput {
 		keys = []string{"Enter queue it", "Esc discard"}
 	} else if st.Mode == ModeConfirm {
@@ -479,14 +627,19 @@ func footerLine(rows []view.Row, sel int, st State, w int) string {
 	} else if len(rows) > 0 && st.Tab == "Jobs" && rows[sel].Ask {
 		keys = append([]string{"a allow", "d deny"}, keys...)
 	}
+	return footerWith(keys, st, w)
+}
+
+// footerWith lays out the key hints on one line.
+func footerWith(keys []string, st State, w int) string {
 	return fit(" "+strings.Join(keys, "  "), w)
 }
 
 func termTitle(st State) string {
 	if st.PaneTitle == "" {
-		return "Term"
+		return "Session"
 	}
-	return "Term › " + sanitize(st.PaneTitle)
+	return "Session › " + sanitize(st.PaneTitle)
 }
 
 // termBody is the pane's screen, or the help shown while nothing runs.
@@ -571,7 +724,7 @@ func chatBody(st State, w, h int) []string {
 			all = []string{" (empty session)"}
 		}
 		if st.ChatE != "" {
-			all = append(all, rule("stale", w))
+			all = append(all, ruleS(st, "stale", w))
 			for _, l := range wrap("refresh failed: "+st.ChatE, w-2, "  ") {
 				all = append(all, " "+l)
 			}
@@ -628,7 +781,7 @@ func logLines(st State, w, h int) []string {
 			}
 		}
 		if st.LogE != "" {
-			all = append(all, rule("stale", w))
+			all = append(all, ruleS(st, "stale", w))
 			for _, l := range wrap("refresh failed: "+st.LogE, w-2, "  ") {
 				all = append(all, " "+l)
 			}
@@ -646,26 +799,56 @@ func logLines(st State, w, h int) []string {
 	return out
 }
 
+// envSections is the Env tab: the workspace panel, then the fleet panel, each with its own failure shown in
+// place so one slow or broken source never hides the other. Nil while neither has answered.
+func envSections(st State) *[]view.Section {
+	if st.Workspace == nil && st.Fleet == nil && st.WorkspaceE == "" && st.FleetE == "" {
+		return nil
+	}
+	var all []view.Section
+	part := func(title string, p *view.Panel, errText string) {
+		switch {
+		case p == nil && errText != "":
+			all = append(all, view.Section{Title: title, Lines: []view.Line{{Text: title + " unavailable: " + errText}}})
+		case p == nil:
+			all = append(all, view.Section{Title: title, Lines: []view.Line{{Text: "Loading " + strings.ToLower(title) + "…"}}})
+		default:
+			all = append(all, p.Sections...)
+			if errText != "" {
+				all = append(all, view.Section{Title: title + " (stale)", Lines: []view.Line{{Text: "refresh failed: " + errText}}})
+			}
+		}
+	}
+	var ws *view.Panel
+	if st.Workspace != nil {
+		ws = &view.Panel{Sections: st.Workspace.Sections}
+	}
+	part("Workspace", ws, st.WorkspaceE)
+	part("Fleet", st.Fleet, st.FleetE)
+	return &all
+}
+
 // panelTitle is the first section's title: it labels the rule under the tab bar, so that section
 // does not repeat it.
 func panelTitle(st State) string {
-	p, fallback := st.Workspace, WorkspaceTab
-	if st.Tab == FleetTab {
-		p, fallback = st.Fleet, FleetTab
+	if st.Tab == SettingsTab {
+		if st.Settings != nil && len(st.Settings.Sections) > 0 {
+			return sanitize(st.Settings.Sections[0].Title)
+		}
+		return SettingsTab
 	}
-	if p != nil && len(p.Sections) > 0 {
-		return sanitize(p.Sections[0].Title)
+	if sections := envSections(st); sections != nil && len(*sections) > 0 {
+		return sanitize((*sections)[0].Title)
 	}
-	return fallback
+	return EnvTab
 }
 
-// panelBody renders the Workspace or Fleet tab.
+// panelBody renders the Env or Settings tab.
 func panelBody(st State, w, h int) []string {
-	p, errText, name := st.Workspace, st.WorkspaceE, "Workspace"
-	if st.Tab == FleetTab {
-		p, errText, name = st.Fleet, st.FleetE, "Fleet"
+	if st.Tab == SettingsTab {
+		return sectionLines(st.Settings.SectionsOrNil(), st.SettingsE, SettingsTab, true, st, w, h)
 	}
-	return sectionLines(p.SectionsOrNil(), errText, name, true, st, w, h)
+	return sectionLines(envSections(st), "", EnvTab, true, st, w, h)
 }
 
 // evidenceLines renders the drawer for one job; every section, including the first, gets its own rule.
@@ -689,14 +872,14 @@ func sectionLines(sections *[]view.Section, errText, name string, firstInRule bo
 	default:
 		for i, sec := range *sections {
 			if i > 0 || !firstInRule {
-				all = append(all, rule(sanitize(sec.Title), w))
+				all = append(all, ruleS(st, sanitize(sec.Title), w))
 			}
 			for _, l := range sec.Lines {
 				all = append(all, " "+tonedLine(l.Tone, sanitize(l.Text), st.Styled))
 			}
 		}
 		if errText != "" {
-			all = append(all, rule("stale", w))
+			all = append(all, ruleS(st, "stale", w))
 			for _, l := range wrap("refresh failed: "+errText, w-2, "  ") {
 				all = append(all, " "+l)
 			}

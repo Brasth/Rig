@@ -9,6 +9,11 @@ type FleetReply struct {
 	View Panel `json:"view"`
 }
 
+// SettingsReply is the settings.view result: read-only sections in the Workspace shape.
+type SettingsReply struct {
+	View Panel `json:"view"`
+}
+
 // Evidence is the job.evidence result: the drawer for one job.
 type Evidence struct {
 	JobID    string    `json:"job_id"`

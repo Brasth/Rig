@@ -18,6 +18,7 @@ type Section struct {
 type Workspace struct {
 	Version   int       `json:"version"`
 	Attention bool      `json:"attention"`
+	Context   string    `json:"context"` // the header's container identity, "devcontainer a3f9c1"; empty without a running one
 	Sections  []Section `json:"sections"`
 	// Recovery is copied from the reply's raw status by the client; nil when dc-cli reports no fault.
 	Recovery *RecoveryPlan `json:"-"`

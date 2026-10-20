@@ -26,6 +26,10 @@ type fakeSource struct {
 	text    string
 	calls   []call
 
+	settings      *view.Panel
+	settingsErr   error
+	settingsCalls int
+
 	fleet       *view.Panel
 	fleetErr    error
 	evidence    *view.Evidence
@@ -61,6 +65,10 @@ func (f *fakeSource) Workspace(bool, time.Duration) (*view.Workspace, error) {
 	return f.ws, f.wsErr
 }
 func (f *fakeSource) Fleet(time.Duration) (*view.Panel, error) { return f.fleet, f.fleetErr }
+func (f *fakeSource) Settings(time.Duration) (*view.Panel, error) {
+	f.settingsCalls++
+	return f.settings, f.settingsErr
+}
 func (f *fakeSource) JobEvidence(id string, _ time.Duration) (*view.Evidence, error) {
 	f.evidenceIDs = append(f.evidenceIDs, id)
 	return f.evidence, f.evidenceErr
@@ -293,12 +301,12 @@ func TestNavigationTabsDetailAndQuit(t *testing.T) {
 	if m.st.Tab != "Queue" {
 		t.Fatalf("tab %q", m.st.Tab)
 	}
-	press(m, "tab", "tab", "tab", "tab", "tab", "tab")
+	press(m, "tab", "tab", "tab", "tab", "tab")
 	if m.st.Tab != "Jobs" {
-		t.Fatalf("tab wraps after Term, got %q", m.st.Tab)
+		t.Fatalf("tab wraps after Settings through Session, got %q", m.st.Tab)
 	}
 	press(m, "shift+tab")
-	if m.st.Tab != "Term" {
+	if m.st.Tab != SessionTab {
 		t.Fatalf("shift+tab goes back and wraps, got %q", m.st.Tab)
 	}
 	press(m, "tab")
@@ -346,7 +354,7 @@ func TestWorkspaceIsFetchedOnlyWhileItsTabShowsAndNotMoreThanEveryFiveSeconds(t 
 	}
 	press(m, "tab", "tab")
 	run(press(m, "tab"), m) // switching to Workspace fetches at once
-	if m.st.Tab != WorkspaceTab {
+	if m.st.Tab != EnvTab {
 		t.Fatalf("tab %q", m.st.Tab)
 	}
 	if src.wsCalls != 1 {

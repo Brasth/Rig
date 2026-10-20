@@ -72,6 +72,17 @@ def render(bullets: list[str]) -> str:
     return "\n".join(lines) + "\n"
 
 
+def stats(repo: Path) -> dict:
+    """How full the standing-facts file is, for the board's side panel. Read-only; absent file is empty."""
+    path = memory_path(Path(repo))
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+        updated = path.stat().st_mtime
+    except OSError:
+        return {"lines": 0, "max": MAX_LINES, "updated": 0.0}
+    return {"lines": _line_count(text), "max": MAX_LINES, "updated": updated}
+
+
 def _line_count(text: str) -> int:
     if not text:
         return 0

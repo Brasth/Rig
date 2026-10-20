@@ -133,6 +133,22 @@ def _first_line(text: str, limit: int = 88) -> str:
     return collapsed[: limit - 1] + "…"
 
 
+# Parents paraphrase the worker preamble in their own words, so a fixed list cannot name every variant;
+# these are the instruction fragments that say how to behave, never what the task is.
+_INSTRUCTION = re.compile(
+    r"rig[_ ]job[_ ]inbox|first rig operation|(?:not|isn'?t) (?:the )?orchestrator|worker only|worker not|"
+    r"read-only (?:reviewer|worker)|no agents|computer[- ]use|do not spawn|handshake|^(?:work )?context\b|"
+    r"^(?:you are|you're) (?:a |an )?(?:rig )?(?:worker|reviewer|child)\b",
+    re.IGNORECASE,
+)
+_SENTENCE_END = re.compile(r"(?<=[.!?])\s+|(?<=[.!?])(?=[A-Z])")
+
+
+def task_title(case: str) -> str:
+    """The short name a launch gives its job: the task text, one line."""
+    return _first_line(re.sub(r"^#+\s*", "", " ".join(str(case or "").split())))
+
+
 def task_from_brief(text: str, job_id: str) -> str:
     lines = []
     for raw in text.splitlines():
@@ -142,7 +158,10 @@ def task_from_brief(text: str, job_id: str) -> str:
         low = s.lower()
         if any(m in low for m in PREAMBLE_MARKERS):
             continue
-        lines.append(s)
+        for part in _SENTENCE_END.split(s):
+            part = part.strip()
+            if part and not _INSTRUCTION.search(part):
+                lines.append(part)
     if lines:
         return _first_line(" ".join(lines[:2]))
     slug = job_id.split("-", 1)

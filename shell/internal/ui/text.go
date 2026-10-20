@@ -101,7 +101,7 @@ func wrap(text string, w int, indent string) []string {
 	return append(lines, prefix+line)
 }
 
-var asciiGlyphs = map[string]string{"●": "*", "✓": "+", "✗": "x", "–": "-", "○": "o", "·": ".", "…": "~", "│": "|", "─": "-", "━": "=", "┬": "+", "›": ">", "▏": "_", "×": "x"}
+var asciiGlyphs = map[string]string{"●": "*", "✓": "+", "✗": "x", "–": "-", "○": "o", "·": ".", "…": "~", "│": "|", "─": "-", "━": "=", "┬": "+", "›": ">", "▏": "_", "×": "x", "↓": "v"}
 
 // asciiOnly maps Unicode UI glyphs to ASCII for terminals that cannot show them.
 func asciiOnly(s string) string {

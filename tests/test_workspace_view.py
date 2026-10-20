@@ -129,6 +129,46 @@ class Rendering(Base):
         self.assertEqual(self.lines(view, "Ports"), ["  3000  web", "  5173  vite", "! 9229  held by node"])
         self.assertEqual(self.lines(view, "Doctor"), ["! engine  (fix: dc recover engine-slow)"])
 
+    def test_the_side_panel_sections_worktrees_memory_and_the_header_context(self):
+        view = workspace.view(self.sample())
+        self.assertEqual(view["context"], "devcontainer a3f9c1")
+        self.assertEqual(self.lines(view, "Worktrees"), ["  main", "  job-7f2  ● writer", "  job-81c  ● writer"])
+        self.assertEqual(self.lines(view, "Memory"), ["42/120 lines"])
+        titles = [s["title"] for s in view["sections"]]
+        self.assertEqual(titles, ["Workspace", "Ports", "Worktrees", "Doctor", "Memory"], "the mockup's order")
+        status = self.sample()
+        status["memory"]["updated"] = __import__("time").time() - 720
+        self.assertEqual(self.lines(workspace.view(status), "Memory")[1], "updated 12m ago")
+        status.update(worktrees=[{"job_id": "j%d" % i, "kind": "writer"} for i in range(9)])
+        lines = self.lines(workspace.view(status), "Worktrees")
+        self.assertEqual((len(lines), lines[-1]), (8, "  +3 more"))
+        status.update(worktrees=[{"job_id": "gone", "kind": "missing"}])
+        self.assertTrue(workspace.view(status)["attention"])
+        self.assertEqual(self.lines(workspace.view(status), "Worktrees")[1], "! gone  worktree missing")
+
+    def test_no_container_means_no_header_context_and_old_status_shapes_still_render(self):
+        status = self.sample()
+        status["containers"] = []
+        self.assertEqual(workspace.view(status)["context"], "")
+        for key in ("worktrees", "memory"):
+            status.pop(key, None)
+        titles = [s["title"] for s in workspace.view(status)["sections"]]
+        self.assertNotIn("Worktrees", titles)
+        self.assertNotIn("Memory", titles)
+
+    def test_status_reads_the_live_worktrees_and_memory_of_the_repository(self):
+        import json as _json
+        folder = self.repo / ".rig" / "jobs" / "w1"
+        folder.mkdir(parents=True)
+        tree = self.repo / ".rig" / "worktrees" / "w1"
+        tree.mkdir(parents=True)
+        (folder / "worktree.json").write_text(_json.dumps({"version": 1, "path": str(tree), "branch": "rig/w1"}))
+        (self.repo / ".rig" / "MEMORY.md").write_text("# MEMORY\n\n- a fact\n")
+        status = workspace.status(self.repo)
+        self.assertEqual(status["worktrees"], [{"job_id": "w1", "kind": "writer"}])
+        self.assertEqual((status["memory"]["lines"], status["memory"]["max"]), (3, 120))
+        self.assertGreater(status["memory"]["updated"], 0)
+
     def test_no_dc_and_clean_states(self):
         status = self.sample()
         status.update(dc={"found": False, "path": "", "version": "", "pin": "", "pin_state": "missing"},
@@ -142,6 +182,14 @@ class Rendering(Base):
         view = workspace.view(clean)
         self.assertFalse(view["attention"])
         self.assertEqual(self.lines(view, "Doctor"), ["● dc doctor reports no problems"])
+
+    def test_an_error_the_panel_already_states_is_not_repeated(self):
+        status = self.sample()
+        status.update(dc={"found": False, "path": "", "version": "", "pin": "", "pin_state": "missing"},
+                      containers=[], ports=[], doctor=None, error="dc-cli is not installed")
+        self.assertEqual(self.lines(workspace.view(status), "Workspace").count("! dc-cli is not installed"), 1)
+        status["error"] = "dc ls failed (1)"
+        self.assertIn("! dc ls failed (1)", self.lines(workspace.view(status), "Workspace"))
 
     def test_pin_mismatch_is_flagged(self):
         status = self.sample()

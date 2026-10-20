@@ -1,6 +1,6 @@
  Rig · my-repo                       ! 1 need attention  ● 1 running  slots 2/3 
-  Jobs !1   Queue 2   Workflows 2   Workspace   Fleet   Logs  [Term]            
-─ Term ─────────────────────────────────────────────────────────────────────────
+ [Session]  Jobs !1   Queue 2   Workflows 2   Env   Settings                    
+─ Session ──────────────────────────────────────────────────────────────────────
  Run an interactive program here, with no tmux:                                 
                                                                                 
    p  the parent CLI for this project                                           
