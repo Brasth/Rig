@@ -140,6 +140,69 @@ def optional_check(repo: Path, task: str, *, required: bool) -> dict:
                  required=required, **evidence)
 
 
+_BAD_STATES = frozenset({"fail", "failed", "error", "missing", "unhealthy", "down"})
+
+
+def engine_check(repo: Path) -> dict:
+    """Ask dc-cli for its own diagnosis. Rig reports it and names the fix; it fixes nothing."""
+    import dc_client
+    try:
+        done = dc_client.run(["doctor", "--json"], repo, timeout=60)
+    except dc_client.DcError as error:
+        return check("engine", "failed", str(error), required=True)
+    try:
+        data = json.loads(done.stdout)
+    except ValueError:
+        detail = (done.stderr or done.stdout).strip().splitlines()
+        return check("engine", "failed", f"dc doctor did not print JSON (exit {done.returncode}): "
+                     f"{detail[-1] if detail else 'no output'}", required=True)
+    rows = data if isinstance(data, list) else dc_client.pick(data, "checks", "results", "items", default=[])
+    problems = []
+    for row in rows if isinstance(rows, list) else []:
+        if not isinstance(row, dict):
+            continue
+        state = dc_client.pick(row, "status", "state", "result", default="")
+        ok = dc_client.pick(row, "ok", default=None)
+        if ok is False or (isinstance(state, str) and state.lower() in _BAD_STATES):
+            problems.append({"name": str(dc_client.pick(row, "name", "check", "id", default="check")),
+                             "recover": str(dc_client.pick(row, "recover", "recover_id", "diagnosis", "diagnosis_id", default="") or "")})
+    if problems:
+        text = "; ".join(p["name"] + (f" (fix: dc recover {p['recover']})" if p["recover"] else "") for p in problems)
+        return check("engine", "failed", f"{len(problems)} problem(s): {text}", required=True, problems=problems)
+    if done.returncode != 0:
+        return check("engine", "failed", f"dc doctor exited {done.returncode} without naming a problem", required=True)
+    return check("engine", "ready", "dc doctor reports no problems", required=True)
+
+
+def workspace_checks(repo: Path, config: dict, *, deep: bool) -> list[dict]:
+    """Workspace kind and dc-cli version always; the engine only when asked (deep)."""
+    import dc_client
+    import sandbox_env
+    kind = sandbox_env.detect_kind(repo)
+    override = sandbox_env.override_path(repo).is_file()
+    rows = [check("workspace", "ready", f"{kind} workspace" + ("; generated override present" if override else ""),
+                  required=False, kind=kind, override=override)]
+    # dc-cli is only a requirement for someone who asked for it.
+    needed = deep or config["sandbox"]["provider"] == "devcontainer"
+    binary = dc_client.dc_binary()
+    found = dc_client.version(binary) if binary else ""
+    pin = dc_client.pinned_version()
+    state = dc_client.pin_state(found, pin)
+    evidence = {"version": found, "pin": pin, "pin_state": state}
+    if state == "missing":
+        rows.append(check("dc-cli", "missing", "dc-cli is not installed or printed no version; install it to use rig env",
+                          required=needed, **evidence))
+    elif state == "mismatch":
+        rows.append(check("dc-cli", "failed", f"dc-cli {found} differs from the pinned {pin}; install {pin}",
+                          required=needed, **evidence))
+    else:
+        rows.append(check("dc-cli", "ready", f"dc-cli {found}" + (" matches the pin" if state == "match" else "; no version pinned"),
+                          required=False, **evidence))
+    if deep and found:
+        rows.append(engine_check(repo))
+    return rows
+
+
 def smoke_check() -> dict:
     """Exercise only our Python child server and inbox in a self-owned fixture."""
     with tempfile.TemporaryDirectory(prefix="rig-doctor-") as raw:
@@ -192,7 +255,8 @@ def smoke_check() -> dict:
 
 
 def build_report(repo: Path, *, task: str = "coding", parent: str = "", model: str = "",
-                 research_sources=None, smoke: bool = False, host_snapshot: dict | None = None) -> dict:
+                 research_sources=None, smoke: bool = False, host_snapshot: dict | None = None,
+                 workspace: bool = False) -> dict:
     if task not in TASKS:
         raise ValueError("task must be " + "|".join(TASKS))
     if not isinstance(parent, str) or (parent and parent not in harness.PARENTS):
@@ -241,6 +305,7 @@ def build_report(repo: Path, *, task: str = "coding", parent: str = "", model: s
     checks.append(check("sandbox", "missing" if sandbox_state["error"] or sandbox_state["provider"] != "host" else "ready",
                         sandbox_state["error"] or f"{sandbox_state['provider']} provider",
                         required=False))
+    checks.extend(workspace_checks(repo, config, deep=bool(workspace)))
     checks.append(check("scripts", "ready" if script_ready else "missing", "Rig runtime scripts present" if script_ready else "Rig runtime scripts missing"))
     entry = parent_entry(selected, repo)
     configured = child_mcp._stdio_entry_ready(entry)
@@ -323,11 +388,13 @@ def main(argv=None) -> int:
     parser.add_argument("--model", default="", help="Exact model selector to check against cache; never invokes a provider")
     parser.add_argument("--research-source", action="append", dest="research_sources")
     parser.add_argument("--smoke", action="store_true", help="Run an 8-second-bounded temporary child MCP fixture; no provider/host/browser execution")
+    parser.add_argument("--workspace", action="store_true",
+                        help="Also ask dc-cli for its engine diagnosis; dc-cli then becomes required")
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args(argv)
     try:
         report = build_report(args.repo, task=args.task, parent=args.parent, model=args.model,
-                              research_sources=args.research_sources, smoke=args.smoke)
+                              research_sources=args.research_sources, smoke=args.smoke, workspace=args.workspace)
     except ValueError as exc:
         parser.error(str(exc))
     print(json.dumps(report, indent=2) if args.json else format_report(report))
