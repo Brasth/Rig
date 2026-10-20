@@ -179,7 +179,9 @@ def view(status: dict) -> dict:
     if not status["containers"] and dc["found"] and not status["error"]:
         work.append(_line("no container for this repository"))
     if status["error"]:
-        work.append(_line("! " + status["error"], "attention"))
+        text = "! " + status["error"]
+        if text not in [line["text"] for line in work]:  # "dc-cli is not installed" is already said above
+            work.append(_line(text, "attention"))
         attention = True
     sections.append({"title": "Workspace", "lines": work})
     if status["ports"]:

@@ -7,7 +7,7 @@ An optional terminal layout for working with a parent agent while Rig runs worke
 | Command | What it does |
 | --- | --- |
 | `rig shell` | One tmux window: the parent CLI unchanged in its own pane, the board (`rig-shell`) beside it, and a log pane following the most relevant job |
-| `rig shell --no-tmux` | The board in this terminal with nothing else installed, no tmux: its Term tab runs the parent CLI or a container shell on an emulated terminal, and the Logs tab replaces the log pane |
+| `rig shell --no-tmux` | The board in this terminal with nothing else installed, no tmux: its Session tab runs the parent CLI or a container shell on an emulated terminal beside the jobs, and `l` follows a job's log in place of the log pane |
 | `rig shell print`, `rig shell kill` | Show the tmux commands it would run, or remove this repository's session |
 | `rig shell build` | Build `rig-shell` from a Rig clone with Go 1.24+ (no project needed) |
 | `rig init --sandbox` | Detect the workspace and, for a folder with no devcontainer, store dc-cli's generated config under `.rig/sandbox/override.json`; `--write-devcontainer` turns it into `.devcontainer/devcontainer.json` |
@@ -24,35 +24,48 @@ An optional terminal layout for working with a parent agent while Rig runs worke
 
 ## The board
 
-Tabs: Jobs, Queue, Workflows, Workspace, Fleet, Logs, Term. Every state shows a glyph and a word, and labels, ordering and counts come from the same code as `rig tui`, so the two never disagree.
+Tabs, as in the design mockup: **Session, Jobs, Queue, Workflows, Env, Settings**. Every state shows a glyph and a word, and labels, ordering and counts come from the same code as `rig tui`, so the two never disagree. The Jobs list is attention first, with a "Finished" line before the finished jobs. Colours are the mockup's palette (xterm-256, so any 256-colour terminal shows the same thing); the selected row is a dark bar.
 
 | Key | Action |
 | --- | --- |
 | `Tab`, `Shift-Tab` | Next or previous tab |
-| `j`, `k` | Move, or scroll on the Workspace and Fleet tabs and in the evidence drawer |
-| `Enter`, `Esc` | Open or close details on narrow terminals |
+| `j`, `k` | Move, or scroll on Env, Settings, logs and the evidence drawer |
+| `Enter`, `Esc` | Open or close details on narrow terminals; on Session, `Enter` types into the running program |
 | `a`, `d` | Allow or deny the selected worker prompt |
-| `v` | Evidence drawer for the selected job (`Esc` closes it) |
-| `s` | Interactive shell in the selected job's container (on the Workspace and Fleet tabs: the repository's), by handing the terminal to `dc exec --no-start`; exit the shell to return |
-| `k`, `j`, `G` | Logs tab: scroll back, forward, and follow the tail again |
-| `x` | Stop the selected job or queue item, after a confirmation |
-| `R` | Workspace tab: apply the proposed environment fix, after a confirmation, when Rig allows it |
 | `e` | Park a task in the queue (`Enter` saves, `Esc` discards; a failed save keeps the draft) |
-| `r`, `q` | Refresh, quit |
+| `v` | Evidence drawer for the selected job (`Esc` closes it) |
+| `w` | Jump to Env |
+| `l` | Jobs: follow the selected job's log (`Esc` returns to Jobs) |
+| `s` | Interactive shell in the selected job's container (on Env: the repository's), by handing the terminal to `dc exec --no-start`; exit the shell to return. On Session, `p` and `s` start a program in the pane instead |
+| `x` | Stop the selected job or queue item, after a confirmation. On a narrow Session tab, close the program |
+| `X` | Session screen: close the program in the middle column, after a confirmation |
+| `k`, `j`, `G` | Log screen: scroll back, forward, and follow the tail again |
+| `R` | Env: apply the proposed environment fix, after a confirmation, when Rig allows it |
+| `r`, `?`, `q` | Refresh, the full key list, quit |
 
-Pasted text is never run as commands. `RIG_TUI_ASCII=1`, `RIG_TUI_CJK=1` or a non-UTF locale selects ASCII glyphs. If the API server is not running the board starts one and shows "refresh failed" with the snapshot age if it cannot reach it, keeping the last data on screen.
+The footer shows only the keys that matter on the current screen; `?` lists them all. Pasted text is never run as commands. `RIG_TUI_ASCII=1`, `RIG_TUI_CJK=1` or a non-UTF locale selects ASCII glyphs. If the API server is not running the board starts one and shows "refresh failed" with the snapshot age if it cannot reach it, keeping the last data on screen.
+
+### The Session screen
+
+On a terminal of at least **120 columns by 30 rows** the Session tab is the mockup's screen: the workspace on the left (container, ports, worktrees, doctor, memory), the parent's own terminal in the middle (`p` starts it), and the jobs and queue on the right, with the selected job's diff, checks, contract and ports docked along the bottom. The header names the container (`devcontainer a3f9c1`). Job keys (`a`, `d`, `x`, `v`, `j`, `k`) act on the selected job while the parent keeps the keyboard focus rules below, and `X` closes the program. The program is sized to the middle column and follows window resizes. On a smaller terminal the Session tab is the single-program view described under [The Session tab](#the-session-tab-one-program).
+
+### Env and Settings
+
+**Env** is the workspace panel and the fleet panel together (what the old Workspace and Fleet tabs showed; `--tab Workspace` and `--tab Fleet` still work and mean Env). If one source fails, its failure is shown in place and the other is still shown.
+
+**Settings** is read-only. It shows what `.rig/harness.toml` makes effective: the project state and parent, which workers are on, routing, orchestration, queue limits, sandbox and worktree choices, the MCP profile and the experiments, with any bad value flagged and the tab marked `!`. It is read through the same parser Rig uses, and the board has no write path to configuration: change a setting in `.rig/harness.toml` and the board picks it up on refresh.
 
 ## Logs and shells without tmux
 
-The **Logs** tab follows the log of the job selected on the Jobs tab (the job worth watching if none is) as plain text, refreshed every two seconds while the tab shows, with terminal escape sequences removed. Scrolling back stops following; `G` follows the tail again.
+The log screen (`l` on a job) follows the log of the job selected on the Jobs tab (the job worth watching if none is) as plain text, refreshed every two seconds while the tab shows, with terminal escape sequences removed. Scrolling back stops following; `G` follows the tail again.
 
-**`s`** (outside the Term tab) opens a real interactive shell in the job's container. The server decides the command: `dc exec --no-start <workspace>`, where the workspace is the job's own worktree when its container is keyed by that worktree and the repository otherwise. `--no-start` means a shell can enter a container that is running and never start one. If there is no running container, or dc-cli is missing, the board says why and runs nothing. While the shell is open the board is suspended and the terminal is the shell's; exiting returns to the board.
+**`s`** (outside the Session tab) opens a real interactive shell in the job's container. The server decides the command: `dc exec --no-start <workspace>`, where the workspace is the job's own worktree when its container is keyed by that worktree and the repository otherwise. `--no-start` means a shell can enter a container that is running and never start one. If there is no running container, or dc-cli is missing, the board says why and runs nothing. While the shell is open the board is suspended and the terminal is the shell's; exiting returns to the board.
 
-### The Term tab
+### The Session tab, one program
 
-The **Term** tab runs one interactive program on a pseudo-terminal inside the board, so the parent CLI and a container shell work without tmux. `p` starts the parent CLI for the project (the server decides which; the same one `rig shell` puts in its tmux pane), `s` starts a shell in the project's container (`dc exec --no-start`). A program starts with the keyboard: **every key goes to it, Ctrl-C included**, except **Ctrl-]**, which returns to the board; **Enter** types into it again. The program sees the real size and is resized with the window; a full-screen program such as `vi` works. `x` closes it (after a confirmation), a program that exits keeps its last screen until you start another, and quitting the board ends it.
+The **Session** tab runs one interactive program on a pseudo-terminal inside the board, so the parent CLI and a container shell work without tmux. `p` starts the parent CLI for the project (the server decides which; the same one `rig shell` puts in its tmux pane), `s` starts a shell in the project's container (`dc exec --no-start`). A program starts with the keyboard: **every key goes to it, Ctrl-C included**, except **Ctrl-]**, which returns to the board; **Enter** types into it again. The program sees the real size and is resized with the window; a full-screen program such as `vi` works. `x` closes it (after a confirmation), a program that exits keeps its last screen until you start another, and quitting the board ends it.
 
-Limits: one program at a time; the live screen only, with no scrollback; the mouse is not forwarded; pasted text goes in as plain input (newlines become Enter), so a paste into a shell runs; wide characters (CJK, emoji) take one cell and can misalign. The tmux layout is unchanged and still gives the side-by-side view; the Term tab is a full-screen tab, not a split.
+Limits: one program at a time; the live screen only, with no scrollback; the mouse is not forwarded; pasted text goes in as plain input (newlines become Enter), so a paste into a shell runs; wide characters (CJK, emoji) take one cell and can misalign. The tmux layout is unchanged and still gives the side-by-side view; on a terminal too small for the Session screen this tab is full-screen.
 
 ## Experiment: headless parent chat
 
@@ -76,11 +89,11 @@ What it is not: a way to answer a prompt, stop a job or enqueue work. Those stay
 
 **Evidence drawer** (`v` on a job): where the job ran (host, container with name and state, worktree with branch, base and merge state), what changed (file list with added and removed lines from git for worktree jobs, the recorded changed paths otherwise, files outside the declared scope flagged), the acceptance contract with each criterion's outcome, the checks with their exit codes and where they ran, and the forwarded ports observed now. Everything is read from records Rig wrote or from git and dc-cli as they are at that moment.
 
-**Fleet tab**: every container dc-cli can see on the engine (`dc ls --all`), this repository's first, then other workspaces with their folder. Running ones show CPU and memory as `dc stats` reports them, and the engine's own cpus and memory. These are observed values only: Rig sums nothing, estimates nothing and never turns them into a cost ([cost accounting](cost-accounting.md)).
+**Fleet** (the second half of the Env tab): every container dc-cli can see on the engine (`dc ls --all`), this repository's first, then other workspaces with their folder. Running ones show CPU and memory as `dc stats` reports them, and the engine's own cpus and memory. These are observed values only: Rig sums nothing, estimates nothing and never turns them into a cost ([cost accounting](cost-accounting.md)).
 
 ### Environment recovery
 
-When `dc recover` has a next step, the Workspace tab shows it with the command to run. Rig applies a step itself only when the owner confirms that exact plan id and its action is one of `colima_start`, `create_nets` or `take_ports`, which covers an engine that is down and a port held by one of dc-cli's own containers. Everything else dc-cli offers (installing or launching Docker Desktop, anything needing `sudo`, switching Docker contexts, stopping another engine, pruning, starting a sandbox for a folder with no config) is shown as text for you to run; Rig never prunes. Each attempt, applied, failed or refused, adds one line to `.rig/recovery/environment.jsonl` with who asked, the plan, the action and the outcome. A plan that changed between your confirmation and the apply is refused.
+When `dc recover` has a next step, the Env tab shows it with the command to run. Rig applies a step itself only when the owner confirms that exact plan id and its action is one of `colima_start`, `create_nets` or `take_ports`, which covers an engine that is down and a port held by one of dc-cli's own containers. Everything else dc-cli offers (installing or launching Docker Desktop, anything needing `sudo`, switching Docker contexts, stopping another engine, pruning, starting a sandbox for a folder with no config) is shown as text for you to run; Rig never prunes. Each attempt, applied, failed or refused, adds one line to `.rig/recovery/environment.jsonl` with who asked, the plan, the action and the outcome. A plan that changed between your confirmation and the apply is refused.
 
 ## Parallel writers in worktrees
 

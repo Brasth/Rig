@@ -183,6 +183,14 @@ class Rendering(Base):
         self.assertFalse(view["attention"])
         self.assertEqual(self.lines(view, "Doctor"), ["● dc doctor reports no problems"])
 
+    def test_an_error_the_panel_already_states_is_not_repeated(self):
+        status = self.sample()
+        status.update(dc={"found": False, "path": "", "version": "", "pin": "", "pin_state": "missing"},
+                      containers=[], ports=[], doctor=None, error="dc-cli is not installed")
+        self.assertEqual(self.lines(workspace.view(status), "Workspace").count("! dc-cli is not installed"), 1)
+        status["error"] = "dc ls failed (1)"
+        self.assertIn("! dc ls failed (1)", self.lines(workspace.view(status), "Workspace"))
+
     def test_pin_mismatch_is_flagged(self):
         status = self.sample()
         status["dc"]["pin_state"], status["dc"]["pin"] = "mismatch", "9.9.9"
