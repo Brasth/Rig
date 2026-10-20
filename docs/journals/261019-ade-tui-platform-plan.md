@@ -152,7 +152,7 @@ Each phase ends on a named check, following the canvas. Sizes are relative
 - Exit check: every existing worker dry-run test passes unchanged with the
   provider in the path.
 
-**0.3 Local API v1 (M).**
+**0.3 Local API v1 (M).** *Status 2026-10-20: implemented in `scripts/local_api.py` with `docs/local-api.md` generated from its registry. Deviations: `events.subscribe` moves to 0.5 where the board needs it; no `local_api_protocol` key in `runtime-compat.json` (that file is compared exactly by the update tests, and the API is versioned in-band by `rig_api`); `ensure_service` auto-start moves to 0.5; the exit check is that `api call` text equals the MCP tool text for the same arguments.*
 - New `scripts/local_api.py`: JSON-RPC 2.0 over a Unix socket at
   `<runtime dir>/api.sock`, newline-delimited, `{"rig_api": 1}` on every
   response. Methods mirror the parent MCP tools that the board and CLI need

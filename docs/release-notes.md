@@ -1,5 +1,9 @@
 # Release Notes
 
+## Local API v1 (2026-10-20)
+
+`rig api serve` starts a versioned JSON-RPC 2.0 server on a private Unix socket (mode 0600, in the 0700 runtime directory) bound to one repository; `rig api call METHOD [JSON]` and `rig api methods` are the clients. Every request carries the token from `api.token`. Methods map one-to-one onto existing parent MCP tools (session, doctor, status, jobs, queue, workflows, allow, deny, cancel, message), so project-enabled and ownership checks are unchanged, a client-supplied `repo` is ignored, owner tokens are redacted from every response, and a worker child cannot start the server. `docs/local-api.md` is generated from the method registry and a test keeps them in step. Nothing changes for existing workflows; the board and companion move onto this API in a later step.
+
 ## Sandbox provider seam (2026-10-20)
 
 `.rig/harness.toml` gains an optional `[sandbox]` section with `provider = "host"` (the default and today's behavior). `scripts/sandbox_provider.py` defines the provider interface a container backend will implement; the host provider changes nothing. `provider = "devcontainer"` is reserved: `run-worker.sh` refuses to launch with it, and so does any unknown value, rather than silently running on the host. `rig doctor` lists the provider as an optional check. Existing repos need no change.
