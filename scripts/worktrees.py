@@ -207,10 +207,10 @@ def plan(repo, job_id, role='worker', access='', writer_job='', continues=''):
     config = settings(root)
     access = access or ('read' if role.lower() in READ_ROLES else 'write')
     isolated = config['mode'] == 'per-job' and access == 'write' and not config['error']
-    if isolated and continues:
-        # A successor would start from the base without the predecessor's unmerged edits; refuse rather than lose them.
-        raise WorktreeError('continuations are not supported in [worktrees] mode = "per-job"; accept or discard the earlier job first')
+    shared = _continuation_target(root, continues) if isolated and continues else None
     path = job_path(root, job_id) if isolated else root
+    if shared:
+        path = Path(shared['path'])  # the predecessor's unmerged edits live there; the successor continues in place
     if not isolated and access == 'read' and writer_job and not config['error']:
         # A reviewer reads the writer's work, which lives in the writer's worktree until it is merged.
         try:
@@ -220,7 +220,55 @@ def plan(repo, job_id, role='worker', access='', writer_job='', continues=''):
         if record and not (record.get('merged') or record.get('removed')) and Path(record['path']).is_dir():
             path = Path(record['path'])
     return {'isolated': isolated, 'error': config['error'], 'container': config['container'],
-            'path': str(path), 'branch': job_branch(job_id) if isolated else ''}
+            'path': str(path), 'branch': (shared['branch'] if shared else job_branch(job_id)) if isolated else '',
+            'continues_worktree': (shared.get('worktree_job') or shared['job_id']) if shared else ''}
+
+
+def _continuation_target(root, continues):
+    """The predecessor's worktree record when a continuation must share it; None when its work is already in the base."""
+    record = job_record(Path(root) / '.rig' / 'jobs' / continues)
+    if not record:
+        raise WorktreeError(f'job {continues} edited the base checkout, not a worktree; a continuation in '
+                            '[worktrees] mode = "per-job" cannot see uncommitted work there')
+    if record.get('merged') or record.get('nothing_to_merge'):
+        return None
+    if record.get('removed'):
+        raise WorktreeError(f'the worktree of job {continues} was removed before it was merged; its work is gone')
+    if not Path(record['path']).is_dir():
+        raise WorktreeError(f'worktree {record["path"]} of job {continues} is gone; the continuation cannot see its work')
+    return record
+
+
+def chain(repo, job_dir):
+    """Every job that shares this job's worktree, oldest first, as (folder, record) pairs."""
+    jobs = Path(repo).resolve() / '.rig' / 'jobs'
+    folder = Path(job_dir).resolve()
+    record = job_record(folder)
+    if not record:
+        return []
+    seen, current = set(), folder.name
+    while current and current not in seen:  # up to the job that made the worktree
+        seen.add(current)
+        row = job_record(jobs / current)
+        if not row:
+            break
+        root_id, current = current, row.get('continues', '')
+    rows, queue = [], [root_id]
+    while queue:  # then down through every continuation
+        name = queue.pop(0)
+        if name in rows:
+            continue
+        row = job_record(jobs / name)
+        if row:
+            rows.append(name)
+            queue.extend(str(x) for x in row.get('continued_by') or [])
+    return [(jobs / name, job_record(jobs / name)) for name in rows]
+
+
+def _mark_chain(repo, job_dir, **fields):
+    for folder, record in chain(repo, job_dir):
+        record.update(fields)
+        _write_record(folder, record)
 
 
 def job_record(job_dir):
@@ -257,8 +305,9 @@ def _exclude(common_dir, pattern):
         path.write_text(current + ('' if current.endswith('\n') or not current else '\n') + pattern + '\n')
 
 
-def create_job(repo, job_dir):
-    """Make the job's worktree and branch from the base HEAD. Idempotent for the same job."""
+def create_job(repo, job_dir, continues=''):
+    """Make the job's worktree and branch from the base HEAD. Idempotent for the same job.
+    A continuation of an unmerged worktree job joins that job's worktree and branch instead."""
     root = Path(repo).resolve()
     folder = Path(job_dir).resolve()
     job_id = folder.name
@@ -267,6 +316,9 @@ def create_job(repo, job_dir):
         if not Path(existing['path']).is_dir():
             raise WorktreeError(f'worktree {existing["path"]} for job {job_id} is gone; the job cannot continue')
         return existing
+    shared = _continuation_target(root, continues) if continues else None
+    if shared:
+        return _join_worktree(root, folder, continues, shared)
     context = resolve(root)
     if not context['head']:
         raise WorktreeError('worktree mode needs at least one commit in the repository')
@@ -286,6 +338,23 @@ def create_job(repo, job_dir):
               'created_at': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
               'container': settings(root)['container'], 'branch_head': '', 'merged': False, 'merge_commit': ''}
     _write_record(folder, record)
+    return record
+
+
+def _join_worktree(root, folder, continues, shared):
+    path, branch = Path(shared['path']), shared['branch']
+    current = os.fsdecode(_git(path, 'symbolic-ref', '--quiet', '--short', 'HEAD', allow_failure=True)).strip()
+    if current != branch:
+        raise WorktreeError(f'worktree {path} is on {current or "a detached HEAD"}, not {branch}; refusing to continue there')
+    record = {'version': 1, 'job_id': folder.name, 'path': shared['path'], 'branch': branch,
+              'base_branch': shared['base_branch'], 'base_head': shared['base_head'], 'common_dir': shared['common_dir'],
+              'created_at': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
+              'container': shared.get('container', 'shared'), 'branch_head': shared.get('branch_head', ''),
+              'merged': False, 'merge_commit': '', 'continues': continues,
+              'worktree_job': shared.get('worktree_job') or shared['job_id']}
+    _write_record(folder, record)
+    shared['continued_by'] = [*(shared.get('continued_by') or []), folder.name]
+    _write_record(root / '.rig' / 'jobs' / continues, shared)
     return record
 
 
@@ -330,9 +399,12 @@ def remove_job(repo, job_dir, *, discard=False):
     if not record:
         raise WorktreeError('this job has no recorded worktree; Rig only removes worktrees it created')
     path = Path(record['path'])
-    expected = job_path(root, folder.name)
+    owner = record.get('worktree_job') or folder.name
+    expected = job_path(root, owner)
     if path.resolve() != expected.resolve():
         raise WorktreeError('recorded worktree path is not the job\'s own path; refusing')
+    if owner != folder.name and (job_record(root / '.rig' / 'jobs' / owner) or {}).get('path') != record['path']:
+        raise WorktreeError(f'job {owner} did not record this worktree; refusing')
     busy = _busy(path) if path.exists() else []
     if busy:
         raise WorktreeError(f'processes are still running in the worktree (pid {", ".join(map(str, busy))})')
@@ -346,9 +418,8 @@ def remove_job(repo, job_dir, *, discard=False):
                             env={k: v for k, v in os.environ.items() if not k.startswith('GIT_')})
     if result.returncode:
         raise WorktreeError(f'worktree removed, but branch {branch} was kept (unmerged work; --discard deletes it)')
-    record.update(removed=True)
-    _write_record(folder, record)
-    return record
+    _mark_chain(root, folder, removed=True)
+    return job_record(folder)
 
 
 def job_status(repo):
@@ -376,6 +447,8 @@ def job_status(repo):
             state = 'removed without merge'
         else:
             state = 'unmerged' if present else 'unmerged, worktree missing'
+        if record.get('continues'):
+            state += f" (continues {record['continues']}, same worktree)"
         rows.append({'job_id': folder.name, 'state': state, 'branch': record.get('branch', ''), 'present': present,
                      'job_status': meta.get('status', ''), 'path': record['path'], 'created_at': record.get('created_at', ''),
                      'cleanup': ('' if state == 'merged' else f'rig worktrees remove --job {folder.name}')})
@@ -446,7 +519,7 @@ def job_main(argv):
             if result['error']:
                 raise WorktreeError(result['error'])
         elif args.command == 'create':
-            result = create_job(repo, folder)
+            result = create_job(repo, folder, args.continues)
         elif args.command == 'status':
             result = job_status(repo)
         elif args.command == 'commit':

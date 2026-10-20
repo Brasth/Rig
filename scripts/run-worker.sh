@@ -1032,7 +1032,7 @@ if [[ "${RIG_LIVE:-0}" != "1" ]]; then
 fi
 
 if [[ "$WORKTREE_ISOLATED" == "1" ]]; then
-  python3 "$WORKTREES_PY" create --repo "$REPO" --job "$JOB_ID" >/dev/null || refuse "could not create the job worktree"
+  python3 "$WORKTREES_PY" create --repo "$REPO" --job "$JOB_ID" --continues "${RIG_CONTINUES_JOB_ID:-}" >/dev/null || refuse "could not create the job worktree"
 fi
 if [[ "$SANDBOX_PROVIDER" == "devcontainer" ]]; then
   SANDBOX_ERR="$(python3 "$SANDBOX_PY" prepare --repo "$REPO" --worker "$WORKER" --job-dir "$JOB_DIR" --job-id "$JOB_ID" 2>&1 >/dev/null)" || \

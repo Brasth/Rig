@@ -973,6 +973,8 @@ Continuation requires the original owner/session, the same worker, and an equal 
 
 Lineage is `continuation_root_id` plus `continuation_depth`. At most three admitted continuations across the root's history, including failed launches and sibling branches; the cap error tells you to start a fresh job. Invalid or cyclic lineage is refused.
 
+In `[worktrees] mode = "per-job"` a continuation runs in its predecessor's worktree and branch; accepting any job in the chain merges the whole branch (see [the shell guide](ade-shell.md#parallel-writers-in-worktrees)).
+
 Compatible grok, claude, codex, and opencode sessions resume natively (`grok -r`, `claude --resume`, `codex exec resume`, `opencode --session`). Otherwise the wrapper starts fresh with prior context. A nonzero resume exit retries once only for a recognized plain-text missing-session or unsupported-resume diagnostic, before handshake/activity, with confirmed process-group termination and no cancellation. Unknown failures or partially executed work never retry automatically. `resume-attempt.log` preserves the first invocation; `resume-fallback.json` records a retry. `continuation_mode` is `native`, `fresh`, or `fresh-fallback`.
 
 For missing CUA action tools, call parent-only `rig_cu_status` first. It remains listed when machine opt-in, the binary, or the project flag is missing. Resolve its reported blockers and restart parent/MCP discovery. All parents use the Rig proxy; setup no longer installs raw Driver MCP or vendor skills. No diagnostic silently installs, enables, or grants access. Existing-profile permission still requires a human grant.

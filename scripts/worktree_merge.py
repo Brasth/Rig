@@ -34,9 +34,17 @@ def _lines(raw):
 
 
 def _declared_scope(repo, folder):
+    """The union of the declared scopes of every job on the branch: each one's edits were admitted under its own."""
     import change_evidence as evidence
-    meta = evidence.read_json(Path(folder) / "meta.json") or {}
-    return evidence.normalize_files(worktrees.resolve(repo)["root"], meta.get("files", []), allow_empty=True)
+    root = worktrees.resolve(repo)["root"]
+    scope = []
+    for member, _ in worktrees.chain(repo, folder) or [(Path(folder), None)]:
+        meta = evidence.read_json(member / "meta.json") or {}
+        files = evidence.normalize_files(root, meta.get("files", []), allow_empty=True)
+        if not files:
+            return []  # one job with no declared scope: nothing to check against
+        scope.extend(f for f in files if f not in scope)
+    return scope
 
 
 def gate(repo, job_dir):
@@ -49,6 +57,9 @@ def gate(repo, job_dir):
         return {"applies": True, "ok": True, "merged": True, "merge_commit": record.get("merge_commit", "")}
     if record.get("removed") and not record.get("merged"):
         raise GateRefused("worktree_removed", "the job's worktree was removed before it was merged")
+    busy = worktrees._busy(record["path"]) if Path(record["path"]).is_dir() else []
+    if busy:
+        raise GateRefused("worktree_busy", "a process is still running in the worktree (pid " + ", ".join(map(str, busy)) + ")")
     record = worktrees.commit_job(root, folder)  # capture anything left after the worker stopped
     base, head, branch = record["base_branch"], record["base_head"], record["branch"]
     current = os.fsdecode(worktrees._git(root, "symbolic-ref", "--quiet", "--short", "HEAD", allow_failure=True)).strip()
@@ -56,7 +67,8 @@ def gate(repo, job_dir):
         raise GateRefused("base_moved", f"the base checkout is on {current or 'a detached HEAD'}, the job was based on {base}")
     changed = _lines(worktrees._git(root, "diff", "--name-only", "-z", "--no-renames", head, record["branch_head"]).replace(b"\0", b"\n"))
     result = {"applies": True, "ok": True, "merged": False, "branch": branch, "base_branch": base,
-              "changed": changed, "scope_checked": False, "nothing_to_merge": not changed}
+              "changed": changed, "scope_checked": False, "nothing_to_merge": not changed,
+              "chain": [member.name for member, _ in worktrees.chain(root, folder)]}
     if not changed:
         return result
     scope = _declared_scope(root, folder)
@@ -126,6 +138,9 @@ def merge(repo, job_dir, snapshot_id=""):
                       merged_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), nothing_to_merge=bool(result.get("nothing_to_merge")),
                       snapshot_id=snapshot_id)
         worktrees._write_record(folder, record)
+        # One branch: every job that shared the worktree is merged by this commit.
+        worktrees._mark_chain(root, folder, merged=record["merged"], merge_commit=merge_commit, merged_at=record["merged_at"],
+                              nothing_to_merge=record["nothing_to_merge"])
         try:
             worktrees.remove_job(root, folder)
         except WorktreeError as error:  # a reviewer may still be reading it; the merge itself stands
