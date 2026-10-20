@@ -31,7 +31,7 @@ repository. Owner tokens are never returned, and workers may not serve the API.
 | `workflows.show` | no | `rig_workflow_show` | Show one workflow |
 | `api.methods` | no | none | List the methods this server offers |
 | `api.ping` | no | none | Check the server and protocol version |
-| `board.snapshot` | no | none | Board view: jobs window, pending queue, slots, settings rows and workflows |
+| `board.snapshot` | no | none | Board data (jobs window, pending queue, slots, settings, workflows) plus a ready-to-render `view` |
 | `events.ack` | yes | none | Acknowledge one notice, or all, for a companion session |
 | `events.list` | no | none | Notices for a companion session: approvals, finished work, verification, stop progress |
 | `ui.request` | yes | none | Companion operations (snapshot, enqueue, stop, reply, details, sessions) on the hosted UI service |

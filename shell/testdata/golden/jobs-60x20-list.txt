@@ -1,0 +1,20 @@
+ Rig · my-repo   ! 1 need attention  ● 1 running  slots 2/3 
+ [Jobs !1]  Queue 2   Workflows 2                           
+─ Jobs 1-7/7 ───────────────────────────────────────────────
+> ! Needs input   Add supertest dev dep                     
+    permission: npm i -D supertest                          
+  ● Running       Rate limit POST /login                    
+    editing src/middleware/limit.ts                         
+  ● Checking      Verify wf-12 auth tests                   
+    running npm test -- login                               
+  ○ Unverified    Session store refactor                    
+    opencode · finished 4m ago; not accepted                
+  ✗ Failed        Bump eslint config                        
+    pi · check npm run lint failed                          
+  ✓ Verified      Settings loader                           
+    claude · Parent accepted the current, unchanged content…
+  – Cancelled     Spike: SSE logs                           
+    grok · Stop confirmed; the worker is no longer running. 
+                                                            
+                                                            
+ a allow  d deny  Tab pane  Enter details  e enqueue  x sto…

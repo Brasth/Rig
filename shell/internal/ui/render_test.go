@@ -1,0 +1,170 @@
+package ui
+
+import (
+	"encoding/json"
+	"flag"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/charmbracelet/lipgloss"
+
+	"github.com/Brasth/Rig/shell/internal/view"
+)
+
+var update = flag.Bool("update", false, "rewrite golden files")
+
+func loadView(t *testing.T) *view.View {
+	t.Helper()
+	raw, err := os.ReadFile("../../testdata/snapshot.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var snap view.Snapshot
+	if err := json.Unmarshal(raw, &snap); err != nil {
+		t.Fatal(err)
+	}
+	return &snap.View
+}
+
+func golden(t *testing.T, name, got string) {
+	t.Helper()
+	path := filepath.Join("..", "..", "testdata", "golden", name+".txt")
+	if *update {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(got+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("missing golden %s (run go test ./... -update): %v", name, err)
+	}
+	if strings.TrimRight(string(want), "\n") != got {
+		t.Errorf("%s differs from golden\n--- got ---\n%s\n--- want ---\n%s", name, got, want)
+	}
+}
+
+func assertGrid(t *testing.T, out string, w, h int) {
+	t.Helper()
+	lines := strings.Split(out, "\n")
+	if len(lines) != h {
+		t.Fatalf("got %d lines, want %d", len(lines), h)
+	}
+	for i, l := range lines {
+		if lipgloss.Width(l) != w {
+			t.Fatalf("line %d is %d cells, want %d: %q", i, lipgloss.Width(l), w, l)
+		}
+	}
+}
+
+func TestGoldenFrames(t *testing.T) {
+	v := loadView(t)
+	cases := []struct {
+		name string
+		w, h int
+		tab  string
+		mut  func(*State)
+	}{
+		{"jobs-120x36", 120, 36, "Jobs", nil},
+		{"jobs-120x36-second-selected", 120, 36, "Jobs", func(s *State) { s.Selected["Jobs"] = 1 }},
+		{"queue-120x36", 120, 36, "Queue", nil},
+		{"workflows-120x36", 120, 36, "Workflows", nil},
+		{"jobs-80x30-stacked", 80, 30, "Jobs", nil},
+		{"jobs-60x20-list", 60, 20, "Jobs", nil},
+		{"jobs-60x20-detail", 60, 20, "Jobs", func(s *State) { s.DetailOpen = true }},
+		{"jobs-120x36-ascii", 120, 36, "Jobs", func(s *State) { s.ASCII = true }},
+		{"jobs-120x36-stale", 120, 36, "Jobs", func(s *State) { s.Stale = "refresh failed: connection refused (snapshot 4.2s old)" }},
+		{"jobs-120x36-confirm", 120, 36, "Jobs", func(s *State) { s.Mode, s.Prompt = ModeConfirm, "Stop job-81c Rate limit POST /login?" }},
+		{"jobs-120x36-input", 120, 36, "Jobs", func(s *State) { s.Mode, s.Prompt = ModeInput, "Add audit log" }},
+		{"tiny-30x6", 30, 6, "Jobs", nil},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			st := NewState()
+			st.Tab = c.tab
+			if c.mut != nil {
+				c.mut(&st)
+			}
+			out := Render(v, st, c.w, c.h)
+			assertGrid(t, out, c.w, c.h)
+			golden(t, c.name, out)
+		})
+	}
+}
+
+func TestEveryJobShowsStateAsGlyphAndWord(t *testing.T) {
+	out := Render(loadView(t), NewState(), 120, 36)
+	for _, want := range []string{"! Needs input", "● Running", "● Checking", "○ Unverified", "✗ Failed", "✓ Verified", "– Cancelled"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q in\n%s", want, out)
+		}
+	}
+	if !strings.Contains(out, "> ! Needs input") {
+		t.Error("selected row must carry the > marker")
+	}
+}
+
+func TestLoadingAndEmptyViews(t *testing.T) {
+	st := NewState()
+	out := Render(nil, st, 80, 24)
+	assertGrid(t, out, 80, 24)
+	if !strings.Contains(out, "loading") {
+		t.Error("nil view must say it is loading")
+	}
+	empty := &view.View{Version: 1, Tabs: []view.Tab{{Name: "Jobs"}}}
+	assertGrid(t, Render(empty, st, 120, 36), 120, 36)
+}
+
+func TestWorkerTextCannotInjectTerminalSequences(t *testing.T) {
+	v := loadView(t)
+	evil := *v
+	evil.Jobs = append([]view.Row(nil), v.Jobs...)
+	evil.Jobs[0].Title = "ok\x1b[2J\x1b]0;pwned\x07 title\x07\x00"
+	evil.Jobs[0].Detail = []string{"line\x1b[31mred\x1b[0m"}
+	out := Render(&evil, NewState(), 120, 36)
+	if strings.ContainsRune(out, '\x1b') || strings.ContainsRune(out, '\x07') || strings.ContainsRune(out, 0) {
+		t.Fatalf("control sequence leaked: %q", out)
+	}
+	if !strings.Contains(out, "ok title") {
+		t.Error("visible text must survive sanitising")
+	}
+}
+
+func TestAsciiModeHasNoNonAsciiUIGlyphs(t *testing.T) {
+	st := NewState()
+	st.ASCII = true
+	for _, r := range Render(loadView(t), st, 120, 36) {
+		if r > 127 {
+			t.Fatalf("non-ASCII rune %q in ASCII mode", r)
+		}
+	}
+}
+
+func TestWindowStartKeepsSelectionVisibleAndNeverSplitsEntries(t *testing.T) {
+	for n := 1; n <= 30; n++ {
+		for per := 1; per <= 8; per++ {
+			for sel := 0; sel < n; sel++ {
+				for _, off := range []int{0, sel, n - 1, 100} {
+					s := windowStart(off, sel, per, n)
+					if sel < s || sel >= s+per || s < 0 || s > max(0, n-1) {
+						t.Fatalf("n=%d per=%d sel=%d off=%d gave start %d", n, per, sel, off, s)
+					}
+				}
+			}
+		}
+	}
+}
+
+func TestLongTitlesTruncateWithoutBreakingWidth(t *testing.T) {
+	v := loadView(t)
+	long := *v
+	long.Jobs = append([]view.Row(nil), v.Jobs...)
+	long.Jobs[1].Title = strings.Repeat("très long 日本語 title ", 20)
+	for _, w := range []int{40, 52, 70, 100, 140} {
+		assertGrid(t, Render(&long, NewState(), w, 30), w, 30)
+	}
+}

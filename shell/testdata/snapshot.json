@@ -1,0 +1,268 @@
+{
+ "view": {
+  "version": 1,
+  "header": {
+   "project": "my-repo",
+   "attention": 1,
+   "running": 1,
+   "slots": 2,
+   "cap": 3
+  },
+  "tabs": [
+   {
+    "name": "Jobs",
+    "count": 7,
+    "attention": 1
+   },
+   {
+    "name": "Queue",
+    "count": 2,
+    "attention": 0
+   },
+   {
+    "name": "Workflows",
+    "count": 2,
+    "attention": 0
+   }
+  ],
+  "jobs": [
+   {
+    "id": "job-7f2",
+    "title": "Add supertest dev dep",
+    "label": "Needs input",
+    "tone": "attention",
+    "glyph": "!",
+    "second": "permission: npm i -D supertest",
+    "explanation": "Worker is waiting for a permission answer (y allows, n denies).",
+    "worker": "claude",
+    "detail": [
+     "job-7f2",
+     "status needs-input",
+     "agent  claude   model claude-sonnet-5-5",
+     "verification unknown / not accepted",
+     "independent review unknown; not completed",
+     "role   implement",
+     "task   Add supertest dev dep"
+    ],
+    "ask": true,
+    "attention": true
+   },
+   {
+    "id": "job-81c",
+    "title": "Rate limit POST /login",
+    "label": "Running",
+    "tone": "active",
+    "glyph": "●",
+    "second": "editing src/middleware/limit.ts",
+    "explanation": "Worker process is executing.",
+    "worker": "codex",
+    "detail": [
+     "job-81c",
+     "status working",
+     "agent  codex   model unknown",
+     "verification unknown / not accepted",
+     "independent review unknown; not completed",
+     "role   implement",
+     "task   Rate limit POST /login",
+     "doing  editing src/middleware/limit.ts",
+     "pid    4242 (alive)"
+    ],
+    "ask": false,
+    "attention": false
+   },
+   {
+    "id": "job-6d0",
+    "title": "Verify wf-12 auth tests",
+    "label": "Checking",
+    "tone": "active",
+    "glyph": "●",
+    "second": "running npm test -- login",
+    "explanation": "A verification check or reviewer is running.",
+    "worker": "claude",
+    "detail": [
+     "job-6d0",
+     "status verifying",
+     "agent  claude   model unknown",
+     "verification unknown / not accepted",
+     "independent review unknown; not completed",
+     "role   -",
+     "task   Verify wf-12 auth tests",
+     "doing  running npm test -- login"
+    ],
+    "ask": false,
+    "attention": false
+   },
+   {
+    "id": "job-4c1",
+    "title": "Session store refactor",
+    "label": "Unverified",
+    "tone": "history",
+    "glyph": "○",
+    "second": "opencode · finished 4m ago; not accepted",
+    "explanation": "Finished, but the parent has not accepted the current content.",
+    "worker": "opencode",
+    "detail": [
+     "job-4c1",
+     "status completed-unverified",
+     "finished 4m ago; not accepted",
+     "agent  opencode   model unknown",
+     "verification unknown / not accepted",
+     "independent review unknown; not completed",
+     "role   -",
+     "task   Session store refactor"
+    ],
+    "ask": false,
+    "attention": false
+   },
+   {
+    "id": "job-5aa",
+    "title": "Bump eslint config",
+    "label": "Failed",
+    "tone": "failed",
+    "glyph": "✗",
+    "second": "pi · check npm run lint failed",
+    "explanation": "Execution failed, timed out, went stale, or acceptance was rejected.",
+    "worker": "pi",
+    "detail": [
+     "job-5aa",
+     "status failed",
+     "check npm run lint failed",
+     "agent  pi   model unknown",
+     "verification unknown / not accepted",
+     "independent review unknown; not completed",
+     "role   -",
+     "task   Bump eslint config"
+    ],
+    "ask": false,
+    "attention": false
+   },
+   {
+    "id": "job-3b9",
+    "title": "Settings loader",
+    "label": "Verified",
+    "tone": "verified",
+    "glyph": "✓",
+    "second": "claude · Parent accepted the current, unchanged content snapshot.",
+    "explanation": "Parent accepted the current, unchanged content snapshot.",
+    "worker": "claude",
+    "detail": [
+     "job-3b9",
+     "status verified",
+     "agent  claude   model unknown",
+     "verification verified / checks",
+     "independent review unknown; not completed",
+     "role   -",
+     "task   Settings loader"
+    ],
+    "ask": false,
+    "attention": false
+   },
+   {
+    "id": "job-2e7",
+    "title": "Spike: SSE logs",
+    "label": "Cancelled",
+    "tone": "history",
+    "glyph": "–",
+    "second": "grok · Stop confirmed; the worker is no longer running.",
+    "explanation": "Stop confirmed; the worker is no longer running.",
+    "worker": "grok",
+    "detail": [
+     "job-2e7",
+     "status cancelled",
+     "agent  grok   model unknown",
+     "verification unknown / not accepted",
+     "independent review unknown; not completed",
+     "role   -",
+     "task   Spike: SSE logs"
+    ],
+    "ask": false,
+    "attention": false
+   }
+  ],
+  "queue": [
+   {
+    "id": "q-0a1",
+    "title": "Add /logout audit",
+    "label": "Queued",
+    "tone": "history",
+    "glyph": "·",
+    "second": "waiting: Execution capacity full (3/3); awaiting a free slot · prefers parent chooses",
+    "explanation": "Execution capacity full (3/3); awaiting a free slot",
+    "worker": "",
+    "summary": "p0",
+    "detail": [
+     "q-0a1",
+     "status pending",
+     "waiting Execution capacity full (3/3); awaiting a free slot",
+     "worker parent chooses  priority 0",
+     "task   Add /logout audit"
+    ],
+    "attention": false
+   },
+   {
+    "id": "q-0a2",
+    "title": "Docs for rate limit",
+    "label": "Queued",
+    "tone": "history",
+    "glyph": "·",
+    "second": "waiting: Awaiting parent scope and claim; file overlap is not yet known · prefers claude",
+    "explanation": "Awaiting parent scope and claim; file overlap is not yet known",
+    "worker": "claude",
+    "summary": "p2",
+    "detail": [
+     "q-0a2",
+     "status pending",
+     "waiting Awaiting parent scope and claim; file overlap is not yet known",
+     "worker claude  priority 2",
+     "task   Docs for rate limit\nwith examples"
+    ],
+    "attention": false
+   }
+  ],
+  "workflows": [
+   {
+    "id": "wf-12",
+    "title": "Fix auth tests and add rate limiting",
+    "label": "Running",
+    "tone": "active",
+    "glyph": "●",
+    "second": "",
+    "explanation": "Worker process is executing.",
+    "worker": "",
+    "summary": "accepted 0/3",
+    "detail": [
+     "wf-12",
+     "status running",
+     "accepted/required 0/3",
+     "running 2  ask 1",
+     "blocker none",
+     "next parent action none",
+     "title  Fix auth tests and add rate limiting"
+    ],
+    "attention": false
+   },
+   {
+    "id": "wf-09",
+    "title": "Settings migration",
+    "label": "Unverified",
+    "tone": "history",
+    "glyph": "○",
+    "second": "",
+    "explanation": "Finished, but the parent has not accepted the current content.",
+    "worker": "",
+    "summary": "accepted 3/3",
+    "detail": [
+     "wf-09",
+     "status completed-unverified",
+     "accepted/required 3/3",
+     "running 0  ask 0",
+     "blocker none",
+     "next parent action none",
+     "title  Settings migration"
+    ],
+    "attention": false
+   }
+  ]
+ },
+ "captured_wall": 1760000000.0
+}

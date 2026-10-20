@@ -1,0 +1,36 @@
+ Rig · my-repo                                                               ! 1 need attention  ● 1 running  slots 2/3 
+  Jobs !1   Queue 2  [Workflows 2]                                                                                      
+─ Workflows 1-2/2 ────────────────────────────────────────────┬─────────────────────────────────────────────────────────
+> ● Running       Fix auth tests and add rate l…  accepted 0/3│ ● Running                                               
+  ○ Unverified    Settings migration              accepted 3/3│ Worker process is executing.                            
+                                                              │                                                         
+                                                              │ wf-12                                                   
+                                                              │ status running                                          
+                                                              │ accepted/required 0/3                                   
+                                                              │ running 2 ask 1                                         
+                                                              │ blocker none                                            
+                                                              │ next parent action none                                 
+                                                              │ title Fix auth tests and add rate limiting              
+                                                              │                                                         
+                                                              │                                                         
+                                                              │                                                         
+                                                              │                                                         
+                                                              │                                                         
+                                                              │                                                         
+                                                              │                                                         
+                                                              │                                                         
+                                                              │                                                         
+                                                              │                                                         
+                                                              │                                                         
+                                                              │                                                         
+                                                              │                                                         
+                                                              │                                                         
+                                                              │                                                         
+                                                              │                                                         
+                                                              │                                                         
+                                                              │                                                         
+                                                              │                                                         
+                                                              │                                                         
+                                                              │                                                         
+                                                                                                                        
+ Tab pane  Enter details  e enqueue  x stop  r refresh  q quit                                                          

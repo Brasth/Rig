@@ -15,3 +15,5 @@ plans/
 
 .rig/workflows/
 .rig/workflows/*/owner-credentials.json
+
+shell/bin/

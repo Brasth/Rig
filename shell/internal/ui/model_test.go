@@ -1,0 +1,250 @@
+package ui
+
+import (
+	"errors"
+	"strings"
+	"testing"
+	"time"
+
+	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/Brasth/Rig/shell/internal/view"
+)
+
+type call struct {
+	method string
+	params map[string]any
+}
+
+type fakeSource struct {
+	snap    *view.Snapshot
+	snapErr error
+	actErr  error
+	text    string
+	calls   []call
+}
+
+func (f *fakeSource) Snapshot(int, int, time.Duration) (*view.Snapshot, error) {
+	return f.snap, f.snapErr
+}
+func (f *fakeSource) Act(method string, params map[string]any, _ time.Duration) (string, error) {
+	f.calls = append(f.calls, call{method, params})
+	return f.text, f.actErr
+}
+
+func newReady(t *testing.T) (*Model, *fakeSource) {
+	t.Helper()
+	v := loadView(t)
+	src := &fakeSource{snap: &view.Snapshot{View: *v}, text: "ok"}
+	m := NewModel(src, false)
+	m.newKey = func() string { return "key-1" }
+	m.Update(tea.WindowSizeMsg{Width: 120, Height: 36})
+	m.Update(snapshotMsg{snap: src.snap, at: time.Now()})
+	return m, src
+}
+
+func press(m *Model, keys ...string) tea.Cmd {
+	var cmd tea.Cmd
+	for _, k := range keys {
+		var msg tea.KeyMsg
+		switch k {
+		case "tab":
+			msg = tea.KeyMsg{Type: tea.KeyTab}
+		case "enter":
+			msg = tea.KeyMsg{Type: tea.KeyEnter}
+		case "esc":
+			msg = tea.KeyMsg{Type: tea.KeyEsc}
+		case "backspace":
+			msg = tea.KeyMsg{Type: tea.KeyBackspace}
+		default:
+			msg = tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(k)}
+		}
+		_, cmd = m.Update(msg)
+	}
+	return cmd
+}
+
+func run(cmd tea.Cmd, m *Model) {
+	if cmd == nil {
+		return
+	}
+	if msg := cmd(); msg != nil {
+		if batch, ok := msg.(tea.BatchMsg); ok {
+			for _, c := range batch {
+				run(c, m)
+			}
+			return
+		}
+		m.Update(msg)
+	}
+}
+
+func TestAllowAndDenyOnlyOnAskRows(t *testing.T) {
+	m, src := newReady(t)
+	run(press(m, "a"), m)
+	if len(src.calls) != 1 || src.calls[0].method != "job.allow" || src.calls[0].params["id"] != "job-7f2" {
+		t.Fatalf("calls %v", src.calls)
+	}
+	press(m, "j") // a running job is not an ASK
+	run(press(m, "a"), m)
+	run(press(m, "d"), m)
+	if len(src.calls) != 1 {
+		t.Fatalf("approving a non-ASK row must do nothing: %v", src.calls)
+	}
+	m, src = newReady(t)
+	run(press(m, "d"), m)
+	if src.calls[0].method != "job.deny" {
+		t.Fatalf("calls %v", src.calls)
+	}
+}
+
+func TestStopNeedsConfirmationAndRefusesFinishedJobs(t *testing.T) {
+	m, src := newReady(t)
+	press(m, "j", "x")
+	if m.st.Mode != ModeConfirm || !strings.Contains(m.st.Prompt, "job-81c") {
+		t.Fatalf("mode %v prompt %q", m.st.Mode, m.st.Prompt)
+	}
+	press(m, "n")
+	if m.st.Mode != ModeNormal || len(src.calls) != 0 {
+		t.Fatal("n must cancel without calling")
+	}
+	press(m, "x")
+	run(press(m, "y"), m)
+	if len(src.calls) != 1 || src.calls[0].method != "job.cancel" || src.calls[0].params["id"] != "job-81c" || src.calls[0].params["reason"] != "shell" {
+		t.Fatalf("calls %v", src.calls)
+	}
+	m, _ = newReady(t)
+	press(m, "j", "j", "j", "j", "x") // job-4c1 is Unverified: finished
+	if m.st.Mode != ModeNormal || !strings.Contains(m.st.Message, "already finished") {
+		t.Fatalf("mode %v message %q", m.st.Mode, m.st.Message)
+	}
+}
+
+func TestQueueStopUsesQueueCancel(t *testing.T) {
+	m, src := newReady(t)
+	press(m, "tab", "x")
+	run(press(m, "y"), m)
+	if src.calls[0].method != "queue.cancel" || src.calls[0].params["id"] != "q-0a1" {
+		t.Fatalf("calls %v", src.calls)
+	}
+	if _, has := src.calls[0].params["reason"]; has {
+		t.Fatal("queue.cancel takes no reason")
+	}
+}
+
+func TestEnqueueDraftIsRetainedOnFailureAndDedupedByKey(t *testing.T) {
+	m, src := newReady(t)
+	press(m, "e")
+	for _, ch := range "Add audit" {
+		press(m, string(ch))
+	}
+	press(m, "backspace")
+	src.actErr = errors.New("queue is locked")
+	run(press(m, "enter"), m)
+	if src.calls[0].method != "queue.add" || src.calls[0].params["text"] != "Add audi" || src.calls[0].params["idempotency_key"] != "key-1" {
+		t.Fatalf("calls %v", src.calls)
+	}
+	if m.st.Mode != ModeInput || m.st.Prompt != "Add audi" || !strings.Contains(m.st.Message, "draft retained") {
+		t.Fatalf("draft must survive a failure: mode %v %q %q", m.st.Mode, m.st.Prompt, m.st.Message)
+	}
+	src.actErr = nil
+	run(press(m, "enter"), m)
+	if src.calls[1].params["idempotency_key"] != "key-1" {
+		t.Fatal("a retry must reuse the same idempotency key")
+	}
+	if m.st.Mode != ModeNormal || m.st.Prompt != "" {
+		t.Fatal("success clears the draft")
+	}
+}
+
+func TestPasteOutsideEditorIsIgnored(t *testing.T) {
+	m, src := newReady(t)
+	_, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x"), Paste: true})
+	if m.st.Mode != ModeNormal || len(src.calls) != 0 {
+		t.Fatal("pasted x must not start a stop")
+	}
+}
+
+func TestSelectionFollowsTheItemAcrossRefreshes(t *testing.T) {
+	m, src := newReady(t)
+	press(m, "j", "j") // job-6d0
+	reordered := *src.snap
+	reordered.View.Jobs = append([]view.Row{{ID: "job-new", Title: "new", Label: "Running"}}, src.snap.View.Jobs...)
+	m.Update(snapshotMsg{snap: &reordered, at: time.Now()})
+	row, _ := m.selected()
+	if row.ID != "job-6d0" {
+		t.Fatalf("selection moved to %s", row.ID)
+	}
+	shrunk := *src.snap
+	shrunk.View.Jobs = shrunk.View.Jobs[:1]
+	m.Update(snapshotMsg{snap: &shrunk, at: time.Now()})
+	if row, ok := m.selected(); !ok || row.ID != "job-7f2" {
+		t.Fatalf("a vanished item must clamp, got %v %v", row.ID, ok)
+	}
+}
+
+func TestRefreshFailureKeepsLastSnapshotAndMarksItStale(t *testing.T) {
+	m, _ := newReady(t)
+	m.now = func() time.Time { return m.lastOK.Add(4200 * time.Millisecond) }
+	m.Update(snapshotMsg{err: errors.New("rig API is not running"), at: time.Now()})
+	if m.view == nil || len(m.view.Jobs) == 0 {
+		t.Fatal("last snapshot must be kept")
+	}
+	if !strings.Contains(m.st.Stale, "refresh failed") || !strings.Contains(m.st.Stale, "snapshot 4.2s old") {
+		t.Fatalf("stale %q", m.st.Stale)
+	}
+	if !strings.Contains(m.View(), "refresh failed") {
+		t.Fatal("stale notice must be on screen")
+	}
+	m.Update(snapshotMsg{snap: &view.Snapshot{View: *m.view}, at: time.Now()})
+	if m.st.Stale != "" {
+		t.Fatal("a good refresh clears the notice")
+	}
+}
+
+func TestOnlyOneSnapshotInFlight(t *testing.T) {
+	m := NewModel(&fakeSource{}, false)
+	if m.fetch() == nil {
+		t.Fatal("first fetch must start")
+	}
+	if m.fetch() != nil {
+		t.Fatal("a second fetch must wait for the first")
+	}
+}
+
+func TestNavigationTabsDetailAndQuit(t *testing.T) {
+	m, _ := newReady(t)
+	press(m, "tab")
+	if m.st.Tab != "Queue" {
+		t.Fatalf("tab %q", m.st.Tab)
+	}
+	press(m, "tab", "tab")
+	if m.st.Tab != "Jobs" {
+		t.Fatalf("tab wraps, got %q", m.st.Tab)
+	}
+	press(m, "enter")
+	if !m.st.DetailOpen {
+		t.Fatal("enter opens details")
+	}
+	press(m, "esc")
+	if m.st.DetailOpen {
+		t.Fatal("esc closes details")
+	}
+	if cmd := press(m, "q"); cmd == nil {
+		t.Fatal("q must quit")
+	}
+	if msg := press(m, "q")(); msg != tea.Quit() {
+		t.Fatalf("q returned %v", msg)
+	}
+}
+
+func TestKeysBeforeFirstSnapshotOnlyQuit(t *testing.T) {
+	m := NewModel(&fakeSource{}, false)
+	press(m, "x", "a", "e", "tab")
+	if m.st.Mode != ModeNormal {
+		t.Fatal("no actions without data")
+	}
+	if press(m, "q") == nil {
+		t.Fatal("q must still quit")
+	}
+}

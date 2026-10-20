@@ -59,7 +59,7 @@ METHODS = {
 LOCAL_METHODS = {
     "api.ping": (False, "Check the server and protocol version"),
     "api.methods": (False, "List the methods this server offers"),
-    "board.snapshot": (False, "Board view: jobs window, pending queue, slots, settings rows and workflows"),
+    "board.snapshot": (False, "Board data (jobs window, pending queue, slots, settings, workflows) plus a ready-to-render `view`"),
     "events.list": (False, "Notices for a companion session: approvals, finished work, verification, stop progress"),
     "events.ack": (True, "Acknowledge one notice, or all, for a companion session"),
     "ui.request": (True, "Companion operations (snapshot, enqueue, stop, reply, details, sessions) on the hosted UI service"),
@@ -208,8 +208,10 @@ def _board_snapshot(self, request_id, params):
         workflows = ui_snapshot.collect_workflows(self.repo)
     except (Exception, SystemExit) as error:
         return _reply(request_id, error=_error(SERVER_ERROR, str(error) or "board snapshot failed"))
+    import board_view
     result = scrub({"jobs": snap.jobs, "pending": snap.pending, "slots": snap.slots, "cap": snap.cap,
-                    "settings": snap.settings, "workflows": workflows, "captured_wall": time.time()})
+                    "settings": snap.settings, "workflows": workflows, "captured_wall": time.time(),
+                    "view": board_view.build(snap.jobs, snap.pending, workflows, snap.slots, snap.cap, self.repo)})
     return _reply(request_id, result=json.loads(json.dumps(result, default=str)))
 
 
@@ -409,7 +411,7 @@ def render_doc() -> str:
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(prog="rig api", description="Rig local API")
-    parser.add_argument("command", choices=["serve", "call", "methods", "doc"])
+    parser.add_argument("command", choices=["serve", "call", "methods", "doc", "ensure"])
     parser.add_argument("method", nargs="?")
     parser.add_argument("params", nargs="?", default="{}")
     parser.add_argument("--repo", default=".")
@@ -426,6 +428,19 @@ def main(argv=None) -> int:
             return serve(args.repo, max(0.0, args.idle))
     except (ValueError, SystemExit) as error:
         print(f"rig api: {error}", file=sys.stderr)
+        return 1
+    if args.command == "ensure":
+        # Start a detached idle-limited server if needed and wait until it answers.
+        local_api_started = ensure(args.repo, idle=args.idle or 60.0)
+        deadline = time.monotonic() + args.timeout
+        while time.monotonic() < deadline:
+            try:
+                call(args.repo, "api.ping", timeout=0.5)
+                print("started" if local_api_started else "running")
+                return 0
+            except (ConnectionError, OSError, ValueError):
+                time.sleep(0.05)
+        print("rig api: server did not start in time", file=sys.stderr)
         return 1
     method, params = args.method, args.params
     if args.command == "methods":
