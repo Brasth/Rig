@@ -1,0 +1,4 @@
+{
+  "version": "",
+  "note": "Exact dc-cli release Rig is tested with. Empty means unpinned: any dc-cli is accepted and rig doctor says so. Set it, then rig doctor fails on a different version."
+}

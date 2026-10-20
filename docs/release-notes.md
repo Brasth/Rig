@@ -1,5 +1,9 @@
 # Release Notes
 
+## The Rig shell, workspace panel and environment commands (2026-10-20)
+
+New, all optional and off unless you use them. `rig shell` opens a tmux layout with your parent CLI, the new Go board `rig-shell` and a log pane. The board reads everything through the local API, shows Jobs, Queue, Workflows and a Workspace tab, and can allow, deny, stop and enqueue. `rig init --sandbox` and `rig env up | down | status` manage a workspace container through dc-cli without editing your own devcontainer files. `rig doctor` gains `workspace`, `dc-cli` and `rig-shell` checks, and `--workspace` adds dc-cli's own diagnosis. `rig setup` builds `rig-shell` when Go is installed (`--no-shell-binary` skips) and `rig shell build` rebuilds it. New API methods: `workspace.status`, and `board.snapshot` now carries a ready-to-render `view`. Workers still run on the host; `[sandbox] provider = "devcontainer"` remains refused at launch. The dc-cli commands Rig relies on are assumptions not yet verified against a release, and the version pin in `templates/dc-cli.json` is empty. See [the shell guide](ade-shell.md).
+
 ## One local API for the board and the companion (2026-10-20)
 
 The board's enqueue, stop, answer and recovery-guidance actions now go through the local API (`queue.add`, `queue.cancel`, `job.cancel`, `job.allow`, `job.deny`, `recovery.guide`). An action falls back to the old direct call only when the API server cannot be reached at all; a request that may already have reached the server is never re-run, and an error the API reports (a disabled project, an unknown item) is shown, not bypassed. Tool results now include a `structured` field where the MCP tool returns one.

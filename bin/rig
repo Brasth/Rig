@@ -42,7 +42,7 @@ usage() {
   cat <<'EOF'
 usage: rig <command> [args]
 
-  setup [--shell-ui] [--shell bash|zsh] [--rc-file PATH] [--cua-driver|--no-cua-driver] [--browser-skill|--no-browser-skill] [--mimo|--no-mimo]
+  setup [--shell-ui] [--shell bash|zsh] [--rc-file PATH] [--cua-driver|--no-cua-driver] [--browser-skill|--no-browser-skill] [--mimo|--no-mimo] [--shell-binary|--no-shell-binary]
     Optional desktop/browser components ask once (default No); their shared skills install only after opt-in.
   ui [open|status|enable|disable|stop]
   uninstall [--dry-run] [--repo PATH]
@@ -53,8 +53,8 @@ usage: rig <command> [args]
   update --migrate (--latest|--revision SHA) [--project PATH] [--new-root PATH] [--dry-run] [--yes]
   update --restore-migration DIR [--dry-run] [--yes] [--force]
     Legacy installs: run a checkout's bin/rig (older installed CLIs lack --migrate).
-  init [--patch-agents|--no-patch-agents] [--patch-claude]
-  doctor [--task coding|research|browser|computer-use] [--parent NAME] [--model MODEL] [--json] [--smoke]
+  init [--patch-agents|--no-patch-agents] [--patch-claude] [--sandbox]
+  doctor [--task coding|research|browser|computer-use] [--parent NAME] [--model MODEL] [--json] [--smoke] [--workspace]
     Task doctor is offline; --smoke checks only a temporary child MCP fixture.
   computer-use [status|setup|on|off|doctor|unlock|serve]
   browser-skill [status|setup|on|off|doctor]
@@ -66,7 +66,9 @@ usage: rig <command> [args]
   run "prompt"
   jobs [--json] [--thread [ID]]
   tui
-  api serve | call METHOD [JSON] | methods | doc   # local JSON-RPC API v1 (docs/local-api.md)
+  env up | down | status [--json]   # workspace container through dc-cli
+  shell [--parent NAME] [--parent-cmd CMD] [--detach] | shell kill | shell print | shell build   # parent, board and logs in tmux
+  api serve | ensure | call METHOD [JSON] | methods | doc   # local JSON-RPC API v1 (docs/local-api.md)
   memory [show]
   memory add "standing fact"
   job start [--worker NAME] [--role ROLE] [id]
@@ -313,7 +315,7 @@ maybe_copy_queue_adapter() {
 }
 
 cmd_setup() {
-  local shell_ui=0 shell_args=() cua_flags=() bsk_flags=() mimo_flag=""
+  local shell_ui=0 shell_args=() cua_flags=() bsk_flags=() mimo_flag="" shell_bin_flags=()
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --shell-ui) shell_ui=1; shift ;;
@@ -321,6 +323,8 @@ cmd_setup() {
       --cua-driver|--no-cua-driver) cua_flags+=("$1"); shift ;;
       --browser-skill|--no-browser-skill) bsk_flags+=("$1"); shift ;;
       --mimo|--no-mimo) mimo_flag="$1"; shift ;;
+      --shell-binary) shell_bin_flags+=(--shell); shift ;;
+      --no-shell-binary) shell_bin_flags+=(--no-shell); shift ;;
       *) echo "rig setup: unknown flag $1" >&2; return 2 ;;
     esac
   done
@@ -353,6 +357,10 @@ cmd_setup() {
     python3 "$optional_py" ${bsk_flags[@]+"${bsk_flags[@]}"} || true
   else
     echo "browser-skill setup: installer missing; skip. Enable later: rig browser-skill setup"
+  fi
+  optional_py="$(py_script install-shell.py)"
+  if [[ -f "$optional_py" ]]; then
+    python3 "$optional_py" --src "$src" ${shell_bin_flags[@]+"${shell_bin_flags[@]}"} || true
   fi
   local optional_skills=false
   optional_skills="$(python3 "$(py_script optional_skills.py)" "$dest")"
@@ -585,9 +593,10 @@ PY
 }
 
 cmd_init() {
-  local patch_agents=1 patch_claude=0 arg
+  local patch_agents=1 patch_claude=0 sandbox_init=0 arg
   for arg in "$@"; do
     case "$arg" in
+      --sandbox) sandbox_init=1 ;;
       --patch-agents) patch_agents=1 ;;
       --no-patch-agents) patch_agents=0 ;;
       --patch-claude) patch_claude=1 ;;
@@ -742,6 +751,13 @@ cmd_init() {
     else
       cp "$stub" "$claude"
       echo "wrote $claude"
+    fi
+  fi
+
+  if [[ "$sandbox_init" -eq 1 ]]; then
+    if ! python3 "$(py_script sandbox_env.py)" init --repo "$root"; then
+      echo "rig init: sandbox setup failed; the rest of init completed" >&2
+      return 1
     fi
   fi
 
@@ -1564,10 +1580,19 @@ main() {
     on) cmd_project_toggle on; return ;;
     off) cmd_project_toggle off; return ;;
   esac
-  case "$cmd" in init|setup|update|status|doctor|jobs|worktrees|tui|memory|timeline|recovery|task|workflows|workflow|queue|routing|billing|help|-h|--help|"") ;; *) project_guard || return ;; esac
+  case "$cmd" in init|setup|update|status|doctor|jobs|worktrees|tui|memory|timeline|recovery|task|workflows|workflow|queue|routing|billing|help|-h|--help|"") ;; *) [[ "$cmd:${1:-}" == "shell:build" ]] || project_guard || return ;; esac
   case "$cmd" in
     ui) python3 "$(py_script rig_ui.py)" "$@" ;;
     api) python3 "$(py_script local_api.py)" "$@" --repo "$(repo_root)" ;;
+    shell)
+      if [[ "${1:-}" == "build" ]]; then
+        shift
+        python3 "$(py_script install-shell.py)" --shell --src "$(rig_source_root)" "$@"
+      else
+        python3 "$(py_script rig_shell.py)" "$@"
+      fi
+      ;;
+    env) python3 "$(py_script sandbox_env.py)" "$@" --repo "$(repo_root)" ;;
     uninstall) python3 "$(py_script ui_install.py)" "$@" ;;
     setup) cmd_setup "$@" ;;
     update) cmd_update "$@" ;;

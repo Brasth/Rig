@@ -1,0 +1,20 @@
+ Rig · my-repo   ! 1 need attention  ● 1 running  slots 2/3 
+ [Jobs !1]  Queue 2   Workflows 2   Workspace               
+─ Jobs › job-7f2 ───────────────────────────────────────────
+ ! Needs input                                              
+ Worker is waiting for a permission answer (y allows, n     
+   denies).                                                 
+                                                            
+ job-7f2                                                    
+ status needs-input                                         
+ agent claude model claude-sonnet-5-5                       
+ verification unknown / not accepted                        
+ independent review unknown; not completed                  
+ role implement                                             
+ task Add supertest dev dep                                 
+                                                            
+                                                            
+                                                            
+                                                            
+                                                            
+ a allow  d deny  Tab pane  Enter details  e enqueue  x sto…

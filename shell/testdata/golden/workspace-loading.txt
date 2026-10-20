@@ -1,0 +1,12 @@
+ Rig · my-repo                       ! 1 need attention  ● 1 running  slots 2/3 
+  Jobs !1   Queue 2   Workflows 2  [Workspace]                                  
+─ Workspace ────────────────────────────────────────────────────────────────────
+ Loading workspace…                                                             
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+ Tab pane  j/k scroll  r refresh  q quit                                        

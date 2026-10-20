@@ -1,0 +1,30 @@
+ Rig · my-repo                       ! 1 need attention  ● 1 running  slots 2/3 
+ [Jobs !1]  Queue 2   Workflows 2   Workspace                                   
+─ Jobs 1-7/7 ───────────────────────────────────────────────────────────────────
+> ! Needs input   Add supertest dev dep                                  job-7f2
+    permission: npm i -D supertest                                              
+  ● Running       Rate limit POST /login                                 job-81c
+    editing src/middleware/limit.ts                                             
+  ● Checking      Verify wf-12 auth tests                                job-6d0
+    running npm test -- login                                                   
+  ○ Unverified    Session store refactor                                 job-4c1
+    opencode · finished 4m ago; not accepted                                    
+  ✗ Failed        Bump eslint config                                     job-5aa
+    pi · check npm run lint failed                                              
+  ✓ Verified      Settings loader                                        job-3b9
+    claude · Parent accepted the current, unchanged content snapshot.           
+  – Cancelled     Spike: SSE logs                                        job-2e7
+    grok · Stop confirmed; the worker is no longer running.                     
+                                                                                
+─ Detail ───────────────────────────────────────────────────────────────────────
+ ! Needs input                                                                  
+ Worker is waiting for a permission answer (y allows, n denies).                
+                                                                                
+ job-7f2                                                                        
+ status needs-input                                                             
+ agent claude model claude-sonnet-5-5                                           
+ verification unknown / not accepted                                            
+ independent review unknown; not completed                                      
+ role implement                                                                 
+                                                                                
+ a allow  d deny  Tab pane  Enter details  e enqueue  x stop  r refresh  q quit 

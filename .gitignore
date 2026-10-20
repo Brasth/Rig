@@ -15,3 +15,11 @@ plans/
 
 .rig/workflows/
 .rig/workflows/*/owner-credentials.json
+
+shell/bin/
+
+# Left in the checkout by installer tests
+/.lifecycle.lock
+/install-manifest.json
+
+/bin/rig-shell

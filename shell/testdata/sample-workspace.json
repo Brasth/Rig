@@ -1,0 +1,57 @@
+{
+ "kind": "devcontainer",
+ "override": {
+  "path": "/work/my-repo/.rig/sandbox/override.json",
+  "exists": false
+ },
+ "dc": {
+  "found": true,
+  "path": "/usr/local/bin/dc",
+  "version": "0.23.0",
+  "pin": "0.23.0",
+  "pin_state": "match"
+ },
+ "containers": [
+  {
+   "name": "my-repo-dev",
+   "id": "a3f9c1d2e4b5f6",
+   "state": "running",
+   "image": "node:22-bookworm",
+   "uptime": "2h"
+  }
+ ],
+ "ports": [
+  {
+   "port": "3000",
+   "name": "web",
+   "state": "forwarded",
+   "held_by": "",
+   "problem": false
+  },
+  {
+   "port": "5173",
+   "name": "vite",
+   "state": "forwarded",
+   "held_by": "",
+   "problem": false
+  },
+  {
+   "port": "9229",
+   "name": "",
+   "state": "",
+   "held_by": "node",
+   "problem": true
+  }
+ ],
+ "doctor": {
+  "ok": false,
+  "detail": "1 problem(s): engine (fix: dc recover engine-slow)",
+  "problems": [
+   {
+    "name": "engine",
+    "recover": "engine-slow"
+   }
+  ]
+ },
+ "error": ""
+}

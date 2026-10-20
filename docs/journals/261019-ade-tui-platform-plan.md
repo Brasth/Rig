@@ -200,7 +200,20 @@ Each phase ends on a named check, following the canvas. Sizes are relative
 - Exit check (canvas Phase 0 exit): the curses board reads state only
   through the API, and the contract tests pass.
 
-### Phase 1 · ADE shell, Rig side (size L)
+### Phase 1 · ADE shell, Rig side (size L) · COMPLETE 2026-10-20 (with the deviations below)
+
+> **Delivered:** 1.1 Go board over the API, 1.2 `rig shell` tmux layout, 1.3 `rig init --sandbox` and `rig env`, 1.4 doctor checks, 1.5 Workspace tab, 1.6 build and version verification. Exit check met: `rig shell` opens the parent in its pane with the board live over the API, jobs still on the host. Verified by driving the real binaries in tmux (enqueue, confirmed stop, workspace tab, quit) as well as by tests.
+>
+> **Deviations and open items**
+> - **dc-cli contract is assumed.** dc-cli was out of scope for this work, so the commands and JSON fields in `scripts/dc_client.py` are unverified guesses read tolerantly. Nothing about them has been checked against a real release. Verify before relying on `rig env` or the Workspace tab.
+> - **No dc-cli pin chosen.** `templates/dc-cli.json` is empty (unpinned) until a release is picked.
+> - **Parsing lives in Python, not Go.** The plan had a Go `dc` client; instead `workspace.status` returns ready-to-render sections, so there is one parser, one language, and a Python fake-dc test suite. The Go shell renders text.
+> - **Workspace is a tab,** not a left column: the shell pane is narrow in the tmux layout.
+> - **Board presentation comes from the server** (`scripts/board_view.py`, reusing the curses board's label, ordering and count code) with a fixture test against Go, instead of re-deriving state in Go.
+> - **1.6 is build-from-source, not a tarball.** No release hosting exists in this repo. `rig setup` builds `rig-shell` (stamped with the commit) when Go is present; `rig update` is unchanged because it carries no shell sources, so `rig doctor` reports a stale binary and `rig shell build` rebuilds it. A real one-tarball release needs a release process outside this repo.
+> - **Not done from the Phase 1 list:** retiring the F8/F9 popups (the new layout simply does not use them), `dc forward`-only UI evidence URLs (Phase 2), and dc-cli changes (out of scope).
+> - **Not run:** a real dc-cli, a real Docker engine, and a real parent CLI in the parent pane.
+
 
 Needs decision D1 (Go shell lives in this repo) and dc-cli's public theme
 package for a shared look; without the latter, Phase 1 proceeds with its

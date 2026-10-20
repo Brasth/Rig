@@ -1,0 +1,59 @@
+{
+ "view": {
+  "version": 1,
+  "attention": true,
+  "sections": [
+   {
+    "title": "Workspace",
+    "lines": [
+     {
+      "text": "kind     devcontainer",
+      "tone": ""
+     },
+     {
+      "text": "override none",
+      "tone": ""
+     },
+     {
+      "text": "  dc-cli   0.23.0 (pin 0.23.0)",
+      "tone": ""
+     },
+     {
+      "text": "● running  a3f9c1d2e4b5 · 2h",
+      "tone": "ok"
+     },
+     {
+      "text": "image    node:22-bookworm",
+      "tone": ""
+     }
+    ]
+   },
+   {
+    "title": "Ports",
+    "lines": [
+     {
+      "text": "  3000  web",
+      "tone": ""
+     },
+     {
+      "text": "  5173  vite",
+      "tone": ""
+     },
+     {
+      "text": "! 9229  held by node",
+      "tone": "attention"
+     }
+    ]
+   },
+   {
+    "title": "Doctor",
+    "lines": [
+     {
+      "text": "! engine  (fix: dc recover engine-slow)",
+      "tone": "attention"
+     }
+    ]
+   }
+  ]
+ }
+}

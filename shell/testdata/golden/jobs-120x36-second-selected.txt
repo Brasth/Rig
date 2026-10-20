@@ -1,0 +1,36 @@
+ Rig · my-repo                                                               ! 1 need attention  ● 1 running  slots 2/3 
+ [Jobs !1]  Queue 2   Workflows 2   Workspace                                                                           
+─ Jobs 1-7/7 ─────────────────────────────────────────────────┬─────────────────────────────────────────────────────────
+  ! Needs input   Add supertest dev dep                       │ ● Running                                               
+    permission: npm i -D supertest                            │ Worker process is executing.                            
+> ● Running       Rate limit POST /login                      │                                                         
+    editing src/middleware/limit.ts                           │ job-81c                                                 
+  ● Checking      Verify wf-12 auth tests                     │ status working                                          
+    running npm test -- login                                 │ agent codex model unknown                               
+  ○ Unverified    Session store refactor                      │ verification unknown / not accepted                     
+    opencode · finished 4m ago; not accepted                  │ independent review unknown; not completed               
+  ✗ Failed        Bump eslint config                          │ role implement                                          
+    pi · check npm run lint failed                            │ task Rate limit POST /login                             
+  ✓ Verified      Settings loader                             │ doing editing src/middleware/limit.ts                   
+    claude · Parent accepted the current, unchanged content s…│ pid 4242 (alive)                                        
+  – Cancelled     Spike: SSE logs                             │                                                         
+    grok · Stop confirmed; the worker is no longer running.   │                                                         
+                                                              │                                                         
+                                                              │                                                         
+                                                              │                                                         
+                                                              │                                                         
+                                                              │                                                         
+                                                              │                                                         
+                                                              │                                                         
+                                                              │                                                         
+                                                              │                                                         
+                                                              │                                                         
+                                                              │                                                         
+                                                              │                                                         
+                                                              │                                                         
+                                                              │                                                         
+                                                              │                                                         
+                                                              │                                                         
+                                                              │                                                         
+                                                                                                                        
+ Tab pane  Enter details  e enqueue  x stop  r refresh  q quit                                                          
