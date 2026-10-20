@@ -29,3 +29,4 @@ repository. Owner tokens are never returned, and workers may not serve the API.
 | `workflows.show` | no | `rig_workflow_show` | Show one workflow |
 | `api.methods` | no | none | List the methods this server offers |
 | `api.ping` | no | none | Check the server and protocol version |
+| `board.snapshot` | no | none | Board view: jobs window, pending queue, slots, settings rows and workflows |

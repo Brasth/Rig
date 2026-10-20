@@ -192,7 +192,7 @@ Each phase ends on a named check, following the canvas. Sizes are relative
   profile.
 - Exit check: `rig doctor` prints the active profile and the tool count.
 
-**0.5 The curses board reads through the API (M).**
+**0.5 The curses board reads through the API (M).** *Status 2026-10-20: slice 0.5a done (board snapshot reads via `board.snapshot`, API-first `ApiLoader` with labelled direct-read fallback, idle-limited auto-start). Still open for 0.5b/0.5c: board actions (enqueue, cancel, answer, routing and jev settings, recovery guide) and detail views through the API, `events.subscribe`, and moving `ui_popup.py` and the status row off `control.sock`. The "board never opens `.rig/jobs`" exit check is therefore not yet met.*
 - `tui_runtime.load_snapshot` becomes an API client; the in-process
   loader stays as a fallback flagged `stale: true` only when the API is
   unreachable, and the board shows that state (the existing "refresh

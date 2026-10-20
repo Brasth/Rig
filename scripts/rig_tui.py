@@ -42,7 +42,8 @@ def _snapshot_status(runtime):
     age = f"snapshot {max(0, time.monotonic() - snapshot.captured_at):.1f}s old" if snapshot.captured_at else "loading snapshot"
     if runtime.snapshot_error:
         return f"refresh failed: {runtime.snapshot_error} ({age})"
-    return age + (" · refreshing" if runtime.scanning else "")
+    direct = " · direct read, API unavailable" if getattr(snapshot, "source", "local") == "direct" else ""
+    return age + direct + (" · refreshing" if runtime.scanning else "")
 
 
 def _report_result(notes, result) -> None:
@@ -413,8 +414,12 @@ def main() -> int:
     if not sys.stdout.isatty() or os.environ.get("RIG_TUI") == "0":
         print(rig_jobs.format_table(rig_jobs.list_jobs(repo), repo))
         return 0
+    runtime = None
+    if os.environ.get("RIG_TUI_API") != "0":
+        from tui_runtime import ApiLoader
+        runtime = BoardRuntime(repo, loader=ApiLoader())
     try:
-        curses.wrapper(lambda stdscr: _paint(stdscr, repo))
+        curses.wrapper(lambda stdscr: _paint(stdscr, repo, runtime=runtime))
     except KeyboardInterrupt:
         return 0
     return 0

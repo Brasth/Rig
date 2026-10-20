@@ -1,5 +1,9 @@
 # Release Notes
 
+## Board reads through the local API (2026-10-20)
+
+`rig tui` now fetches its jobs, queue, slot, settings and workflow data from the local API (new read-only `board.snapshot` method). If no API server answers, the board starts a detached one that exits after 60 idle seconds and, for that frame and until the server is up, falls back to the previous direct reads, labelled "direct read, API unavailable" in the status line, so the board never blanks. `rig api serve --idle SECONDS` sets the idle exit (default: never). Set `RIG_TUI_API=0` to keep fully direct reads. Board actions (enqueue, stop, answer, routing and key settings, recovery guidance) and the tmux companion are unchanged in this step.
+
 ## MCP tool profiles (2026-10-20)
 
 `.rig/harness.toml` gains an optional `[mcp] profile = "full" | "core"` (default and template value `full`, so nothing changes). `core` stops listing eight cost-reporting, benchmark and analysis tools (billing report, import and sync; benchmark create, outcome and report; routing report; task timeline) to shrink the parent's tool list; everything on the launch, wait, check, accept, close, workflow and recovery path stays. `RIG_MCP_PROFILE` overrides the file, and unrecognised values mean `full`. Profiles only filter `tools/list`: they add no authority, hidden tools remain callable by name, and the worker child set is always the same eight tools. `rig doctor` reports the active profile as an optional check.

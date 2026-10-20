@@ -20,8 +20,10 @@ import re
 import secrets
 import signal
 import socket
+import subprocess
 import sys
 import threading
+import time
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -53,7 +55,8 @@ METHODS = {
     "job.message": ("rig_job_message", True, "Send a message to a running worker"),
 }
 LOCAL_METHODS = {"api.ping": "Check the server and protocol version",
-                 "api.methods": "List the methods this server offers"}
+                 "api.methods": "List the methods this server offers",
+                 "board.snapshot": "Board view: jobs window, pending queue, slots, settings rows and workflows"}
 
 _SECRET = re.compile(r'("owner_token"\s*:\s*)"[^"]*"')
 
@@ -113,6 +116,8 @@ class Api:
                     for name, (_, mutates, summary) in sorted(METHODS.items())]
             rows += [{"method": name, "mutates": False, "summary": summary} for name, summary in sorted(LOCAL_METHODS.items())]
             return _reply(request_id, result={"version": API_VERSION, "methods": rows})
+        if method == "board.snapshot":
+            return self._board_snapshot(request_id, params)
         entry = METHODS.get(method)
         if entry is None:
             return _reply(request_id, error=_error(METHOD_NOT_FOUND, f"unknown method {method}"))
@@ -135,6 +140,38 @@ class Api:
         return _reply(request_id, result=result)
 
 
+def _view_int(params, name, default, low, high):
+    value = params.get(name, default)
+    if type(value) is not int or not low <= value <= high:
+        raise ValueError(f"{name} must be an integer from {low} to {high}")
+    return value
+
+
+def _board_snapshot(self, request_id, params):
+    """Read-only board data, built by the same loader the in-process board uses."""
+    try:
+        start = _view_int(params, "start", 0, 0, 1_000_000)
+        rows = _view_int(params, "rows", 20, 0, 500)
+        selected = params.get("selected_id")
+        if selected is not None and (not isinstance(selected, str) or len(selected) > 200):
+            raise ValueError("selected_id must be a short string")
+    except ValueError as error:
+        return _reply(request_id, error=_error(INVALID_PARAMS, str(error)))
+    import tui_runtime
+    import ui_snapshot
+    try:
+        snap = tui_runtime.load_snapshot(self.repo, start=start, rows=rows, selected_id=selected or None)
+        workflows = ui_snapshot.collect_workflows(self.repo)
+    except (Exception, SystemExit) as error:
+        return _reply(request_id, error=_error(SERVER_ERROR, str(error) or "board snapshot failed"))
+    result = scrub({"jobs": snap.jobs, "pending": snap.pending, "slots": snap.slots, "cap": snap.cap,
+                    "settings": snap.settings, "workflows": workflows, "captured_wall": time.time()})
+    return _reply(request_id, result=json.loads(json.dumps(result, default=str)))
+
+
+Api._board_snapshot = _board_snapshot
+
+
 def _receive(connection):
     data = bytearray()
     while b"\n" not in data:
@@ -147,7 +184,7 @@ def _receive(connection):
     return bytes(data).split(b"\n", 1)[0]
 
 
-def serve(repo) -> int:
+def serve(repo, idle: float = 0.0) -> int:
     if (os.environ.get("RIG_JOB_ID") or os.environ.get("RIG_JOB_DIR") or "").strip():
         print("rig api: a worker child may not serve the API", file=sys.stderr)
         return 1
@@ -170,8 +207,10 @@ def serve(repo) -> int:
         endpoint.unlink(missing_ok=True)
         api = Api(repo, token)
         slots = threading.BoundedSemaphore(8)
+        last_request = [time.monotonic()]
 
         def handle(connection):
+            last_request[0] = time.monotonic()
             with connection:
                 connection.settimeout(5)
                 try:
@@ -194,12 +233,18 @@ def serve(repo) -> int:
             listener.bind(str(endpoint))
             endpoint.chmod(0o600)
             listener.listen(8)
+            listener.settimeout(1.0)
             if threading.current_thread() is threading.main_thread():
                 signal.signal(signal.SIGTERM, lambda *_: (_ for _ in ()).throw(SystemExit(0)))
             print(f"rig api: listening for {repo}", file=sys.stderr)
             try:
                 while True:
-                    connection, _ = listener.accept()
+                    try:
+                        connection, _ = listener.accept()
+                    except socket.timeout:
+                        if idle and time.monotonic() - last_request[0] > idle:
+                            break
+                        continue
                     if slots.acquire(blocking=False):
                         threading.Thread(target=handle, args=(connection,), daemon=True).start()
                     else:
@@ -210,6 +255,24 @@ def serve(repo) -> int:
                 endpoint.unlink(missing_ok=True)
                 token_path.unlink(missing_ok=True)
     return 0
+
+
+def ensure(repo, idle: float = 60.0) -> bool:
+    """Start a detached server if none answers. Returns True when one was started.
+
+    Racing starters are safe: the server holds an exclusive lock and a second
+    instance exits at once. The idle timeout means a server never outlives its
+    last client for long.
+    """
+    try:
+        call(repo, "api.ping", timeout=0.5)
+        return False
+    except (ConnectionError, OSError, ValueError):
+        pass
+    subprocess.Popen([sys.executable, str(HERE / "local_api.py"), "serve", "--repo", str(repo), "--idle", str(idle)],
+                     stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                     start_new_session=True, close_fds=True)
+    return True
 
 
 def call(repo, method, params=None, timeout=10.0) -> dict:
@@ -265,6 +328,7 @@ def main(argv=None) -> int:
     parser.add_argument("params", nargs="?", default="{}")
     parser.add_argument("--repo", default=".")
     parser.add_argument("--timeout", type=float, default=10.0)
+    parser.add_argument("--idle", type=float, default=0.0, help="serve: exit after this many idle seconds (0 = never)")
     args = parser.parse_args(argv)
     if args.command == "doc":
         sys.stdout.write(render_doc())
@@ -273,7 +337,7 @@ def main(argv=None) -> int:
         import jobs
         args.repo = str(jobs.repo_root(args.repo or None))
         if args.command == "serve":
-            return serve(args.repo)
+            return serve(args.repo, max(0.0, args.idle))
     except (ValueError, SystemExit) as error:
         print(f"rig api: {error}", file=sys.stderr)
         return 1

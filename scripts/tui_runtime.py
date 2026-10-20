@@ -4,7 +4,7 @@ from __future__ import annotations
 import queue
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Callable
 
@@ -20,6 +20,11 @@ class Snapshot:
     cap: int = 3
     captured_at: float = 0.0
     settings: list[dict] = field(default_factory=list)
+    # None means the board collects workflows itself (direct reads).
+    workflows: list[dict] | None = None
+    # "api": read through the local API. "direct": ApiLoader fell back to
+    # in-process reads because the API was unreachable. "local": plain direct mode.
+    source: str = "local"
 
 
 def visible_jobs(listing, repo, start, stop):
@@ -170,3 +175,53 @@ class BoardRuntime:
 
     def close(self):
         self.closed = True
+
+
+def api_snapshot(repo, *, start=0, rows=20, selected_id=None, timeout=3.0):
+    """One board snapshot through the local API. Raises on any failure."""
+    import local_api
+    params = {"start": int(start), "rows": int(rows)}
+    if selected_id:
+        params["selected_id"] = str(selected_id)
+    response = local_api.call(repo, "board.snapshot", params, timeout=timeout)
+    if "error" in response:
+        raise RuntimeError(response["error"].get("message") or "board snapshot failed")
+    data = response["result"]
+    return Snapshot(list(data["jobs"]), list(data["pending"]), int(data["slots"]), int(data["cap"]),
+                    time.monotonic(), list(data["settings"]), list(data["workflows"]), "api")
+
+
+class ApiLoader:
+    """API-first snapshot loader that keeps the board usable when the API is down.
+
+    The first unreachable call starts a detached, idle-limited server (at most
+    once per ``respawn`` seconds) and serves that frame from direct reads, so a
+    missing server never blanks the board. Direct reads are labelled by
+    ``Snapshot.source == "local"``.
+    """
+
+    def __init__(self, *, spawn=True, respawn=15.0, clock=time.monotonic,
+                 fetch: Callable = None, fallback: Callable = None, ensure: Callable = None):
+        self.spawn, self.respawn, self.clock = spawn, respawn, clock
+        self.fetch = fetch or api_snapshot
+        self.fallback = fallback or load_snapshot
+        self.ensure = ensure
+        self._last_spawn = float("-inf")
+
+    def __call__(self, repo, **view):
+        try:
+            return self.fetch(repo, **view)
+        except (ConnectionError, OSError, ValueError, RuntimeError, KeyError, TypeError):
+            if self.spawn and self.clock() - self._last_spawn >= self.respawn:
+                self._last_spawn = self.clock()
+                try:
+                    (self.ensure or _ensure_api)(repo)
+                except (OSError, ValueError):
+                    pass
+            snapshot = self.fallback(repo, **view)
+            return replace(snapshot, source="direct") if isinstance(snapshot, Snapshot) else snapshot
+
+
+def _ensure_api(repo):
+    import local_api
+    local_api.ensure(repo)
