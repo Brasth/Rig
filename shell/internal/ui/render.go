@@ -42,6 +42,9 @@ type State struct {
 	WorkspaceE   string // why the workspace panel could not load
 	Fleet        *view.Panel
 	FleetE       string
+	Log          *view.LogReply
+	LogE         string
+	LogUp        int // lines scrolled back from the newest; 0 follows the tail
 	Evidence     *view.Evidence
 	EvidenceE    string
 	EvidenceID   string
@@ -55,7 +58,10 @@ func NewState() State {
 }
 
 // Tabs are the board tabs in order.
-var Tabs = []string{"Jobs", "Queue", "Workflows", WorkspaceTab, FleetTab}
+var Tabs = []string{"Jobs", "Queue", "Workflows", WorkspaceTab, FleetTab, LogsTab}
+
+// LogsTab follows the selected job's log as plain text, so the board works without tmux.
+const LogsTab = "Logs"
 
 // FleetTab renders the containers on the engine, observed now.
 const FleetTab = "Fleet"
@@ -103,6 +109,15 @@ func frame(v *view.View, st State, w, h int) []string {
 	if st.EvidenceOpen {
 		lines = append(lines, rule("Evidence › "+sanitize(st.EvidenceID), w))
 		lines = append(lines, evidenceLines(st, w, body)...)
+		lines = append(lines, messageLine(st, w), footerLine(nil, 0, st, w))
+		for len(lines) < h {
+			lines = append(lines, fit("", w))
+		}
+		return lines[:h]
+	}
+	if st.Tab == LogsTab {
+		lines = append(lines, rule(logTitle(st), w))
+		lines = append(lines, logLines(st, w, body)...)
 		lines = append(lines, messageLine(st, w), footerLine(nil, 0, st, w))
 		for len(lines) < h {
 			lines = append(lines, fit("", w))
@@ -190,10 +205,24 @@ func headerLine(v *view.View, st State, w int) string {
 	return fit(left+strings.Repeat(" ", gap)+health, w)
 }
 
+// tabShort are distinct three-letter forms for a narrow tab bar ("Wor" would be both Workflows and Workspace).
+var tabShort = map[string]string{"Jobs": "Job", "Queue": "Que", "Workflows": "Flw", WorkspaceTab: "Wks", FleetTab: "Flt", LogsTab: "Log"}
+
 func tabLine(v *view.View, st State, w int) string {
+	if line := tabLineWith(v, st, false); lipgloss.Width(line) <= w {
+		return fit(line, w)
+	}
+	return fit(tabLineWith(v, st, true), w)
+}
+
+// tabLineWith builds the tab bar; short abbreviates the inactive tabs so the active one is never cut off.
+func tabLineWith(v *view.View, st State, short bool) string {
 	var parts []string
 	for _, name := range Tabs {
 		label := name
+		if short && name != st.Tab {
+			label = tabShort[name]
+		}
 		if v != nil {
 			for _, t := range v.Tabs {
 				if t.Name != name {
@@ -220,7 +249,7 @@ func tabLine(v *view.View, st State, w int) string {
 		}
 		parts = append(parts, label)
 	}
-	return fit(" "+strings.Join(parts, " "), w)
+	return " " + strings.Join(parts, " ")
 }
 
 func rule(title string, w int) string {
@@ -376,12 +405,15 @@ func messageLine(st State, w int) string {
 }
 
 func footerLine(rows []view.Row, sel int, st State, w int) string {
-	keys := []string{"Tab pane", "Enter details", "v evidence", "e enqueue", "x stop", "r refresh", "q quit"}
+	keys := []string{"Tab pane", "Enter details", "v evidence", "s shell", "e enqueue", "x stop", "r refresh", "q quit"}
 	if st.Tab == WorkspaceTab || st.Tab == FleetTab {
 		keys = []string{"Tab pane", "j/k scroll", "r refresh", "q quit"}
 		if st.Tab == WorkspaceTab && st.Workspace != nil && st.Workspace.Recovery != nil && st.Workspace.Recovery.Safe && !st.Workspace.Recovery.Ready {
 			keys = []string{"Tab pane", "j/k scroll", "R recover", "r refresh", "q quit"}
 		}
+	}
+	if st.Tab == LogsTab {
+		keys = []string{"Tab pane", "k/j scroll", "G follow", "s shell", "r refresh", "q quit"}
 	}
 	if st.EvidenceOpen {
 		keys = []string{"Esc close", "j/k scroll", "r refresh", "q quit"}
@@ -394,6 +426,63 @@ func footerLine(rows []view.Row, sel int, st State, w int) string {
 		keys = append([]string{"a allow", "d deny"}, keys...)
 	}
 	return fit(" "+strings.Join(keys, "  "), w)
+}
+
+func logTitle(st State) string {
+	if st.Log != nil && st.Log.Job != nil {
+		j := st.Log.Job
+		title := "Logs › " + sanitize(j.ID)
+		if j.Label != "" || j.Worker != "" {
+			title += " · " + sanitize(strings.TrimSpace(j.Label+" "+j.Worker))
+		}
+		if st.LogUp > 0 {
+			title += fmt.Sprintf(" · %d lines back", st.LogUp)
+		}
+		return title
+	}
+	return "Logs"
+}
+
+// logLines renders the log tail: plain text, wrapped, newest at the bottom, scrolled back by st.LogUp.
+func logLines(st State, w, h int) []string {
+	var all []string
+	switch {
+	case st.Log == nil && st.LogE != "":
+		for _, l := range wrap("Logs unavailable: "+st.LogE, w-2, "  ") {
+			all = append(all, " "+l)
+		}
+	case st.Log == nil:
+		all = []string{" Loading log…"}
+	case st.Log.Job == nil:
+		all = []string{" No jobs yet. Output of the active job appears here."}
+	default:
+		for _, raw := range strings.Split(strings.TrimRight(st.Log.Text, "\n"), "\n") {
+			raw = sanitize(raw) // per line: sanitize drops control characters, newlines included
+			if raw == "" {
+				all = append(all, "")
+				continue
+			}
+			for _, l := range wrap(raw, w-2, "  ") {
+				all = append(all, " "+l)
+			}
+		}
+		if st.LogE != "" {
+			all = append(all, rule("stale", w))
+			for _, l := range wrap("refresh failed: "+st.LogE, w-2, "  ") {
+				all = append(all, " "+l)
+			}
+		}
+	}
+	end := len(all) - min(st.LogUp, max(0, len(all)-h))
+	start := max(0, end-h)
+	out := make([]string, 0, h)
+	for _, line := range all[start:end] {
+		out = append(out, fit(line, w))
+	}
+	for len(out) < h {
+		out = append(out, fit("", w))
+	}
+	return out
 }
 
 // panelTitle is the first section's title: it labels the rule under the tab bar, so that section

@@ -7,6 +7,7 @@ An optional terminal layout for working with a parent agent while Rig runs worke
 | Command | What it does |
 | --- | --- |
 | `rig shell` | One tmux window: the parent CLI unchanged in its own pane, the board (`rig-shell`) beside it, and a log pane following the most relevant job |
+| `rig shell --no-tmux` | The board in this terminal with nothing else installed: no tmux, no parent pane. The Logs tab and the `dc exec` shell cover what the tmux log pane and a second terminal did |
 | `rig shell print`, `rig shell kill` | Show the tmux commands it would run, or remove this repository's session |
 | `rig shell build` | Build `rig-shell` from a Rig clone with Go 1.24+ (no project needed) |
 | `rig init --sandbox` | Detect the workspace and, for a folder with no devcontainer, store dc-cli's generated config under `.rig/sandbox/override.json`; `--write-devcontainer` turns it into `.devcontainer/devcontainer.json` |
@@ -21,7 +22,7 @@ An optional terminal layout for working with a parent agent while Rig runs worke
 
 ## The board
 
-Tabs: Jobs, Queue, Workflows, Workspace, Fleet. Every state shows a glyph and a word, and labels, ordering and counts come from the same code as `rig tui`, so the two never disagree.
+Tabs: Jobs, Queue, Workflows, Workspace, Fleet, Logs. Every state shows a glyph and a word, and labels, ordering and counts come from the same code as `rig tui`, so the two never disagree.
 
 | Key | Action |
 | --- | --- |
@@ -30,12 +31,22 @@ Tabs: Jobs, Queue, Workflows, Workspace, Fleet. Every state shows a glyph and a 
 | `Enter`, `Esc` | Open or close details on narrow terminals |
 | `a`, `d` | Allow or deny the selected worker prompt |
 | `v` | Evidence drawer for the selected job (`Esc` closes it) |
+| `s` | Interactive shell in the selected job's container (on the Workspace and Fleet tabs: the repository's), by handing the terminal to `dc exec --no-start`; exit the shell to return |
+| `k`, `j`, `G` | Logs tab: scroll back, forward, and follow the tail again |
 | `x` | Stop the selected job or queue item, after a confirmation |
 | `R` | Workspace tab: apply the proposed environment fix, after a confirmation, when Rig allows it |
 | `e` | Park a task in the queue (`Enter` saves, `Esc` discards; a failed save keeps the draft) |
 | `r`, `q` | Refresh, quit |
 
 Pasted text is never run as commands. `RIG_TUI_ASCII=1`, `RIG_TUI_CJK=1` or a non-UTF locale selects ASCII glyphs. If the API server is not running the board starts one and shows "refresh failed" with the snapshot age if it cannot reach it, keeping the last data on screen.
+
+## Logs and shells without tmux
+
+The **Logs** tab follows the log of the job selected on the Jobs tab (the job worth watching if none is) as plain text, refreshed every two seconds while the tab shows, with terminal escape sequences removed. Scrolling back stops following; `G` follows the tail again.
+
+**`s`** opens a real interactive shell in the job's container. The server decides the command: `dc exec --no-start <workspace>`, where the workspace is the job's own worktree when its container is keyed by that worktree and the repository otherwise. `--no-start` means a shell can enter a container that is running and never start one. If there is no running container, or dc-cli is missing, the board says why and runs nothing. While the shell is open the board is suspended and the terminal is the shell's; exiting returns to the board.
+
+What this deliberately does not do: embed the parent CLI in a pane. That needs a terminal emulator inside the board, which is a large dependency for little gain. Without tmux, run the parent in another terminal. The tmux layout is unchanged.
 
 ## Evidence drawer, Fleet and recovery
 

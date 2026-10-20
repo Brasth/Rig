@@ -138,6 +138,16 @@ func TestGoldenFrames(t *testing.T) {
 		{"evidence-unavailable", 80, 12, "Jobs", func(s *State) {
 			s.EvidenceOpen, s.EvidenceID, s.EvidenceE = true, "job-7", "no such job: job-7"
 		}},
+		{"logs-100x24", 100, 24, "Logs", func(s *State) {
+			s.Log = logReply("job-7f2", "starting\nreading src/middleware/limit.ts\nrunning npm test -- login\n12 passing\nverify next: lint")
+		}},
+		{"logs-60x12-back", 60, 12, "Logs", func(s *State) {
+			s.Log = logReply("job-7f2", strings.Repeat("a long line that has to wrap at the edge of a narrow pane\n", 6)+"newest")
+			s.LogUp = 2
+		}},
+		{"logs-loading", 80, 12, "Logs", nil},
+		{"logs-unavailable", 80, 12, "Logs", func(s *State) { s.LogE = "connection refused" }},
+		{"logs-no-jobs", 80, 12, "Logs", func(s *State) { s.Log = &view.LogReply{} }},
 		{"workspace-loading", 80, 12, "Workspace", nil},
 		{"workspace-unavailable", 80, 12, "Workspace", func(s *State) { s.WorkspaceE = "dc ls --json failed (2): engine not running" }},
 	}

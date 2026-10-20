@@ -38,7 +38,7 @@ class ShellError(ValueError):
 def tmux_binary() -> str:
     binary = shutil.which("tmux")
     if not binary:
-        raise ShellError("tmux 3.3+ is required for rig shell")
+        raise ShellError("tmux 3.3+ is required for the full layout; rig shell --no-tmux runs the board and logs in this terminal without it")
     try:
         import re
         out = subprocess.run([binary, "-V"], capture_output=True, text=True, timeout=5).stdout
@@ -218,6 +218,28 @@ def log_frame(repo: Path, lines: int = 30) -> str:
         return "Rig API is not running; the board pane starts it."
 
 
+def follow_frame(repo: Path, job_id: str = "", lines: int = 60) -> dict:
+    """The tail of one job's log as plain text, for the board's Logs tab. With no id: the job worth watching."""
+    repo = Path(repo).resolve()
+    label = worker = ""
+    if not job_id:
+        import board_view
+        import tui_runtime
+        import ui_snapshot
+        snap = tui_runtime.load_snapshot(repo, start=0, rows=50, selected_id=None)
+        view = board_view.build(snap.jobs, snap.pending, ui_snapshot.collect_workflows(repo), snap.slots, snap.cap, repo)
+        job = pick_job(view["jobs"])
+        if job is None:
+            return {"job": None, "text": "", "error": False}
+        job_id, label, worker = job["id"], job["label"], job["worker"]
+    import local_api
+    import rig_mcp
+    outcome = rig_mcp.call_tool("rig_job_log", {"id": job_id, "repo": str(repo), "lines": lines})
+    text = "\n".join(part.get("text", "") for part in outcome.get("content", []) if isinstance(part, dict))
+    return {"job": {"id": job_id, "label": label, "worker": worker}, "text": local_api.scrub(text),
+            "error": bool(outcome.get("isError"))}
+
+
 def follow_logs(repo: Path, interval: float = 2.0) -> int:
     import local_api
     try:
@@ -244,6 +266,8 @@ def main(argv=None) -> int:
     parser.add_argument("--parent", default="", help="parent CLI to run in the parent pane")
     parser.add_argument("--parent-cmd", default="", help="exact command for the parent pane (overrides --parent)")
     parser.add_argument("--detach", action="store_true", help="create the session without attaching")
+    parser.add_argument("--no-tmux", action="store_true",
+                        help="run the board (with its Logs tab and dc exec shell) in this terminal; no parent pane, no tmux")
     args = parser.parse_args(argv)
     try:
         import jobs
@@ -253,6 +277,12 @@ def main(argv=None) -> int:
         if args.command == "kill":
             print("killed" if kill(repo) else "no rig shell session for this repository")
             return 0
+        if args.no_tmux and args.command in ("start", "print"):
+            command = [shell_binary(), "--repo", str(repo)]
+            if args.command == "print":
+                print(shlex.join(pane_env(repo) + command))
+                return 0
+            os.execvpe(command[0], command, {**os.environ, "RIG_SHELL_ACTIVE": "1", "RIG_REPO": str(repo), "RIG_BIN": rig_binary()})
         if args.command == "print":
             steps = plan(repo, parent_command(repo, args.parent, args.parent_cmd), shell_binary())
             print("\n".join(shlex.join(["tmux", *server_args(), *step]) for step in steps))

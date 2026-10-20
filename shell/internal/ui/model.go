@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"os/exec"
 	"strings"
 	"time"
 
@@ -22,11 +23,15 @@ type Source interface {
 	Fleet(timeout time.Duration) (*view.Panel, error)
 	JobEvidence(id string, timeout time.Duration) (*view.Evidence, error)
 	Recover(confirmID string, timeout time.Duration) (string, error)
+	Log(id string, lines int, timeout time.Duration) (*view.LogReply, error)
+	Shell(id string, timeout time.Duration) (*view.ShellPlan, error)
 }
 
 const (
 	pollEvery      = time.Second
 	workspaceEvery = 5 * time.Second
+	logEvery       = 2 * time.Second
+	logFetchRows   = 200
 	callTimeout    = 5 * time.Second
 	snapshotRows   = 200
 	finishedLabels = "Verified Unverified Failed Cancelled"
@@ -58,6 +63,19 @@ type evidenceMsg struct {
 	id  string
 }
 
+type logMsg struct {
+	log *view.LogReply
+	err error
+	at  time.Time
+}
+
+type shellPlanMsg struct {
+	plan *view.ShellPlan
+	err  error
+}
+
+type shellDoneMsg struct{ err error }
+
 type recoverMsg struct {
 	text string
 	err  error
@@ -80,6 +98,10 @@ type Model struct {
 	wsLast   time.Time
 	flBusy   bool
 	flLast   time.Time
+	lgBusy   bool
+	lgLast   time.Time
+	// exec hands the terminal to a command and returns when it exits; tests replace it.
+	exec     func(argv []string, done func(error) tea.Msg) tea.Cmd
 	lastOK   time.Time
 	now      func() time.Time
 	newKey   func() string
@@ -93,7 +115,12 @@ type Model struct {
 func NewModel(src Source, ascii bool) *Model {
 	st := NewState()
 	st.Loading, st.ASCII, st.Styled = true, ascii, true
-	return &Model{src: src, st: st, w: 120, h: 36, now: time.Now, newKey: randomKey, selID: map[string]string{}}
+	return &Model{src: src, st: st, w: 120, h: 36, now: time.Now, newKey: randomKey, selID: map[string]string{}, exec: execProcess}
+}
+
+func execProcess(argv []string, done func(error) tea.Msg) tea.Cmd {
+	cmd := exec.Command(argv[0], argv[1:]...)
+	return tea.ExecProcess(cmd, func(err error) tea.Msg { return done(err) })
 }
 
 func randomKey() string {
@@ -143,6 +170,43 @@ func (m *Model) fetchFleet(force bool) tea.Cmd {
 	return func() tea.Msg {
 		p, err := src.Fleet(20 * time.Second)
 		return fleetMsg{panel: p, err: err, at: time.Now()}
+	}
+}
+
+// selectedJobID is the Jobs-tab selection: what the Logs tab follows and what a shell targets.
+func (m *Model) selectedJobID() string {
+	if m.view == nil {
+		return ""
+	}
+	rows := m.view.Rows("Jobs")
+	if len(rows) == 0 {
+		return ""
+	}
+	return rows[clampSel(m.st.Selected["Jobs"], len(rows))].ID
+}
+
+// fetchLog follows the selected job's log, only while the Logs tab is showing.
+func (m *Model) fetchLog(force bool) tea.Cmd {
+	if m.st.Tab != LogsTab || m.lgBusy || (!force && m.now().Sub(m.lgLast) < logEvery) {
+		return nil
+	}
+	m.lgBusy = true
+	src, id := m.src, m.selectedJobID()
+	return func() tea.Msg {
+		l, err := src.Log(id, logFetchRows, callTimeout)
+		return logMsg{log: l, err: err, at: time.Now()}
+	}
+}
+
+func (m *Model) askShell() tea.Cmd {
+	id := ""
+	if m.st.Tab == "Jobs" {
+		id = m.selectedJobID()
+	}
+	src := m.src
+	return func() tea.Msg {
+		plan, err := src.Shell(id, callTimeout)
+		return shellPlanMsg{plan: plan, err: err}
 	}
 }
 
@@ -206,7 +270,30 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.w, m.h = msg.Width, msg.Height
 	case tickMsg:
-		return m, tea.Batch(m.fetch(), m.fetchWorkspace(false), m.fetchFleet(false), tick())
+		return m, tea.Batch(m.fetch(), m.fetchWorkspace(false), m.fetchFleet(false), m.fetchLog(false), tick())
+	case logMsg:
+		m.lgBusy, m.lgLast = false, m.now()
+		if msg.err != nil {
+			m.st.LogE = msg.err.Error()
+			return m, nil
+		}
+		m.st.Log, m.st.LogE = msg.log, ""
+	case shellPlanMsg:
+		switch {
+		case msg.err != nil:
+			m.st.Message = "Shell failed: " + msg.err.Error()
+		case !msg.plan.Available || len(msg.plan.Argv) == 0:
+			m.st.Message = "No shell: " + clean(msg.plan.Reason)
+		default:
+			m.st.Message = "shell in " + clean(msg.plan.Workspace) + " (exit to return)"
+			return m, m.exec(msg.plan.Argv, func(err error) tea.Msg { return shellDoneMsg{err: err} })
+		}
+	case shellDoneMsg:
+		m.st.Message = "shell closed"
+		if msg.err != nil {
+			m.st.Message = "shell closed: " + msg.err.Error()
+		}
+		return m, tea.Batch(m.fetch(), m.fetchWorkspace(true))
 	case fleetMsg:
 		m.flBusy, m.flLast = false, m.now()
 		if msg.err != nil {
@@ -319,23 +406,43 @@ func (m *Model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		m.st.DetailOpen, m.st.DetailOff, m.st.Message = false, 0, ""
 		m.st.EvidenceOpen = false
-		return m, tea.Batch(m.fetchWorkspace(true), m.fetchFleet(true))
+		return m, tea.Batch(m.fetchWorkspace(true), m.fetchFleet(true), m.fetchLog(true))
 	case "j", "down":
+		if m.st.Tab == LogsTab && !m.st.EvidenceOpen {
+			m.st.LogUp = max(0, m.st.LogUp-1)
+			return m, nil
+		}
 		if m.scrollsPanel() {
 			m.st.DetailOff++
 			return m, nil
 		}
 		m.move(1)
 	case "k", "up":
+		if m.st.Tab == LogsTab && !m.st.EvidenceOpen {
+			m.st.LogUp++
+			return m, nil
+		}
 		if m.scrollsPanel() {
 			m.st.DetailOff = max(0, m.st.DetailOff-1)
 			return m, nil
 		}
 		m.move(-1)
 	case "pgdown":
+		if m.st.Tab == LogsTab {
+			m.st.LogUp = max(0, m.st.LogUp-8)
+			return m, nil
+		}
 		m.st.DetailOff += 8
 	case "pgup":
+		if m.st.Tab == LogsTab {
+			m.st.LogUp += 8
+			return m, nil
+		}
 		m.st.DetailOff = max(0, m.st.DetailOff-8)
+	case "G":
+		m.st.LogUp = 0
+	case "s":
+		return m, m.askShell()
 	case "enter":
 		if _, ok := m.selected(); ok {
 			m.st.DetailOpen = !m.st.DetailOpen
@@ -354,7 +461,7 @@ func (m *Model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, m.askRecover()
 	case "r":
 		m.st.Message = "refreshing"
-		cmds := []tea.Cmd{m.fetch(), m.fetchWorkspace(true), m.fetchFleet(true)}
+		cmds := []tea.Cmd{m.fetch(), m.fetchWorkspace(true), m.fetchFleet(true), m.fetchLog(true)}
 		if m.st.EvidenceOpen {
 			cmds = append(cmds, m.fetchEvidence(m.st.EvidenceID))
 		}

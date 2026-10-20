@@ -43,3 +43,22 @@ func (p *Panel) SectionsOrNil() *[]Section {
 	}
 	return &p.Sections
 }
+
+// LogReply is the log.follow result: a job's log tail as plain text.
+type LogReply struct {
+	Job *struct {
+		ID     string `json:"id"`
+		Label  string `json:"label"`
+		Worker string `json:"worker"`
+	} `json:"job"`
+	Text  string `json:"text"`
+	Error bool   `json:"error"`
+}
+
+// ShellPlan is the env.shell result: the server's decision whether, and how, to open a shell in a job's container.
+type ShellPlan struct {
+	Available bool     `json:"available"`
+	Reason    string   `json:"reason"`
+	Argv      []string `json:"argv"`
+	Workspace string   `json:"workspace"`
+}

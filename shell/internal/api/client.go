@@ -161,6 +161,24 @@ func (c *Client) Recover(confirmID string, timeout time.Duration) (string, error
 	return fmt.Sprintf("applied %s (exit %d): %s", out.Applied, out.Exit, state), nil
 }
 
+// Log fetches the tail of a job's log. An empty id lets the server pick the job worth watching.
+func (c *Client) Log(id string, lines int, timeout time.Duration) (*view.LogReply, error) {
+	var out view.LogReply
+	if err := c.Call("log.follow", map[string]any{"id": id, "lines": lines}, timeout, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// Shell asks the server for the command that opens a shell in a job's container.
+func (c *Client) Shell(id string, timeout time.Duration) (*view.ShellPlan, error) {
+	var out view.ShellPlan
+	if err := c.Call("env.shell", map[string]any{"id": id}, timeout, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 type textResult struct {
 	Text string `json:"text"`
 }
