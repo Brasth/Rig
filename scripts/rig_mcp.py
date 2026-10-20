@@ -58,10 +58,24 @@ CU_TOOL_NAMES = frozenset({"rig_cu_serve", "rig_cu_capture", "rig_cu_act", "rig_
 BSK_TOOL_NAMES = frozenset({"rig_bsk_session", "rig_bsk_observe", "rig_bsk_act", "rig_bsk_confirm", "rig_bsk_navigate", "rig_bsk_tab"})
 
 
+def tool_profile(repo=None) -> str:
+    """RIG_MCP_PROFILE wins over [mcp] profile; anything unrecognised is full."""
+    env = (os.environ.get("RIG_MCP_PROFILE") or "").strip().lower()
+    if env in TOOL_PROFILES:
+        return env
+    try:
+        raw = (os.environ.get("RIG_REPO") or "").strip()
+        repo = repo or _repo({"repo": raw} if raw else {})
+        return rig_harness.parse_harness(rig_harness.harness_path(Path(repo)))["mcp"]["profile"]
+    except Exception:
+        return DEFAULT_TOOL_PROFILE
+
+
 def listed_tools() -> list[dict]:
     if is_child():
         return list(CHILD_TOOLS)
-    tools = list(TOOLS)
+    allowed = profile_tool_names(tool_profile())
+    tools = [item for item in TOOLS if item["name"] in allowed]
     try:
         import computer_use as cu
         raw = (os.environ.get("RIG_REPO") or "").strip()

@@ -230,6 +230,13 @@ def build_report(repo: Path, *, task: str = "coding", parent: str = "", model: s
     except ValueError as exc:
         checks.append(check("routing", "missing", str(exc)))
     script_ready = all((HERE / name).is_file() for name in ("rig_mcp.py", "run-worker.sh"))
+    from mcp_tools import schemas as mcp_tools_schemas  # lazy: schemas imports this module
+    mcp_state = config["mcp"]
+    profile = os.environ.get("RIG_MCP_PROFILE", "").strip().lower()
+    profile = profile if profile in ("core", "full") else mcp_state["profile"]
+    checks.append(check("mcp-profile", "missing" if mcp_state["error"] else "ready",
+                        mcp_state["error"] or f"{profile} profile lists up to {len(mcp_tools_schemas.profile_tool_names(profile))} parent tools",
+                        required=False))
     sandbox_state = config["sandbox"]
     checks.append(check("sandbox", "missing" if sandbox_state["error"] or sandbox_state["provider"] != "host" else "ready",
                         sandbox_state["error"] or f"{sandbox_state['provider']} provider",

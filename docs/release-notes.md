@@ -1,5 +1,9 @@
 # Release Notes
 
+## MCP tool profiles (2026-10-20)
+
+`.rig/harness.toml` gains an optional `[mcp] profile = "full" | "core"` (default and template value `full`, so nothing changes). `core` stops listing eight cost-reporting, benchmark and analysis tools (billing report, import and sync; benchmark create, outcome and report; routing report; task timeline) to shrink the parent's tool list; everything on the launch, wait, check, accept, close, workflow and recovery path stays. `RIG_MCP_PROFILE` overrides the file, and unrecognised values mean `full`. Profiles only filter `tools/list`: they add no authority, hidden tools remain callable by name, and the worker child set is always the same eight tools. `rig doctor` reports the active profile as an optional check.
+
 ## Local API v1 (2026-10-20)
 
 `rig api serve` starts a versioned JSON-RPC 2.0 server on a private Unix socket (mode 0600, in the 0700 runtime directory) bound to one repository; `rig api call METHOD [JSON]` and `rig api methods` are the clients. Every request carries the token from `api.token`. Methods map one-to-one onto existing parent MCP tools (session, doctor, status, jobs, queue, workflows, allow, deny, cancel, message), so project-enabled and ownership checks are unchanged, a client-supplied `repo` is ignored, owner tokens are redacted from every response, and a worker child cannot start the server. `docs/local-api.md` is generated from the method registry and a test keeps them in step. Nothing changes for existing workflows; the board and companion move onto this API in a later step.

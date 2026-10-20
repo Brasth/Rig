@@ -176,7 +176,7 @@ Each phase ends on a named check, following the canvas. Sizes are relative
 - Exit check: `rig api call session` and `rig session --json` return the
   same document.
 
-**0.4 MCP tool profiles (S).**
+**0.4 MCP tool profiles (S).** *Status 2026-10-20: implemented (`TOOL_PROFILES`, `profile_tool_names` in `scripts/mcp_tools/schemas.py`; `[mcp] profile`; `RIG_MCP_PROFILE`). Deviations: the generated parent protocol and skills reference nearly every tool, so `core` hides only 8 reporting and analysis tools (65 listed by default, 57 in core, 8 for children) rather than the ~30-tool set sketched below; the template keeps `full`, so decision D7 (new repos get `core`) is not applied until the protocol stops naming the hidden tools; hidden tools stay callable.*
 - `scripts/mcp_tools/schemas.py`: tag every parent tool with a profile
   (`core` or `full`). `core` = session, pick, queue, job lifecycle, wait,
   check, accept, close, recovery guide, doctor (roughly 30 tools). `full`

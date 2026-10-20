@@ -49,3 +49,9 @@ enabled = false
 # Where workers run. "host" is today's behaviour. "devcontainer" is reserved for
 # the dc-cli backend and is refused at launch until that backend ships.
 provider = "host"
+
+[mcp]
+# Parent tool profile. "full" lists every parent tool. "core" leaves out cost
+# reporting, benchmark and analysis tools. RIG_MCP_PROFILE overrides this.
+# Only the tool list changes; workers always get the same small child set.
+profile = "full"
