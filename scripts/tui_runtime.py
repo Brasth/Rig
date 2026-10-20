@@ -1,6 +1,7 @@
 """Background I/O for the board. Workers publish data; they never call curses."""
 from __future__ import annotations
 
+import json
 import queue
 import threading
 import time
@@ -27,6 +28,22 @@ class Snapshot:
     source: str = "local"
 
 
+def read_sandbox(folder):
+    """Where a job ran, from the evidence the launcher recorded. Only known string fields are kept."""
+    try:
+        path = Path(folder) / "sandbox.json"
+        if not path.is_file() or path.stat().st_size > 16384:
+            return None
+        data = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict) or not isinstance(data.get("provider"), str):
+        return None
+    box = data.get("container") if isinstance(data.get("container"), dict) else {}
+    keep = {key: box[key][:200] for key in ("name", "id", "image", "image_digest", "state", "note") if isinstance(box.get(key), str)}
+    return {"provider": data["provider"][:40], "container": {"found": box.get("found") is True, **keep}}
+
+
 def visible_jobs(listing, repo, start, stop):
     cache = {}
     result = []
@@ -36,6 +53,9 @@ def visible_jobs(listing, repo, start, stop):
         row["artifacts"] = [str(folder / name) for name in (
             "change-evidence.json", "verification.json", "checks",
         ) if folder is not None and (folder / name).exists()]
+        sandbox = read_sandbox(folder) if folder is not None else None
+        if sandbox:
+            row["sandbox"] = sandbox
         result.append(row)
     return result
 

@@ -26,7 +26,17 @@
    "doing": "editing src/middleware/limit.ts",
    "role": "implement",
    "pid": 4242,
-   "alive": true
+   "alive": true,
+   "sandbox": {
+    "provider": "devcontainer",
+    "container": {
+     "found": true,
+     "id": "a3f9c1d2e4b5",
+     "name": "my-repo-dev",
+     "image": "node:22-bookworm",
+     "image_digest": "sha256:9f1c2d3e4a5b6c7d8e9f0a1b2c3d4e5f"
+    }
+   }
   },
   {
    "job_id": "job-6d0",

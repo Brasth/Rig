@@ -244,7 +244,24 @@ own theme and adopts the shared package later.
 - Exit check (canvas): `rig shell` in a repo opens the shell with the parent
   in its pane and the board live over the API. Jobs still run on the host.
 
-### Phase 2 · Sandboxed workers (size L)
+### Phase 2 · Sandboxed workers (size L) · BUILT 2026-10-20, container behavior unverified
+
+> **Delivered:** 2.1 container modes and `[sandbox.workers]`, 2.2 the devcontainer provider with probe, evidence, stop supervisor and generated config, 2.3 child MCP inside the container, 2.4 checks run in the container, 2.5 forwarded-port guard and `rig env ports`, 2.6 evidence on the board and `rig doctor --workspace` per worker. Verified by the real supervisor, probe and `run-worker.sh` against a fake `dc` whose `exec` runs locally, including live completion, live cancel with the whole agent tree gone, refusal before launch, and every acceptance-verification test re-run under the container provider.
+>
+> **Not verified, and the exit check is therefore not met:** a real dc-cli (`exec --no-start`, exit-code passthrough, `forward --status --json`), a real Docker engine, and real `claude` and `codex` CLIs in a container. "One job verified end to end inside a container" needs those.
+>
+> **Deviations**
+> - **A hard problem the plan missed: stopping.** Killing the host-side `dc exec` client does not stop the agent in the container, so files could be released under a running agent. A supervisor in the container kills the process group on a stop file or after a 15 second heartbeat lease (content-compared, so clock drift cannot expire it); `run-worker.sh` stops through it first. This bounds, but cannot remove, the window if the engine itself hangs.
+> - **Same-path invariant instead of path translation.** Rig puts no translated path in any command; it probes that the repository, job directory, Rig runtime and home exist at the same paths, and generates a config that mounts them so (only when it owns the config).
+> - **Only claude and codex.** The others wire MCP through global host configuration (grok, opencode, omp, pi, agy, devin, mimo) or a host plugin tripwire (cursor), which a container cannot share. Each is refused with its reason.
+> - **Environment is passed with `env` inside the command,** not `dc exec --env` (the canvas lists it as something dc-cli still has to add), so only `HOME` and four `RIG_*` variables go in and secrets cannot leak by accident.
+> - **No `dc actions`.** Checks run through `dc exec --no-start` with the exact argv, so no trust hash joins the contract fingerprint. Container id and digest are recorded as evidence only when dc-cli reports them.
+> - **Per-worker data is Python (`scripts/container_modes.py`),** not `adapter.json` manifests, and `build_worker_cmd` is untouched; only the codex sandbox flag is rewritten for the container.
+> - **UI evidence packs store no URLs,** so the "forwarded ports only" rule is enforced where a URL is opened (browser navigate and named-profile capture), not in the pack.
+> - **No `rig-workers` devcontainer feature.** The image must already have `python3`, `setsid` and the agent CLIs; the probe says which is missing.
+> - **Credentials:** only `mount-ro`. Agents that must write to their config directory may fail; a writable option was deliberately not added.
+> - **Open design question:** the evidence drawer is the board's existing detail pane gaining a `sandbox` line, not a separate drawer.
+
 
 Needs decision D2 (credential mounting) and dc-cli's `exec --env`
 passthrough (fallback: write env into a job-scoped file mounted into the
