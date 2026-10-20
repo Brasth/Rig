@@ -33,4 +33,4 @@
                                                               │                                                         
                                                               │                                                         
                                                                                                                         
- Tab pane  Enter details  v evidence  s shell  e enqueue  x stop  r refresh  q quit                                     
+ Tab pane  Enter details  e enqueue  v evidence  w workspace  ? help  q quit                                            

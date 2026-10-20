@@ -1,12 +1,13 @@
  Rig · my-repo                       ! 1 need attention  ● 1 running  slots 2/3 
  [Jobs !1]  Queue 2   Workflows 2   Workspace   Fleet   Logs   Term             
-─ Jobs 1-7/7 ───────────────────────────────────────────────────────────────────
+─ Jobs 1-7/7 · attention first ─────────────────────────────────────────────────
 > ! Needs input   Add supertest dev dep                                  job-7f2
     permission: npm i -D supertest                                              
   ● Running       Rate limit POST /login                                 job-81c
     editing src/middleware/limit.ts                                             
   ● Checking      Verify wf-12 auth tests                                job-6d0
     running npm test -- login                                                   
+  Finished                                                                      
   ○ Unverified    Session store refactor                                 job-4c1
     opencode · finished 4m ago; not accepted                                    
   ✗ Failed        Bump eslint config                                     job-5aa
@@ -15,7 +16,6 @@
     claude · Parent accepted the current, unchanged content snapshot.           
   – Cancelled     Spike: SSE logs                                        job-2e7
     grok · Stop confirmed; the worker is no longer running.                     
-                                                                                
 ─ Detail ───────────────────────────────────────────────────────────────────────
  ! Needs input                                                                  
  Worker is waiting for a permission answer (y allows, n denies).                
@@ -27,4 +27,4 @@
  independent review unknown; not completed                                      
  role implement                                                                 
                                                                                 
- a allow  d deny  Tab pane  Enter details  v evidence  s shell  e enqueue  x st…
+ a allow  d deny  Tab pane  Enter details  e enqueue  v evidence  w workspace  …

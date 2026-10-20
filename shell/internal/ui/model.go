@@ -645,6 +645,15 @@ func (m *Model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.st.Mode, m.st.InputLabel, m.inputFor, m.st.Message = ModeInput, "chat", "chat", ""
 		return m, nil
 	}
+	if m.st.HelpOpen {
+		switch k.String() {
+		case "?", "esc":
+			m.st.HelpOpen = false
+		case "q":
+			return m, tea.Quit
+		}
+		return m, nil
+	}
 	if m.view == nil {
 		if k.String() == "q" {
 			return m, tea.Quit
@@ -654,6 +663,11 @@ func (m *Model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch k.String() {
 	case "q":
 		return m, tea.Quit
+	case "?":
+		m.st.HelpOpen = true
+		return m, nil
+	case "w":
+		return m, m.goTab(WorkspaceTab)
 	case "tab", "shift+tab":
 		step := 1
 		if k.String() == "shift+tab" {
@@ -662,13 +676,10 @@ func (m *Model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		tabs := TabList(m.st)
 		for i, t := range tabs {
 			if t == m.st.Tab {
-				m.st.Tab = tabs[(i+step)%len(tabs)]
-				break
+				return m, m.goTab(tabs[(i+step)%len(tabs)])
 			}
 		}
-		m.st.DetailOpen, m.st.DetailOff, m.st.Message = false, 0, ""
-		m.st.EvidenceOpen = false
-		return m, tea.Batch(m.fetchWorkspace(true), m.fetchFleet(true), m.fetchLog(true), m.fetchChat(true))
+		return m, nil
 	case "j", "down":
 		if m.st.Tab == ChatTab {
 			m.st.ChatUp = max(0, m.st.ChatUp-1)
@@ -761,6 +772,14 @@ func (m *Model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 	return m, nil
+}
+
+// goTab shows a tab and starts whatever it needs loaded.
+func (m *Model) goTab(name string) tea.Cmd {
+	m.st.Tab = name
+	m.st.DetailOpen, m.st.DetailOff, m.st.Message = false, 0, ""
+	m.st.EvidenceOpen = false
+	return tea.Batch(m.fetchWorkspace(true), m.fetchFleet(true), m.fetchLog(true), m.fetchChat(true))
 }
 
 func (m *Model) move(delta int) {
