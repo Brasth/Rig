@@ -2,6 +2,7 @@
 from __future__ import annotations
 import argparse
 import base64
+import errno
 from contextlib import contextmanager
 import fcntl
 import json
@@ -304,6 +305,15 @@ def active_runtime_blocker(root, repos=()):
     return None
 
 
+def _symlink_loop(path):
+    """Path.resolve() stopped raising on symlink loops in Python 3.13; a loop must still read as uncertain."""
+    try:
+        os.stat(path)
+    except OSError as error:
+        return error.errno == errno.ELOOP
+    return False
+
+
 def runtime_blocker(root, entries, ignored=(), repos=()):
     """Uninstall additionally refuses retained runtime references/user edits."""
     blocker = active_runtime_blocker(root, repos)
@@ -322,6 +332,8 @@ def runtime_blocker(root, entries, ignored=(), repos=()):
         if path.is_relative_to(root):
             continue
         try:
+            if _symlink_loop(path):
+                return 'path reference uncertain'
             if path.resolve().is_relative_to(root.resolve()):
                 # A project skill can have an ordinary leaf file under a
                 # user-owned directory symlink into the runtime.

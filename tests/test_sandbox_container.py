@@ -43,7 +43,8 @@ class Base(unittest.TestCase):
         self.log = self.base / "dc.log"
         self.env = mock.patch.dict(os.environ, {
             "RIG_DC_BIN": str(self.dc), "FAKE_DC_LOG": str(self.log), "HOME": str(self.home),
-            "PATH": f"{self.bin}:{os.environ['PATH']}"})
+            # Only the stand-ins and system tools: a real claude/codex on the developer's PATH must not satisfy the probe.
+            "PATH": f"{self.bin}:/usr/bin:/bin"})
         self.env.start()
         for key in ("FAKE_DC_EXEC_FAIL", "FAKE_DC_LS"):
             os.environ.pop(key, None)
