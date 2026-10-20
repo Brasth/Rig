@@ -177,8 +177,10 @@ fi
         wrapper.write_text(f'#!/bin/bash\nexec bash "{ROOT / "install.sh"}" --no-mimo\n')
         self.run_rig("init")
         result = self.run_rig("update", expected_code=2, RIG_INSTALL_SH=str(wrapper))
-        # The installer leaves an unversioned kit, so the guided helper prints the migration hint (on stdout).
-        self.assertIn("update --migrate --latest --dry-run", result.stdout)
+        # The guided helper prints instructions on stdout: the migration hint for an unversioned kit, or the
+        # pinned-update commands for a versioned one (which the installer makes depends on the checkout's git state).
+        self.assertTrue("update --migrate --latest --dry-run" in result.stdout or "--revision FULL_COMMIT_SHA" in result.stdout,
+                        result.stdout)
         self.run_rig("init")
         self.assert_global(False)
         self.assert_project(False)
