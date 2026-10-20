@@ -75,3 +75,21 @@ func TestVersion(t *testing.T) {
 		t.Fatalf("got %q", out.String())
 	}
 }
+
+func TestOnceWorkspaceFromFixtures(t *testing.T) {
+	var out, errb bytes.Buffer
+	code := run([]string{"--once", "--tab", "Workspace", "--fixture", "../../testdata/snapshot.json",
+		"--workspace-fixture", "../../testdata/workspace.json", "--size", "100x24", "--ascii"}, &out, &errb)
+	if code != 0 {
+		t.Fatalf("exit %d: %s", code, errb.String())
+	}
+	text := out.String()
+	for _, want := range []string{"Rig . my-repo", "[Workspace !]", "! 9229  held by node"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("missing %q in\n%s", want, text)
+		}
+	}
+	if run([]string{"--once", "--tab", "Workspace", "--workspace-fixture", "/no/such.json"}, &out, &errb) == 0 {
+		t.Error("a missing workspace fixture must fail")
+	}
+}

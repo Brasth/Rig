@@ -18,10 +18,12 @@ import (
 type Source interface {
 	Snapshot(start, rows int, timeout time.Duration) (*view.Snapshot, error)
 	Act(method string, params map[string]any, timeout time.Duration) (string, error)
+	Workspace(deep bool, timeout time.Duration) (*view.Workspace, error)
 }
 
 const (
 	pollEvery      = time.Second
+	workspaceEvery = 5 * time.Second
 	callTimeout    = 5 * time.Second
 	snapshotRows   = 200
 	finishedLabels = "Verified Unverified Failed Cancelled"
@@ -33,6 +35,12 @@ type snapshotMsg struct {
 	snap *view.Snapshot
 	err  error
 	at   time.Time
+}
+
+type workspaceMsg struct {
+	ws  *view.Workspace
+	err error
+	at  time.Time
 }
 
 type actionMsg struct {
@@ -48,6 +56,8 @@ type Model struct {
 	view     *view.View
 	w, h     int
 	fetching bool
+	wsBusy   bool
+	wsLast   time.Time
 	lastOK   time.Time
 	now      func() time.Time
 	newKey   func() string
@@ -83,6 +93,21 @@ func (m *Model) fetch() tea.Cmd {
 	return func() tea.Msg {
 		snap, err := src.Snapshot(0, snapshotRows, callTimeout)
 		return snapshotMsg{snap: snap, err: err, at: time.Now()}
+	}
+}
+
+// fetchWorkspace loads the workspace panel. It runs only while that tab is
+// showing, at most once per interval unless forced, so dc-cli is not polled
+// for a panel nobody is looking at.
+func (m *Model) fetchWorkspace(force bool) tea.Cmd {
+	if m.st.Tab != WorkspaceTab || m.wsBusy || (!force && m.now().Sub(m.wsLast) < workspaceEvery) {
+		return nil
+	}
+	m.wsBusy = true
+	src := m.src
+	return func() tea.Msg {
+		ws, err := src.Workspace(true, 15*time.Second)
+		return workspaceMsg{ws: ws, err: err, at: time.Now()}
 	}
 }
 
@@ -130,7 +155,15 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.w, m.h = msg.Width, msg.Height
 	case tickMsg:
-		return m, tea.Batch(m.fetch(), tick())
+		return m, tea.Batch(m.fetch(), m.fetchWorkspace(false), tick())
+	case workspaceMsg:
+		m.wsBusy, m.wsLast = false, m.now()
+		if msg.err != nil {
+			// Keep the last good panel on screen; say why it is stale.
+			m.st.WorkspaceE = msg.err.Error()
+			return m, nil
+		}
+		m.st.Workspace, m.st.WorkspaceE = msg.ws, ""
 	case snapshotMsg:
 		m.fetching = false
 		m.st.Loading = false
@@ -209,9 +242,18 @@ func (m *Model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 		m.st.DetailOpen, m.st.DetailOff, m.st.Message = false, 0, ""
+		return m, m.fetchWorkspace(true)
 	case "j", "down":
+		if m.st.Tab == WorkspaceTab {
+			m.st.DetailOff++
+			return m, nil
+		}
 		m.move(1)
 	case "k", "up":
+		if m.st.Tab == WorkspaceTab {
+			m.st.DetailOff = max(0, m.st.DetailOff-1)
+			return m, nil
+		}
 		m.move(-1)
 	case "pgdown":
 		m.st.DetailOff += 8
@@ -226,7 +268,7 @@ func (m *Model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.st.DetailOpen, m.st.Message = false, ""
 	case "r":
 		m.st.Message = "refreshing"
-		return m, m.fetch()
+		return m, tea.Batch(m.fetch(), m.fetchWorkspace(true))
 	case "a", "d":
 		row, ok := m.selected()
 		if !ok || m.st.Tab != "Jobs" || !row.Ask {

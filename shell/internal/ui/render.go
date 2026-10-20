@@ -38,7 +38,9 @@ type State struct {
 	Stale      string // set when the last refresh failed; shown until one succeeds
 	Loading    bool
 	ASCII      bool
-	Styled     bool // apply colour and reverse video to list rows; golden tests leave it off
+	Workspace  *view.Workspace
+	WorkspaceE string // why the workspace panel could not load
+	Styled     bool   // apply colour and reverse video to list rows; golden tests leave it off
 }
 
 // NewState returns a state on the first tab.
@@ -47,7 +49,10 @@ func NewState() State {
 }
 
 // Tabs are the board tabs in order.
-var Tabs = []string{"Jobs", "Queue", "Workflows"}
+var Tabs = []string{"Jobs", "Queue", "Workflows", WorkspaceTab}
+
+// WorkspaceTab is the tab that renders the workspace panel instead of a list.
+const WorkspaceTab = "Workspace"
 
 func glyph(r view.Row) string {
 	if r.Glyph == "" {
@@ -86,6 +91,15 @@ func frame(v *view.View, st State, w, h int) []string {
 	}
 	body := h - 5
 	lines := []string{headerLine(v, st, w), tabLine(v, st, w)}
+	if st.Tab == WorkspaceTab {
+		lines = append(lines, rule(workspaceTitle(st), w))
+		lines = append(lines, workspaceLines(st, w, body)...)
+		lines = append(lines, messageLine(st, w), footerLine(nil, 0, st, w))
+		for len(lines) < h {
+			lines = append(lines, fit("", w))
+		}
+		return lines[:h]
+	}
 	rows := v.Rows(st.Tab)
 	sel := clampSel(st.Selected[st.Tab], len(rows))
 	split := w >= splitMinWidth
@@ -174,6 +188,9 @@ func tabLine(v *view.View, st State, w int) string {
 					label += fmt.Sprintf(" %d", t.Count)
 				}
 			}
+		}
+		if name == WorkspaceTab && st.Workspace != nil && st.Workspace.Attention {
+			label += " !"
 		}
 		if name == st.Tab {
 			label = "[" + label + "]"
@@ -339,6 +356,9 @@ func messageLine(st State, w int) string {
 
 func footerLine(rows []view.Row, sel int, st State, w int) string {
 	keys := []string{"Tab pane", "Enter details", "e enqueue", "x stop", "r refresh", "q quit"}
+	if st.Tab == WorkspaceTab {
+		keys = []string{"Tab pane", "j/k scroll", "r refresh", "q quit"}
+	}
 	if st.Mode == ModeInput {
 		keys = []string{"Enter queue it", "Esc discard"}
 	} else if st.Mode == ModeConfirm {
@@ -347,4 +367,59 @@ func footerLine(rows []view.Row, sel int, st State, w int) string {
 		keys = append([]string{"a allow", "d deny"}, keys...)
 	}
 	return fit(" "+strings.Join(keys, "  "), w)
+}
+
+// workspaceTitle is the first section's title: it labels the rule under the
+// tab bar, so that section does not repeat it.
+func workspaceTitle(st State) string {
+	if st.Workspace != nil && len(st.Workspace.Sections) > 0 {
+		return sanitize(st.Workspace.Sections[0].Title)
+	}
+	return "Workspace"
+}
+
+func workspaceLines(st State, w, h int) []string {
+	var all []string
+	switch {
+	case st.Workspace == nil && st.WorkspaceE != "":
+		for _, l := range wrap("Workspace unavailable: "+st.WorkspaceE, w-2, "  ") {
+			all = append(all, " "+l)
+		}
+	case st.Workspace == nil:
+		all = []string{" Loading workspace…"}
+	default:
+		for i, sec := range st.Workspace.Sections {
+			if i > 0 {
+				all = append(all, rule(sanitize(sec.Title), w))
+			}
+			for _, l := range sec.Lines {
+				all = append(all, " "+tonedLine(l.Tone, sanitize(l.Text), st.Styled))
+			}
+		}
+		if st.WorkspaceE != "" {
+			all = append(all, rule("stale", w))
+			for _, l := range wrap("refresh failed: "+st.WorkspaceE, w-2, "  ") {
+				all = append(all, " "+l)
+			}
+		}
+	}
+	off := max(0, min(st.DetailOff, max(0, len(all)-h)))
+	out := make([]string, 0, h)
+	for _, line := range all[off:] {
+		if len(out) == h {
+			break
+		}
+		out = append(out, fit(line, w))
+	}
+	for len(out) < h {
+		out = append(out, fit("", w))
+	}
+	return out
+}
+
+func tonedLine(toneName, text string, styled bool) string {
+	if styled && toneName != "" {
+		return tone(map[string]string{"ok": "verified", "attention": "attention"}[toneName]).Render(text)
+	}
+	return text
 }

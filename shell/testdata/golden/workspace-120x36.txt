@@ -1,0 +1,36 @@
+ Rig · my-repo                                                               ! 1 need attention  ● 1 running  slots 2/3 
+  Jobs !1   Queue 2   Workflows 2  [Workspace !]                                                                        
+─ Workspace ────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ kind     devcontainer                                                                                                  
+ override none                                                                                                          
+   dc-cli   0.23.0 (pin 0.23.0)                                                                                         
+ ● running  a3f9c1d2e4b5 · 2h                                                                                           
+ image    node:22-bookworm                                                                                              
+─ Ports ────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+   3000  web                                                                                                            
+   5173  vite                                                                                                           
+ ! 9229  held by node                                                                                                   
+─ Doctor ───────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ ! engine  (fix: dc recover engine-slow)                                                                                
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+ Tab pane  j/k scroll  r refresh  q quit                                                                                

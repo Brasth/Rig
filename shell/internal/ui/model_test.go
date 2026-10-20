@@ -17,6 +17,9 @@ type call struct {
 }
 
 type fakeSource struct {
+	ws      *view.Workspace
+	wsErr   error
+	wsCalls int
 	snap    *view.Snapshot
 	snapErr error
 	actErr  error
@@ -24,6 +27,10 @@ type fakeSource struct {
 	calls   []call
 }
 
+func (f *fakeSource) Workspace(bool, time.Duration) (*view.Workspace, error) {
+	f.wsCalls++
+	return f.ws, f.wsErr
+}
 func (f *fakeSource) Snapshot(int, int, time.Duration) (*view.Snapshot, error) {
 	return f.snap, f.snapErr
 }
@@ -50,6 +57,8 @@ func press(m *Model, keys ...string) tea.Cmd {
 		switch k {
 		case "tab":
 			msg = tea.KeyMsg{Type: tea.KeyTab}
+		case "shift+tab":
+			msg = tea.KeyMsg{Type: tea.KeyShiftTab}
 		case "enter":
 			msg = tea.KeyMsg{Type: tea.KeyEnter}
 		case "esc":
@@ -218,10 +227,15 @@ func TestNavigationTabsDetailAndQuit(t *testing.T) {
 	if m.st.Tab != "Queue" {
 		t.Fatalf("tab %q", m.st.Tab)
 	}
-	press(m, "tab", "tab")
+	press(m, "tab", "tab", "tab")
 	if m.st.Tab != "Jobs" {
-		t.Fatalf("tab wraps, got %q", m.st.Tab)
+		t.Fatalf("tab wraps after Workspace, got %q", m.st.Tab)
 	}
+	press(m, "shift+tab")
+	if m.st.Tab != "Workspace" {
+		t.Fatalf("shift+tab goes back and wraps, got %q", m.st.Tab)
+	}
+	press(m, "tab")
 	press(m, "enter")
 	if !m.st.DetailOpen {
 		t.Fatal("enter opens details")
@@ -246,5 +260,116 @@ func TestKeysBeforeFirstSnapshotOnlyQuit(t *testing.T) {
 	}
 	if press(m, "q") == nil {
 		t.Fatal("q must still quit")
+	}
+}
+
+func workspaceReady(t *testing.T) (*Model, *fakeSource) {
+	t.Helper()
+	m, src := newReady(t)
+	src.ws = loadWorkspace(t)
+	return m, src
+}
+
+func TestWorkspaceIsFetchedOnlyWhileItsTabShowsAndNotMoreThanEveryFiveSeconds(t *testing.T) {
+	m, src := workspaceReady(t)
+	clock := time.Unix(1000, 0)
+	m.now = func() time.Time { return clock }
+	run(m.fetchWorkspace(false), m)
+	if src.wsCalls != 0 {
+		t.Fatal("must not fetch while another tab is showing")
+	}
+	press(m, "tab", "tab")
+	run(press(m, "tab"), m) // switching to Workspace fetches at once
+	if m.st.Tab != WorkspaceTab {
+		t.Fatalf("tab %q", m.st.Tab)
+	}
+	if src.wsCalls != 1 {
+		t.Fatalf("switching to the tab must fetch, calls=%d", src.wsCalls)
+	}
+	if m.st.Workspace == nil || m.st.WorkspaceE != "" {
+		t.Fatal("panel must be stored")
+	}
+	clock = clock.Add(2 * time.Second)
+	run(m.fetchWorkspace(false), m)
+	if src.wsCalls != 1 {
+		t.Fatal("must wait out the interval")
+	}
+	clock = clock.Add(4 * time.Second)
+	run(m.fetchWorkspace(false), m)
+	if src.wsCalls != 2 {
+		t.Fatalf("calls=%d", src.wsCalls)
+	}
+	press(m, "tab") // back to Jobs
+	clock = clock.Add(time.Minute)
+	run(m.fetchWorkspace(false), m)
+	if src.wsCalls != 2 {
+		t.Fatal("leaving the tab stops polling")
+	}
+}
+
+func TestSwitchingToWorkspaceFetchesImmediately(t *testing.T) {
+	m, src := workspaceReady(t)
+	press(m, "tab", "tab")
+	run(press(m, "tab"), m)
+	if src.wsCalls != 1 || m.st.Workspace == nil {
+		t.Fatalf("calls=%d panel=%v", src.wsCalls, m.st.Workspace)
+	}
+}
+
+func TestWorkspaceFailureKeepsTheLastPanelAndSaysWhy(t *testing.T) {
+	m, src := workspaceReady(t)
+	press(m, "tab", "tab")
+	run(press(m, "tab"), m)
+	good := m.st.Workspace
+	if good == nil {
+		t.Fatal("panel must load first")
+	}
+	src.wsErr = errors.New("dc ls failed")
+	run(m.fetchWorkspace(true), m)
+	if m.st.Workspace != good {
+		t.Fatal("last good panel must stay")
+	}
+	if m.st.WorkspaceE != "dc ls failed" {
+		t.Fatalf("error %q", m.st.WorkspaceE)
+	}
+	src.wsErr = nil
+	run(m.fetchWorkspace(true), m)
+	if m.st.WorkspaceE != "" {
+		t.Fatal("success clears the error")
+	}
+}
+
+func TestOnlyOneWorkspaceFetchInFlight(t *testing.T) {
+	m, _ := workspaceReady(t)
+	press(m, "tab", "tab")
+	cmd := press(m, "tab") // starts the fetch; it has not completed yet
+	if cmd == nil {
+		t.Fatal("switching to the tab must start a fetch")
+	}
+	if m.fetchWorkspace(true) != nil {
+		t.Fatal("a second fetch must wait for the first")
+	}
+	run(cmd, m)
+	if m.fetchWorkspace(true) == nil {
+		t.Fatal("after it completes a new one may start")
+	}
+}
+
+func TestWorkspaceTabScrollsAndIgnoresJobActions(t *testing.T) {
+	m, src := workspaceReady(t)
+	press(m, "tab", "tab", "tab")
+	press(m, "j", "j", "j")
+	if m.st.DetailOff != 3 {
+		t.Fatalf("offset %d", m.st.DetailOff)
+	}
+	press(m, "k")
+	if m.st.DetailOff != 2 {
+		t.Fatalf("offset %d", m.st.DetailOff)
+	}
+	run(press(m, "a"), m)
+	run(press(m, "d"), m)
+	press(m, "x", "enter")
+	if m.st.Mode != ModeNormal || len(src.calls) != 0 || m.st.DetailOpen {
+		t.Fatalf("job actions must not apply on the workspace tab: mode=%v calls=%v", m.st.Mode, src.calls)
 	}
 }

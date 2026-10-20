@@ -5,6 +5,7 @@ import (
 	"flag"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -26,6 +27,19 @@ func loadView(t *testing.T) *view.View {
 		t.Fatal(err)
 	}
 	return &snap.View
+}
+
+func loadWorkspace(t *testing.T) *view.Workspace {
+	t.Helper()
+	raw, err := os.ReadFile("../../testdata/workspace.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var reply view.WorkspaceReply
+	if err := json.Unmarshal(raw, &reply); err != nil {
+		t.Fatal(err)
+	}
+	return &reply.View
 }
 
 func golden(t *testing.T, name, got string) {
@@ -81,6 +95,11 @@ func TestGoldenFrames(t *testing.T) {
 		{"jobs-120x36-confirm", 120, 36, "Jobs", func(s *State) { s.Mode, s.Prompt = ModeConfirm, "Stop job-81c Rate limit POST /login?" }},
 		{"jobs-120x36-input", 120, 36, "Jobs", func(s *State) { s.Mode, s.Prompt = ModeInput, "Add audit log" }},
 		{"tiny-30x6", 30, 6, "Jobs", nil},
+		{"workspace-120x36", 120, 36, "Workspace", func(s *State) { s.Workspace = loadWorkspace(t) }},
+		{"workspace-60x14", 60, 14, "Workspace", func(s *State) { s.Workspace = loadWorkspace(t) }},
+		{"workspace-80x24-ascii", 80, 24, "Workspace", func(s *State) { s.Workspace, s.ASCII = loadWorkspace(t), true }},
+		{"workspace-loading", 80, 12, "Workspace", nil},
+		{"workspace-unavailable", 80, 12, "Workspace", func(s *State) { s.WorkspaceE = "dc ls --json failed (2): engine not running" }},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -167,4 +186,49 @@ func TestLongTitlesTruncateWithoutBreakingWidth(t *testing.T) {
 	for _, w := range []int{40, 52, 70, 100, 140} {
 		assertGrid(t, Render(&long, NewState(), w, 30), w, 30)
 	}
+}
+
+func TestWorkspaceTabFlagsAttentionAndNeverShowsListChrome(t *testing.T) {
+	st := NewState()
+	st.Tab = "Jobs"
+	st.Workspace = loadWorkspace(t)
+	out := Render(loadView(t), st, 120, 36)
+	if !strings.Contains(strings.Split(out, "\n")[1], "Workspace !") {
+		t.Errorf("tab bar must flag workspace attention:\n%s", strings.Split(out, "\n")[1])
+	}
+	st.Tab = "Workspace"
+	out = Render(loadView(t), st, 120, 36)
+	for _, banned := range []string{"│", "┬", "Enter details", "x stop"} {
+		if strings.Contains(out, banned) {
+			t.Errorf("workspace tab must not show %q", banned)
+		}
+	}
+	for _, want := range []string{"kind     devcontainer", "! 9229  held by node", "fix: dc recover engine-slow"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q", want)
+		}
+	}
+}
+
+func TestWorkspaceTextIsSanitisedAndScrolls(t *testing.T) {
+	ws := &view.Workspace{Version: 1}
+	var lines []view.Line
+	for i := 0; i < 40; i++ {
+		lines = append(lines, view.Line{Text: "row \x1b[31m" + strings.Repeat("x", i) + "\x1b[0m"})
+	}
+	ws.Sections = []view.Section{{Title: "Big\x1b[2J", Lines: lines}}
+	st := NewState()
+	st.Tab, st.Workspace = "Workspace", ws
+	out := Render(nil, st, 80, 20)
+	if strings.ContainsRune(out, '\x1b') {
+		t.Fatal("escape sequence leaked")
+	}
+	st.DetailOff = 10
+	scrolled := Render(nil, st, 80, 20)
+	first := regexp.MustCompile(`(?m)^ row +$`)
+	if !first.MatchString(out) || first.MatchString(scrolled) {
+		t.Fatal("scrolling must move the first line out of view")
+	}
+	st.DetailOff = 10000
+	assertGrid(t, Render(nil, st, 80, 20), 80, 20)
 }

@@ -137,3 +137,23 @@ func TestViewRowsByTab(t *testing.T) {
 		t.Fatal("nil view must have no rows")
 	}
 }
+
+func TestWorkspaceSendsDeepFlagAndChecksVersion(t *testing.T) {
+	fs := serve(t, func(string) string {
+		return `{"jsonrpc":"2.0","id":1,"rig_api":1,"result":{"status":{},"view":{"version":1,"attention":true,"sections":[{"title":"Workspace","lines":[{"text":"kind     none","tone":""}]}]}}}`
+	})
+	ws, err := fs.client.Workspace(true, time.Second)
+	if err != nil || !ws.Attention || ws.Sections[0].Lines[0].Text != "kind     none" {
+		t.Fatalf("got %+v %v", ws, err)
+	}
+	req := <-fs.requests
+	if req["method"] != "workspace.status" || req["params"].(map[string]any)["deep"] != true {
+		t.Fatalf("bad request %v", req)
+	}
+	old := serve(t, func(string) string {
+		return `{"jsonrpc":"2.0","id":1,"rig_api":1,"result":{"view":{"version":7}}}`
+	})
+	if _, err := old.client.Workspace(false, time.Second); err == nil {
+		t.Fatal("unknown workspace view version must be refused")
+	}
+}

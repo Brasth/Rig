@@ -1,5 +1,5 @@
  Rig · my-repo                                                               ! 1 need attention  ● 1 running  slots 2/3 
-  Jobs !1   Queue 2  [Workflows 2]                                                                                      
+  Jobs !1   Queue 2  [Workflows 2]  Workspace                                                                           
 ─ Workflows 1-2/2 ────────────────────────────────────────────┬─────────────────────────────────────────────────────────
 > ● Running       Fix auth tests and add rate l…  accepted 0/3│ ● Running                                               
   ○ Unverified    Settings migration              accepted 3/3│ Worker process is executing.                            

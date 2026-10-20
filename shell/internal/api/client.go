@@ -116,6 +116,19 @@ func (c *Client) Snapshot(start, rows int, timeout time.Duration) (*view.Snapsho
 	return &snap, nil
 }
 
+// Workspace fetches the workspace panel. deep also asks for ports and dc-cli's
+// own diagnosis, which costs the server a few dc invocations (it caches them).
+func (c *Client) Workspace(deep bool, timeout time.Duration) (*view.Workspace, error) {
+	var reply view.WorkspaceReply
+	if err := c.Call("workspace.status", map[string]any{"deep": deep}, timeout, &reply); err != nil {
+		return nil, err
+	}
+	if reply.View.Version != view.WorkspaceVersion {
+		return nil, fmt.Errorf("rig API workspace view version %d is not supported (shell expects %d)", reply.View.Version, view.WorkspaceVersion)
+	}
+	return &reply.View, nil
+}
+
 type textResult struct {
 	Text string `json:"text"`
 }

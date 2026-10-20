@@ -32,6 +32,24 @@ func clean(s string) string {
 	return strings.Join(strings.Fields(b.String()), " ")
 }
 
+// sanitize strips terminal sequences and control characters but keeps runs of
+// spaces, for server-formatted lines whose columns are already aligned.
+func sanitize(s string) string {
+	s = oscSeq.ReplaceAllString(s, "")
+	s = csiSeq.ReplaceAllString(s, "")
+	var b strings.Builder
+	for _, r := range s {
+		switch {
+		case r == '\t':
+			b.WriteString("  ")
+		case unicode.IsControl(r) || r == '\x1b':
+		default:
+			b.WriteRune(r)
+		}
+	}
+	return strings.TrimRight(b.String(), " \n\r")
+}
+
 // fit truncates s to w cells with an ellipsis and pads it to exactly w cells.
 func fit(s string, w int) string {
 	if w <= 0 {

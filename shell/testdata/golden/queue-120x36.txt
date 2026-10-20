@@ -1,5 +1,5 @@
  Rig · my-repo                                                               ! 1 need attention  ● 1 running  slots 2/3 
-  Jobs !1  [Queue 2]  Workflows 2                                                                                       
+  Jobs !1  [Queue 2]  Workflows 2   Workspace                                                                           
 ─ Queue 1-2/2 ────────────────────────────────────────────────┬─────────────────────────────────────────────────────────
 > · Queued        Add /logout audit                         p0│ · Queued                                                
     waiting: Execution capacity full (3/3); awaiting a free s…│ Execution capacity full (3/3); awaiting a free slot     
