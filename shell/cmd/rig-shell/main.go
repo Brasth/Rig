@@ -90,6 +90,10 @@ func (e *ensuringSource) Fleet(timeout time.Duration) (*view.Panel, error) {
 	return e.client.Fleet(timeout)
 }
 
+func (e *ensuringSource) Settings(timeout time.Duration) (*view.Panel, error) {
+	return e.client.Settings(timeout)
+}
+
 func (e *ensuringSource) JobEvidence(id string, timeout time.Duration) (*view.Evidence, error) {
 	return e.client.JobEvidence(id, timeout)
 }
@@ -139,8 +143,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 	fixture := fs.String("fixture", "", "render --once from a board.snapshot JSON file instead of the API")
 	wsFixture := fs.String("workspace-fixture", "", "render the Workspace tab for --once from a workspace.status JSON file")
 	fleetFixture := fs.String("fleet-fixture", "", "render the Fleet tab for --once from a fleet.status JSON file")
+	settingsFixture := fs.String("settings-fixture", "", "render the Settings tab for --once from a settings.view JSON file")
 	evFixture := fs.String("evidence-fixture", "", "render the evidence drawer for --once from a job.evidence JSON file")
-	tab := fs.String("tab", "Jobs", "tab to show for --once: Session, Jobs, Queue, Workflows, Env or Logs (Workspace and Fleet mean Env, Term means Session)")
+	tab := fs.String("tab", "Jobs", "tab to show for --once: Session, Jobs, Queue, Workflows, Env, Settings or Logs (Workspace and Fleet mean Env, Term means Session)")
 	start := fs.String("start", "", "tab to open on in the interactive board (default Jobs)")
 	ascii := fs.Bool("ascii", false, "use ASCII glyphs")
 	noEnsure := fs.Bool("no-ensure", false, "do not start the API server when it is not running")
@@ -167,7 +172,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	useASCII := wantASCII(*ascii, os.Getenv)
 
 	if *once {
-		return renderOnce(stdout, stderr, *repo, *rigBin, *fixture, *wsFixture, *fleetFixture, *evFixture, *size, *tab, useASCII, !*noEnsure)
+		return renderOnce(stdout, stderr, *repo, *rigBin, *fixture, *wsFixture, *fleetFixture, *evFixture, *settingsFixture, *size, *tab, useASCII, !*noEnsure)
 	}
 	client, err := api.New(*repo)
 	if err != nil {
@@ -178,7 +183,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	model := ui.NewModel(src, useASCII)
 	if *start != "" {
 		if !ui.ValidTab(ui.TabAlias(*start)) {
-			fmt.Fprintln(stderr, "rig-shell: --start must be Session, Jobs, Queue, Workflows, Env or Logs")
+			fmt.Fprintln(stderr, "rig-shell: --start must be Session, Jobs, Queue, Workflows, Env, Settings or Logs")
 			return 2
 		}
 		model.SetTab(ui.TabAlias(*start))
@@ -194,7 +199,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
-func renderOnce(stdout, stderr io.Writer, repo, rigBin, fixture, wsFixture, fleetFixture, evFixture, size, tab string, ascii, ensure bool) int {
+func renderOnce(stdout, stderr io.Writer, repo, rigBin, fixture, wsFixture, fleetFixture, evFixture, settingsFixture, size, tab string, ascii, ensure bool) int {
 	w, h, err := parseSize(size)
 	if err != nil {
 		fmt.Fprintln(stderr, "rig-shell:", err)
@@ -202,12 +207,12 @@ func renderOnce(stdout, stderr io.Writer, repo, rigBin, fixture, wsFixture, flee
 	}
 	tab = ui.TabAlias(tab)
 	if !ui.ValidTab(tab) {
-		fmt.Fprintln(stderr, "rig-shell: --tab must be Session, Jobs, Queue, Workflows, Env or Logs")
+		fmt.Fprintln(stderr, "rig-shell: --tab must be Session, Jobs, Queue, Workflows, Env, Settings or Logs")
 		return 2
 	}
 	var snap *view.Snapshot
 	var ws *view.Workspace
-	var wsErr, fleetErr string
+	var wsErr, fleetErr, settingsErr string
 	if wsFixture != "" {
 		raw, err := os.ReadFile(wsFixture)
 		var reply view.WorkspaceReply
@@ -232,6 +237,19 @@ func renderOnce(stdout, stderr io.Writer, repo, rigBin, fixture, wsFixture, flee
 			return 1
 		}
 		fleetPanel = &reply.View
+	}
+	var settingsPanel *view.Panel
+	if settingsFixture != "" {
+		raw, err := os.ReadFile(settingsFixture)
+		var reply view.SettingsReply
+		if err == nil {
+			err = json.Unmarshal(raw, &reply)
+		}
+		if err != nil {
+			fmt.Fprintln(stderr, "rig-shell:", err)
+			return 1
+		}
+		settingsPanel = &reply.View
 	}
 	var evidence *view.Evidence
 	if evFixture != "" {
@@ -271,6 +289,11 @@ func renderOnce(stdout, stderr io.Writer, repo, rigBin, fixture, wsFixture, flee
 				fleetErr = err.Error() // the workspace half can still be shown
 			}
 		}
+		if tab == ui.SettingsTab && settingsPanel == nil {
+			if settingsPanel, err = src.Settings(5 * time.Second); err != nil {
+				settingsErr = err.Error()
+			}
+		}
 		if tab == ui.EnvTab && ws == nil {
 			if ws, err = src.Workspace(true, 15*time.Second); err != nil {
 				wsErr = err.Error()
@@ -284,6 +307,7 @@ func renderOnce(stdout, stderr io.Writer, repo, rigBin, fixture, wsFixture, flee
 	st := ui.NewState()
 	st.Tab, st.ASCII, st.Workspace, st.Fleet = tab, ascii, ws, fleetPanel
 	st.WorkspaceE, st.FleetE = wsErr, fleetErr
+	st.Settings, st.SettingsE = settingsPanel, settingsErr
 	switch {
 	case evidence != nil && tab == ui.SessionTab:
 		// the Session screen docks the selected job's evidence instead of opening the drawer

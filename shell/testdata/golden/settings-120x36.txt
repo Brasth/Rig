@@ -1,0 +1,36 @@
+ Rig · my-repo                                                               ! 1 need attention  ● 1 running  slots 2/3 
+  Session   Jobs !1   Queue 2   Workflows 2   Env  [Settings]                                                           
+─ This project ─────────────────────────────────────────────────────────────────────────────────────────────────────────
+ file       .rig/harness.toml                                                                                           
+ state      enabled                                                                                                     
+ parent     codex                                                                                                       
+─ Who does what ────────────────────────────────────────────────────────────────────────────────────────────────────────
+ ● grok                                                                                                                 
+ ● claude                                                                                                               
+ off: codex, cursor, opencode, omp, pi, agy, devin, mimo                                                                
+ Models come from rig pick; the parent's model is chosen in its own CLI.                                                
+─ Routing ──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ mode       smart                                                                                                       
+ engine     local                                                                                                       
+ policy     scored-v1                                                                                                   
+ objective  balanced                                                                                                    
+─ Orchestration ────────────────────────────────────────────────────────────────────────────────────────────────────────
+ mode       adaptive                                                                                                    
+ max nodes  12                                                                                                          
+─ Queue ────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ running    4 at once                                                                                                   
+ per worker 2                                                                                                           
+   grok     1 at once                                                                                                   
+─ Sandbox ──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ provider   devcontainer                                                                                                
+   claude   credentials mounted read-only                                                                               
+   codex    no credentials mounted                                                                                      
+─ Worktrees ────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ mode       per-job                                                                                                     
+ container  per-job                                                                                                     
+─ Tools ────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ mcp        core                                                                                                        
+ computer   off                                                                                                         
+ chat       on (experiment)                                                                                             
+                                                                                                                        
+ Tab pane  j/k scroll  r refresh  read-only: edit .rig/harness.toml  ? help  q quit                                     

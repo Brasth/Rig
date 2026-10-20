@@ -1,5 +1,5 @@
  Rig · my-repo                                                               ! 1 need attention  ● 1 running  slots 2/3 
- [Session]  Jobs !1   Queue 2   Workflows 2   Env                                                                       
+ [Session]  Jobs !1   Queue 2   Workflows 2   Env   Settings                                                            
 ─ Workspace ──────────────│━ Session ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━│─ Jobs 1-7/7 · attention first ─────────
  Loading workspace…       │                                                    │> ! Needs input   Add supertest dev dep 
                           │ p  start the parent CLI for this project here      │    permission: npm i -D supertest      

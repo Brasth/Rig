@@ -42,6 +42,8 @@ type State struct {
 	WorkspaceE   string // why the workspace panel could not load
 	Fleet        *view.Panel
 	FleetE       string
+	Settings     *view.Panel
+	SettingsE    string
 	PaneLines    []string // the Session pane's screen, already styled by the emulator
 	PaneTitle    string
 	PaneFocus    bool
@@ -71,7 +73,7 @@ func NewState() State {
 }
 
 // Tabs are the board tabs in the order the mockup shows them. Logs is a screen under Jobs (key l), not a tab.
-var Tabs = []string{SessionTab, "Jobs", "Queue", "Workflows", EnvTab}
+var Tabs = []string{SessionTab, "Jobs", "Queue", "Workflows", EnvTab, SettingsTab}
 
 // SessionTab is the parent's seat: it hosts one interactive program (the parent CLI, or a shell in the
 // container) on an emulated terminal.
@@ -79,6 +81,9 @@ const SessionTab = "Session"
 
 // EnvTab shows the workspace (container, ports, worktrees, doctor) and the fleet of containers on the engine.
 const EnvTab = "Env"
+
+// SettingsTab shows what the project's configuration makes effective. It is read-only.
+const SettingsTab = "Settings"
 
 // ChatTab is the EXPERIMENT chat with a headless parent; it exists only while the experiment is on.
 const ChatTab = "Chat"
@@ -203,7 +208,7 @@ func frame(v *view.View, st State, w, h int) []string {
 		}
 		return lines[:h]
 	}
-	if st.Tab == EnvTab {
+	if st.Tab == EnvTab || st.Tab == SettingsTab {
 		lines = append(lines, ruleS(st, panelTitle(st), w))
 		lines = append(lines, panelBody(st, w, body)...)
 		lines = append(lines, messageLine(st, w), footerLine(nil, 0, st, w))
@@ -289,7 +294,7 @@ func headerLine(v *view.View, st State, w int) string {
 }
 
 // tabShort are distinct three-letter forms for a narrow tab bar ("Wor" would be both Workflows and Workspace).
-var tabShort = map[string]string{"Jobs": "Job", "Queue": "Que", "Workflows": "Flw", EnvTab: "Env", LogsTab: "Log", ChatTab: "Cht", SessionTab: "Ses"}
+var tabShort = map[string]string{"Jobs": "Job", "Queue": "Que", "Workflows": "Flw", EnvTab: "Env", SettingsTab: "Set", LogsTab: "Log", ChatTab: "Cht", SessionTab: "Ses"}
 
 func tabLine(v *view.View, st State, w int) string {
 	if line := tabLineWith(v, st, false); lipgloss.Width(line) <= w {
@@ -322,6 +327,9 @@ func tabLineWith(v *view.View, st State, short bool) string {
 					label += fmt.Sprintf(" %d", t.Count)
 				}
 			}
+		}
+		if name == SettingsTab && st.Settings != nil && st.Settings.Attention {
+			label += " !"
 		}
 		if name == EnvTab && ((st.Workspace != nil && st.Workspace.Attention) || (st.Fleet != nil && st.Fleet.Attention)) {
 			label += " !"
@@ -591,6 +599,9 @@ func footerLine(rows []view.Row, sel int, st State, w int) string {
 			keys = []string{"Tab pane", "j/k scroll", "R recover", "r refresh", "? help", "q quit"}
 		}
 	}
+	if st.Tab == SettingsTab {
+		keys = []string{"Tab pane", "j/k scroll", "r refresh", "read-only: edit .rig/harness.toml", "? help", "q quit"}
+	}
 	if st.Tab == LogsTab {
 		keys = []string{"Esc back to jobs", "k/j scroll", "G follow", "s shell", "r refresh", "q quit"}
 	}
@@ -820,14 +831,23 @@ func envSections(st State) *[]view.Section {
 // panelTitle is the first section's title: it labels the rule under the tab bar, so that section
 // does not repeat it.
 func panelTitle(st State) string {
+	if st.Tab == SettingsTab {
+		if st.Settings != nil && len(st.Settings.Sections) > 0 {
+			return sanitize(st.Settings.Sections[0].Title)
+		}
+		return SettingsTab
+	}
 	if sections := envSections(st); sections != nil && len(*sections) > 0 {
 		return sanitize((*sections)[0].Title)
 	}
 	return EnvTab
 }
 
-// panelBody renders the Env tab.
+// panelBody renders the Env or Settings tab.
 func panelBody(st State, w, h int) []string {
+	if st.Tab == SettingsTab {
+		return sectionLines(st.Settings.SectionsOrNil(), st.SettingsE, SettingsTab, true, st, w, h)
+	}
 	return sectionLines(envSections(st), "", EnvTab, true, st, w, h)
 }
 

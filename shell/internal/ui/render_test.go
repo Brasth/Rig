@@ -42,6 +42,19 @@ func loadWorkspace(t *testing.T) *view.Workspace {
 	return &reply.View
 }
 
+func loadSettings(t *testing.T) *view.Panel {
+	t.Helper()
+	raw, err := os.ReadFile("../../testdata/settings.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var reply view.SettingsReply
+	if err := json.Unmarshal(raw, &reply); err != nil {
+		t.Fatal(err)
+	}
+	return &reply.View
+}
+
 func loadFleet(t *testing.T) *view.Panel {
 	t.Helper()
 	raw, err := os.ReadFile("../../testdata/fleet.json")
@@ -189,6 +202,10 @@ func TestGoldenFrames(t *testing.T) {
 			s.Mode, s.Prompt = ModeConfirm, "Stop job-7f2 Add supertest dev dep?"
 		}},
 		{"session-100x30-narrow", 100, 30, SessionTab, func(s *State) { s.Workspace = loadWorkspace(t) }},
+		{"settings-120x36", 120, 36, SettingsTab, func(s *State) { s.Settings = loadSettings(t) }},
+		{"settings-60x14-ascii", 60, 14, SettingsTab, func(s *State) { s.ASCII, s.Settings = true, loadSettings(t) }},
+		{"settings-loading", 80, 12, SettingsTab, nil},
+		{"settings-unavailable", 80, 12, SettingsTab, func(s *State) { s.SettingsE = "connection refused" }},
 		{"workspace-loading", 80, 12, EnvTab, nil},
 		{"workspace-unavailable", 80, 12, EnvTab, func(s *State) { s.WorkspaceE = "dc ls --json failed (2): engine not running" }},
 	}

@@ -1,0 +1,157 @@
+{
+ "view": {
+  "version": 1,
+  "attention": false,
+  "sections": [
+   {
+    "title": "This project",
+    "lines": [
+     {
+      "text": "file       .rig/harness.toml",
+      "tone": ""
+     },
+     {
+      "text": "state      enabled",
+      "tone": ""
+     },
+     {
+      "text": "parent     codex",
+      "tone": ""
+     }
+    ]
+   },
+   {
+    "title": "Who does what",
+    "lines": [
+     {
+      "text": "● grok",
+      "tone": "ok"
+     },
+     {
+      "text": "● claude",
+      "tone": "ok"
+     },
+     {
+      "text": "off: codex, cursor, opencode, omp, pi, agy, devin, mimo",
+      "tone": ""
+     },
+     {
+      "text": "Models come from rig pick; the parent's model is chosen in its own CLI.",
+      "tone": ""
+     }
+    ]
+   },
+   {
+    "title": "Routing",
+    "lines": [
+     {
+      "text": "mode       smart",
+      "tone": ""
+     },
+     {
+      "text": "engine     local",
+      "tone": ""
+     },
+     {
+      "text": "policy     scored-v1",
+      "tone": ""
+     },
+     {
+      "text": "objective  balanced",
+      "tone": ""
+     }
+    ]
+   },
+   {
+    "title": "Orchestration",
+    "lines": [
+     {
+      "text": "mode       adaptive",
+      "tone": ""
+     },
+     {
+      "text": "max nodes  12",
+      "tone": ""
+     }
+    ]
+   },
+   {
+    "title": "Queue",
+    "lines": [
+     {
+      "text": "running    4 at once",
+      "tone": ""
+     },
+     {
+      "text": "per worker 2",
+      "tone": ""
+     },
+     {
+      "text": "  grok     1 at once",
+      "tone": ""
+     }
+    ]
+   },
+   {
+    "title": "Sandbox",
+    "lines": [
+     {
+      "text": "provider   devcontainer",
+      "tone": ""
+     },
+     {
+      "text": "  claude   credentials mounted read-only",
+      "tone": ""
+     },
+     {
+      "text": "  codex    no credentials mounted",
+      "tone": ""
+     }
+    ]
+   },
+   {
+    "title": "Worktrees",
+    "lines": [
+     {
+      "text": "mode       per-job",
+      "tone": ""
+     },
+     {
+      "text": "container  per-job",
+      "tone": ""
+     }
+    ]
+   },
+   {
+    "title": "Tools",
+    "lines": [
+     {
+      "text": "mcp        core",
+      "tone": ""
+     },
+     {
+      "text": "computer   off",
+      "tone": ""
+     },
+     {
+      "text": "chat       on (experiment)",
+      "tone": ""
+     }
+    ]
+   },
+   {
+    "title": "Changing these",
+    "lines": [
+     {
+      "text": "Read-only here. Edit .rig/harness.toml; the board picks it up on refresh.",
+      "tone": ""
+     },
+     {
+      "text": "Machine-wide opt-ins (rig setup) live in ~/.rig/.",
+      "tone": ""
+     }
+    ]
+   }
+  ]
+ }
+}

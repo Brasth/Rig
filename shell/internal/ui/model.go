@@ -22,6 +22,7 @@ type Source interface {
 	Act(method string, params map[string]any, timeout time.Duration) (string, error)
 	Workspace(deep bool, timeout time.Duration) (*view.Workspace, error)
 	Fleet(timeout time.Duration) (*view.Panel, error)
+	Settings(timeout time.Duration) (*view.Panel, error)
 	JobEvidence(id string, timeout time.Duration) (*view.Evidence, error)
 	Recover(confirmID string, timeout time.Duration) (string, error)
 	Log(id string, lines int, timeout time.Duration) (*view.LogReply, error)
@@ -63,6 +64,11 @@ type fleetMsg struct {
 	panel *view.Panel
 	err   error
 	at    time.Time
+}
+
+type settingsMsg struct {
+	panel *view.Panel
+	err   error
 }
 
 type evidenceMsg struct {
@@ -156,6 +162,8 @@ type Model struct {
 	csBusy    bool
 	csLast    time.Time
 	dkBusy    bool
+	stBusy    bool
+	stLast    time.Time
 	dkLast    time.Time
 	pane      Pane
 	paneName  string
@@ -277,6 +285,19 @@ func (m *Model) fetchDock(force bool) tea.Cmd {
 	return func() tea.Msg {
 		ev, err := src.JobEvidence(id, 15*time.Second)
 		return dockMsg{ev: ev, err: err, id: id}
+	}
+}
+
+// fetchSettings loads the settings panel while its tab shows; it is a local read, so the interval is short.
+func (m *Model) fetchSettings(force bool) tea.Cmd {
+	if m.st.Tab != SettingsTab || m.stBusy || (!force && m.now().Sub(m.stLast) < workspaceEvery) {
+		return nil
+	}
+	m.stBusy = true
+	src := m.src
+	return func() tea.Msg {
+		p, err := src.Settings(callTimeout)
+		return settingsMsg{panel: p, err: err}
 	}
 }
 
@@ -514,7 +535,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, waitPane(m.pane)
 	case tickMsg:
-		return m, tea.Batch(m.fetch(), m.fetchWorkspace(false), m.fetchFleet(false), m.fetchLog(false), m.fetchDock(false), m.fetchChatStatus(), m.fetchChat(false), tick())
+		return m, tea.Batch(m.fetch(), m.fetchWorkspace(false), m.fetchFleet(false), m.fetchSettings(false), m.fetchLog(false), m.fetchDock(false), m.fetchChatStatus(), m.fetchChat(false), tick())
 	case chatStatusMsg:
 		m.csBusy, m.csLast = false, m.now()
 		if msg.err != nil || msg.status == nil || !msg.status.Enabled {
@@ -554,6 +575,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.chLast = time.Time{}
 		return m, m.fetchChat(true)
+	case settingsMsg:
+		m.stBusy, m.stLast = false, m.now()
+		if msg.err != nil {
+			m.st.SettingsE = msg.err.Error() // keep the last good panel, say why it is stale
+			return m, nil
+		}
+		m.st.Settings, m.st.SettingsE = msg.panel, ""
 	case dockMsg:
 		m.dkBusy, m.dkLast = false, m.now()
 		if msg.id != m.st.DockID {
@@ -823,7 +851,7 @@ func (m *Model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, m.askRecover()
 	case "r":
 		m.st.Message = "refreshing"
-		cmds := []tea.Cmd{m.fetch(), m.fetchWorkspace(true), m.fetchFleet(true), m.fetchLog(true)}
+		cmds := []tea.Cmd{m.fetch(), m.fetchWorkspace(true), m.fetchFleet(true), m.fetchSettings(true), m.fetchLog(true)}
 		if m.st.EvidenceOpen {
 			cmds = append(cmds, m.fetchEvidence(m.st.EvidenceID))
 		}
@@ -862,7 +890,7 @@ func (m *Model) goTab(name string) tea.Cmd {
 	m.st.Tab = name
 	m.st.DetailOpen, m.st.DetailOff, m.st.Message = false, 0, ""
 	m.st.EvidenceOpen = false
-	return tea.Batch(m.fetchWorkspace(true), m.fetchFleet(true), m.fetchLog(true), m.fetchDock(true), m.fetchChat(true))
+	return tea.Batch(m.fetchWorkspace(true), m.fetchFleet(true), m.fetchSettings(true), m.fetchLog(true), m.fetchDock(true), m.fetchChat(true))
 }
 
 func (m *Model) move(delta int) {
@@ -883,7 +911,7 @@ func (m *Model) move(delta int) {
 
 // scrollsPanel is true when j/k scroll a panel instead of moving a list selection.
 func (m *Model) scrollsPanel() bool {
-	return m.st.EvidenceOpen || m.st.Tab == EnvTab
+	return m.st.EvidenceOpen || m.st.Tab == EnvTab || m.st.Tab == SettingsTab
 }
 
 // askRecover confirms dc-cli's proposed fix. Only a plan the server marked safe is offered; anything

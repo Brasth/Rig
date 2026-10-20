@@ -1,5 +1,5 @@
  Rig · my-repo · devcontainer a3f9c1                                         ! 1 need attention  ● 1 running  slots 2/3 
- [Session]  Jobs !1   Queue 2   Workflows 2   Env !                                                                     
+ [Session]  Jobs !1   Queue 2   Workflows 2   Env !   Settings                                                          
 ─ Workspace ──────────────│━ Session › codex · running (Enter to type) ━━━━━━━━│─ Jobs 1-7/7 · attention first ─────────
  kind     devcontainer    │> Fix the failing auth tests                        │> ! Needs input   Add supertest dev dep 
  override none            │                                                    │    permission: npm i -D supertest      

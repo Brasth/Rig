@@ -1,5 +1,5 @@
  Rig · my-repo   ! 1 need attention  ● 1 running  slots 2/3 
-  Session   Jobs !1   Queue 2   Workflows 2   Env  [Chat]   
+  Ses   Job !1   Que 2   Flw 2   Env   Set  [Chat]          
 ─ Chat (experiment) › c-1a2b3c4d · claude · running ────────
  you › a question long enough to need wrapping at this      
        narrow width of pane                                 

@@ -59,7 +59,7 @@ func TestOnceFromFixture(t *testing.T) {
 func TestOnceRejectsBadArguments(t *testing.T) {
 	for _, args := range [][]string{
 		{"--once", "--fixture", "../../testdata/snapshot.json", "--size", "nope"},
-		{"--once", "--fixture", "../../testdata/snapshot.json", "--tab", "Settings"},
+		{"--once", "--fixture", "../../testdata/snapshot.json", "--tab", "Nowhere"},
 		{"--once", "--fixture", "/no/such/file.json"},
 	} {
 		var out, errb bytes.Buffer

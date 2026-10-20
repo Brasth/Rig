@@ -70,6 +70,7 @@ LOCAL_METHODS = {
     "env.shell": (False, "The dc exec --no-start command for an interactive shell in a job's container, or why there is none (params: id)"),
     "job.evidence": (False, "Evidence drawer for one job: where it ran, change, contract, checks, ports (params: id)"),
     "fleet.status": (False, "Fleet panel: workspace containers on the engine with observed CPU and memory, ready to render"),
+    "settings.view": (False, "Settings tab: what this repository's .rig/harness.toml makes effective, ready to render and read-only"),
     "env.recovery": (False, "The one next step dc-cli proposes for an environment fault, and whether Rig would apply it"),
     "env.recover": (True, "Apply the confirmed environment recovery step once, if it is safe (params: confirm_id)"),
     "events.list": (False, "Notices for a companion session: approvals, finished work, verification, stop progress"),
@@ -171,7 +172,7 @@ class Api:
             return self._board_snapshot(request_id, params)
         if method == "workspace.status":
             return self._workspace(request_id, params)
-        if method in ("job.evidence", "fleet.status", "env.recovery", "env.recover", "log.follow", "env.shell", "shell.parent",
+        if method in ("job.evidence", "fleet.status", "settings.view", "env.recovery", "env.recover", "log.follow", "env.shell", "shell.parent",
                       "chat.status", "chat.transcript", "chat.send", "chat.cancel"):
             return self._environment(request_id, method, params)
         if method in ("ui.request", "events.list", "events.ack"):
@@ -296,6 +297,9 @@ def _environment(self, request_id, method, params):
             import fleet
             data = fleet.facts(self.repo)
             result = {"facts": data, "view": fleet.view(data)}
+        elif method == "settings.view":
+            import settings_view
+            result = {"view": settings_view.view(self.repo)}
         elif method == "env.recovery":
             import env_recovery
             result = env_recovery.plan(self.repo)

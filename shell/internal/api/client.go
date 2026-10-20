@@ -139,6 +139,15 @@ func (c *Client) Fleet(timeout time.Duration) (*view.Panel, error) {
 	return &reply.View, nil
 }
 
+// Settings fetches the read-only settings panel.
+func (c *Client) Settings(timeout time.Duration) (*view.Panel, error) {
+	var reply view.SettingsReply
+	if err := c.Call("settings.view", nil, timeout, &reply); err != nil {
+		return nil, err
+	}
+	return &reply.View, nil
+}
+
 // JobEvidence fetches the evidence drawer for one job.
 func (c *Client) JobEvidence(id string, timeout time.Duration) (*view.Evidence, error) {
 	var ev view.Evidence

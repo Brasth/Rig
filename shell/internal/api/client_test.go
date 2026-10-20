@@ -157,3 +157,17 @@ func TestWorkspaceSendsDeepFlagAndChecksVersion(t *testing.T) {
 		t.Fatal("unknown workspace view version must be refused")
 	}
 }
+
+func TestSettingsAsksForTheReadOnlyViewAndDecodesIt(t *testing.T) {
+	fs := serve(t, func(string) string {
+		return `{"jsonrpc":"2.0","id":1,"rig_api":1,"result":{"view":{"version":1,"attention":true,"sections":[{"title":"Sandbox","lines":[{"text":"! unknown provider","tone":"attention"}]}]}}}`
+	})
+	panel, err := fs.client.Settings(time.Second)
+	if err != nil || !panel.Attention || panel.Sections[0].Title != "Sandbox" || panel.Sections[0].Lines[0].Tone != "attention" {
+		t.Fatalf("got %+v %v", panel, err)
+	}
+	req := <-fs.requests
+	if req["method"] != "settings.view" {
+		t.Fatalf("bad request %v", req)
+	}
+}
