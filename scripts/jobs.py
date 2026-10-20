@@ -2208,7 +2208,8 @@ def _allocate_job_id(job_id: str) -> str:
 
 
 def _validate_worker(worker: str) -> str:
-    if worker not in JOB_WORKERS:
+    import adapters
+    if worker not in JOB_WORKERS and worker not in adapters.names():
         raise SystemExit(
             "rig job: worker must be grok|codex|claude|cursor|opencode|omp|pi|agy|devin|parent"
         )

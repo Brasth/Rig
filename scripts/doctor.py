@@ -257,6 +257,32 @@ def worktree_check(repo: Path, config: dict) -> dict | None:
     return check("worktrees", "ready", f"per-job worktrees (git {label}); containers: {state['container']}", required=False)
 
 
+def chat_check(repo: Path) -> dict | None:
+    """Reported only while the headless-parent chat experiment is on."""
+    import rig_chat
+    if not rig_chat.enabled(repo):
+        return None
+    state = rig_chat.status(repo)
+    available = ", ".join(state["available"]) or "none on PATH"
+    return check("chat-experiment", "ready" if state["available"] else "missing",
+                 f"EXPERIMENT: headless parent chat (parents it can drive: {', '.join(state['parents'])}; on PATH: {available}). "
+                 "Event formats are not verified against a real parent CLI", required=False)
+
+
+def adapter_check() -> dict | None:
+    """Reported only when adapter packages exist or one is broken."""
+    import adapters
+    found, problems = adapters.discover()
+    if problems:
+        text = "; ".join(f"{Path(path).name}: {reason}" for path, reason in sorted(problems.items()))
+        return check("adapters", "failed", f"{len(problems)} adapter package(s) are invalid: {text}", required=False,
+                     problems=problems)
+    if not found:
+        return None
+    return check("adapters", "ready", "adapter workers: " + ", ".join(sorted(found)) + " (enable under [workers]; chosen explicitly, never by smart routing)",
+                 required=False)
+
+
 def shell_check() -> dict:
     """Optional: the Go board binary and whether it matches the installed core."""
     import rig_shell
@@ -389,6 +415,12 @@ def build_report(repo: Path, *, task: str = "coding", parent: str = "", model: s
     worktree_row = worktree_check(repo, config)
     if worktree_row:
         checks.append(worktree_row)
+    adapter_row = adapter_check()
+    if adapter_row:
+        checks.append(adapter_row)
+    chat_row = chat_check(repo)
+    if chat_row:
+        checks.append(chat_row)
     checks.append(shell_check())
     checks.append(check("scripts", "ready" if script_ready else "missing", "Rig runtime scripts present" if script_ready else "Rig runtime scripts missing"))
     entry = parent_entry(selected, repo)

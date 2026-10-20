@@ -1,0 +1,8 @@
+{
+  "schema": 1,
+  "name": "env-plain",
+  "command": ["{binary}", "--workdir", "{work}", "--task", "{brief_text}"],
+  "mcp": {"mode": "env", "env": {"ENV_PLAIN_MCP_CONFIG": "{mcp_path}"}},
+  "permissions": {"host": ["--non-interactive"]},
+  "output": {"decoder": "plain"}
+}

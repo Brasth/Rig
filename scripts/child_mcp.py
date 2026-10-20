@@ -330,7 +330,8 @@ def _pi_adapter_ready(mcp_path: Path) -> bool:
 def worker_binary(worker: str) -> str:
     name = (worker or "").strip()
     if name != "cursor":
-        return shutil.which(name) or ""
+        import harness
+        return shutil.which(harness.adapter_binary(name)) or ""
     path = shutil.which("cursor-agent")
     if path:
         return path
@@ -376,6 +377,11 @@ def worker_mcp_ready(worker: str, *, home: Path | None = None, repo: Path | None
         return (not reason), reason
     if not name or name == "parent":
         return False, "parent work does not use child MCP"
+    import adapters
+    adapter = adapters.get(name)
+    if adapter is not None:
+        # An adapter's MCP is delivered through its manifest (a flag or an environment path naming the job file).
+        return (True, "") if worker_binary(name) else (False, f"binary '{adapter['binary']}' not on PATH")
     if name not in SCOPED_WORKERS:
         return False, f"{name} has no isolated job-scoped MCP"
     if not worker_binary(name):
@@ -490,7 +496,12 @@ def write_job_mcp(job_dir: Path, job_id: str, repo: Path, worker: str) -> dict:
     argv: list[str] = []
     isolation = "none"
     name = (worker or "").strip()
-    if name == "claude":
+    import adapters
+    adapter = adapters.get(name)
+    if adapter is not None:
+        env.update(adapters.mcp_env(adapter, path))
+        isolation = "adapter-" + adapter["mcp"]["mode"]  # flag mode: the manifest's argv is spliced into the command
+    elif name == "claude":
         argv = ["--mcp-config", str(path), "--strict-mcp-config"]
         isolation = "strict-mcp-config"
     elif name == "codex":

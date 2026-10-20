@@ -1,5 +1,5 @@
  Rig · my-repo                                                               ! 1 need attention  ● 1 running  slots 2/3 
- [Jobs !1]  Queue 2   Workflows 2   Workspace   Fleet                                                                   
+ [Jobs !1]  Queue 2   Workflows 2   Workspace   Fleet   Logs                                                            
 ─ Jobs 1-7/7 ─────────────────────────────────────────────────┬─────────────────────────────────────────────────────────
   ! Needs input   Add supertest dev dep                       │ ● Running                                               
     permission: npm i -D supertest                            │ Worker process is executing.                            
@@ -33,4 +33,4 @@
                                                               │                                                         
                                                               │                                                         
                                                                                                                         
- Tab pane  Enter details  v evidence  e enqueue  x stop  r refresh  q quit                                              
+ Tab pane  Enter details  v evidence  s shell  e enqueue  x stop  r refresh  q quit                                     

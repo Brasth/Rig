@@ -1,5 +1,5 @@
  Rig · my-repo   ! 1 need attention  ● 1 running  slots 2/3 
- [Jobs !1]  Queue 2   Workflows 2   Workspace   Fleet       
+ [Jobs !1]  Que 2   Flw 2   Wks   Flt   Log                 
 ─ Jobs 1-7/7 ───────────────────────────────────────────────
 > ! Needs input   Add supertest dev dep                     
     permission: npm i -D supertest                          
@@ -17,4 +17,4 @@
     grok · Stop confirmed; the worker is no longer running. 
                                                             
                                                             
- a allow  d deny  Tab pane  Enter details  v evidence  e en…
+ a allow  d deny  Tab pane  Enter details  v evidence  s sh…

@@ -1,0 +1,12 @@
+{
+  "schema": 1,
+  "name": "echo-agent",
+  "binary": "echo-agent",
+  "provider": "example",
+  "command": ["{binary}", "run", "--cwd", "{work}", "--prompt-file", "{brief_file}", "{model_args}", "{mcp}", "{permissions}"],
+  "model_args": ["--model", "{model}"],
+  "mcp": {"mode": "flag", "argv": ["--mcp-config", "{mcp_path}"]},
+  "permissions": {"host": ["--auto-approve"], "container": ["--auto-approve"]},
+  "container": {"supported": true, "credential_paths": [".echo-agent"]},
+  "output": {"decoder": "jsonl", "result_field": "result"}
+}

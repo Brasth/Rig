@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"os/exec"
 	"strings"
 	"time"
 
@@ -22,11 +23,21 @@ type Source interface {
 	Fleet(timeout time.Duration) (*view.Panel, error)
 	JobEvidence(id string, timeout time.Duration) (*view.Evidence, error)
 	Recover(confirmID string, timeout time.Duration) (string, error)
+	Log(id string, lines int, timeout time.Duration) (*view.LogReply, error)
+	Shell(id string, timeout time.Duration) (*view.ShellPlan, error)
+	ChatStatus(timeout time.Duration) (*view.ChatStatus, error)
+	ChatTranscript(session string, tail int, timeout time.Duration) (*view.ChatTranscript, error)
+	ChatSend(message, session string, timeout time.Duration) (*view.ChatStarted, error)
+	ChatCancel(session string, timeout time.Duration) error
 }
 
 const (
 	pollEvery      = time.Second
 	workspaceEvery = 5 * time.Second
+	logEvery       = 2 * time.Second
+	chatEvery      = time.Second
+	chatStatEvery  = 10 * time.Second
+	logFetchRows   = 200
 	callTimeout    = 5 * time.Second
 	snapshotRows   = 200
 	finishedLabels = "Verified Unverified Failed Cancelled"
@@ -58,6 +69,36 @@ type evidenceMsg struct {
 	id  string
 }
 
+type logMsg struct {
+	log *view.LogReply
+	err error
+	at  time.Time
+}
+
+type chatStatusMsg struct {
+	status *view.ChatStatus
+	err    error
+}
+
+type chatMsg struct {
+	chat *view.ChatTranscript
+	err  error
+}
+
+type chatSentMsg struct {
+	started *view.ChatStarted
+	err     error
+}
+
+type chatCancelMsg struct{ err error }
+
+type shellPlanMsg struct {
+	plan *view.ShellPlan
+	err  error
+}
+
+type shellDoneMsg struct{ err error }
+
 type recoverMsg struct {
 	text string
 	err  error
@@ -80,6 +121,16 @@ type Model struct {
 	wsLast   time.Time
 	flBusy   bool
 	flLast   time.Time
+	lgBusy   bool
+	lgLast   time.Time
+	chBusy   bool
+	chLast   time.Time
+	csBusy   bool
+	csLast   time.Time
+	chatID   string // the session the Chat tab follows; empty until one exists
+	inputFor string // "chat" while the input line is a chat message, else enqueue
+	// exec hands the terminal to a command and returns when it exits; tests replace it.
+	exec     func(argv []string, done func(error) tea.Msg) tea.Cmd
 	lastOK   time.Time
 	now      func() time.Time
 	newKey   func() string
@@ -93,7 +144,12 @@ type Model struct {
 func NewModel(src Source, ascii bool) *Model {
 	st := NewState()
 	st.Loading, st.ASCII, st.Styled = true, ascii, true
-	return &Model{src: src, st: st, w: 120, h: 36, now: time.Now, newKey: randomKey, selID: map[string]string{}}
+	return &Model{src: src, st: st, w: 120, h: 36, now: time.Now, newKey: randomKey, selID: map[string]string{}, exec: execProcess}
+}
+
+func execProcess(argv []string, done func(error) tea.Msg) tea.Cmd {
+	cmd := exec.Command(argv[0], argv[1:]...)
+	return tea.ExecProcess(cmd, func(err error) tea.Msg { return done(err) })
 }
 
 func randomKey() string {
@@ -143,6 +199,69 @@ func (m *Model) fetchFleet(force bool) tea.Cmd {
 	return func() tea.Msg {
 		p, err := src.Fleet(20 * time.Second)
 		return fleetMsg{panel: p, err: err, at: time.Now()}
+	}
+}
+
+// selectedJobID is the Jobs-tab selection: what the Logs tab follows and what a shell targets.
+func (m *Model) selectedJobID() string {
+	if m.view == nil {
+		return ""
+	}
+	rows := m.view.Rows("Jobs")
+	if len(rows) == 0 {
+		return ""
+	}
+	return rows[clampSel(m.st.Selected["Jobs"], len(rows))].ID
+}
+
+// fetchLog follows the selected job's log, only while the Logs tab is showing.
+func (m *Model) fetchLog(force bool) tea.Cmd {
+	if m.st.Tab != LogsTab || m.lgBusy || (!force && m.now().Sub(m.lgLast) < logEvery) {
+		return nil
+	}
+	m.lgBusy = true
+	src, id := m.src, m.selectedJobID()
+	return func() tea.Msg {
+		l, err := src.Log(id, logFetchRows, callTimeout)
+		return logMsg{log: l, err: err, at: time.Now()}
+	}
+}
+
+// fetchChatStatus learns whether the experiment is on (and which session is newest). Cheap, and the only call a
+// board makes for the experiment while its tab is not showing.
+func (m *Model) fetchChatStatus() tea.Cmd {
+	if m.csBusy || m.now().Sub(m.csLast) < chatStatEvery {
+		return nil
+	}
+	m.csBusy = true
+	src := m.src
+	return func() tea.Msg {
+		s, err := src.ChatStatus(callTimeout)
+		return chatStatusMsg{status: s, err: err}
+	}
+}
+
+func (m *Model) fetchChat(force bool) tea.Cmd {
+	if m.st.Tab != ChatTab || m.chBusy || m.chatID == "" || (!force && m.now().Sub(m.chLast) < chatEvery) {
+		return nil
+	}
+	m.chBusy = true
+	src, id := m.src, m.chatID
+	return func() tea.Msg {
+		c, err := src.ChatTranscript(id, 300, callTimeout)
+		return chatMsg{chat: c, err: err}
+	}
+}
+
+func (m *Model) askShell() tea.Cmd {
+	id := ""
+	if m.st.Tab == "Jobs" {
+		id = m.selectedJobID()
+	}
+	src := m.src
+	return func() tea.Msg {
+		plan, err := src.Shell(id, callTimeout)
+		return shellPlanMsg{plan: plan, err: err}
 	}
 }
 
@@ -206,7 +325,69 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.w, m.h = msg.Width, msg.Height
 	case tickMsg:
-		return m, tea.Batch(m.fetch(), m.fetchWorkspace(false), m.fetchFleet(false), tick())
+		return m, tea.Batch(m.fetch(), m.fetchWorkspace(false), m.fetchFleet(false), m.fetchLog(false), m.fetchChatStatus(), m.fetchChat(false), tick())
+	case chatStatusMsg:
+		m.csBusy, m.csLast = false, m.now()
+		if msg.err != nil || msg.status == nil || !msg.status.Enabled {
+			m.st.ChatOn = false // off, or a server that predates the experiment: no tab
+			if m.st.Tab == ChatTab {
+				m.st.Tab = "Jobs"
+			}
+			return m, nil
+		}
+		m.st.ChatOn = true
+		if m.chatID == "" && len(msg.status.Sessions) > 0 {
+			m.chatID = msg.status.Sessions[0].ID
+		}
+	case chatMsg:
+		m.chBusy, m.chLast = false, m.now()
+		if msg.err != nil {
+			m.st.ChatE = msg.err.Error()
+			return m, nil
+		}
+		m.st.Chat, m.st.ChatE = msg.chat, ""
+	case chatSentMsg:
+		if msg.err != nil {
+			m.st.InputLabel, m.inputFor = "chat", "chat"
+			m.st.Mode = ModeInput // keep the draft, as a failed enqueue does
+			m.st.Message = "Chat send failed: " + msg.err.Error() + "; draft retained"
+			return m, nil
+		}
+		m.chatID, m.st.Prompt, m.st.ChatUp = msg.started.Session, "", 0
+		m.st.Message = "sent to " + clean(msg.started.Parent)
+		m.chLast = time.Time{}
+		return m, m.fetchChat(true)
+	case chatCancelMsg:
+		if msg.err != nil {
+			m.st.Message = "Stop failed: " + msg.err.Error()
+		} else {
+			m.st.Message = "turn stopped"
+		}
+		m.chLast = time.Time{}
+		return m, m.fetchChat(true)
+	case logMsg:
+		m.lgBusy, m.lgLast = false, m.now()
+		if msg.err != nil {
+			m.st.LogE = msg.err.Error()
+			return m, nil
+		}
+		m.st.Log, m.st.LogE = msg.log, ""
+	case shellPlanMsg:
+		switch {
+		case msg.err != nil:
+			m.st.Message = "Shell failed: " + msg.err.Error()
+		case !msg.plan.Available || len(msg.plan.Argv) == 0:
+			m.st.Message = "No shell: " + clean(msg.plan.Reason)
+		default:
+			m.st.Message = "shell in " + clean(msg.plan.Workspace) + " (exit to return)"
+			return m, m.exec(msg.plan.Argv, func(err error) tea.Msg { return shellDoneMsg{err: err} })
+		}
+	case shellDoneMsg:
+		m.st.Message = "shell closed"
+		if msg.err != nil {
+			m.st.Message = "shell closed: " + msg.err.Error()
+		}
+		return m, tea.Batch(m.fetch(), m.fetchWorkspace(true))
 	case fleetMsg:
 		m.flBusy, m.flLast = false, m.now()
 		if msg.err != nil {
@@ -297,6 +478,10 @@ func (m *Model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.st.Message = "Press e before pasting queue text"
 		return m, nil
 	}
+	if k.String() == "c" && m.st.Tab == ChatTab {
+		m.st.Mode, m.st.InputLabel, m.inputFor, m.st.Message = ModeInput, "chat", "chat", ""
+		return m, nil
+	}
 	if m.view == nil {
 		if k.String() == "q" {
 			return m, tea.Quit
@@ -309,33 +494,67 @@ func (m *Model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "tab", "shift+tab":
 		step := 1
 		if k.String() == "shift+tab" {
-			step = len(Tabs) - 1
+			step = len(TabList(m.st)) - 1
 		}
-		for i, t := range Tabs {
+		tabs := TabList(m.st)
+		for i, t := range tabs {
 			if t == m.st.Tab {
-				m.st.Tab = Tabs[(i+step)%len(Tabs)]
+				m.st.Tab = tabs[(i+step)%len(tabs)]
 				break
 			}
 		}
 		m.st.DetailOpen, m.st.DetailOff, m.st.Message = false, 0, ""
 		m.st.EvidenceOpen = false
-		return m, tea.Batch(m.fetchWorkspace(true), m.fetchFleet(true))
+		return m, tea.Batch(m.fetchWorkspace(true), m.fetchFleet(true), m.fetchLog(true), m.fetchChat(true))
 	case "j", "down":
+		if m.st.Tab == ChatTab {
+			m.st.ChatUp = max(0, m.st.ChatUp-1)
+			return m, nil
+		}
+		if m.st.Tab == LogsTab && !m.st.EvidenceOpen {
+			m.st.LogUp = max(0, m.st.LogUp-1)
+			return m, nil
+		}
 		if m.scrollsPanel() {
 			m.st.DetailOff++
 			return m, nil
 		}
 		m.move(1)
 	case "k", "up":
+		if m.st.Tab == ChatTab {
+			m.st.ChatUp++
+			return m, nil
+		}
+		if m.st.Tab == LogsTab && !m.st.EvidenceOpen {
+			m.st.LogUp++
+			return m, nil
+		}
 		if m.scrollsPanel() {
 			m.st.DetailOff = max(0, m.st.DetailOff-1)
 			return m, nil
 		}
 		m.move(-1)
 	case "pgdown":
+		if m.st.Tab == LogsTab {
+			m.st.LogUp = max(0, m.st.LogUp-8)
+			return m, nil
+		}
 		m.st.DetailOff += 8
 	case "pgup":
+		if m.st.Tab == LogsTab {
+			m.st.LogUp += 8
+			return m, nil
+		}
 		m.st.DetailOff = max(0, m.st.DetailOff-8)
+	case "G":
+		m.st.LogUp, m.st.ChatUp = 0, 0
+	case "N":
+		if m.st.Tab == ChatTab {
+			m.chatID, m.st.Chat, m.st.ChatUp = "", nil, 0
+			m.st.Message = "next message starts a new session"
+		}
+	case "s":
+		return m, m.askShell()
 	case "enter":
 		if _, ok := m.selected(); ok {
 			m.st.DetailOpen = !m.st.DetailOpen
@@ -354,7 +573,7 @@ func (m *Model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, m.askRecover()
 	case "r":
 		m.st.Message = "refreshing"
-		cmds := []tea.Cmd{m.fetch(), m.fetchWorkspace(true), m.fetchFleet(true)}
+		cmds := []tea.Cmd{m.fetch(), m.fetchWorkspace(true), m.fetchFleet(true), m.fetchLog(true)}
 		if m.st.EvidenceOpen {
 			cmds = append(cmds, m.fetchEvidence(m.st.EvidenceID))
 		}
@@ -422,6 +641,15 @@ func (m *Model) askRecover() tea.Cmd {
 }
 
 func (m *Model) askStop() tea.Cmd {
+	if m.st.Tab == ChatTab {
+		if m.chatID == "" || m.st.Chat == nil || m.st.Chat.State != "running" {
+			m.st.Message = "no turn is running"
+			return nil
+		}
+		m.pendingX, m.pendingI = "chat.cancel", m.chatID
+		m.st.Mode, m.st.Prompt = ModeConfirm, "Stop the running chat turn "+m.chatID+"?"
+		return nil
+	}
 	row, ok := m.selected()
 	if !ok || (m.st.Tab != "Jobs" && m.st.Tab != "Queue") {
 		return nil
@@ -444,6 +672,11 @@ func (m *Model) confirmKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "y":
 		method, id := m.pendingX, m.pendingI
 		m.st.Mode, m.st.Prompt, m.pendingX, m.pendingI = ModeNormal, "", "", ""
+		if method == "chat.cancel" {
+			m.st.Message = "stopping " + id
+			src := m.src
+			return m, func() tea.Msg { return chatCancelMsg{err: src.ChatCancel(id, callTimeout)} }
+		}
 		if method == "env.recover" {
 			m.st.Message = "recovering: " + id
 			return m, m.recover(id)
@@ -463,13 +696,21 @@ func (m *Model) confirmKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m *Model) inputKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch k.Type {
 	case tea.KeyEsc:
-		m.st.Mode, m.st.Prompt = ModeNormal, ""
+		m.st.Mode, m.st.Prompt, m.st.InputLabel, m.inputFor = ModeNormal, "", "", ""
 	case tea.KeyEnter:
 		text := strings.TrimSpace(m.st.Prompt)
 		if text == "" {
 			return m, nil
 		}
 		m.st.Mode = ModeNormal
+		if m.inputFor == "chat" {
+			m.st.InputLabel, m.inputFor = "", ""
+			src, session := m.src, m.chatID
+			return m, func() tea.Msg {
+				started, err := src.ChatSend(text, session, 10*time.Second)
+				return chatSentMsg{started: started, err: err}
+			}
+		}
 		return m, m.act("queue.add", map[string]any{"text": text, "idempotency_key": m.draftKey}, true)
 	case tea.KeyBackspace:
 		if r := []rune(m.st.Prompt); len(r) > 0 {

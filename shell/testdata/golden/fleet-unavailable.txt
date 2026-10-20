@@ -1,5 +1,5 @@
  Rig · my-repo                       ! 1 need attention  ● 1 running  slots 2/3 
-  Jobs !1   Queue 2   Workflows 2   Workspace  [Fleet]                          
+  Jobs !1   Queue 2   Workflows 2   Workspace  [Fleet]  Logs                    
 ─ Fleet ────────────────────────────────────────────────────────────────────────
  Fleet unavailable: dc ls --all --json failed (1): engine not running           
                                                                                 

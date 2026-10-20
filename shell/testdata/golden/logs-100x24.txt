@@ -1,0 +1,24 @@
+ Rig · my-repo                                           ! 1 need attention  ● 1 running  slots 2/3 
+  Jobs !1   Queue 2   Workflows 2   Workspace   Fleet  [Logs]                                       
+─ Logs › job-7f2 · Running claude ──────────────────────────────────────────────────────────────────
+ starting                                                                                           
+ reading src/middleware/limit.ts                                                                    
+ running npm test -- login                                                                          
+ 12 passing                                                                                         
+ verify next: lint                                                                                  
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+ Tab pane  k/j scroll  G follow  s shell  r refresh  q quit                                         

@@ -138,6 +138,31 @@ func TestGoldenFrames(t *testing.T) {
 		{"evidence-unavailable", 80, 12, "Jobs", func(s *State) {
 			s.EvidenceOpen, s.EvidenceID, s.EvidenceE = true, "job-7", "no such job: job-7"
 		}},
+		{"logs-100x24", 100, 24, "Logs", func(s *State) {
+			s.Log = logReply("job-7f2", "starting\nreading src/middleware/limit.ts\nrunning npm test -- login\n12 passing\nverify next: lint")
+		}},
+		{"logs-60x12-back", 60, 12, "Logs", func(s *State) {
+			s.Log = logReply("job-7f2", strings.Repeat("a long line that has to wrap at the edge of a narrow pane\n", 6)+"newest")
+			s.LogUp = 2
+		}},
+		{"logs-loading", 80, 12, "Logs", nil},
+		{"logs-unavailable", 80, 12, "Logs", func(s *State) { s.LogE = "connection refused" }},
+		{"logs-no-jobs", 80, 12, "Logs", func(s *State) { s.Log = &view.LogReply{} }},
+		{"chat-100x24", 100, 24, "Chat", func(s *State) {
+			s.ChatOn = true
+			s.Chat = transcript("idle", ce("user", "what is in a.txt?"), ce("assistant", "Looking at it."),
+				ce("tool", "Read /repo/a.txt"), ce("assistant", "It says one.\nNothing else is in the file."),
+				ce("user", "thanks"), ce("error", "the parent exited with status 3: not logged in"))
+		}},
+		{"chat-60x12-running", 60, 12, "Chat", func(s *State) {
+			s.ChatOn = true
+			s.Chat = transcript("running", ce("user", "a question long enough to need wrapping at this narrow width of pane"), ce("tool", "Bash ls"))
+		}},
+		{"chat-empty", 80, 12, "Chat", func(s *State) { s.ChatOn = true }},
+		{"chat-unavailable", 80, 12, "Chat", func(s *State) { s.ChatOn, s.ChatE = true, "no such chat session: c-1a2b3c4d" }},
+		{"chat-input", 80, 12, "Chat", func(s *State) {
+			s.ChatOn, s.Mode, s.InputLabel, s.Prompt = true, ModeInput, "chat", "summarise the open jobs"
+		}},
 		{"workspace-loading", 80, 12, "Workspace", nil},
 		{"workspace-unavailable", 80, 12, "Workspace", func(s *State) { s.WorkspaceE = "dc ls --json failed (2): engine not running" }},
 	}

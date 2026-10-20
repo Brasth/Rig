@@ -331,7 +331,19 @@ container and sourced by a wrapper).
 - Exit check (canvas): two writer nodes touching the same files run at once
   and merge after acceptance.
 
-### Phase 4 · Native panes, platform (size L)
+### Phase 4 · Native panes, platform (size L) · BUILT 2026-10-20, verified with stand-in CLIs
+
+> **Delivered** (design note: [261020-phase-4-design.md](261020-phase-4-design.md)): 4.1 the board without tmux (Logs tab, `s` shell through `dc exec --no-start`, `rig shell --no-tmux`); 4.2 adapter packages and `rig adapters check`; 4.3 `rig web`, a read-only board; 4.4 the headless-parent chat experiment; 4.5 the decision to keep `bin/rig` in bash ([record](261020-bin-rig-dispatch-decision.md)). Exit check: the board runs without tmux for plain-text streams (real binary driven in a terminal with no tmux layout, and `rig shell --no-tmux` started with tmux absent from `PATH`); a new worker ships as an adapter directory alone and passes the conformance suite, including a live job with a real MCP handshake and a cancel through the real `run-worker.sh`.
+>
+> **Verified:** headless Chromium loads the web board (cookie hand-off, fetches, DOM, a markup-injection attempt through job text); the real shell binary over the real API shows the Logs tab, hands the terminal to a shell and back, and renders and sends a chat turn; adapters through the real launcher in host and container mode (fake `dc`). **Not verified:** any real worker or parent CLI honouring an adapter manifest or the chat stream formats (no real CLI or credentials available).
+>
+> **Deviations**
+> - **Built-in workers did not move to manifests, so `run-worker.sh` did not shrink.** Porting ten workers' launch code to data would risk every worker's byte-identical argv for no user benefit; the launcher gained one generic branch instead, and adapters are for new workers. Adapter workers are chosen explicitly: no smart routing, no model catalog, no resume.
+> - **No terminal emulator.** The parent CLI is not embedded in a pane without tmux; the board, logs and a shell cover plain-text streams. The tmux layout is unchanged.
+> - **The web board cannot send chat messages.** The plan had a send box; read-only is the web board's guarantee, so sending stays in the terminal board and `rig chat`.
+> - **`bin/rig` stays bash** (measured: the dispatcher is not where time goes).
+> - **An example adapter ships under `examples/adapters/`, not `adapters/`,** so a fake worker is never discovered on a normal install.
+
 
 - Bubble Tea PTY panes for logs, `dc exec` shells and worker output; tmux
   becomes optional; decision on whether `rig-shell` takes over the `rig`

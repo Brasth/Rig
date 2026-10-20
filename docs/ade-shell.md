@@ -7,11 +7,15 @@ An optional terminal layout for working with a parent agent while Rig runs worke
 | Command | What it does |
 | --- | --- |
 | `rig shell` | One tmux window: the parent CLI unchanged in its own pane, the board (`rig-shell`) beside it, and a log pane following the most relevant job |
+| `rig shell --no-tmux` | The board in this terminal with nothing else installed: no tmux, no parent pane. The Logs tab and the `dc exec` shell cover what the tmux log pane and a second terminal did |
 | `rig shell print`, `rig shell kill` | Show the tmux commands it would run, or remove this repository's session |
 | `rig shell build` | Build `rig-shell` from a Rig clone with Go 1.24+ (no project needed) |
 | `rig init --sandbox` | Detect the workspace and, for a folder with no devcontainer, store dc-cli's generated config under `.rig/sandbox/override.json`; `--write-devcontainer` turns it into `.devcontainer/devcontainer.json` |
 | `rig env up`, `down`, `status`, `ports [--json]` | Start or stop the workspace container, show what dc-cli reports, and list the ports it forwards |
 | `rig env recover [--apply ID]` | Show the one next step `dc recover` proposes; apply it only by naming the plan id, and only if Rig allows that action (see [Environment recovery](#environment-recovery)) |
+| `rig chat send, show, sessions, cancel, status` | EXPERIMENT, off unless `RIG_EXPERIMENT_CHAT=1` or `[experiments] chat = true`: a headless parent CLI with a Rig-rendered chat ([details](#experiment-headless-parent-chat)) |
+| `rig web [--port N] [--open]` | A read-only board in the browser: the same Jobs, Queue, Workflows, Workspace, Fleet and Logs views, and the evidence drawer, from the same server-built data. 127.0.0.1 only |
+| `rig adapters list`, `validate DIR`, `check DIR` | Add a worker CLI as an adapter package ([reference](adapters.md)) |
 | `rig worktrees status [--json]`, `plan`, `create`, `commit`, `remove --job ID` | Per-job worktrees, below. `status` lists leftover job worktrees and the stopped containers keyed to them, and removes nothing |
 | `rig doctor [--workspace]` | Adds `workspace`, `dc-cli` and `rig-shell` checks. `--workspace` also runs dc-cli's own diagnosis |
 | `rig api serve`, `ensure`, `call`, `methods` | The local API behind all of this ([reference](local-api.md)) |
@@ -20,7 +24,7 @@ An optional terminal layout for working with a parent agent while Rig runs worke
 
 ## The board
 
-Tabs: Jobs, Queue, Workflows, Workspace, Fleet. Every state shows a glyph and a word, and labels, ordering and counts come from the same code as `rig tui`, so the two never disagree.
+Tabs: Jobs, Queue, Workflows, Workspace, Fleet, Logs. Every state shows a glyph and a word, and labels, ordering and counts come from the same code as `rig tui`, so the two never disagree.
 
 | Key | Action |
 | --- | --- |
@@ -29,12 +33,40 @@ Tabs: Jobs, Queue, Workflows, Workspace, Fleet. Every state shows a glyph and a 
 | `Enter`, `Esc` | Open or close details on narrow terminals |
 | `a`, `d` | Allow or deny the selected worker prompt |
 | `v` | Evidence drawer for the selected job (`Esc` closes it) |
+| `s` | Interactive shell in the selected job's container (on the Workspace and Fleet tabs: the repository's), by handing the terminal to `dc exec --no-start`; exit the shell to return |
+| `k`, `j`, `G` | Logs tab: scroll back, forward, and follow the tail again |
 | `x` | Stop the selected job or queue item, after a confirmation |
 | `R` | Workspace tab: apply the proposed environment fix, after a confirmation, when Rig allows it |
 | `e` | Park a task in the queue (`Enter` saves, `Esc` discards; a failed save keeps the draft) |
 | `r`, `q` | Refresh, quit |
 
 Pasted text is never run as commands. `RIG_TUI_ASCII=1`, `RIG_TUI_CJK=1` or a non-UTF locale selects ASCII glyphs. If the API server is not running the board starts one and shows "refresh failed" with the snapshot age if it cannot reach it, keeping the last data on screen.
+
+## Logs and shells without tmux
+
+The **Logs** tab follows the log of the job selected on the Jobs tab (the job worth watching if none is) as plain text, refreshed every two seconds while the tab shows, with terminal escape sequences removed. Scrolling back stops following; `G` follows the tail again.
+
+**`s`** opens a real interactive shell in the job's container. The server decides the command: `dc exec --no-start <workspace>`, where the workspace is the job's own worktree when its container is keyed by that worktree and the repository otherwise. `--no-start` means a shell can enter a container that is running and never start one. If there is no running container, or dc-cli is missing, the board says why and runs nothing. While the shell is open the board is suspended and the terminal is the shell's; exiting returns to the board.
+
+What this deliberately does not do: embed the parent CLI in a pane. That needs a terminal emulator inside the board, which is a large dependency for little gain. Without tmux, run the parent in another terminal. The tmux layout is unchanged.
+
+## Experiment: headless parent chat
+
+**Experimental and off by default.** With `RIG_EXPERIMENT_CHAT=1` (or `[experiments] chat = true`, exactly `true`), the board gains a Chat tab and `rig chat` works. A message runs the parent CLI once in its headless mode (`claude -p --output-format stream-json --verbose`, or `codex exec --json`), a detached runner decodes the event stream into a transcript under `.rig/chat/<session>.jsonl` (directory mode 0700), and the board renders it: your messages, the parent's text, and one short line per tool call. A later message in the same session resumes the parent's own session. The parent is the `parent` in `.rig/harness.toml` when that is `claude` or `codex`; `rig chat send --parent` picks another.
+
+On the Chat tab: `c` writes a message (`Enter` sends, `Esc` discards, a failed send keeps the draft), `N` starts a new session on the next message, `x` stops a running turn after a confirmation, `k`/`j`/`G` scroll. The web board shows the same transcript read-only; it has no way to send.
+
+What it does not do: Rig adds no permission flags, so the parent runs with your own configuration, and in these modes a tool you have not allowed is refused rather than asked about. Messages reach the parent as one argument after `--` (or on the runner's standard input), never through a shell. Only one turn per session runs at a time.
+
+**Not verified:** the event formats are the ones `run-worker.sh` already relies on for these CLIs, but no real parent CLI or credentials are available where this was built, so it was tested against stand-in parents that print recorded-shape streams. `rig doctor` says so while the experiment is on. Treat the first real run as the first verification.
+
+## Web board
+
+`rig web` prints a URL such as `http://127.0.0.1:41603/?token=…` and serves until you stop it (`--idle N` exits after N quiet seconds, `--open` opens your browser). The first visit trades the token for a cookie and drops it from the address bar. The page polls the local API every two seconds while it is visible and shows exactly what the server built: labels, tones, glyphs, ordering, sections. It never works out job state itself. Deep links work: `#Fleet`, `#Jobs/<job id>`, `#Jobs/<job id>/evidence`, `#Logs`.
+
+It cannot change anything. The only methods reachable are `api.ping`, `board.snapshot`, `workspace.status`, `fleet.status`, `job.evidence`, `log.follow` and, with the chat experiment on, `chat.status` and `chat.transcript`, from an allowlist (so a method added to the API later is not reachable until someone lists it), each with validated parameters; every request that is not GET or HEAD gets 405. Hardening: it binds 127.0.0.1 and has no host option; the token is 256 bits and compared in constant time; the `Host` header must be the bound address (DNS rebinding); cross-site requests are refused; there are no CORS headers; the Content-Security-Policy allows scripts and styles only from the page's own origin (no inline code, no external loads); and worker-supplied text only ever enters the page as text, never as HTML.
+
+What it is not: a way to answer a prompt, stop a job or enqueue work. Those stay in the terminal board, where a confirmation can be given at the keyboard that is running the project.
 
 ## Evidence drawer, Fleet and recovery
 

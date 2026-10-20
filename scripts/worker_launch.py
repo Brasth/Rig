@@ -356,8 +356,9 @@ def launch(repo, **kwargs) -> dict:
             model, effort = choice.get("model") or "", choice.get("effort") or ""
         if picked_routing is None and isinstance(choice.get("routing"), dict):
             picked_routing = choice["routing"]
-    if worker not in LAUNCH_WORKERS:
-        raise LaunchError("worker must be grok|codex|claude|cursor|opencode|omp|pi|agy|devin|mimo")
+    import adapters
+    if worker not in LAUNCH_WORKERS and worker not in adapters.names():
+        raise LaunchError("worker must be grok|codex|claude|cursor|opencode|omp|pi|agy|devin|mimo or an installed adapter")
     if worker == "mimo" and rig_route.classify(role, "") in {"hard", "review"}:
         raise LaunchError("MiMo does not support hard or review jobs")
     job_id = _job_id(_require_string(kwargs.get("id"), "id"))

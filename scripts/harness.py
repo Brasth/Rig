@@ -7,7 +7,20 @@ import shutil
 import subprocess
 from pathlib import Path
 
-WORKERS = ("grok", "claude", "codex", "cursor", "opencode", "omp", "pi", "agy", "devin", "mimo")
+BUILTIN_WORKERS = ("grok", "claude", "codex", "cursor", "opencode", "omp", "pi", "agy", "devin", "mimo")
+
+
+def _adapter_workers() -> tuple:
+    """Workers shipped as adapter packages. A broken adapter is skipped here and reported by rig doctor."""
+    try:
+        import adapters
+        return adapters.names()
+    except Exception:
+        return ()
+
+
+# Built-ins first (their order is meaningful), then adapter packages by name.
+WORKERS = BUILTIN_WORKERS + tuple(name for name in _adapter_workers() if name not in BUILTIN_WORKERS)
 PARENTS = frozenset({"grok", "codex", "claude", "cursor", "opencode", "omp", "pi", "agy", "devin"})
 
 # Missing harness file and missing keys are all false so pick cannot
@@ -40,6 +53,7 @@ def parse_harness(path: Path) -> dict:
         "sandbox": {"provider": "host", "error": "", "credentials": {}},
         "mcp": {"profile": "full", "error": ""},
         "worktrees": {"mode": "off", "container": "shared", "error": ""},
+        "experiments": {"chat": False},
         "project": {"state": "uninitialized", "enabled": False, "error": ""},
     }
     if not path.is_file():
@@ -86,6 +100,9 @@ def parse_harness(path: Path) -> dict:
                 out["mcp"] = {"profile": choice, "error": ""}
             else:
                 out["mcp"] = {"profile": "full", "error": f"unknown [mcp] profile {choice!r}"}
+            continue
+        if section == "experiments" and key == "chat":
+            out["experiments"]["chat"] = _toml_exact_true(val)  # exact true only: an experiment is never enabled by a typo
             continue
         if section == "worktrees" and key in {"mode", "container"}:
             choice = val.strip().strip('"\'').lower()
@@ -180,11 +197,23 @@ def computer_use_enabled(repo_or_parsed) -> bool:
     return bool((parsed.get("computer_use") or {}).get("enabled"))
 
 
+def adapter_binary(name: str) -> str:
+    """The executable an adapter package names; any other worker is its own binary name."""
+    if name in BUILTIN_WORKERS:
+        return name
+    try:
+        import adapters
+        manifest = adapters.get(name)
+    except Exception:
+        manifest = None
+    return manifest["binary"] if manifest else name
+
+
 def find_worker_bin(name: str) -> str:
     if name in {"grok", "claude", "codex", "opencode", "omp", "pi", "agy", "devin", "mimo"}:
         return shutil.which(name) or ""
     if name != "cursor":
-        return shutil.which(name) or ""
+        return shutil.which(adapter_binary(name)) or ""
     path = shutil.which("cursor-agent")
     if path:
         return path

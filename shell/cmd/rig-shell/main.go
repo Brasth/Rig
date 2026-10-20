@@ -98,6 +98,30 @@ func (e *ensuringSource) Recover(confirmID string, timeout time.Duration) (strin
 	return e.client.Recover(confirmID, timeout)
 }
 
+func (e *ensuringSource) Log(id string, lines int, timeout time.Duration) (*view.LogReply, error) {
+	return e.client.Log(id, lines, timeout)
+}
+
+func (e *ensuringSource) Shell(id string, timeout time.Duration) (*view.ShellPlan, error) {
+	return e.client.Shell(id, timeout)
+}
+
+func (e *ensuringSource) ChatStatus(timeout time.Duration) (*view.ChatStatus, error) {
+	return e.client.ChatStatus(timeout)
+}
+
+func (e *ensuringSource) ChatTranscript(session string, tail int, timeout time.Duration) (*view.ChatTranscript, error) {
+	return e.client.ChatTranscript(session, tail, timeout)
+}
+
+func (e *ensuringSource) ChatSend(message, session string, timeout time.Duration) (*view.ChatStarted, error) {
+	return e.client.ChatSend(message, session, timeout)
+}
+
+func (e *ensuringSource) ChatCancel(session string, timeout time.Duration) error {
+	return e.client.ChatCancel(session, timeout)
+}
+
 func (e *ensuringSource) Act(method string, params map[string]any, timeout time.Duration) (string, error) {
 	return e.client.Act(method, params, timeout)
 }
@@ -112,7 +136,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	wsFixture := fs.String("workspace-fixture", "", "render the Workspace tab for --once from a workspace.status JSON file")
 	fleetFixture := fs.String("fleet-fixture", "", "render the Fleet tab for --once from a fleet.status JSON file")
 	evFixture := fs.String("evidence-fixture", "", "render the evidence drawer for --once from a job.evidence JSON file")
-	tab := fs.String("tab", "Jobs", "tab to show for --once: Jobs, Queue, Workflows, Workspace or Fleet")
+	tab := fs.String("tab", "Jobs", "tab to show for --once: Jobs, Queue, Workflows, Workspace, Fleet or Logs")
 	ascii := fs.Bool("ascii", false, "use ASCII glyphs")
 	noEnsure := fs.Bool("no-ensure", false, "do not start the API server when it is not running")
 	rigBin := fs.String("rig", os.Getenv("RIG_BIN"), "path to the rig CLI used to start the API server")
@@ -164,7 +188,7 @@ func renderOnce(stdout, stderr io.Writer, repo, rigBin, fixture, wsFixture, flee
 		valid = valid || t == tab
 	}
 	if !valid {
-		fmt.Fprintln(stderr, "rig-shell: --tab must be Jobs, Queue, Workflows, Workspace or Fleet")
+		fmt.Fprintln(stderr, "rig-shell: --tab must be Jobs, Queue, Workflows, Workspace, Fleet or Logs")
 		return 2
 	}
 	var snap *view.Snapshot

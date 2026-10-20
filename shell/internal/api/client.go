@@ -161,6 +161,60 @@ func (c *Client) Recover(confirmID string, timeout time.Duration) (string, error
 	return fmt.Sprintf("applied %s (exit %d): %s", out.Applied, out.Exit, state), nil
 }
 
+// Log fetches the tail of a job's log. An empty id lets the server pick the job worth watching.
+func (c *Client) Log(id string, lines int, timeout time.Duration) (*view.LogReply, error) {
+	var out view.LogReply
+	if err := c.Call("log.follow", map[string]any{"id": id, "lines": lines}, timeout, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// Shell asks the server for the command that opens a shell in a job's container.
+func (c *Client) Shell(id string, timeout time.Duration) (*view.ShellPlan, error) {
+	var out view.ShellPlan
+	if err := c.Call("env.shell", map[string]any{"id": id}, timeout, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// ChatStatus asks whether the chat experiment is on. An older server without it answers with an error.
+func (c *Client) ChatStatus(timeout time.Duration) (*view.ChatStatus, error) {
+	var out view.ChatStatus
+	if err := c.Call("chat.status", nil, timeout, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// ChatTranscript fetches the tail of one chat session.
+func (c *Client) ChatTranscript(session string, tail int, timeout time.Duration) (*view.ChatTranscript, error) {
+	var out view.ChatTranscript
+	if err := c.Call("chat.transcript", map[string]any{"session": session, "tail": tail}, timeout, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// ChatSend starts one turn; an empty session starts a new one. The answer arrives in the transcript.
+func (c *Client) ChatSend(message, session string, timeout time.Duration) (*view.ChatStarted, error) {
+	var out view.ChatStarted
+	params := map[string]any{"message": message}
+	if session != "" {
+		params["session"] = session
+	}
+	if err := c.Call("chat.send", params, timeout, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// ChatCancel stops a session's running turn.
+func (c *Client) ChatCancel(session string, timeout time.Duration) error {
+	return c.Call("chat.cancel", map[string]any{"session": session}, timeout, nil)
+}
+
 type textResult struct {
 	Text string `json:"text"`
 }

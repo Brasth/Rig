@@ -60,6 +60,9 @@ usage: rig <command> [args]
   browser-skill [status|setup|on|off|doctor]
   status
   worktrees list|register [--json]   # discovery/identity only; does not enable execution
+  web [--port N] [--open]                # read-only board in the browser, 127.0.0.1 only
+  chat send|show|sessions|cancel|status  # EXPERIMENT (RIG_EXPERIMENT_CHAT=1): headless parent, Rig-rendered chat
+  adapters list|validate DIR|check DIR   # worker CLIs shipped as adapter packages (docs/adapters.md)
   worktrees status [--json] | plan|create|commit|remove --job ID   # per-job worktrees ([worktrees] mode = "per-job")
   use codex|grok|opencode|omp|pi|agy
   workers grok=on|off claude=on|off codex=on|off cursor=on|off opencode=on|off omp=on|off pi=on|off agy=on|off devin=on|off mimo=on|off
@@ -1581,7 +1584,7 @@ main() {
     on) cmd_project_toggle on; return ;;
     off) cmd_project_toggle off; return ;;
   esac
-  case "$cmd" in init|setup|update|status|doctor|jobs|worktrees|tui|memory|timeline|recovery|task|workflows|workflow|queue|routing|billing|help|-h|--help|"") ;; *) [[ "$cmd:${1:-}" == "shell:build" ]] || project_guard || return ;; esac
+  case "$cmd" in init|setup|update|status|doctor|jobs|worktrees|adapters|tui|memory|timeline|recovery|task|workflows|workflow|queue|routing|billing|help|-h|--help|"") ;; *) [[ "$cmd:${1:-}" == "shell:build" ]] || project_guard || return ;; esac
   case "$cmd" in
     ui) python3 "$(py_script rig_ui.py)" "$@" ;;
     api) python3 "$(py_script local_api.py)" "$@" --repo "$(repo_root)" ;;
@@ -1601,6 +1604,11 @@ main() {
     doctor) cmd_doctor "$@" ;;
     status) cmd_status "$@" ;;
     worktrees) python3 "$(py_script worktrees.py)" "$@" --repo "$PWD" ;;
+    web) python3 "$(py_script web_board.py)" "$@" --repo "$PWD" ;;
+    chat) python3 "$(py_script rig_chat.py)" "$@" ;;
+    adapters)
+      if [[ "${1:-}" == "check" ]]; then shift; python3 "$(py_script adapter_check.py)" "$@"
+      else python3 "$(py_script adapters.py)" "$@"; fi ;;
     use) cmd_use "$@" ;;
     parent) cmd_parent "$@" ;;
     workers) cmd_workers "$@" ;;

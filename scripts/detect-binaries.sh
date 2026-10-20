@@ -40,7 +40,10 @@ find_worker_bin() {
       fi
       ;;
     *)
-      find_bin "$name"
+      # An adapter package may name an executable other than its worker name.
+      local _bin
+      _bin="$(python3 "$(rig_script_dir)/adapters.py" binary --worker "$name" 2>/dev/null || true)"
+      find_bin "${_bin:-$name}"
       ;;
   esac
 }
@@ -107,6 +110,10 @@ parse_harness() {
   HARNESS_WORKER_AGY="false"
   HARNESS_WORKER_DEVIN="false"
   HARNESS_WORKER_MIMO="false"
+  # Adapter workers (adapters/<name>/adapter.json) have no variable of their own; keep their flags by name.
+  local _extra
+  for _extra in ${HARNESS_EXTRA_KEYS:-}; do unset "$_extra"; done
+  HARNESS_EXTRA_KEYS=""
   HARNESS_FILE="$file"
   [[ -f "$file" ]] || return 0
 
@@ -120,7 +127,7 @@ parse_harness() {
       section="${BASH_REMATCH[1]}"
       continue
     fi
-    if [[ "$line" =~ ^[[:space:]]*([A-Za-z0-9_]+)[[:space:]]*=[[:space:]]*(.*)$ ]]; then
+    if [[ "$line" =~ ^[[:space:]]*([A-Za-z0-9_-]+)[[:space:]]*=[[:space:]]*(.*)$ ]]; then
       key="${BASH_REMATCH[1]}"
       val="${BASH_REMATCH[2]}"
       val="${val%%#*}"
@@ -146,6 +153,13 @@ parse_harness() {
             agy) HARNESS_WORKER_AGY="$val" ;;
             devin) HARNESS_WORKER_DEVIN="$val" ;;
             mimo) HARNESS_WORKER_MIMO="$val" ;;
+            *)
+              if [[ "$key" =~ ^[a-z][a-z0-9-]{1,23}$ ]]; then
+                _extra="HARNESS_WORKER_EXTRA_${key//-/_}"
+                printf -v "$_extra" '%s' "$val"
+                HARNESS_EXTRA_KEYS="$HARNESS_EXTRA_KEYS $_extra"
+              fi
+              ;;
           esac
           ;;
       esac
@@ -172,7 +186,14 @@ worker_flag() {
     agy) printf '%s\n' "$HARNESS_WORKER_AGY" ;;
     devin) printf '%s\n' "$HARNESS_WORKER_DEVIN" ;;
     mimo) printf '%s\n' "$HARNESS_WORKER_MIMO" ;;
-    *) printf '%s\n' "false" ;;
+    *)
+      if [[ "$name" =~ ^[a-z][a-z0-9-]{1,23}$ ]]; then
+        local _var="HARNESS_WORKER_EXTRA_${name//-/_}"
+        printf '%s\n' "${!_var:-false}"
+      else
+        printf '%s\n' "false"
+      fi
+      ;;
   esac
 }
 

@@ -61,6 +61,12 @@ LOCAL_METHODS = {
     "api.methods": (False, "List the methods this server offers"),
     "board.snapshot": (False, "Board data (jobs window, pending queue, slots, settings, workflows) plus a ready-to-render `view`"),
     "workspace.status": (False, "Workspace panel: container, ports and dc-cli diagnosis as ready-to-render sections (params: deep)"),
+    "chat.status": (False, "EXPERIMENT: whether the headless-parent chat is on, which parents can run, and recent sessions"),
+    "chat.transcript": (False, "EXPERIMENT: a chat session's transcript (params: session, tail)"),
+    "chat.send": (True, "EXPERIMENT: send one message to the headless parent; the answer arrives in the transcript (params: message, session, parent)"),
+    "chat.cancel": (True, "EXPERIMENT: stop a chat session's running turn (params: session)"),
+    "log.follow": (False, "Tail of a job's log as plain text; without an id, the job worth watching (params: id, lines)"),
+    "env.shell": (False, "The dc exec --no-start command for an interactive shell in a job's container, or why there is none (params: id)"),
     "job.evidence": (False, "Evidence drawer for one job: where it ran, change, contract, checks, ports (params: id)"),
     "fleet.status": (False, "Fleet panel: workspace containers on the engine with observed CPU and memory, ready to render"),
     "env.recovery": (False, "The one next step dc-cli proposes for an environment fault, and whether Rig would apply it"),
@@ -164,7 +170,8 @@ class Api:
             return self._board_snapshot(request_id, params)
         if method == "workspace.status":
             return self._workspace(request_id, params)
-        if method in ("job.evidence", "fleet.status", "env.recovery", "env.recover"):
+        if method in ("job.evidence", "fleet.status", "env.recovery", "env.recover", "log.follow", "env.shell",
+                      "chat.status", "chat.transcript", "chat.send", "chat.cancel"):
             return self._environment(request_id, method, params)
         if method in ("ui.request", "events.list", "events.ack"):
             return self._companion(request_id, method, params)
@@ -251,6 +258,36 @@ def _environment(self, request_id, method, params):
                 return _reply(request_id, error=_error(INVALID_PARAMS, "id must be a job id"))
             import job_evidence_view
             result = job_evidence_view.build(self.repo, job_id)
+        elif method == "log.follow":
+            lines = params.get("lines", 60)
+            job_id = params.get("id", "")
+            if not isinstance(lines, int) or isinstance(lines, bool) or not 1 <= lines <= 500 or not isinstance(job_id, str):
+                return _reply(request_id, error=_error(INVALID_PARAMS, "lines must be 1 to 500 and id a string"))
+            import rig_shell
+            result = rig_shell.follow_frame(self.repo, job_id, lines)
+        elif method == "env.shell":
+            job_id = params.get("id", "")
+            if not isinstance(job_id, str):
+                return _reply(request_id, error=_error(INVALID_PARAMS, "id must be a string"))
+            import env_shell
+            result = env_shell.plan(self.repo, job_id)
+        elif method.startswith("chat."):
+            import rig_chat
+            session, tail = params.get("session", ""), params.get("tail", 200)
+            if not isinstance(session, str) or not isinstance(tail, int) or isinstance(tail, bool) or not 1 <= tail <= 5000:
+                return _reply(request_id, error=_error(INVALID_PARAMS, "session must be a string and tail 1 to 5000"))
+            if method == "chat.status":
+                result = rig_chat.status(self.repo)
+            elif method == "chat.transcript":
+                result = rig_chat.transcript(self.repo, session, tail)
+            elif method == "chat.cancel":
+                result = rig_chat.cancel(self.repo, session)
+            else:
+                message, parent = params.get("message"), params.get("parent", "")
+                if not isinstance(message, str) or not isinstance(parent, str):
+                    return _reply(request_id, error=_error(INVALID_PARAMS, "message and parent must be strings"))
+                rig_chat.require_enabled(self.repo)
+                result = rig_chat.send(self.repo, message, session, parent)
         elif method == "fleet.status":
             import fleet
             data = fleet.facts(self.repo)
@@ -264,7 +301,7 @@ def _environment(self, request_id, method, params):
                 return _reply(request_id, error=_error(INVALID_PARAMS, "confirm_id must be the plan id the owner confirmed"))
             import env_recovery
             result = env_recovery.apply(self.repo, confirm, actor="local-api")
-    except ValueError as error:
+    except ValueError as error:  # includes ChatError
         return _reply(request_id, error=_error(INVALID_PARAMS, str(error)))
     except (Exception, SystemExit) as error:
         return _reply(request_id, error=_error(SERVER_ERROR, str(error) or f"{method} failed"))

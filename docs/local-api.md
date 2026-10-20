@@ -32,11 +32,17 @@ repository. Owner tokens are never returned, and workers may not serve the API.
 | `api.methods` | no | none | List the methods this server offers |
 | `api.ping` | no | none | Check the server and protocol version |
 | `board.snapshot` | no | none | Board data (jobs window, pending queue, slots, settings, workflows) plus a ready-to-render `view` |
+| `chat.cancel` | yes | none | EXPERIMENT: stop a chat session's running turn (params: session) |
+| `chat.send` | yes | none | EXPERIMENT: send one message to the headless parent; the answer arrives in the transcript (params: message, session, parent) |
+| `chat.status` | no | none | EXPERIMENT: whether the headless-parent chat is on, which parents can run, and recent sessions |
+| `chat.transcript` | no | none | EXPERIMENT: a chat session's transcript (params: session, tail) |
 | `env.recover` | yes | none | Apply the confirmed environment recovery step once, if it is safe (params: confirm_id) |
 | `env.recovery` | no | none | The one next step dc-cli proposes for an environment fault, and whether Rig would apply it |
+| `env.shell` | no | none | The dc exec --no-start command for an interactive shell in a job's container, or why there is none (params: id) |
 | `events.ack` | yes | none | Acknowledge one notice, or all, for a companion session |
 | `events.list` | no | none | Notices for a companion session: approvals, finished work, verification, stop progress |
 | `fleet.status` | no | none | Fleet panel: workspace containers on the engine with observed CPU and memory, ready to render |
 | `job.evidence` | no | none | Evidence drawer for one job: where it ran, change, contract, checks, ports (params: id) |
+| `log.follow` | no | none | Tail of a job's log as plain text; without an id, the job worth watching (params: id, lines) |
 | `ui.request` | yes | none | Companion operations (snapshot, enqueue, stop, reply, details, sessions) on the hosted UI service |
 | `workspace.status` | no | none | Workspace panel: container, ports and dc-cli diagnosis as ready-to-render sections (params: deep) |

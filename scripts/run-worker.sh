@@ -38,11 +38,18 @@ LAUNCH_COMMITTED=0
 AGY_PERMS_MERGED=0
 DEVIN_MCP_INSTALLED=0
 
+ADAPTERS_PY="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/adapters.py"
+ADAPTER_WORKER=0
 case "$WORKER" in
   grok|codex|claude|cursor|opencode|omp|pi|agy|devin|mimo) ;;
   *)
-    echo "run-worker: unknown worker '$WORKER'" >&2
-    exit 2
+    # A worker shipped as an adapter package (adapters/<name>/adapter.json).
+    if python3 "$ADAPTERS_PY" names --exists "$WORKER" 2>/dev/null; then
+      ADAPTER_WORKER=1
+    else
+      echo "run-worker: unknown worker '$WORKER'" >&2
+      exit 2
+    fi
     ;;
 esac
 
@@ -1121,6 +1128,17 @@ case "$WORKER" in
     [[ -n "$EFFORT" ]] && CMD+=(--variant "$EFFORT")
     CMD+=("$BRIEF_TEXT")
     ;;
+  *)
+    # Adapter package: the manifest expands to the argv. The MCP flags it names come from the job-scoped file.
+    ADAPTER_MODE=host
+    [[ "$SANDBOX_PROVIDER" == "devcontainer" ]] && ADAPTER_MODE=container
+    while IFS= read -r -d '' _adapter_arg; do
+      CMD+=("$_adapter_arg")
+    done < <(python3 "$ADAPTERS_PY" command --worker "$WORKER" --mode "$ADAPTER_MODE" --work "$WORK" \
+      --brief-file "$BRIEF" --brief-text "$BRIEF_TEXT" --model "$MODEL" --effort "$EFFORT" \
+      --job-dir "$JOB_DIR" --job-id "$JOB_ID" --mcp-path "$JOB_DIR/mcp.json" --binary "${BIN:-}")
+    [[ ${#CMD[@]} -gt 0 ]] || { echo "run-worker: refuse: could not build the adapter command for $WORKER" >&2; exit 1; }
+    ;;
 esac
 return 0
 }
@@ -1482,6 +1500,10 @@ agy_restore_settings
 devin_restore_mcp
 
 SUMMARY="$(summary_from_log)"
+if [[ "$ADAPTER_WORKER" == "1" ]]; then
+  _adapter_summary="$(python3 "$ADAPTERS_PY" summary --worker "$WORKER" --log "$LOG" 2>/dev/null || true)"
+  [[ -n "$_adapter_summary" ]] && SUMMARY="$_adapter_summary"
+fi
 JOBS_PY="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/jobs.py"
 if [[ -f "$JOBS_PY" ]]; then
   python3 "$JOBS_PY" persist --dir "$JOB_DIR" || true

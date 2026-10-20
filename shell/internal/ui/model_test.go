@@ -33,6 +33,23 @@ type fakeSource struct {
 	evidenceIDs []string
 	recovered   []string
 	recoverErr  error
+	logReply    *view.LogReply
+	logErr      error
+	logIDs      []string
+	shellPlan   *view.ShellPlan
+	shellErr    error
+	shellIDs    []string
+
+	chatStatus      *view.ChatStatus
+	chatStatusErr   error
+	chatStatusCalls int
+	chatView        *view.ChatTranscript
+	chatErr         error
+	chatReads       []string
+	chatStarted     *view.ChatStarted
+	chatSendErr     error
+	chatSent        [][2]string
+	chatCancelled   []string
 }
 
 func (f *fakeSource) Workspace(bool, time.Duration) (*view.Workspace, error) {
@@ -47,6 +64,30 @@ func (f *fakeSource) JobEvidence(id string, _ time.Duration) (*view.Evidence, er
 func (f *fakeSource) Recover(id string, _ time.Duration) (string, error) {
 	f.recovered = append(f.recovered, id)
 	return "applied " + id, f.recoverErr
+}
+func (f *fakeSource) Log(id string, lines int, _ time.Duration) (*view.LogReply, error) {
+	f.logIDs = append(f.logIDs, id)
+	return f.logReply, f.logErr
+}
+func (f *fakeSource) Shell(id string, _ time.Duration) (*view.ShellPlan, error) {
+	f.shellIDs = append(f.shellIDs, id)
+	return f.shellPlan, f.shellErr
+}
+func (f *fakeSource) ChatStatus(time.Duration) (*view.ChatStatus, error) {
+	f.chatStatusCalls++
+	return f.chatStatus, f.chatStatusErr
+}
+func (f *fakeSource) ChatTranscript(session string, tail int, _ time.Duration) (*view.ChatTranscript, error) {
+	f.chatReads = append(f.chatReads, session)
+	return f.chatView, f.chatErr
+}
+func (f *fakeSource) ChatSend(message, session string, _ time.Duration) (*view.ChatStarted, error) {
+	f.chatSent = append(f.chatSent, [2]string{message, session})
+	return f.chatStarted, f.chatSendErr
+}
+func (f *fakeSource) ChatCancel(session string, _ time.Duration) error {
+	f.chatCancelled = append(f.chatCancelled, session)
+	return nil
 }
 func (f *fakeSource) Snapshot(int, int, time.Duration) (*view.Snapshot, error) {
 	return f.snap, f.snapErr
@@ -244,12 +285,12 @@ func TestNavigationTabsDetailAndQuit(t *testing.T) {
 	if m.st.Tab != "Queue" {
 		t.Fatalf("tab %q", m.st.Tab)
 	}
-	press(m, "tab", "tab", "tab", "tab")
+	press(m, "tab", "tab", "tab", "tab", "tab")
 	if m.st.Tab != "Jobs" {
-		t.Fatalf("tab wraps after Fleet, got %q", m.st.Tab)
+		t.Fatalf("tab wraps after Logs, got %q", m.st.Tab)
 	}
 	press(m, "shift+tab")
-	if m.st.Tab != "Fleet" {
+	if m.st.Tab != "Logs" {
 		t.Fatalf("shift+tab goes back and wraps, got %q", m.st.Tab)
 	}
 	press(m, "tab")
