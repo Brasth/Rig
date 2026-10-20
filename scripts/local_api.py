@@ -61,6 +61,10 @@ LOCAL_METHODS = {
     "api.methods": (False, "List the methods this server offers"),
     "board.snapshot": (False, "Board data (jobs window, pending queue, slots, settings, workflows) plus a ready-to-render `view`"),
     "workspace.status": (False, "Workspace panel: container, ports and dc-cli diagnosis as ready-to-render sections (params: deep)"),
+    "job.evidence": (False, "Evidence drawer for one job: where it ran, change, contract, checks, ports (params: id)"),
+    "fleet.status": (False, "Fleet panel: workspace containers on the engine with observed CPU and memory, ready to render"),
+    "env.recovery": (False, "The one next step dc-cli proposes for an environment fault, and whether Rig would apply it"),
+    "env.recover": (True, "Apply the confirmed environment recovery step once, if it is safe (params: confirm_id)"),
     "events.list": (False, "Notices for a companion session: approvals, finished work, verification, stop progress"),
     "events.ack": (True, "Acknowledge one notice, or all, for a companion session"),
     "ui.request": (True, "Companion operations (snapshot, enqueue, stop, reply, details, sessions) on the hosted UI service"),
@@ -160,6 +164,8 @@ class Api:
             return self._board_snapshot(request_id, params)
         if method == "workspace.status":
             return self._workspace(request_id, params)
+        if method in ("job.evidence", "fleet.status", "env.recovery", "env.recover"):
+            return self._environment(request_id, method, params)
         if method in ("ui.request", "events.list", "events.ack"):
             return self._companion(request_id, method, params)
         entry = METHODS.get(method)
@@ -235,6 +241,37 @@ def _workspace(self, request_id, params):
 
 
 Api._workspace = _workspace
+
+
+def _environment(self, request_id, method, params):
+    try:
+        if method == "job.evidence":
+            job_id = params.get("id")
+            if not isinstance(job_id, str) or not job_id:
+                return _reply(request_id, error=_error(INVALID_PARAMS, "id must be a job id"))
+            import job_evidence_view
+            result = job_evidence_view.build(self.repo, job_id)
+        elif method == "fleet.status":
+            import fleet
+            data = fleet.facts(self.repo)
+            result = {"facts": data, "view": fleet.view(data)}
+        elif method == "env.recovery":
+            import env_recovery
+            result = env_recovery.plan(self.repo)
+        else:
+            confirm = params.get("confirm_id")
+            if not isinstance(confirm, str) or not confirm:
+                return _reply(request_id, error=_error(INVALID_PARAMS, "confirm_id must be the plan id the owner confirmed"))
+            import env_recovery
+            result = env_recovery.apply(self.repo, confirm, actor="local-api")
+    except ValueError as error:
+        return _reply(request_id, error=_error(INVALID_PARAMS, str(error)))
+    except (Exception, SystemExit) as error:
+        return _reply(request_id, error=_error(SERVER_ERROR, str(error) or f"{method} failed"))
+    return _reply(request_id, result=json.loads(json.dumps(scrub(result), default=str)))
+
+
+Api._environment = _environment
 
 
 def _companion(self, request_id, method, params):

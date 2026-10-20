@@ -32,7 +32,11 @@ repository. Owner tokens are never returned, and workers may not serve the API.
 | `api.methods` | no | none | List the methods this server offers |
 | `api.ping` | no | none | Check the server and protocol version |
 | `board.snapshot` | no | none | Board data (jobs window, pending queue, slots, settings, workflows) plus a ready-to-render `view` |
+| `env.recover` | yes | none | Apply the confirmed environment recovery step once, if it is safe (params: confirm_id) |
+| `env.recovery` | no | none | The one next step dc-cli proposes for an environment fault, and whether Rig would apply it |
 | `events.ack` | yes | none | Acknowledge one notice, or all, for a companion session |
 | `events.list` | no | none | Notices for a companion session: approvals, finished work, verification, stop progress |
+| `fleet.status` | no | none | Fleet panel: workspace containers on the engine with observed CPU and memory, ready to render |
+| `job.evidence` | no | none | Evidence drawer for one job: where it ran, change, contract, checks, ports (params: id) |
 | `ui.request` | yes | none | Companion operations (snapshot, enqueue, stop, reply, details, sessions) on the hosted UI service |
 | `workspace.status` | no | none | Workspace panel: container, ports and dc-cli diagnosis as ready-to-render sections (params: deep) |

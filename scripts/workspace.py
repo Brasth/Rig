@@ -97,13 +97,18 @@ def status(repo: Path, *, deep: bool = False, now=time.monotonic) -> dict:
             return hit[1]
     base = sandbox_env.env_status(repo)
     result = {"kind": base["kind"], "override": base["override"], "dc": base["dc"],
-              "containers": containers_view(base["containers"]), "ports": [], "doctor": None, "error": base["error"]}
+              "containers": containers_view(base["containers"]), "ports": [], "doctor": None, "recovery": None, "error": base["error"]}
     if deep and base["dc"]["found"]:
         try:
             result["ports"] = parse_forward_status(dc_client.run_text(["forward", "--status"], repo, timeout=10))
         except dc_client.DcError as error:
             result["error"] = result["error"] or str(error)
         result["doctor"] = _doctor_summary(repo)
+        try:
+            import env_recovery
+            result["recovery"] = env_recovery.plan(repo)
+        except (dc_client.DcError, ValueError) as error:
+            result["recovery"] = {"ready": True, "error": str(error)}
     with _lock:
         _cache[key] = (now(), result)
     return result
@@ -161,4 +166,13 @@ def view(status: dict) -> dict:
                      for p in doctor["problems"]] or [_line("! " + doctor["detail"], "attention")]
             attention = True
         sections.append({"title": "Doctor", "lines": lines})
+    recovery = status.get("recovery") or {"ready": True}
+    if not recovery.get("ready"):
+        lines = [_line("! " + (recovery.get("summary") or recovery.get("error") or "dc recover reports a problem"), "attention")]
+        if recovery.get("command"):
+            lines.append(_line("  run: " + recovery["command"]))
+        if recovery.get("safe"):
+            lines.append(_line(f"  R applies {recovery['apply']} (confirm)", "attention"))
+        sections.append({"title": "Recovery", "lines": lines})
+        attention = True
     return {"version": VIEW_VERSION, "attention": attention, "sections": sections}

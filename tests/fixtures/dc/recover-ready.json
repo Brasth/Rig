@@ -1,0 +1,1 @@
+{"schemaVersion":1,"command":"dc-recover","host":{"status":"ok","code":"ready","summary":"Docker engine reachable","detail":null,"engineHint":"unknown","guideUrl":"https://docs.docker.com/desktop/"},"next":{"id":"ready","summary":"Docker engine is reachable.","command":"dc-tui or dc-up","apply":"none","applyAllowed":false,"verify":"dc-host","escalate":"dc-recover --report"}}

@@ -222,10 +222,11 @@ def format_status(status: dict) -> str:
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(prog="rig env", description="Workspace environment through dc-cli")
-    parser.add_argument("command", choices=["init", "up", "down", "status", "ports"])
+    parser.add_argument("command", choices=["init", "up", "down", "status", "ports", "recover"])
     parser.add_argument("--repo", default="")
     parser.add_argument("--json", action="store_true")
     parser.add_argument("--force", action="store_true", help="init: regenerate an existing override")
+    parser.add_argument("--apply", default="", metavar="PLAN_ID", help="recover: apply the plan you reviewed, by id")
     parser.add_argument("--write-devcontainer", action="store_true", help="init: write .devcontainer/devcontainer.json")
     args = parser.parse_args(argv)
     try:
@@ -239,6 +240,23 @@ def main(argv=None) -> int:
             print(json.dumps(report, indent=2) if args.json else
                   f"sandbox: {report['kind']}" + (f" · wrote {report['override']}" if report["wrote"] else "") + f"\n{report['note']}")
             return 0
+        if args.command == "recover":
+            import env_recovery
+            if args.apply:
+                outcome = env_recovery.apply(repo, args.apply, actor="cli")
+                print(json.dumps(outcome, indent=2) if args.json else
+                      f"applied {outcome['applied']} (exit {outcome['exit']}); now: {outcome['after'].get('id') or 'unknown'}")
+                return 0 if outcome["exit"] == 0 else 1
+            plan = env_recovery.plan(repo)
+            if args.json:
+                print(json.dumps(plan, indent=2))
+            else:
+                print(f"{plan['id']}  {plan['summary']}")
+                if not plan["ready"]:
+                    print(f"run: {plan['command']}")
+                    print(f"Rig applies this: rig env recover --apply {plan['id']}" if plan["safe"]
+                          else "Rig does not apply this one; run the command above yourself.")
+            return 0 if plan["ready"] else 1
         if args.command == "ports":
             ports = forwarded_ports(repo)
             print(json.dumps(ports, indent=2) if args.json else format_ports(ports))
