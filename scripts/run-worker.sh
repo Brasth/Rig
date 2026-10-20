@@ -944,203 +944,39 @@ if [[ -z "$PARENT_THREAD" ]]; then
   fi
 fi
 
+WORKER_COMMANDS_PY="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/worker_commands.py"
+AGY_PERMS_PY="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/agy_job_permissions.py"
+
 build_worker_cmd() {
   SESSION_ID=""
   CMD=()
-case "$WORKER" in
-  grok)
-    if [[ "$SHOULD_RESUME" -eq 1 ]]; then
-      SESSION_ID="$CONTINUES_SESSION"
-      # A positional prompt selects Grok's interactive TUI, even with -r and
-      # streaming-json. Keep resume headless under the detached supervisor.
-      CMD=(grok --no-auto-update -r "$SESSION_ID" --prompt-file "$BRIEF" --cwd "$WORK" --output-format streaming-json --always-approve --max-turns 40)
-      [[ -n "$MODEL" ]] && CMD+=(-m "$MODEL")
-      [[ -n "$EFFORT" ]] && CMD+=(--effort "$EFFORT")
-    else
-      SESSION_ID="$(python3 -c 'import uuid; print(uuid.uuid4())')"
-      CMD=(grok --no-auto-update --prompt-file "$BRIEF" --cwd "$WORK" --output-format streaming-json --session-id "$SESSION_ID" --always-approve --max-turns 40)
-      [[ -n "$MODEL" ]] && CMD+=(-m "$MODEL")
-      [[ -n "$EFFORT" ]] && CMD+=(--effort "$EFFORT")
-    fi
-    ;;
-  codex)
-    if [[ "$SHOULD_RESUME" -eq 1 ]]; then
-      SESSION_ID="$CONTINUES_SESSION"
-      # -s/--sandbox and -C/--cd belong to `codex exec`, not `exec resume`.
-      CMD=(codex exec --json -s workspace-write -C "$WORK")
-      [[ -n "$MODEL" ]] && CMD+=(-m "$MODEL")
-      [[ -n "$EFFORT" ]] && CMD+=(-c "model_reasoning_effort=\"$EFFORT\"")
-      CMD+=("${CHILD_MCP_ARGV[@]}")
-      CMD+=(resume "$SESSION_ID" "$BRIEF_TEXT")
-    else
-      CMD=(codex exec --json -s workspace-write -C "$WORK")
-      [[ -n "$MODEL" ]] && CMD+=(-m "$MODEL")
-      [[ -n "$EFFORT" ]] && CMD+=(-c "model_reasoning_effort=\"$EFFORT\"")
-      CMD+=("${CHILD_MCP_ARGV[@]}")
-      CMD+=("$BRIEF_TEXT")
-    fi
-    ;;
-  claude)
-    # Print-mode must stream. json buffers until exit, so Anthropic's
-    # invalid remote deny rules (Bash(eval $(wget*))) fill the TUI as
-    # "doing" and the job looks stuck. -p is boolean; prompt is last
-    # after --. Do not use --bare (drops OAuth), empty --setting-sources=
-    # (can skip user auth), or --dangerously-skip-permissions (org
-    # policy can disable bypass).
-    CLAUDE_WORKER_MD="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../adapters/claude/CLAUDE.worker.md"
-    CMD=(
-      claude -p
-      --model "${MODEL:-claude-sonnet-5-5}"
-      --output-format stream-json
-      --verbose
-      --permission-mode acceptEdits
-      --allowedTools "Read,Grep,Glob,Bash,Edit,Write"
-      --tools "Bash,Edit,Read,Grep,Glob,Write"
-    )
-    CMD+=("${CHILD_MCP_ARGV[@]}")
-    CMD+=(
-      --permission-prompt-tool mcp__rig-ask__permission_prompt
-      --disable-slash-commands
-    )
-    if [[ "$SHOULD_RESUME" -eq 1 ]]; then
-      SESSION_ID="$CONTINUES_SESSION"
-      CMD+=(--resume "$SESSION_ID")
-    fi
-    if [[ -f "$CLAUDE_WORKER_MD" ]]; then
-      CMD+=(--append-system-prompt-file "$CLAUDE_WORKER_MD")
-    fi
-    # Haiku print-mode hangs on --effort. Still stamp effort in meta.json.
-    if [[ -n "$EFFORT" ]]; then
-      case "$MODEL" in
-        *[Hh][Aa][Ii][Kk][Uu]*) ;;
-        *) CMD+=(--effort "$EFFORT") ;;
-      esac
-    fi
-    CMD+=(-- "$BRIEF_TEXT")
-    ;;
-  cursor)
-    CURSOR_BIN="${BIN:-cursor-agent}"
-    CURSOR_WORKER_MD="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../adapters/cursor/CURSOR.worker.md"
-    CURSOR_PROMPT="$BRIEF_TEXT"
-    if [[ -f "$CURSOR_WORKER_MD" ]]; then
-      CURSOR_PROMPT="$(cat "$CURSOR_WORKER_MD")"$'\n\n'"$BRIEF_TEXT"
-    fi
-    CMD=(
-      "$CURSOR_BIN" -p
-      --workspace "$WORK"
-      --output-format stream-json
-      --stream-partial-output
-      --force
-      --trust
-    )
-    CMD+=("${CHILD_MCP_ARGV[@]}")
-    [[ -n "$MODEL" ]] && CMD+=(--model "$MODEL")
-    case "$ROLE" in
-      explore|mini) CMD+=(--mode=ask) ;;
-    esac
-    if [[ "$SHOULD_RESUME" -eq 1 ]]; then
-      SESSION_ID="$CONTINUES_SESSION"
-      CMD+=(--resume "$SESSION_ID")
-    fi
-    CMD+=("$CURSOR_PROMPT")
-    ;;
-  opencode)
-    CMD=(
-      opencode run
-      --format json
-      --dir "$WORK"
-      --title "rig $JOB_ID"
-      --auto
-    )
-    if [[ "$SHOULD_RESUME" -eq 1 ]]; then
-      SESSION_ID="$CONTINUES_SESSION"
-      # --session continues that id; --continue is last-session and conflicts.
-      CMD+=(--session "$SESSION_ID")
-    fi
-    # Rig policy: exact approved OpenCode Go selector, never --variant.
-    [[ -n "$MODEL" ]] && CMD+=(-m "$MODEL")
-    CMD+=("$BRIEF_TEXT")
-    ;;
-  omp)
-    OMP_WORKER_MD="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../adapters/omp/OMP.worker.md"
-    CMD=(
-      omp -p
-      --mode json
-      --cwd "$WORK"
-      --no-session
-      --approval-mode write
-    )
-    if [[ -f "$OMP_WORKER_MD" ]]; then
-      CMD+=(--append-system-prompt "$OMP_WORKER_MD")
-    fi
-    [[ -n "$MODEL" ]] && CMD+=(--model "$MODEL")
-    [[ -n "$EFFORT" ]] && CMD+=(--thinking "$EFFORT")
-    CMD+=("$BRIEF_TEXT")
-    ;;
-  pi)
-    PI_WORKER_MD="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../adapters/pi/PI.worker.md"
-    CMD=(
-      pi -p
-      --mode json
-      --no-session
-      --approve
-    )
-    if [[ -f "$PI_WORKER_MD" ]]; then
-      CMD+=(--append-system-prompt "$PI_WORKER_MD")
-    fi
-    [[ -n "$MODEL" ]] && CMD+=(--model "$MODEL")
-    [[ -n "$EFFORT" ]] && CMD+=(--thinking "$EFFORT")
-    CMD+=("$BRIEF_TEXT")
-    ;;
-  agy)
-    AGY_WORKER_MD="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../adapters/agy/AGY.worker.md"
-    AGY_PERMS_PY="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/agy_job_permissions.py"
-    AGY_PROMPT="$BRIEF_TEXT"
-    if [[ -f "$AGY_WORKER_MD" ]]; then
-      AGY_PROMPT="$(cat "$AGY_WORKER_MD")"$'\n\n'"$BRIEF_TEXT"
-    fi
-    CMD=(
-      agy -p "$AGY_PROMPT"
-      --output-format json
-      --mode accept-edits
-      --print-timeout "${TIMEOUT_SECS}s"
-      --disable-slash-commands
-    )
-    [[ -n "$MODEL" ]] && CMD+=(--model "$MODEL")
-    [[ -n "$EFFORT" ]] && CMD+=(--effort "$EFFORT")
-    ;;
-  devin)
-    CMD=(
-      devin
-      --print
-      --prompt-file "$BRIEF"
-      --model "${MODEL:?Devin requires an exact SWE-2 model}"
-      --permission-mode accept-edits
-      --respect-workspace-trust true
-    )
-    CMD+=("${CHILD_MCP_ARGV[@]}")
-    ;;
-  mimo)
-    # MiMo Code runs in JSON mode and inherits job-scoped RIG_JOB_* values for
-    # the already configured Rig MCP. Never enable its yolo permission mode.
-    CMD=(mimo run --format json --dir "$WORK")
-    [[ -n "$MODEL" ]] && CMD+=(--model "$MODEL")
-    [[ -n "$EFFORT" ]] && CMD+=(--variant "$EFFORT")
-    CMD+=("$BRIEF_TEXT")
-    ;;
-  *)
-    # Adapter package: the manifest expands to the argv. The MCP flags it names come from the job-scoped file.
-    ADAPTER_MODE=host
-    [[ "$SANDBOX_PROVIDER" == "devcontainer" ]] && ADAPTER_MODE=container
-    while IFS= read -r -d '' _adapter_arg; do
-      CMD+=("$_adapter_arg")
-    done < <(python3 "$ADAPTERS_PY" command --worker "$WORKER" --mode "$ADAPTER_MODE" --work "$WORK" \
-      --brief-file "$BRIEF" --brief-text "$BRIEF_TEXT" --model "$MODEL" --effort "$EFFORT" \
-      --job-dir "$JOB_DIR" --job-id "$JOB_ID" --mcp-path "$JOB_DIR/mcp.json" --binary "${BIN:-}")
-    [[ ${#CMD[@]} -gt 0 ]] || { echo "run-worker: refuse: could not build the adapter command for $WORKER" >&2; exit 1; }
-    ;;
-esac
-return 0
+  case "$WORKER" in
+    grok|codex|claude|cursor|opencode|omp|pi|agy|devin|mimo)
+      local _wc_args=(--worker "$WORKER" --work "$WORK" --brief-file "$BRIEF"
+        --model "$MODEL" --effort "$EFFORT" --role "$ROLE" --job-id "$JOB_ID" --timeout-secs "$TIMEOUT_SECS"
+        --session "$CONTINUES_SESSION" --binary "${BIN:-}")
+      [[ "$SHOULD_RESUME" -eq 1 ]] && _wc_args+=(--resume)
+      local _a
+      for _a in "${CHILD_MCP_ARGV[@]}"; do _wc_args+=("--mcp-arg=$_a"); done
+      local _first=1
+      while IFS= read -r -d '' _a; do
+        if [[ "$_first" -eq 1 ]]; then SESSION_ID="$_a"; _first=0; else CMD+=("$_a"); fi
+      done < <(python3 "$WORKER_COMMANDS_PY" "${_wc_args[@]}")
+      [[ ${#CMD[@]} -gt 0 ]] || { echo "run-worker: refuse: could not build the $WORKER command" >&2; exit 1; }
+      ;;
+    *)
+      # Adapter package: the manifest expands to the argv. The MCP flags it names come from the job-scoped file.
+      ADAPTER_MODE=host
+      [[ "$SANDBOX_PROVIDER" == "devcontainer" ]] && ADAPTER_MODE=container
+      while IFS= read -r -d '' _adapter_arg; do
+        CMD+=("$_adapter_arg")
+      done < <(python3 "$ADAPTERS_PY" command --worker "$WORKER" --mode "$ADAPTER_MODE" --work "$WORK" \
+        --brief-file "$BRIEF" --brief-text "$BRIEF_TEXT" --model "$MODEL" --effort "$EFFORT" \
+        --job-dir "$JOB_DIR" --job-id "$JOB_ID" --mcp-path "$JOB_DIR/mcp.json" --binary "${BIN:-}")
+      [[ ${#CMD[@]} -gt 0 ]] || { echo "run-worker: refuse: could not build the adapter command for $WORKER" >&2; exit 1; }
+      ;;
+  esac
+  return 0
 }
 build_worker_cmd
 CMD_STR="$(shell_join "${CMD[@]}")"

@@ -6,7 +6,7 @@ Status: accepted for Phase 4. It records what each item will and will not do bef
 
 **What exists.** Ten workers are wired in by name in about a dozen places: the launch command in `run-worker.sh`, MCP delivery in `child_mcp.py`, the worker lists in `harness.py`, `worker_launch.py`, `jobs.py`, `container_modes.py`, and the shell parser in `detect-binaries.sh`.
 
-**Decision.** A new worker is a directory `adapters/<name>/` holding `adapter.json`. Rig discovers it from the runtime's `adapters/` directory and from any directory in `RIG_ADAPTER_DIRS`. The ten built-in workers stay as code. Porting them to manifests would rewrite the launcher for no user benefit and risks every worker's byte-identical argv, so `run-worker.sh` does not shrink in this phase; it gains one generic branch.
+**Decision.** A new worker is a directory `adapters/<name>/` holding `adapter.json`. Rig discovers it from the runtime's `adapters/` directory and from any directory in `RIG_ADAPTER_DIRS`. The ten built-in workers stay as code. Porting them to manifests would rewrite the launcher for no user benefit and risks every worker's byte-identical argv, so they are not manifests. Their argv construction did move out of `run-worker.sh` into `scripts/worker_commands.py`, pinned byte-for-byte to the old shell output by `tests/fixtures/worker-argv/matrix.json` (480 cases, captured by running the old function; `capture.py` regenerates it). `run-worker.sh` calls that module once and keeps only the adapter branch.
 
 **Manifest (schema 1).** Strict: unknown keys are errors.
 
