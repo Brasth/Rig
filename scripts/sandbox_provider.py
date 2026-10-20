@@ -43,6 +43,10 @@ class SandboxProvider:
         """Non-secret facts recorded with acceptance evidence."""
         raise NotImplementedError
 
+    def check_url(self, url: str) -> None:
+        """Refuse a URL the parent's browser lane must not open for this provider. Host allows all."""
+        return None
+
 
 class HostProvider(SandboxProvider):
     name = "host"
@@ -74,6 +78,11 @@ def provider_for(repo) -> SandboxProvider:
         from sandbox_container import DevcontainerProvider
         return DevcontainerProvider(repo, config["credentials"])
     raise SandboxError(f"[sandbox] provider {config['provider']!r} is not available in this Rig runtime")
+
+
+def check_local_url(repo, url: str) -> None:
+    """Raise SandboxError when ``url`` must not be opened (container mode: unforwarded localhost ports)."""
+    provider_for(repo).check_url(url)
 
 
 def main(argv=None) -> int:

@@ -30,7 +30,12 @@ class DcError(RuntimeError):
 
 
 def dc_binary() -> str:
-    return os.environ.get("RIG_DC_BIN") or shutil.which("dc") or ""
+    """RIG_DC_BIN when it names a real executable, else dc on PATH. A bad override is "not found"
+    rather than a silent fall back to some other dc."""
+    override = os.environ.get("RIG_DC_BIN")
+    if override:
+        return override if os.path.isfile(override) and os.access(override, os.X_OK) else ""
+    return shutil.which("dc") or ""
 
 
 def require() -> str:

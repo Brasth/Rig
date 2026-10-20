@@ -139,6 +139,26 @@ def env_down(repo: Path) -> int:
     return _lifecycle(repo, "down")
 
 
+def forwarded_ports(repo: Path) -> list[dict]:
+    """The ports dc-cli forwards, as dc reports them. Raises DcError when dc cannot say."""
+    import workspace
+    return workspace.ports_view(dc_client.run_json(["forward", "--status", "--json"], Path(repo).resolve(), timeout=10))
+
+
+def format_ports(ports: list[dict]) -> str:
+    if not ports:
+        return "no forwarded ports"
+    lines = []
+    for port in ports:
+        text = f"localhost:{port['port']}  {port['name']}".rstrip()
+        if port["held_by"]:
+            text += f"  held by {port['held_by']}"
+        elif port["problem"] and port["state"]:
+            text += f"  {port['state']}"
+        lines.append(("! " if port["problem"] else "  ") + text)
+    return "\n".join(lines)
+
+
 def env_status(repo: Path) -> dict:
     """Facts only. Container rows are dc's own JSON, matched to this repo by path."""
     repo = Path(repo).resolve()
@@ -185,7 +205,7 @@ def format_status(status: dict) -> str:
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(prog="rig env", description="Workspace environment through dc-cli")
-    parser.add_argument("command", choices=["init", "up", "down", "status"])
+    parser.add_argument("command", choices=["init", "up", "down", "status", "ports"])
     parser.add_argument("--repo", default="")
     parser.add_argument("--json", action="store_true")
     parser.add_argument("--force", action="store_true", help="init: regenerate an existing override")
@@ -197,6 +217,10 @@ def main(argv=None) -> int:
             report = init_sandbox(repo, force=args.force)
             print(json.dumps(report, indent=2) if args.json else
                   f"sandbox: {report['kind']}" + (f" · wrote {report['override']}" if report["wrote"] else "") + f"\n{report['note']}")
+            return 0
+        if args.command == "ports":
+            ports = forwarded_ports(repo)
+            print(json.dumps(ports, indent=2) if args.json else format_ports(ports))
             return 0
         if args.command == "status":
             status = env_status(repo)

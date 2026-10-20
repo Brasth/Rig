@@ -237,6 +237,35 @@ class DevcontainerProvider(SandboxProvider):
                                "is it running (rig env up) with the repository mounted at the same path?")
         return supervised(self.dc(), cwd, stop_file, heartbeat_file, list(argv), [])
 
+    LOCAL_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", "0.0.0.0"})
+
+    def forwarded_ports(self) -> list[int]:
+        """Host ports dc-cli currently forwards to the container. Fails closed when it cannot say."""
+        import workspace
+        try:
+            data = dc_client.run_json(["forward", "--status", "--json"], self.repo, timeout=10)
+        except dc_client.DcError as error:
+            raise SandboxError(f"cannot list forwarded ports, so localhost URLs are refused: {error}") from error
+        return sorted({int(p["port"]) for p in workspace.ports_view(data) if str(p["port"]).isdigit()})
+
+    def check_url(self, url: str) -> None:
+        """A localhost URL on a port dc-cli does not forward points at the HOST, not the app in the
+        container, so evidence captured from it would describe the wrong program."""
+        from urllib.parse import urlsplit
+        try:
+            parts = urlsplit(str(url))
+            host, port = (parts.hostname or "").lower(), parts.port
+        except ValueError as error:
+            raise SandboxError("not a valid URL") from error
+        if host not in self.LOCAL_HOSTS:
+            return
+        port = port or (443 if parts.scheme == "https" else 80)
+        forwarded = self.forwarded_ports()
+        if port not in forwarded:
+            listed = ", ".join(map(str, forwarded)) or "none"
+            raise SandboxError(f"{host}:{port} is not a forwarded port (forwarded: {listed}). In container mode that address "
+                               "would reach the host, not the app in the container; forward the port with dc-cli first.")
+
     def evidence(self) -> dict:
         info = self.container_info()
         return {"provider": "devcontainer", "container": info}
