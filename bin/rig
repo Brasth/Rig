@@ -60,7 +60,7 @@ usage: rig <command> [args]
   browser-skill [status|setup|on|off|doctor]
   status
   worktrees list|register [--json]   # discovery/identity only; does not enable execution
-  worktrees plan|create|commit|remove --job ID   # per-job worktrees ([worktrees] mode = "per-job")
+  worktrees status [--json] | plan|create|commit|remove --job ID   # per-job worktrees ([worktrees] mode = "per-job")
   use codex|grok|opencode|omp|pi|agy
   workers grok=on|off claude=on|off codex=on|off cursor=on|off opencode=on|off omp=on|off pi=on|off agy=on|off devin=on|off mimo=on|off
   prune

@@ -138,6 +138,21 @@ class Gate(unittest.TestCase):
         self.assertEqual(again["merge_commit"], first["merge_commit"])
         self.assertEqual(git(self.repo, "rev-parse", "HEAD"), head)
 
+    def test_a_crash_between_the_merge_and_the_acceptance_is_recovered_by_accepting_again(self):
+        self.start("w1", edit={"a.txt": self.lines(l1="ONE")})
+        folder, auth, meta = self.jobs["w1"]
+        verification.record_requirements(self.repo, folder, [], ["Reviewed by the parent"], **auth)
+        snap = evidence.snapshot(worktrees.work_root(self.repo, folder), meta["files"])["snapshot_id"]
+        merged = worktree_merge.merge(self.repo, folder, snap)  # ...and the process dies before verification.json is written
+        self.assertFalse((folder / "verification.json").exists() and
+                         json.loads((folder / "verification.json").read_text()).get("acceptance") == "accepted")
+        head = git(self.repo, "rev-parse", "HEAD")
+        accepted = verification.accept(self.repo, folder, "accept", snap, rationale="Criteria satisfied.", **auth)
+        self.assertEqual((accepted["state"], accepted["merge_commit"]), ("verified", merged["merge_commit"]))
+        self.assertEqual(git(self.repo, "rev-parse", "HEAD"), head, "no second merge")
+        self.assertEqual((self.repo / "a.txt").read_text(), self.lines(l1="ONE"))
+        self.assertEqual(admission.list_reservations(self.repo), [])
+
     def test_a_job_that_changed_nothing_is_accepted_without_a_merge(self):
         self.start("w1", edit={})
         head = git(self.repo, "rev-parse", "HEAD")

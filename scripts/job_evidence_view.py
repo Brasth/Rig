@@ -57,6 +57,9 @@ def _ran(folder: Path, record) -> list[dict]:
         lines.append(_line(f"worktree   {record.get('branch')}  base {record.get('base_branch')} {_short(record.get('base_head'))}"))
         lines.append(_line(f"           {state}" + ("  (worktree removed)" if record.get("removed") else ""),
                            "ok" if record.get("merged") else ""))
+        if not record.get("merged") and not record.get("nothing_to_merge") and Path(record["path"]).is_dir() \
+                and (evidence.read_json(folder / "meta.json") or {}).get("status") in {"ok", "fail", "failed", "timeout", "cancelled"}:
+            lines.append(_line(f"           kept; remove with: rig worktrees remove --job {folder.name}"))
         if record.get("cleanup_error"):
             lines.append(_line("           cleanup: " + record["cleanup_error"], "attention"))
     return lines

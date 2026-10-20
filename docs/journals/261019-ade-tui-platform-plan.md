@@ -309,7 +309,8 @@ container and sourced by a wrapper).
 > - **Recovery is an allowlist, not "dc recover".** dc-cli's apply actions include `sudo` steps, `open_guide`, `context_use`, `prune_safe`, `stop_extra_engine` and `try_sandbox`. Rig applies only `colima_start`, `create_nets` and `take_ports`, only for the plan id the owner confirmed, and shows the rest as text. This meets the engine-down and port-held exit check on Colima setups; a plain Linux engine-down fix needs `sudo` and stays manual.
 > - **The merge happens inside `rig_job_accept`**, not as a separate step, when `next = complete`. A review handoff (`next = review`) merges nothing.
 > - **A merged job's subject is frozen** at the accepted snapshot (its files live in the base checkout afterwards), so later edits by other jobs do not make it look stale.
-> - **dc-cli leaves stopped containers** after `dc down`; Rig never removes containers, so per-job containers accumulate until `dc prune`.
+> - **dc-cli leaves stopped containers** after `dc down`; Rig never removes containers, so per-job containers accumulate until `dc prune`. `rig worktrees status` lists the leftovers (read-only).
+> - **Continuations are refused in worktree mode** (a successor would start without the predecessor's unmerged edits); supporting them is not built.
 > - **A real bug found while verifying:** an installed Rig runtime (it has `install-manifest.json`) made the child MCP try to take a lock inside the read-only runtime mount, so the worker's handshake never answered. Container jobs now set `RIG_RUNTIME_READONLY=1` and skip the lease. Phase 2's live test had passed only because the checkout had no manifest.
 
 

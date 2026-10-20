@@ -351,6 +351,49 @@ def remove_job(repo, job_dir, *, discard=False):
     return record
 
 
+def job_status(repo):
+    """Every job worktree Rig made, whether it is still there, and the dc-cli containers keyed to them.
+    Read-only: it lists what could be cleaned up and never removes anything."""
+    root = Path(repo).resolve()
+    rows = []
+    for folder in sorted((root / '.rig' / 'jobs').glob('*/')):
+        try:
+            record = job_record(folder)
+        except WorktreeError as error:
+            rows.append({'job_id': folder.name, 'state': 'unreadable', 'detail': str(error)})
+            continue
+        if not record:
+            continue
+        meta = {}
+        try:
+            meta = json.loads((folder / 'meta.json').read_text())
+        except (OSError, ValueError):
+            pass
+        present = Path(record['path']).is_dir()
+        if record.get('merged') or record.get('nothing_to_merge'):
+            state = 'merged' if present is False else 'merged, worktree still present'
+        elif record.get('removed'):
+            state = 'removed without merge'
+        else:
+            state = 'unmerged' if present else 'unmerged, worktree missing'
+        rows.append({'job_id': folder.name, 'state': state, 'branch': record.get('branch', ''), 'present': present,
+                     'job_status': meta.get('status', ''), 'path': record['path'], 'created_at': record.get('created_at', ''),
+                     'cleanup': ('' if state == 'merged' else f'rig worktrees remove --job {folder.name}')})
+    containers = []
+    try:
+        import dc_client
+        if dc_client.dc_binary():
+            prefix = str(root / '.rig' / 'worktrees') + '/'
+            for item in dc_client.run_json(['ls', '--all', '--json'], root):
+                folder = str(item.get('local_folder') or '') if isinstance(item, dict) else ''
+                if folder.startswith(prefix):
+                    containers.append({'job_id': Path(folder).name, 'name': item.get('name', ''), 'status': item.get('status', ''),
+                                       'id': item.get('id', '')})
+    except Exception as error:  # dc being absent or down is not a reason to hide the worktrees
+        return {'worktrees': rows, 'containers': containers, 'containers_error': str(error)}
+    return {'worktrees': rows, 'containers': containers}
+
+
 def main():
     if len(sys.argv) > 1 and sys.argv[1] in JOB_COMMANDS:
         return job_main(sys.argv[1:])
@@ -377,23 +420,26 @@ def main():
             print(f"{row['worktree_id']}  unresolved registration  {row['root']}")
 
 
-JOB_COMMANDS = ('plan', 'create', 'commit', 'remove')
+JOB_COMMANDS = ('plan', 'create', 'commit', 'remove', 'status')
 
 
 def job_main(argv):
     parser = argparse.ArgumentParser(prog='rig worktrees', description='Per-job worktrees')
     parser.add_argument('command', choices=JOB_COMMANDS)
     parser.add_argument('--repo', default=os.getcwd())
-    parser.add_argument('--job', required=True)
+    parser.add_argument('--job', default='')
     parser.add_argument('--role', default='worker')
     parser.add_argument('--access', default='')
     parser.add_argument('--writer-job', default='')
     parser.add_argument('--continues', default='')
     parser.add_argument('--discard', action='store_true')
+    parser.add_argument('--json', action='store_true')
     args = parser.parse_args(argv)
     try:
         import jobs
         repo = jobs.repo_root(args.repo)
+        if args.command != 'status' and not args.job:
+            raise WorktreeError('--job is required')
         folder = Path(repo) / '.rig' / 'jobs' / args.job
         if args.command == 'plan':
             result = plan(repo, args.job, args.role, args.access, args.writer_job, args.continues)
@@ -401,6 +447,8 @@ def job_main(argv):
                 raise WorktreeError(result['error'])
         elif args.command == 'create':
             result = create_job(repo, folder)
+        elif args.command == 'status':
+            result = job_status(repo)
         elif args.command == 'commit':
             result = commit_job(repo, folder)
         else:
@@ -408,6 +456,17 @@ def job_main(argv):
     except (WorktreeError, ValueError, SystemExit) as error:
         print(f'rig worktrees: {error}', file=sys.stderr)
         return 1
+    if args.command == 'status' and not args.json:
+        for row in result['worktrees']:
+            print(f"{row['job_id']}  {row['state']}  {row.get('branch', '')}  job {row.get('job_status') or '-'}"
+                  + (f"  -> {row['cleanup']}" if row.get('cleanup') else ''))
+        for box in result['containers']:
+            print(f"container  job {box['job_id']}  {box['name']}  {box['status']}  (rig never removes containers; see dc prune)")
+        if result.get('containers_error'):
+            print('containers unavailable: ' + result['containers_error'])
+        if not result['worktrees'] and not result['containers']:
+            print('no job worktrees')
+        return 0
     print(json.dumps(result))
     return 0
 

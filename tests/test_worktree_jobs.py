@@ -209,6 +209,32 @@ class Cli(Base):
         self.assertEqual(removed.returncode, 0, removed.stderr)
         self.assertFalse(Path(created["path"]).exists())
 
+    def test_status_lists_leftovers_and_containers_and_removes_nothing(self):
+        import stat
+        for job, fn in (("kept", None), ("gone", "remove")):
+            folder = self.job(job)
+            (folder / "meta.json").write_text(json.dumps({"status": "cancelled"}))
+            worktrees.create_job(self.repo, folder)
+        worktrees.remove_job(self.repo, self.repo / ".rig" / "jobs" / "gone", discard=True)
+        fake = self.base / "dc"
+        fake.write_text("#!/bin/sh\ncase \"$1\" in --version) echo 'dc 0.23.0';; ls) printf '%s' \"$FAKE_LS\";; esac\n")
+        fake.chmod(fake.stat().st_mode | stat.S_IXUSR)
+        rows = [{"id": "abc", "name": "box", "status": "exited", "local_folder": str(self.repo.resolve() / ".rig" / "worktrees" / "kept")},
+                {"id": "def", "name": "other", "status": "running", "local_folder": "/elsewhere"}]
+        env = dict(os.environ, RIG_DC_BIN=str(fake), FAKE_LS=json.dumps(rows))
+        done = subprocess.run([sys.executable, str(ROOT / "scripts" / "worktrees.py"), "status", "--json", "--repo", str(self.repo)],
+                              capture_output=True, text=True, env=env)
+        data = json.loads(done.stdout)
+        by_job = {row["job_id"]: row for row in data["worktrees"]}
+        self.assertEqual(by_job["kept"]["state"], "unmerged")
+        self.assertEqual(by_job["kept"]["cleanup"], "rig worktrees remove --job kept")
+        self.assertEqual(by_job["gone"]["state"], "removed without merge")
+        self.assertEqual([c["job_id"] for c in data["containers"]], ["kept"], "only containers keyed to a job worktree")
+        self.assertTrue((self.repo / ".rig" / "worktrees" / "kept").is_dir(), "status removes nothing")
+        text = subprocess.run([sys.executable, str(ROOT / "scripts" / "worktrees.py"), "status", "--repo", str(self.repo)],
+                              capture_output=True, text=True, env=env).stdout
+        self.assertIn("rig never removes containers", text)
+
     def test_errors_exit_nonzero_with_a_reason(self):
         done = self.run_cli("remove", "--job", "never")
         self.assertEqual(done.returncode, 1)
