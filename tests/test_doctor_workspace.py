@@ -10,8 +10,10 @@ from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
+sys.path.insert(0, str(ROOT / "tests"))
 
 import doctor  # noqa: E402
+from container_test_support import fake_agent, install_fake_dc  # noqa: E402
 
 FAKE_DC = r'''#!/bin/sh
 echo "$*" >> "$FAKE_DC_LOG"
@@ -137,6 +139,85 @@ class WorkspaceChecks(unittest.TestCase):
         plain = subprocess.run([sys.executable, script, "--repo", str(self.repo), "--json"],
                                env=dict(os.environ), capture_output=True, text=True, timeout=60)
         self.assertEqual(rows(json.loads(plain.stdout), "engine"), [])
+
+
+class ContainerMode(unittest.TestCase):
+    """Doctor in container mode, against the local-exec fake dc."""
+
+    def setUp(self):
+        self.td = tempfile.TemporaryDirectory()
+        self.base = Path(self.td.name)
+        self.repo = self.base / "repo"
+        (self.repo / ".git").mkdir(parents=True)
+        (self.repo / ".rig").mkdir()
+        self.bin = self.base / "bin"
+        self.dc = install_fake_dc(self.bin)
+        fake_agent(self.bin, "claude", "")
+        fake_agent(self.bin, "codex", "")
+        self.home = self.base / "home"
+        (self.home / ".claude").mkdir(parents=True)
+        self.env = mock.patch.dict(os.environ, {"RIG_DC_BIN": str(self.dc), "HOME": str(self.home),
+                                                "RIG_HOME": str(self.base / "rh"),
+                                                "PATH": f"{self.bin}:{os.environ['PATH']}"})
+        self.env.start()
+        os.environ.pop("FAKE_DC_EXEC_FAIL", None)
+
+    def tearDown(self):
+        self.env.stop()
+        self.td.cleanup()
+
+    def harness(self, workers="claude = true\ncodex = true\n", creds='claude = "mount-ro"\ncodex = "none"\n'):
+        (self.repo / ".rig" / "harness.toml").write_text(
+            f'[project]\nenabled = true\n\n[workers]\n{workers}\n[sandbox]\nprovider = "devcontainer"\n\n[sandbox.workers]\n{creds}')
+
+    def test_sandbox_row_describes_the_devcontainer_provider(self):
+        self.harness()
+        row = rows(doctor.build_report(self.repo), "sandbox")[0]
+        self.assertEqual((row["status"], row["required"]), ("ready", False))
+        self.assertIn("claude=mount-ro, codex=none", row["detail"])
+        with mock.patch.dict(os.environ, {"RIG_DC_BIN": "", "PATH": str(self.base / "nowhere")}):
+            gone = rows(doctor.build_report(self.repo), "sandbox")[0]
+        self.assertEqual(gone["status"], "missing")
+        self.assertIn("needs dc-cli", gone["detail"])
+        (self.repo / ".rig" / "harness.toml").write_text('[project]\nenabled = true\n\n[sandbox.workers]\nclaude = "oops"\n')
+        self.assertIn("unknown credential choice", rows(doctor.build_report(self.repo), "sandbox")[0]["detail"])
+
+    def test_container_workers_are_checked_only_on_request(self):
+        self.harness()
+        self.assertEqual([c for c in doctor.build_report(self.repo)["checks"] if c["name"].startswith("container-")], [])
+
+    def test_ready_workers_pass_and_are_required_blockers_when_they_fail(self):
+        self.harness()
+        report = doctor.build_report(self.repo, workspace=True)
+        self.assertEqual([(c["name"], c["status"], c["required"]) for c in report["checks"] if c["name"].startswith("container-")],
+                         [("container-claude", "ready", True), ("container-codex", "ready", True)])
+        (self.bin / "codex").unlink()
+        report = doctor.build_report(self.repo, workspace=True)
+        codex = rows(report, "container-codex")[0]
+        self.assertEqual(codex["status"], "failed")
+        self.assertIn("codex CLI is not installed in the container", codex["detail"])
+        self.assertEqual(report["status"], "failed")
+
+    def test_unsupported_and_undecided_workers_are_listed_as_unavailable(self):
+        self.harness(workers="claude = true\ngrok = true\ncodex = true\n", creds='claude = "mount-ro"\n')
+        report = doctor.build_report(self.repo, workspace=True)
+        grok, codex = rows(report, "container-grok")[0], rows(report, "container-codex")[0]
+        self.assertEqual((grok["status"], grok["required"]), ("unavailable", False))
+        self.assertIn("global host configuration", grok["detail"])
+        self.assertIn("no credential choice", codex["detail"])
+
+    def test_unreachable_container_names_every_enabled_worker_as_failed_with_the_start_hint(self):
+        self.harness()
+        os.environ["FAKE_DC_EXEC_FAIL"] = "1"
+        report = doctor.build_report(self.repo, workspace=True)
+        failed = [c for c in report["checks"] if c["name"].startswith("container-")]
+        self.assertEqual({c["status"] for c in failed}, {"failed"})
+        self.assertTrue(all("rig env up" in c["detail"] for c in failed))
+
+    def test_host_provider_never_runs_container_checks(self):
+        (self.repo / ".rig" / "harness.toml").write_text("[project]\nenabled = true\n\n[workers]\nclaude = true\n")
+        report = doctor.build_report(self.repo, workspace=True)
+        self.assertEqual([c for c in report["checks"] if c["name"].startswith("container-")], [])
 
 
 if __name__ == "__main__":

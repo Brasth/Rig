@@ -221,9 +221,37 @@ except (OSError, ValueError, admission.AdmissionError) as error:
 PY
 }
 
+# Container mode. The supervisor inside the container kills the worker's process
+# group on a stop file or when this heartbeat stops changing (see sandbox_container.py).
+HB_COUNT=0
+container_heartbeat() {
+  [[ "${SANDBOX_PROVIDER:-host}" == "devcontainer" ]] || return 0
+  HB_COUNT=$((HB_COUNT + 1))
+  printf '%s\n' "$HB_COUNT" > "$JOB_DIR/container-heartbeat" 2>/dev/null || true
+}
+container_stop() {
+  [[ "${SANDBOX_PROVIDER:-host}" == "devcontainer" && -n "${CHILD:-}" ]] || return 0
+  : > "$JOB_DIR/container-stop" 2>/dev/null || true
+  # Let the supervisor end the agent's whole tree; killing only the dc exec client
+  # would leave the agent running. Bounded by lease (15s) plus its TERM-to-KILL wait.
+  local i
+  for i in {1..230}; do
+    kill -0 "$CHILD" 2>/dev/null || return 0
+    sleep 0.1
+  done
+}
+apply_sandbox_wrap() {
+  [[ "$SANDBOX_PROVIDER" == "devcontainer" ]] || return 0
+  local wrapped=() item
+  while IFS= read -r -d '' item; do wrapped+=("$item"); done < <(
+    python3 "$SANDBOX_PY" wrap --repo "$REPO" --worker "$WORKER" --job-dir "$JOB_DIR" --job-id "$JOB_ID" --role "$ROLE" -- "${CMD[@]}")
+  [[ ${#wrapped[@]} -gt 0 ]] || refuse "could not prepare the container command (see rig doctor --workspace)"
+  CMD=("${wrapped[@]}")
+}
 stop_child() {
   [[ "${SHUTDOWN_ATTEMPTED:-0}" == "1" ]] && return 0
   SHUTDOWN_ATTEMPTED=1
+  container_stop
   admission_call terminate "${LAUNCH_READY:-}" >/dev/null || true
 }
 
@@ -855,6 +883,12 @@ if [[ "$CONTINUATION_MODE" == "native" && -n "$CONTINUES_SESSION" ]]; then
   SHOULD_RESUME=1
 fi
 BRIEF_TEXT="$(cat "$BRIEF")"
+SANDBOX_PY="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/sandbox_provider.py"
+SANDBOX_PROVIDER="$(python3 "$SANDBOX_PY" name --repo "$REPO" 2>/dev/null)" || SANDBOX_PROVIDER=host
+if [[ "$SANDBOX_PROVIDER" == "devcontainer" ]]; then
+  # The container resolves Python by name; the host's interpreter path need not exist there.
+  export RIG_CHILD_PYTHON=python3
+fi
 CHILD_MCP_PREPARE="$(python3 "$CHILD_MCP_PY" prepare "$JOB_DIR" "$JOB_ID" "$REPO" "$WORKER")"
 CHILD_MCP_ARGV=()
 while IFS= read -r _mcp_arg; do
@@ -1092,8 +1126,14 @@ fi
 if [[ "$FLAG" != "true" ]]; then
   refuse "worker '$WORKER' is off in .rig/harness.toml"
 fi
-SANDBOX_ERR="$(python3 "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/sandbox_provider.py" check --repo "$REPO" 2>&1 >/dev/null)" || \
+SANDBOX_ERR="$(python3 "$SANDBOX_PY" check --repo "$REPO" 2>&1 >/dev/null)" || \
   refuse "${SANDBOX_ERR#sandbox: }"
+if [[ "$SANDBOX_PROVIDER" == "devcontainer" ]]; then
+  SANDBOX_ERR="$(python3 "$SANDBOX_PY" wrap --repo "$REPO" --worker "$WORKER" --job-dir "$JOB_DIR" --job-id "$JOB_ID" --role "$ROLE" -- true 2>&1 >/dev/null)" || \
+    refuse "${SANDBOX_ERR#sandbox: }"
+  apply_sandbox_wrap
+  CMD_STR="$(shell_join "${CMD[@]}")"
+fi
 if [[ "$WORKER" == "devin" ]]; then
   if [[ -z "$MODEL" ]]; then
     refuse "Devin requires an exact SWE-2 model"
@@ -1105,7 +1145,7 @@ if [[ "$WORKER" == "devin" ]]; then
   esac
 fi
 
-if [[ -z "$BIN" ]]; then
+if [[ -z "$BIN" && "$SANDBOX_PROVIDER" != "devcontainer" ]]; then
   echo "run-worker: binary '$WORKER' not on PATH"
   echo "would run: $CMD_STR"
   write_json "fail" 127 "binary '$WORKER' not on PATH; would run: $CMD_STR" "$(iso_now)"
@@ -1119,6 +1159,11 @@ if [[ "${RIG_LIVE:-0}" != "1" ]]; then
   echo "would run: $CMD_STR"
   write_json "ok" 0 "dry-run" "$(iso_now)"
   exit 0
+fi
+
+if [[ "$SANDBOX_PROVIDER" == "devcontainer" ]]; then
+  SANDBOX_ERR="$(python3 "$SANDBOX_PY" prepare --repo "$REPO" --worker "$WORKER" --job-dir "$JOB_DIR" --job-id "$JOB_ID" 2>&1 >/dev/null)" || \
+    refuse "${SANDBOX_ERR#sandbox: }"
 fi
 
 CHILD_MCP_READY="$(printf '%s' "$CHILD_MCP_PREPARE" | python3 -c 'import json,sys; print("1" if json.load(sys.stdin).get("ready") else "0")')"
@@ -1174,11 +1219,15 @@ FRESH_SESSION_ID=""
 if [[ "$SHOULD_RESUME" -eq 1 ]]; then
   SHOULD_RESUME=0
   build_worker_cmd
+  apply_sandbox_wrap
   FRESH_CMD=("${CMD[@]}")
   FRESH_SESSION_ID="$SESSION_ID"
   SHOULD_RESUME=1
   build_worker_cmd
+  apply_sandbox_wrap
 fi
+rm -f "$JOB_DIR/container-stop"
+container_heartbeat
 RIG_JOB_ID="$JOB_ID" RIG_JOB_DIR="$JOB_DIR" RIG_REPO="$REPO" RIG_ROLE="$ROLE" \
 python3 - "$ADMISSION_PY" "$REPO" "$$" "$LAUNCH_GATE" "$LAUNCH_READY" "$FRESH_SESSION_ID" "${#FRESH_CMD[@]}" ${FRESH_CMD[@]+"${FRESH_CMD[@]}"} "${CMD[@]}" >"$LOG" 2>&1 <<'PY' &
 import json, os, pathlib, sys, time
@@ -1262,6 +1311,7 @@ while kill -0 "$CHILD" 2>/dev/null; do
   fi
   if (( SECONDS - LAST_OBSERVE >= 1 )); then
     LAST_OBSERVE=$SECONDS
+    container_heartbeat
     if ! admission_call observe >/dev/null; then
       echo "run-worker: could not observe child ownership; stopping execution" >&2
       stop_child

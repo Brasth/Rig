@@ -73,13 +73,60 @@ def init_sandbox(repo: Path, *, force: bool = False) -> dict:
     return report
 
 
+def _mount(source, readonly: bool = True) -> str:
+    """A bind mount at the SAME path inside the container (Rig never translates paths)."""
+    return f"source={source},target={source},type=bind" + (",readonly" if readonly else "")
+
+
+def effective_config(repo: Path, generated: dict, credentials: dict, runtime: Path, home: Path) -> dict:
+    """The generated config plus what container mode needs: the repository mounted at its own
+    path, the Rig runtime read-only, and the login directories of workers opted in with mount-ro."""
+    import container_modes
+    repo = str(Path(repo).resolve())
+    config = dict(generated)
+    config["workspaceMount"] = _mount(repo, readonly=False)
+    config["workspaceFolder"] = repo
+    mounts = [m for m in config.get("mounts", []) if isinstance(m, (str, dict))]
+    wanted = [_mount(runtime)]
+    for worker in sorted(credentials):
+        if credentials[worker] != "mount-ro":
+            continue
+        for relative in container_modes.mode(worker).get("credential_paths", []):
+            if (Path(home) / relative).exists():  # never mount what is not there
+                wanted.append(_mount(Path(home) / relative))
+    config["mounts"] = mounts + [m for m in wanted if m not in mounts]
+    return config
+
+
+def effective_path(repo: Path) -> Path:
+    return Path(repo) / ".rig" / "sandbox" / "effective.json"
+
+
+def write_effective(repo: Path) -> Path:
+    """Regenerate effective.json from override.json and the current [sandbox.workers] choices."""
+    generated = json.loads(override_path(repo).read_text())
+    if not isinstance(generated, dict):
+        raise dc_client.DcError(f"{override_path(repo)} is not a JSON object; run rig init --sandbox --force")
+    config = harness.parse_harness(harness.harness_path(repo))["sandbox"]
+    from sandbox_container import RUNTIME
+    merged = effective_config(repo, generated, config["credentials"], RUNTIME, Path(os.path.expanduser("~")))
+    path = effective_path(repo)
+    temporary = path.with_suffix(".tmp")
+    temporary.write_text(json.dumps(merged, indent=2, sort_keys=True) + "\n")
+    os.replace(temporary, path)
+    return path
+
+
 def _lifecycle(repo: Path, verb: str) -> int:
     repo = Path(repo).resolve()
     harness.assert_project_enabled(repo)
     args = [verb]
     path = override_path(repo)
     if verb == "up" and detect_kind(repo) == "none" and path.is_file():
-        args += ["--override-config", str(path)]
+        args += ["--override-config", str(write_effective(repo))]
+    elif verb == "up" and harness.parse_harness(harness.harness_path(repo))["sandbox"]["provider"] == "devcontainer":
+        print("rig env: the project's own container config is used as it is; container mode needs it to mount the "
+              "repository and the Rig runtime at the same paths (rig doctor --workspace checks)", file=sys.stderr)
     done = dc_client.run(args, repo, timeout=900 if verb == "up" else 120, stream=True)
     return done.returncode
 

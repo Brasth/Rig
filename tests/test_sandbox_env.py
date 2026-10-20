@@ -145,7 +145,7 @@ class Lifecycle(Base):
         sandbox_env.init_sandbox(self.repo)
         self.log.unlink()
         self.assertEqual(sandbox_env.env_up(self.repo), 0)
-        self.assertEqual(self.calls(), [f"up --override-config {self.repo.resolve()}/.rig/sandbox/override.json"])
+        self.assertEqual(self.calls(), [f"up --override-config {self.repo.resolve()}/.rig/sandbox/effective.json"])
         (self.repo / "compose.yaml").write_text("services: {}\n")
         self.log.unlink()
         sandbox_env.env_up(self.repo)
@@ -167,6 +167,83 @@ class Lifecycle(Base):
         (self.repo / ".rig" / "harness.toml").write_text("[project]\nenabled = false\n")
         with self.assertRaises(ValueError):
             sandbox_env.env_up(self.repo)
+
+
+class Effective(Base):
+    def setUp(self):
+        super().setUp()
+        self.home = self.base / "home"
+        (self.home / ".claude").mkdir(parents=True)
+        (self.home / ".claude.json").write_text("{}")
+        self.runtime = self.base / "runtime"
+        self.runtime.mkdir()
+
+    def config(self, credentials, generated=None):
+        return sandbox_env.effective_config(self.repo, generated or {"image": "node:22"}, credentials, self.runtime, self.home)
+
+    def test_repo_is_mounted_at_its_own_path_and_runtime_is_read_only(self):
+        cfg = self.config({})
+        repo = str(self.repo.resolve())
+        self.assertEqual(cfg["workspaceMount"], f"source={repo},target={repo},type=bind")
+        self.assertEqual(cfg["workspaceFolder"], repo)
+        self.assertEqual(cfg["image"], "node:22")
+        self.assertEqual(cfg["mounts"], [f"source={self.runtime},target={self.runtime},type=bind,readonly"])
+
+    def test_only_opted_in_credentials_that_exist_are_mounted_read_only(self):
+        mounts = self.config({"claude": "mount-ro", "codex": "mount-ro"})["mounts"]
+        self.assertIn(f"source={self.home}/.claude,target={self.home}/.claude,type=bind,readonly", mounts)
+        self.assertIn(f"source={self.home}/.claude.json,target={self.home}/.claude.json,type=bind,readonly", mounts)
+        self.assertFalse([m for m in mounts if ".codex" in m], "a path that does not exist is never mounted")
+        self.assertFalse([m for m in self.config({"claude": "none"})["mounts"] if ".claude" in m])
+        self.assertTrue(all(m.endswith("readonly") for m in mounts))
+
+    def test_existing_mounts_are_kept_and_not_duplicated(self):
+        ours = f"source={self.runtime},target={self.runtime},type=bind,readonly"
+        mounts = self.config({}, {"mounts": ["source=a,target=/a,type=bind", {"type": "volume"}, ours, 7]})["mounts"]
+        self.assertEqual(mounts, ["source=a,target=/a,type=bind", {"type": "volume"}, ours])
+
+    def test_up_uses_a_regenerated_effective_config_and_never_the_projects_files(self):
+        harness_path = self.repo / ".rig" / "harness.toml"
+        harness_path.write_text('[project]\nenabled = true\n\n[sandbox.workers]\nclaude = "mount-ro"\n')
+        sandbox_env.init_sandbox(self.repo)
+        with mock.patch.dict(os.environ, {"HOME": str(self.home)}):
+            sandbox_env.env_up(self.repo)
+            first = json.loads(sandbox_env.effective_path(self.repo).read_text())
+            self.assertTrue(any(".claude" in m for m in first["mounts"]))
+            harness_path.write_text('[project]\nenabled = true\n\n[sandbox.workers]\nclaude = "none"\n')
+            sandbox_env.env_up(self.repo)
+        second = json.loads(sandbox_env.effective_path(self.repo).read_text())
+        self.assertFalse(any(".claude" in m for m in second["mounts"]), "stale mounts must not survive a config change")
+        self.assertEqual(json.loads(sandbox_env.override_path(self.repo).read_text()), {"image": "node:22-bookworm"})
+        self.assertFalse((self.repo / ".devcontainer").exists())
+
+    def test_a_projects_own_config_is_used_as_is_with_a_note_in_container_mode(self):
+        import contextlib
+        import io
+        (self.repo / ".devcontainer").mkdir()
+        (self.repo / ".devcontainer" / "devcontainer.json").write_text('{"name": "mine"}\n')
+        before = tree_hash(self.repo / ".devcontainer")
+        (self.repo / ".rig" / "harness.toml").write_text('[project]\nenabled = true\n\n[sandbox]\nprovider = "devcontainer"\n')
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            sandbox_env.env_up(self.repo)
+        self.assertIn("same paths", err.getvalue())
+        self.assertEqual(self.calls(), ["up"])
+        self.assertEqual(tree_hash(self.repo / ".devcontainer"), before)
+        self.assertFalse(sandbox_env.effective_path(self.repo).exists())
+        (self.repo / ".rig" / "harness.toml").write_text("[project]\nenabled = true\n")
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            sandbox_env.env_up(self.repo)
+        self.assertEqual(err.getvalue(), "", "no note for the host provider")
+
+    def test_a_corrupt_override_is_reported_not_passed_to_dc(self):
+        path = sandbox_env.override_path(self.repo)
+        path.parent.mkdir(parents=True)
+        path.write_text("[1]")
+        with self.assertRaisesRegex(dc_client.DcError, "not a JSON object"):
+            sandbox_env.env_up(self.repo)
+        self.assertEqual(self.calls(), [])
 
 
 class Status(Base):

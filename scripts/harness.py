@@ -37,7 +37,7 @@ def parse_harness(path: Path) -> dict:
         "routing": {"mode": "smart", "engine": "", "local_policy": "", "objective": ""},
         "orchestration": {"mode": "adaptive", "max_nodes": 12},
         "computer_use": {"enabled": False},
-        "sandbox": {"provider": "host", "error": ""},
+        "sandbox": {"provider": "host", "error": "", "credentials": {}},
         "mcp": {"profile": "full", "error": ""},
         "project": {"state": "uninitialized", "enabled": False, "error": ""},
     }
@@ -89,10 +89,19 @@ def parse_harness(path: Path) -> dict:
         if section == "sandbox" and key == "provider":
             choice = val.strip().strip('"\'').lower()
             if choice in {"host", "devcontainer"}:
-                out["sandbox"] = {"provider": choice, "error": ""}
+                out["sandbox"].update(provider=choice)
             else:
                 # Never fall back to the host silently when a boundary was requested.
-                out["sandbox"] = {"provider": "host", "error": f"unknown [sandbox] provider {choice!r}"}
+                out["sandbox"].update(provider="host", error=out["sandbox"]["error"] or f"unknown [sandbox] provider {choice!r}")
+            continue
+        if section == "sandbox.workers":
+            choice = val.strip().strip('"\'').lower()
+            if key not in WORKERS:
+                out["sandbox"]["error"] = out["sandbox"]["error"] or f"unknown worker {key!r} in [sandbox.workers]"
+            elif choice not in {"mount-ro", "none"}:
+                out["sandbox"]["error"] = out["sandbox"]["error"] or f"unknown credential choice {choice!r} for {key} in [sandbox.workers]"
+            else:
+                out["sandbox"]["credentials"][key] = choice
             continue
         val = val.strip('"')
         if section == "" and key == "parent":

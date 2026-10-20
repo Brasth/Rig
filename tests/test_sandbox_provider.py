@@ -32,8 +32,8 @@ class SandboxConfig(unittest.TestCase):
 
     def test_default_is_host_without_section_or_file(self):
         self.assertEqual(harness.parse_harness(harness.harness_path(self.repo))["sandbox"],
-                         {"provider": "host", "error": ""})
-        self.assertEqual(self.parsed("[workers]\ngrok = true\n"), {"provider": "host", "error": ""})
+                         {"provider": "host", "error": "", "credentials": {}})
+        self.assertEqual(self.parsed("[workers]\ngrok = true\n"), {"provider": "host", "error": "", "credentials": {}})
 
     def test_known_providers_parse_quoted_and_cased(self):
         self.assertEqual(self.parsed('[sandbox]\nprovider = "host"\n')["provider"], "host")
@@ -44,7 +44,20 @@ class SandboxConfig(unittest.TestCase):
         self.assertIn("unknown [sandbox] provider", state["error"])
 
     def test_provider_key_outside_sandbox_section_is_ignored(self):
-        self.assertEqual(self.parsed('[routing]\nprovider = "devcontainer"\n'), {"provider": "host", "error": ""})
+        self.assertEqual(self.parsed('[routing]\nprovider = "devcontainer"\n'),
+                         {"provider": "host", "error": "", "credentials": {}})
+
+    def test_worker_credential_choices_parse_and_bad_ones_are_errors(self):
+        state = self.parsed('[sandbox]\nprovider = "devcontainer"\n\n[sandbox.workers]\nclaude = "mount-ro"\ncodex = \'None\'  # no login needed\n')
+        self.assertEqual((state["provider"], state["credentials"], state["error"]),
+                         ("devcontainer", {"claude": "mount-ro", "codex": "none"}, ""))
+        self.assertIn("unknown credential choice", self.parsed('[sandbox.workers]\nclaude = "mount-rw"\n')["error"])
+        self.assertIn("unknown worker", self.parsed('[sandbox.workers]\nbogus = "none"\n')["error"])
+        bad = self.parsed('[sandbox.workers]\nclaude = "mount-rw"\ncodex = "none"\n')
+        self.assertEqual(bad["credentials"], {"codex": "none"}, "a bad value is never half-applied")
+
+    def test_workers_section_does_not_change_the_provider(self):
+        self.assertEqual(self.parsed('[sandbox.workers]\nclaude = "mount-ro"\n')["provider"], "host")
 
 
 class HostProviderBehaviour(unittest.TestCase):
@@ -86,7 +99,7 @@ class HostProviderBehaviour(unittest.TestCase):
         bad = subprocess.run([sys.executable, script, "check", "--repo", str(self.repo)],
                              capture_output=True, text=True)
         self.assertEqual(bad.returncode, 1)
-        self.assertIn("not available", bad.stderr)
+        self.assertIn("needs dc-cli", bad.stderr)
 
 
 if __name__ == "__main__":

@@ -120,7 +120,7 @@ class ClaudeWorkerArgv(unittest.TestCase):
         proc = run_worker(self.repo, "claude", "claude-stream", str(self.brief))
         out = proc.stdout + proc.stderr
         self.assertNotEqual(proc.returncode, 0, out)
-        self.assertIn("not available in this Rig runtime", out)
+        self.assertIn("needs dc-cli", out)
         self.assertNotIn("would run:", out)
 
     def test_host_sandbox_provider_keeps_dry_run_argv(self):
