@@ -39,6 +39,7 @@ def parse_harness(path: Path) -> dict:
         "computer_use": {"enabled": False},
         "sandbox": {"provider": "host", "error": "", "credentials": {}},
         "mcp": {"profile": "full", "error": ""},
+        "worktrees": {"mode": "off", "container": "shared", "error": ""},
         "project": {"state": "uninitialized", "enabled": False, "error": ""},
     }
     if not path.is_file():
@@ -85,6 +86,15 @@ def parse_harness(path: Path) -> dict:
                 out["mcp"] = {"profile": choice, "error": ""}
             else:
                 out["mcp"] = {"profile": "full", "error": f"unknown [mcp] profile {choice!r}"}
+            continue
+        if section == "worktrees" and key in {"mode", "container"}:
+            choice = val.strip().strip('"\'').lower()
+            allowed = {"mode": {"off", "per-job"}, "container": {"shared", "per-job"}}[key]
+            if choice in allowed:
+                out["worktrees"][key] = choice
+            else:
+                # An isolation boundary that was asked for is never silently dropped.
+                out["worktrees"]["error"] = out["worktrees"]["error"] or f"unknown [worktrees] {key} {choice!r}"
             continue
         if section == "sandbox" and key == "provider":
             choice = val.strip().strip('"\'').lower()

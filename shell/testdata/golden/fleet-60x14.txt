@@ -1,0 +1,14 @@
+ Rig · my-repo   ! 1 need attention  ● 1 running  slots 2/3 
+  Jobs !1   Queue 2   Workflows 2   Workspace  [Fleet]      
+─ This repository ──────────────────────────────────────────
+ ● repo  running  cpu 0.3%  mem 6.1M/15.7G                  
+ ● job job-7  running                                       
+─ Other workspaces ─────────────────────────────────────────
+ ○ other  exited                                            
+     /work/other                                            
+─ Engine ───────────────────────────────────────────────────
+ host  4 cpus  15.7G memory  in use cpu 8.8% mem 544.8M     
+                                                            
+                                                            
+                                                            
+ Tab pane  j/k scroll  r refresh  q quit                    

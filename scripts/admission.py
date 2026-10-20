@@ -772,6 +772,14 @@ def _validate(root, worker, role, model, access, owner, *, allow_unknown_worker=
             raise AdmissionError(problem)
 
 
+def isolation_for(root, access):
+    """"worktree" when a write job in this repository runs in its own git worktree, else "".
+    Derived from [worktrees] mode so every admission path (launch, queue, workflow) agrees."""
+    import worktrees
+    config = worktrees.settings(root)
+    return "worktree" if config["mode"] == "per-job" and not config["error"] and access == "write" else ""
+
+
 def _capacity(root, rows, worker, access, files, *, reserve_slot=True, resources=None,
               allow_read_overlap_reservations=None):
     cfg = harness.parse_harness(harness.harness_path(root))["queue"]
@@ -787,8 +795,16 @@ def _capacity(root, rows, worker, access, files, *, reserve_slot=True, resources
             raise AdmissionError(f"{name} live {count}/{limit} (max_per_worker)")
     allowed = set(allow_read_overlap_reservations or [])
     held_resources = canonical_resources(resources)
+    candidate_isolated = bool(isolation_for(root, access))
     for row in rows:
         identity = row.get("job_id") or row.get("queue_id") or row.get("reservation_id")
+        # A worktree writer never edits this checkout, so only another worktree writer or a reader of this
+        # checkout may overlap it. Overlap is decided at the merge gate, not here. Resources still conflict.
+        if row.get("isolation") == "worktree" and (candidate_isolated or access == "read"):
+            conflict = resources_conflict(held_resources, row.get("resources") or [])
+            if conflict:
+                raise AdmissionError(f"resource overlap: {conflict} ({identity})")
+            continue
         allowed_read = access == "read" and row.get("reservation_id") in allowed
         if access == "read" and row.get("access") == "read":
             conflict = resources_conflict(held_resources, row.get("resources") or [])
@@ -880,7 +896,7 @@ def _retain_failed_review(root, record, reason):
 def _new_record(*, actor, job_id, queue_id, worker, role, model, access, canonical, declared,
                 source=None, writer_job_id="", writer_snapshot_id="", resources=None,
                 workflow_id="", workflow_node_id="", workflow_spec_hash="", workflow_attempt=0,
-                writer_job_ids=None, writer_snapshot_ids=None, writer_providers=None):
+                writer_job_ids=None, writer_snapshot_ids=None, writer_providers=None, isolation=""):
     actor = _bind_initiating_identity(actor)
     record = {"version": 1, "reservation_id": source["reservation_id"] if source else uuid.uuid4().hex,
             "attempt_id": uuid.uuid4().hex, "owner_token": secrets.token_hex(16), "owner": actor,
@@ -889,6 +905,7 @@ def _new_record(*, actor, job_id, queue_id, worker, role, model, access, canonic
             "access": access, "files": canonical, "declared_files": declared,
             "resources": canonical_resources(resources),
             "scope_unknown": not canonical, "stage": "reserved", "slot_held": True,
+            "isolation": isolation,
             "created_at": _now(), "release_reason": "", "launch_started": False,
             "claim_consumed": bool(job_id) and not bool(queue_id), "stopped": False, "needs_reconciliation": False,
             "history": list(source.get("history", [])) + [_public(source)] if source else []}
@@ -1225,7 +1242,7 @@ def reserve(repo, *, job_id="", worker="", role="worker", model="", files=None,
         if dry_run:
             preview = {"job_id": job_id, "stage": "dry_run", "slot_held": False, "access": access,
                        "files": canonical, "declared_files": declared, "owner": actor, "dry_run": True,
-                       "resources": held_resources}
+                       "resources": held_resources, "isolation": isolation_for(root, access)}
             if lineage:
                 _apply_continuation(preview, lineage)
             return preview
@@ -1251,7 +1268,10 @@ def reserve(repo, *, job_id="", worker="", role="worker", model="", files=None,
                                  resources=held_resources, workflow_id=workflow_id,
                                  workflow_node_id=workflow_node_id, workflow_spec_hash=workflow_spec_hash,
                                  workflow_attempt=workflow_attempt, writer_job_ids=writer_job_ids,
-                                 writer_snapshot_ids=writer_snapshot_ids, writer_providers=writer_providers)
+                                 writer_snapshot_ids=writer_snapshot_ids, writer_providers=writer_providers,
+                                 isolation=isolation_for(root, access))
+        if source and not writer_job_id and not record.get("isolation"):
+            record["isolation"] = isolation_for(root, access)  # a queue claim gains it when the job launches
         if frozen_contract is not None:
             record["acceptance_contract"] = frozen_contract
             record["contract_fingerprint"] = contracts.fingerprint(frozen_contract)
@@ -1571,7 +1591,7 @@ def finish(repo, *, reservation_id, attempt_id, owner_token, status, owner=None,
 def _accepted_complete(root, record, snapshot_id):
     folder = root / ".rig" / "jobs" / record["job_id"]
     accepted = _read(folder / "verification.json", required=True)
-    current = evidence.snapshot(root, record["declared_files"])["snapshot_id"]
+    current = evidence.job_snapshot(root, folder, record["declared_files"])["snapshot_id"]
     if not snapshot_id or snapshot_id != current or accepted.get("snapshot_id") != current or accepted.get("acceptance") != "accepted" or accepted.get("next") != "complete":
         raise AdmissionError("release requires current parent acceptance of this snapshot")
 

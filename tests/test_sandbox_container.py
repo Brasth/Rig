@@ -77,6 +77,27 @@ class Modes(unittest.TestCase):
         self.assertEqual(container_modes.credential_problem("codex", {"codex": "none"}), "")
 
 
+class ReadOnlyRuntime(unittest.TestCase):
+    def test_the_runtime_lease_is_skipped_when_the_runtime_is_mounted_read_only(self):
+        """An installed runtime has install-manifest.json, so the child MCP would otherwise try to take a lock inside
+        the read-only mount and never answer its handshake."""
+        import ui_runtime_lease
+        with tempfile.TemporaryDirectory() as home:
+            (Path(home) / "install-manifest.json").write_text("{}")
+            boom = mock.Mock(side_effect=AssertionError("the runtime must not be touched"))
+            with mock.patch.dict(os.environ, {"RIG_HOME": home, "RIG_RUNTIME_READONLY": "1"}), \
+                    mock.patch.object(ui_runtime_lease.update_gate, "assert_ready", boom):
+                with ui_runtime_lease.lease("mcp"):
+                    pass
+            boom.assert_not_called()
+            with mock.patch.dict(os.environ, {"RIG_HOME": home}, clear=False), \
+                    mock.patch.object(ui_runtime_lease.update_gate, "assert_ready", boom):
+                os.environ.pop("RIG_RUNTIME_READONLY", None)
+                with self.assertRaises(AssertionError):
+                    with ui_runtime_lease.lease("mcp"):
+                        pass
+
+
 class Wrap(Base):
     def test_exact_argv_shape(self):
         argv, env = self.provider.wrap_worker_cmd(["/usr/local/bin/claude", "-p", "do it"], self.job_env, worker="claude")
@@ -84,7 +105,7 @@ class Wrap(Base):
         self.assertEqual(argv[7], sc.SUPERVISOR)
         self.assertEqual(argv[8:13], ["rig-supervisor", str(self.repo.resolve()), str(self.job / "container-stop"),
                                       str(self.job / "container-heartbeat"), "15"])
-        self.assertEqual(argv[13:], ["env", f"HOME={self.home}", "RIG_JOB_ID=j1", f"RIG_JOB_DIR={self.job}",
+        self.assertEqual(argv[13:], ["env", f"HOME={self.home}", "RIG_RUNTIME_READONLY=1", "RIG_JOB_ID=j1", f"RIG_JOB_DIR={self.job}",
                                      f"RIG_REPO={self.repo}", "RIG_ROLE=worker", "claude", "-p", "do it"])
         self.assertEqual(env, self.job_env)
 

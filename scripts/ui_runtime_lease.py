@@ -9,6 +9,10 @@ import update_gate
 @contextmanager
 def lease(kind, repo=None):
     root = Path(os.environ.get("RIG_HOME") or Path(__file__).resolve().parents[1])
+    if os.environ.get("RIG_RUNTIME_READONLY") == "1":
+        # Container mode mounts the runtime read-only; the host wrapper that started this process holds the lease.
+        yield
+        return
     update_gate.assert_ready(root)
     if not (root / "install-manifest.json").is_file():
         yield

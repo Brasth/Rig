@@ -65,6 +65,19 @@ fi
 parse_harness "$HARNESS"
 
 JOB_DIR="$REPO/.rig/jobs/$JOB_ID"
+WORKTREES_PY="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/worktrees.py"
+# Where the worker edits. $REPO stays the state root; a write job in [worktrees] mode = "per-job" edits its own worktree.
+WORKTREE_PLAN="$(python3 "$WORKTREES_PY" plan --repo "$REPO" --job "$JOB_ID" --role "$ROLE" --access "${RIG_ACCESS:-}" --writer-job "${RIG_WRITER_JOB_ID:-}" --continues "${RIG_CONTINUES_JOB_ID:-}" 2>&1)" || {
+  echo "run-worker: refuse: ${WORKTREE_PLAN#rig worktrees: }" >&2
+  exit 1
+}
+WORK="$(printf '%s' "$WORKTREE_PLAN" | python3 -c 'import json,sys; print(json.load(sys.stdin)["path"])')"
+WORKTREE_ISOLATED="$(printf '%s' "$WORKTREE_PLAN" | python3 -c 'import json,sys; print("1" if json.load(sys.stdin)["isolated"] else "0")')"
+if [[ "$WORKTREE_ISOLATED" == "1" ]]; then
+  export RIG_ISOLATION=worktree RIG_WORKDIR="$WORK"
+else
+  unset RIG_ISOLATION RIG_WORKDIR
+fi
 JOB_FILES_JSON="$(python3 - "$JOB_DIR/meta.json" <<'PY'
 import json, os, pathlib, sys
 if "RIG_JOB_FILES_JSON" in os.environ:
@@ -364,6 +377,9 @@ PY
     return 0
   fi
   if python3 "$EVIDENCE_PY" finish --repo "$REPO" --job-dir "$JOB_DIR" >/dev/null; then
+    if [[ "$WORKTREE_ISOLATED" == "1" ]]; then
+      python3 "$WORKTREES_PY" commit --repo "$REPO" --job "$JOB_ID" >/dev/null || EVIDENCE_ERROR="could not commit the job worktree"
+    fi
     RESULT_FILES_JSON="$(python3 - "$JOB_DIR/change-evidence.json" <<'PY'
 import json, pathlib, sys
 evidence = json.loads(pathlib.Path(sys.argv[1]).read_text())
@@ -930,12 +946,12 @@ case "$WORKER" in
       SESSION_ID="$CONTINUES_SESSION"
       # A positional prompt selects Grok's interactive TUI, even with -r and
       # streaming-json. Keep resume headless under the detached supervisor.
-      CMD=(grok --no-auto-update -r "$SESSION_ID" --prompt-file "$BRIEF" --cwd "$REPO" --output-format streaming-json --always-approve --max-turns 40)
+      CMD=(grok --no-auto-update -r "$SESSION_ID" --prompt-file "$BRIEF" --cwd "$WORK" --output-format streaming-json --always-approve --max-turns 40)
       [[ -n "$MODEL" ]] && CMD+=(-m "$MODEL")
       [[ -n "$EFFORT" ]] && CMD+=(--effort "$EFFORT")
     else
       SESSION_ID="$(python3 -c 'import uuid; print(uuid.uuid4())')"
-      CMD=(grok --no-auto-update --prompt-file "$BRIEF" --cwd "$REPO" --output-format streaming-json --session-id "$SESSION_ID" --always-approve --max-turns 40)
+      CMD=(grok --no-auto-update --prompt-file "$BRIEF" --cwd "$WORK" --output-format streaming-json --session-id "$SESSION_ID" --always-approve --max-turns 40)
       [[ -n "$MODEL" ]] && CMD+=(-m "$MODEL")
       [[ -n "$EFFORT" ]] && CMD+=(--effort "$EFFORT")
     fi
@@ -944,13 +960,13 @@ case "$WORKER" in
     if [[ "$SHOULD_RESUME" -eq 1 ]]; then
       SESSION_ID="$CONTINUES_SESSION"
       # -s/--sandbox and -C/--cd belong to `codex exec`, not `exec resume`.
-      CMD=(codex exec --json -s workspace-write -C "$REPO")
+      CMD=(codex exec --json -s workspace-write -C "$WORK")
       [[ -n "$MODEL" ]] && CMD+=(-m "$MODEL")
       [[ -n "$EFFORT" ]] && CMD+=(-c "model_reasoning_effort=\"$EFFORT\"")
       CMD+=("${CHILD_MCP_ARGV[@]}")
       CMD+=(resume "$SESSION_ID" "$BRIEF_TEXT")
     else
-      CMD=(codex exec --json -s workspace-write -C "$REPO")
+      CMD=(codex exec --json -s workspace-write -C "$WORK")
       [[ -n "$MODEL" ]] && CMD+=(-m "$MODEL")
       [[ -n "$EFFORT" ]] && CMD+=(-c "model_reasoning_effort=\"$EFFORT\"")
       CMD+=("${CHILD_MCP_ARGV[@]}")
@@ -1004,7 +1020,7 @@ case "$WORKER" in
     fi
     CMD=(
       "$CURSOR_BIN" -p
-      --workspace "$REPO"
+      --workspace "$WORK"
       --output-format stream-json
       --stream-partial-output
       --force
@@ -1025,7 +1041,7 @@ case "$WORKER" in
     CMD=(
       opencode run
       --format json
-      --dir "$REPO"
+      --dir "$WORK"
       --title "rig $JOB_ID"
       --auto
     )
@@ -1043,7 +1059,7 @@ case "$WORKER" in
     CMD=(
       omp -p
       --mode json
-      --cwd "$REPO"
+      --cwd "$WORK"
       --no-session
       --approval-mode write
     )
@@ -1100,7 +1116,7 @@ case "$WORKER" in
   mimo)
     # MiMo Code runs in JSON mode and inherits job-scoped RIG_JOB_* values for
     # the already configured Rig MCP. Never enable its yolo permission mode.
-    CMD=(mimo run --format json --dir "$REPO")
+    CMD=(mimo run --format json --dir "$WORK")
     [[ -n "$MODEL" ]] && CMD+=(--model "$MODEL")
     [[ -n "$EFFORT" ]] && CMD+=(--variant "$EFFORT")
     CMD+=("$BRIEF_TEXT")
@@ -1161,6 +1177,9 @@ if [[ "${RIG_LIVE:-0}" != "1" ]]; then
   exit 0
 fi
 
+if [[ "$WORKTREE_ISOLATED" == "1" ]]; then
+  python3 "$WORKTREES_PY" create --repo "$REPO" --job "$JOB_ID" >/dev/null || refuse "could not create the job worktree"
+fi
 if [[ "$SANDBOX_PROVIDER" == "devcontainer" ]]; then
   SANDBOX_ERR="$(python3 "$SANDBOX_PY" prepare --repo "$REPO" --worker "$WORKER" --job-dir "$JOB_DIR" --job-id "$JOB_ID" 2>&1 >/dev/null)" || \
     refuse "${SANDBOX_ERR#sandbox: }"
@@ -1229,7 +1248,7 @@ fi
 rm -f "$JOB_DIR/container-stop"
 container_heartbeat
 RIG_JOB_ID="$JOB_ID" RIG_JOB_DIR="$JOB_DIR" RIG_REPO="$REPO" RIG_ROLE="$ROLE" \
-python3 - "$ADMISSION_PY" "$REPO" "$$" "$LAUNCH_GATE" "$LAUNCH_READY" "$FRESH_SESSION_ID" "${#FRESH_CMD[@]}" ${FRESH_CMD[@]+"${FRESH_CMD[@]}"} "${CMD[@]}" >"$LOG" 2>&1 <<'PY' &
+python3 - "$ADMISSION_PY" "$WORK" "$$" "$LAUNCH_GATE" "$LAUNCH_READY" "$FRESH_SESSION_ID" "${#FRESH_CMD[@]}" ${FRESH_CMD[@]+"${FRESH_CMD[@]}"} "${CMD[@]}" >"$LOG" 2>&1 <<'PY' &
 import json, os, pathlib, sys, time
 sys.path.insert(0, str(pathlib.Path(sys.argv[1]).parent))
 import admission

@@ -1172,6 +1172,8 @@ current binding, and is locally enabled. It is discovery metadata, not a launch
 authorization or provider-readiness check. Worktree locks are reported as Git
 retention locks; they are not Rig execution reservations.
 
-This foundation does not aggregate scheduling limits or resource locks, launch
-workers across worktrees from one parent, or integrate results between branches.
-Those operations continue to use existing checkout-local behavior.
+Discovery and registration do not aggregate scheduling limits or resource locks.
+Rig can also run each write job in its own worktree and merge it when you accept
+it; that is a separate opt-in, `[worktrees] mode = "per-job"`, described in
+[the shell guide](ade-shell.md#parallel-writers-in-worktrees). Without it, jobs
+use existing checkout-local behavior.

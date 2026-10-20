@@ -1,0 +1,1 @@
+{"schemaVersion":1,"engine":"linux","guest":{"label":"host","cpus":4,"memoryBytes":16874930176,"cpuPct":8.8,"memoryUsedBytes":571248640,"live":true},"containers":[{"id": "b6367eacc123", "name": "elastic_mccarthy", "service": "python:3.12-slim-bookworm", "cpuPct": 0.27, "memUsedBytes": 6398410, "memLimitBytes": 16879221473, "netRxBytes": 0, "netTxBytes": 0}]}

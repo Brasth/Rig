@@ -1,0 +1,1 @@
+[{"id":"b6367eacc123","name":"elastic_mccarthy","status":"running","local_folder":"/work/repo","compose":"","ports":"","kind":"devcontainer"},{"id":"d4df5881472b","name":"pedantic_snyder","status":"exited","local_folder":"/work/other","compose":"","ports":"","kind":"devcontainer"}]

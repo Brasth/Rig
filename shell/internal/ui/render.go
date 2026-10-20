@@ -27,20 +27,26 @@ const (
 
 // State is everything Render needs besides the view. It holds no I/O.
 type State struct {
-	Tab        string
-	Selected   map[string]int
-	Offsets    map[string]int
-	DetailOpen bool
-	DetailOff  int
-	Mode       Mode
-	Prompt     string // confirm question or input draft
-	Message    string
-	Stale      string // set when the last refresh failed; shown until one succeeds
-	Loading    bool
-	ASCII      bool
-	Workspace  *view.Workspace
-	WorkspaceE string // why the workspace panel could not load
-	Styled     bool   // apply colour and reverse video to list rows; golden tests leave it off
+	Tab          string
+	Selected     map[string]int
+	Offsets      map[string]int
+	DetailOpen   bool
+	DetailOff    int
+	Mode         Mode
+	Prompt       string // confirm question or input draft
+	Message      string
+	Stale        string // set when the last refresh failed; shown until one succeeds
+	Loading      bool
+	ASCII        bool
+	Workspace    *view.Workspace
+	WorkspaceE   string // why the workspace panel could not load
+	Fleet        *view.Panel
+	FleetE       string
+	Evidence     *view.Evidence
+	EvidenceE    string
+	EvidenceID   string
+	EvidenceOpen bool // the evidence drawer replaces the board body
+	Styled       bool // apply colour and reverse video to list rows; golden tests leave it off
 }
 
 // NewState returns a state on the first tab.
@@ -49,7 +55,10 @@ func NewState() State {
 }
 
 // Tabs are the board tabs in order.
-var Tabs = []string{"Jobs", "Queue", "Workflows", WorkspaceTab}
+var Tabs = []string{"Jobs", "Queue", "Workflows", WorkspaceTab, FleetTab}
+
+// FleetTab renders the containers on the engine, observed now.
+const FleetTab = "Fleet"
 
 // WorkspaceTab is the tab that renders the workspace panel instead of a list.
 const WorkspaceTab = "Workspace"
@@ -91,9 +100,18 @@ func frame(v *view.View, st State, w, h int) []string {
 	}
 	body := h - 5
 	lines := []string{headerLine(v, st, w), tabLine(v, st, w)}
-	if st.Tab == WorkspaceTab {
-		lines = append(lines, rule(workspaceTitle(st), w))
-		lines = append(lines, workspaceLines(st, w, body)...)
+	if st.EvidenceOpen {
+		lines = append(lines, rule("Evidence › "+sanitize(st.EvidenceID), w))
+		lines = append(lines, evidenceLines(st, w, body)...)
+		lines = append(lines, messageLine(st, w), footerLine(nil, 0, st, w))
+		for len(lines) < h {
+			lines = append(lines, fit("", w))
+		}
+		return lines[:h]
+	}
+	if st.Tab == WorkspaceTab || st.Tab == FleetTab {
+		lines = append(lines, rule(panelTitle(st), w))
+		lines = append(lines, panelBody(st, w, body)...)
 		lines = append(lines, messageLine(st, w), footerLine(nil, 0, st, w))
 		for len(lines) < h {
 			lines = append(lines, fit("", w))
@@ -190,6 +208,9 @@ func tabLine(v *view.View, st State, w int) string {
 			}
 		}
 		if name == WorkspaceTab && st.Workspace != nil && st.Workspace.Attention {
+			label += " !"
+		}
+		if name == FleetTab && st.Fleet != nil && st.Fleet.Attention {
 			label += " !"
 		}
 		if name == st.Tab {
@@ -355,9 +376,15 @@ func messageLine(st State, w int) string {
 }
 
 func footerLine(rows []view.Row, sel int, st State, w int) string {
-	keys := []string{"Tab pane", "Enter details", "e enqueue", "x stop", "r refresh", "q quit"}
-	if st.Tab == WorkspaceTab {
+	keys := []string{"Tab pane", "Enter details", "v evidence", "e enqueue", "x stop", "r refresh", "q quit"}
+	if st.Tab == WorkspaceTab || st.Tab == FleetTab {
 		keys = []string{"Tab pane", "j/k scroll", "r refresh", "q quit"}
+		if st.Tab == WorkspaceTab && st.Workspace != nil && st.Workspace.Recovery != nil && st.Workspace.Recovery.Safe && !st.Workspace.Recovery.Ready {
+			keys = []string{"Tab pane", "j/k scroll", "R recover", "r refresh", "q quit"}
+		}
+	}
+	if st.EvidenceOpen {
+		keys = []string{"Esc close", "j/k scroll", "r refresh", "q quit"}
 	}
 	if st.Mode == ModeInput {
 		keys = []string{"Enter queue it", "Esc discard"}
@@ -369,36 +396,58 @@ func footerLine(rows []view.Row, sel int, st State, w int) string {
 	return fit(" "+strings.Join(keys, "  "), w)
 }
 
-// workspaceTitle is the first section's title: it labels the rule under the
-// tab bar, so that section does not repeat it.
-func workspaceTitle(st State) string {
-	if st.Workspace != nil && len(st.Workspace.Sections) > 0 {
-		return sanitize(st.Workspace.Sections[0].Title)
+// panelTitle is the first section's title: it labels the rule under the tab bar, so that section
+// does not repeat it.
+func panelTitle(st State) string {
+	p, fallback := st.Workspace, WorkspaceTab
+	if st.Tab == FleetTab {
+		p, fallback = st.Fleet, FleetTab
 	}
-	return "Workspace"
+	if p != nil && len(p.Sections) > 0 {
+		return sanitize(p.Sections[0].Title)
+	}
+	return fallback
 }
 
-func workspaceLines(st State, w, h int) []string {
+// panelBody renders the Workspace or Fleet tab.
+func panelBody(st State, w, h int) []string {
+	p, errText, name := st.Workspace, st.WorkspaceE, "Workspace"
+	if st.Tab == FleetTab {
+		p, errText, name = st.Fleet, st.FleetE, "Fleet"
+	}
+	return sectionLines(p.SectionsOrNil(), errText, name, true, st, w, h)
+}
+
+// evidenceLines renders the drawer for one job; every section, including the first, gets its own rule.
+func evidenceLines(st State, w, h int) []string {
+	var sections *[]view.Section
+	if st.Evidence != nil {
+		sections = &st.Evidence.Sections
+	}
+	return sectionLines(sections, st.EvidenceE, "Evidence", false, st, w, h)
+}
+
+func sectionLines(sections *[]view.Section, errText, name string, firstInRule bool, st State, w, h int) []string {
 	var all []string
 	switch {
-	case st.Workspace == nil && st.WorkspaceE != "":
-		for _, l := range wrap("Workspace unavailable: "+st.WorkspaceE, w-2, "  ") {
+	case sections == nil && errText != "":
+		for _, l := range wrap(name+" unavailable: "+errText, w-2, "  ") {
 			all = append(all, " "+l)
 		}
-	case st.Workspace == nil:
-		all = []string{" Loading workspace…"}
+	case sections == nil:
+		all = []string{" Loading " + strings.ToLower(name) + "…"}
 	default:
-		for i, sec := range st.Workspace.Sections {
-			if i > 0 {
+		for i, sec := range *sections {
+			if i > 0 || !firstInRule {
 				all = append(all, rule(sanitize(sec.Title), w))
 			}
 			for _, l := range sec.Lines {
 				all = append(all, " "+tonedLine(l.Tone, sanitize(l.Text), st.Styled))
 			}
 		}
-		if st.WorkspaceE != "" {
+		if errText != "" {
 			all = append(all, rule("stale", w))
-			for _, l := range wrap("refresh failed: "+st.WorkspaceE, w-2, "  ") {
+			for _, l := range wrap("refresh failed: "+errText, w-2, "  ") {
 				all = append(all, " "+l)
 			}
 		}

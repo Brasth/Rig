@@ -299,7 +299,20 @@ container and sourced by a wrapper).
 - Exit check (canvas): one job verified end to end inside a container, with
   container id and image digest in the evidence drawer.
 
-### Phase 3 · Parallel isolation (size L)
+### Phase 3 · Parallel isolation (size L) · BUILT 2026-10-20, verified against a real engine with a stand-in agent
+
+> **Delivered:** 3.0 the [design note](261020-worktree-merge-gate-design.md); 3.1 per-job worktrees (`[worktrees] mode`, `rig worktrees plan|create|commit|remove`, work root vs state root, container per worktree through the dc-cli workspace argument); 3.2 overlapping writers admitted and the merge gate in `rig_job_accept`; 3.3 evidence drawer (`job.evidence`, key `v`) and Fleet tab (`fleet.status`); 3.4 `dc recover` as an audited environment action (`env.recovery`, `env.recover`, `rig env recover`, key `R`). Exit check met: two writers on the same file ran at the same time through the real `run-worker.sh` in separate worktrees, and after acceptance disjoint hunks merged while overlapping hunks were refused at the gate with the path named.
+>
+> **Verified live** (`tests/test_live_dc.py`, real dc-cli 0.23.0 and Docker): a job in a per-job container keyed by its worktree; and the board binary driven over the real API in tmux for the drawer, Fleet and the confirmed recovery (with a fake `dc` serving recorded output for the recover plan, because a stopped engine cannot be provoked safely here). **Not verified:** a real `claude` or `codex` in a worktree container (credentials), and `dc recover --yes` against a real stopped engine.
+>
+> **Deviations**
+> - **Recovery is an allowlist, not "dc recover".** dc-cli's apply actions include `sudo` steps, `open_guide`, `context_use`, `prune_safe`, `stop_extra_engine` and `try_sandbox`. Rig applies only `colima_start`, `create_nets` and `take_ports`, only for the plan id the owner confirmed, and shows the rest as text. This meets the engine-down and port-held exit check on Colima setups; a plain Linux engine-down fix needs `sudo` and stays manual.
+> - **The merge happens inside `rig_job_accept`**, not as a separate step, when `next = complete`. A review handoff (`next = review`) merges nothing.
+> - **A merged job's subject is frozen** at the accepted snapshot (its files live in the base checkout afterwards), so later edits by other jobs do not make it look stale.
+> - **dc-cli leaves stopped containers** after `dc down`; Rig never removes containers, so per-job containers accumulate until `dc prune`. `rig worktrees status` lists the leftovers (read-only).
+> - **Continuations are refused in worktree mode** (a successor would start without the predecessor's unmerged edits); supporting them is not built.
+> - **A real bug found while verifying:** an installed Rig runtime (it has `install-manifest.json`) made the child MCP try to take a lock inside the read-only runtime mount, so the worker's handshake never answered. Container jobs now set `RIG_RUNTIME_READONLY=1` and skip the lease. Phase 2's live test had passed only because the checkout had no manifest.
+
 
 - `worktrees.py` grows from discovery to lifecycle: `create(job)`,
   `remove(job)`, one container per worktree via `dc up --name` (fallback:

@@ -257,8 +257,28 @@ def _capture(repo, files, initial_dirty=None):
             **context, "initial_dirty_entries": _observed_entries(repo, dirty)}
 
 
+def work_root(repo, job_dir):
+    """The checkout a job's files live in: its worktree when it has one, else the repository."""
+    import worktrees
+    try:
+        return repository(worktrees.work_root(repo, job_dir))
+    except worktrees.WorktreeError as error:
+        raise EvidenceError(str(error)) from error
+
+
+def job_snapshot(repo, job_dir, files, cache=None):
+    """The subject snapshot of a job's files. A merged worktree job's subject is frozen at the snapshot the
+    parent accepted: its files now live in the base checkout, where later edits by others are not its changes."""
+    import worktrees
+    record = worktrees.job_record(job_dir)
+    if record and (record.get("merged") or record.get("nothing_to_merge")) and record.get("snapshot_id"):
+        return {"snapshot_id": record["snapshot_id"], "frozen": True}
+    return snapshot(work_root(repo, job_dir), files, cache=cache)
+
+
 def begin(repo, job_dir, files):
-    root, folder = repository(repo), job_directory(repo, job_dir)
+    state, folder = repository(repo), job_directory(repo, job_dir)
+    root = work_root(state, folder)
     names = normalize_files(root, files, allow_empty=True)
     previous = read_json(folder / "change-before.json")
     if (folder / "change-before.json").exists() and (previous is None or previous.get("version") != 1):
@@ -273,7 +293,8 @@ def begin(repo, job_dir, files):
 
 
 def finish(repo, job_dir):
-    root, folder = repository(repo), job_directory(repo, job_dir)
+    state, folder = repository(repo), job_directory(repo, job_dir)
+    root = work_root(state, folder)
     before = read_json(folder / "change-before.json")
     if not before or before.get("version") != 1:
         raise EvidenceError("before evidence is missing or malformed")

@@ -19,9 +19,14 @@ type Workspace struct {
 	Version   int       `json:"version"`
 	Attention bool      `json:"attention"`
 	Sections  []Section `json:"sections"`
+	// Recovery is copied from the reply's raw status by the client; nil when dc-cli reports no fault.
+	Recovery *RecoveryPlan `json:"-"`
 }
 
 // WorkspaceReply is the workspace.status result.
 type WorkspaceReply struct {
-	View Workspace `json:"view"`
+	View   Workspace `json:"view"`
+	Status struct {
+		Recovery *RecoveryPlan `json:"recovery"`
+	} `json:"status"`
 }

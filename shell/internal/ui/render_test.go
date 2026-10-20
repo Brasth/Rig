@@ -42,6 +42,32 @@ func loadWorkspace(t *testing.T) *view.Workspace {
 	return &reply.View
 }
 
+func loadFleet(t *testing.T) *view.Panel {
+	t.Helper()
+	raw, err := os.ReadFile("../../testdata/fleet.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var reply view.FleetReply
+	if err := json.Unmarshal(raw, &reply); err != nil {
+		t.Fatal(err)
+	}
+	return &reply.View
+}
+
+func loadEvidence(t *testing.T) *view.Evidence {
+	t.Helper()
+	raw, err := os.ReadFile("../../testdata/evidence.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ev view.Evidence
+	if err := json.Unmarshal(raw, &ev); err != nil {
+		t.Fatal(err)
+	}
+	return &ev
+}
+
 func golden(t *testing.T, name, got string) {
 	t.Helper()
 	path := filepath.Join("..", "..", "testdata", "golden", name+".txt")
@@ -98,6 +124,20 @@ func TestGoldenFrames(t *testing.T) {
 		{"workspace-120x36", 120, 36, "Workspace", func(s *State) { s.Workspace = loadWorkspace(t) }},
 		{"workspace-60x14", 60, 14, "Workspace", func(s *State) { s.Workspace = loadWorkspace(t) }},
 		{"workspace-80x24-ascii", 80, 24, "Workspace", func(s *State) { s.Workspace, s.ASCII = loadWorkspace(t), true }},
+		{"fleet-120x36", 120, 36, "Fleet", func(s *State) { s.Fleet = loadFleet(t) }},
+		{"fleet-60x14", 60, 14, "Fleet", func(s *State) { s.Fleet = loadFleet(t) }},
+		{"fleet-loading", 80, 12, "Fleet", nil},
+		{"fleet-unavailable", 80, 12, "Fleet", func(s *State) { s.FleetE = "dc ls --all --json failed (1): engine not running" }},
+		{"evidence-100x30", 100, 30, "Jobs", func(s *State) {
+			s.EvidenceOpen, s.EvidenceID, s.Evidence = true, "job-7", loadEvidence(t)
+		}},
+		{"evidence-60x14-ascii", 60, 14, "Jobs", func(s *State) {
+			s.EvidenceOpen, s.EvidenceID, s.Evidence, s.ASCII = true, "job-7", loadEvidence(t), true
+		}},
+		{"evidence-loading", 80, 12, "Jobs", func(s *State) { s.EvidenceOpen, s.EvidenceID = true, "job-7" }},
+		{"evidence-unavailable", 80, 12, "Jobs", func(s *State) {
+			s.EvidenceOpen, s.EvidenceID, s.EvidenceE = true, "job-7", "no such job: job-7"
+		}},
 		{"workspace-loading", 80, 12, "Workspace", nil},
 		{"workspace-unavailable", 80, 12, "Workspace", func(s *State) { s.WorkspaceE = "dc ls --json failed (2): engine not running" }},
 	}

@@ -19,6 +19,9 @@ type Source interface {
 	Snapshot(start, rows int, timeout time.Duration) (*view.Snapshot, error)
 	Act(method string, params map[string]any, timeout time.Duration) (string, error)
 	Workspace(deep bool, timeout time.Duration) (*view.Workspace, error)
+	Fleet(timeout time.Duration) (*view.Panel, error)
+	JobEvidence(id string, timeout time.Duration) (*view.Evidence, error)
+	Recover(confirmID string, timeout time.Duration) (string, error)
 }
 
 const (
@@ -43,6 +46,23 @@ type workspaceMsg struct {
 	at  time.Time
 }
 
+type fleetMsg struct {
+	panel *view.Panel
+	err   error
+	at    time.Time
+}
+
+type evidenceMsg struct {
+	ev  *view.Evidence
+	err error
+	id  string
+}
+
+type recoverMsg struct {
+	text string
+	err  error
+}
+
 type actionMsg struct {
 	text    string
 	err     error
@@ -58,6 +78,8 @@ type Model struct {
 	fetching bool
 	wsBusy   bool
 	wsLast   time.Time
+	flBusy   bool
+	flLast   time.Time
 	lastOK   time.Time
 	now      func() time.Time
 	newKey   func() string
@@ -111,6 +133,35 @@ func (m *Model) fetchWorkspace(force bool) tea.Cmd {
 	}
 }
 
+// fetchFleet loads the fleet panel only while its tab is showing, like the workspace panel.
+func (m *Model) fetchFleet(force bool) tea.Cmd {
+	if m.st.Tab != FleetTab || m.flBusy || (!force && m.now().Sub(m.flLast) < workspaceEvery) {
+		return nil
+	}
+	m.flBusy = true
+	src := m.src
+	return func() tea.Msg {
+		p, err := src.Fleet(20 * time.Second)
+		return fleetMsg{panel: p, err: err, at: time.Now()}
+	}
+}
+
+func (m *Model) fetchEvidence(id string) tea.Cmd {
+	src := m.src
+	return func() tea.Msg {
+		ev, err := src.JobEvidence(id, 15*time.Second)
+		return evidenceMsg{ev: ev, err: err, id: id}
+	}
+}
+
+func (m *Model) recover(id string) tea.Cmd {
+	src := m.src
+	return func() tea.Msg {
+		text, err := src.Recover(id, 5*time.Minute)
+		return recoverMsg{text: text, err: err}
+	}
+}
+
 func (m *Model) act(method string, params map[string]any, enqueue bool) tea.Cmd {
 	src := m.src
 	return func() tea.Msg {
@@ -155,7 +206,30 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.w, m.h = msg.Width, msg.Height
 	case tickMsg:
-		return m, tea.Batch(m.fetch(), m.fetchWorkspace(false), tick())
+		return m, tea.Batch(m.fetch(), m.fetchWorkspace(false), m.fetchFleet(false), tick())
+	case fleetMsg:
+		m.flBusy, m.flLast = false, m.now()
+		if msg.err != nil {
+			m.st.FleetE = msg.err.Error()
+			return m, nil
+		}
+		m.st.Fleet, m.st.FleetE = msg.panel, ""
+	case evidenceMsg:
+		if !m.st.EvidenceOpen || msg.id != m.st.EvidenceID {
+			return m, nil // the owner moved on
+		}
+		if msg.err != nil {
+			m.st.EvidenceE = msg.err.Error()
+			return m, nil
+		}
+		m.st.Evidence, m.st.EvidenceE = msg.ev, ""
+	case recoverMsg:
+		if msg.err != nil {
+			m.st.Message = "Recovery failed: " + msg.err.Error()
+		} else {
+			m.st.Message = msg.text
+		}
+		return m, tea.Batch(m.fetchWorkspace(true), m.fetch())
 	case workspaceMsg:
 		m.wsBusy, m.wsLast = false, m.now()
 		if msg.err != nil {
@@ -244,15 +318,16 @@ func (m *Model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 		m.st.DetailOpen, m.st.DetailOff, m.st.Message = false, 0, ""
-		return m, m.fetchWorkspace(true)
+		m.st.EvidenceOpen = false
+		return m, tea.Batch(m.fetchWorkspace(true), m.fetchFleet(true))
 	case "j", "down":
-		if m.st.Tab == WorkspaceTab {
+		if m.scrollsPanel() {
 			m.st.DetailOff++
 			return m, nil
 		}
 		m.move(1)
 	case "k", "up":
-		if m.st.Tab == WorkspaceTab {
+		if m.scrollsPanel() {
 			m.st.DetailOff = max(0, m.st.DetailOff-1)
 			return m, nil
 		}
@@ -267,10 +342,23 @@ func (m *Model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.st.DetailOff = 0
 		}
 	case "esc":
-		m.st.DetailOpen, m.st.Message = false, ""
+		m.st.DetailOpen, m.st.EvidenceOpen, m.st.Message = false, false, ""
+	case "v":
+		row, ok := m.selected()
+		if !ok || m.st.Tab != "Jobs" {
+			return m, nil
+		}
+		m.st.EvidenceOpen, m.st.EvidenceID, m.st.Evidence, m.st.EvidenceE, m.st.DetailOff = true, row.ID, nil, "", 0
+		return m, m.fetchEvidence(row.ID)
+	case "R":
+		return m, m.askRecover()
 	case "r":
 		m.st.Message = "refreshing"
-		return m, tea.Batch(m.fetch(), m.fetchWorkspace(true))
+		cmds := []tea.Cmd{m.fetch(), m.fetchWorkspace(true), m.fetchFleet(true)}
+		if m.st.EvidenceOpen {
+			cmds = append(cmds, m.fetchEvidence(m.st.EvidenceID))
+		}
+		return m, tea.Batch(cmds...)
 	case "a", "d":
 		row, ok := m.selected()
 		if !ok || m.st.Tab != "Jobs" || !row.Ask {
@@ -308,6 +396,31 @@ func (m *Model) move(delta int) {
 	m.st.Offsets[m.st.Tab] = WindowStart(m.st.Offsets[m.st.Tab], m.st.Selected[m.st.Tab], m.h-5, eh, len(rows))
 }
 
+// scrollsPanel is true when j/k scroll a panel instead of moving a list selection.
+func (m *Model) scrollsPanel() bool {
+	return m.st.EvidenceOpen || m.st.Tab == WorkspaceTab || m.st.Tab == FleetTab
+}
+
+// askRecover confirms dc-cli's proposed fix. Only a plan the server marked safe is offered; anything
+// else is shown as text on the Workspace tab for the owner to run themselves.
+func (m *Model) askRecover() tea.Cmd {
+	plan := (*view.RecoveryPlan)(nil)
+	if m.st.Workspace != nil {
+		plan = m.st.Workspace.Recovery
+	}
+	if m.st.Tab != WorkspaceTab || plan == nil || plan.Ready {
+		return nil
+	}
+	if !plan.Safe {
+		m.st.Message = "Rig does not apply " + clean(plan.Apply) + "; run: " + clean(plan.Command)
+		return nil
+	}
+	m.pendingX, m.pendingI = "env.recover", plan.ID
+	m.st.Mode = ModeConfirm
+	m.st.Prompt = fmt.Sprintf("Apply %s (%s)?", clean(plan.Apply), clean(plan.Summary))
+	return nil
+}
+
 func (m *Model) askStop() tea.Cmd {
 	row, ok := m.selected()
 	if !ok || (m.st.Tab != "Jobs" && m.st.Tab != "Queue") {
@@ -331,6 +444,10 @@ func (m *Model) confirmKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "y":
 		method, id := m.pendingX, m.pendingI
 		m.st.Mode, m.st.Prompt, m.pendingX, m.pendingI = ModeNormal, "", "", ""
+		if method == "env.recover" {
+			m.st.Message = "recovering: " + id
+			return m, m.recover(id)
+		}
 		params := map[string]any{"id": id}
 		if method == "job.cancel" {
 			params["reason"] = "shell"

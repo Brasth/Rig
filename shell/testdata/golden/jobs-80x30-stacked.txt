@@ -1,5 +1,5 @@
  Rig · my-repo                       ! 1 need attention  ● 1 running  slots 2/3 
- [Jobs !1]  Queue 2   Workflows 2   Workspace                                   
+ [Jobs !1]  Queue 2   Workflows 2   Workspace   Fleet                           
 ─ Jobs 1-7/7 ───────────────────────────────────────────────────────────────────
 > ! Needs input   Add supertest dev dep                                  job-7f2
     permission: npm i -D supertest                                              
@@ -27,4 +27,4 @@
  independent review unknown; not completed                                      
  role implement                                                                 
                                                                                 
- a allow  d deny  Tab pane  Enter details  e enqueue  x stop  r refresh  q quit 
+ a allow  d deny  Tab pane  Enter details  v evidence  e enqueue  x stop  r ref…
