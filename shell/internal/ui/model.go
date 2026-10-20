@@ -12,6 +12,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/Brasth/Rig/shell/internal/api"
+	"github.com/Brasth/Rig/shell/internal/term"
 	"github.com/Brasth/Rig/shell/internal/view"
 )
 
@@ -25,6 +26,7 @@ type Source interface {
 	Recover(confirmID string, timeout time.Duration) (string, error)
 	Log(id string, lines int, timeout time.Duration) (*view.LogReply, error)
 	Shell(id string, timeout time.Duration) (*view.ShellPlan, error)
+	Parent(timeout time.Duration) (*view.ShellPlan, error)
 	ChatStatus(timeout time.Duration) (*view.ChatStatus, error)
 	ChatTranscript(session string, tail int, timeout time.Duration) (*view.ChatTranscript, error)
 	ChatSend(message, session string, timeout time.Duration) (*view.ChatStarted, error)
@@ -75,6 +77,32 @@ type logMsg struct {
 	at  time.Time
 }
 
+// Pane is a program running on an emulated terminal. *term.Pane is the real one; tests use a fake.
+type Pane interface {
+	Resize(cols, rows int)
+	Write([]byte)
+	AppCursor() bool
+	Lines(styled, showCursor bool) []string
+	Updates() <-chan struct{}
+	Exited() (bool, error)
+	Close()
+}
+
+type paneMsg struct{ p Pane }
+
+type panePlanMsg struct {
+	plan *view.ShellPlan
+	err  error
+}
+
+func spawnPane(argv []string, dir string, env []string, cols, rows int) (Pane, error) {
+	p, err := term.Start(argv, dir, env, cols, rows)
+	if err != nil {
+		return nil, err
+	}
+	return p, nil
+}
+
 type chatStatusMsg struct {
 	status *view.ChatStatus
 	err    error
@@ -112,23 +140,27 @@ type actionMsg struct {
 
 // Model is the Bubble Tea model for the board pane.
 type Model struct {
-	src      Source
-	st       State
-	view     *view.View
-	w, h     int
-	fetching bool
-	wsBusy   bool
-	wsLast   time.Time
-	flBusy   bool
-	flLast   time.Time
-	lgBusy   bool
-	lgLast   time.Time
-	chBusy   bool
-	chLast   time.Time
-	csBusy   bool
-	csLast   time.Time
-	chatID   string // the session the Chat tab follows; empty until one exists
-	inputFor string // "chat" while the input line is a chat message, else enqueue
+	src       Source
+	st        State
+	view      *view.View
+	w, h      int
+	fetching  bool
+	wsBusy    bool
+	wsLast    time.Time
+	flBusy    bool
+	flLast    time.Time
+	lgBusy    bool
+	lgLast    time.Time
+	chBusy    bool
+	chLast    time.Time
+	csBusy    bool
+	csLast    time.Time
+	pane      Pane
+	paneName  string
+	paneFocus bool
+	spawn     func(argv []string, dir string, env []string, cols, rows int) (Pane, error)
+	chatID    string // the session the Chat tab follows; empty until one exists
+	inputFor  string // "chat" while the input line is a chat message, else enqueue
 	// exec hands the terminal to a command and returns when it exits; tests replace it.
 	exec     func(argv []string, done func(error) tea.Msg) tea.Cmd
 	lastOK   time.Time
@@ -144,7 +176,7 @@ type Model struct {
 func NewModel(src Source, ascii bool) *Model {
 	st := NewState()
 	st.Loading, st.ASCII, st.Styled = true, ascii, true
-	return &Model{src: src, st: st, w: 120, h: 36, now: time.Now, newKey: randomKey, selID: map[string]string{}, exec: execProcess}
+	return &Model{src: src, st: st, w: 120, h: 36, now: time.Now, newKey: randomKey, selID: map[string]string{}, exec: execProcess, spawn: spawnPane}
 }
 
 func execProcess(argv []string, done func(error) tea.Msg) tea.Cmd {
@@ -253,6 +285,85 @@ func (m *Model) fetchChat(force bool) tea.Cmd {
 	}
 }
 
+// paneRows is the room the Term tab gives a program: the whole body under the rule.
+func (m *Model) paneRows() int { return max(2, m.h-5) }
+
+// waitPane returns a command that reports the next change of the pane's screen.
+func waitPane(p Pane) tea.Cmd {
+	return func() tea.Msg {
+		<-p.Updates()
+		return paneMsg{p: p}
+	}
+}
+
+// askPane fetches the server's command for the parent CLI or for a container shell.
+func (m *Model) askPane(parent bool) tea.Cmd {
+	src := m.src
+	return func() tea.Msg {
+		var plan *view.ShellPlan
+		var err error
+		if parent {
+			plan, err = src.Parent(callTimeout)
+		} else {
+			plan, err = src.Shell("", callTimeout)
+		}
+		return panePlanMsg{plan: plan, err: err}
+	}
+}
+
+// startPane runs the plan in the Term tab. A finished pane is replaced; a running one is never replaced silently.
+func (m *Model) startPane(plan *view.ShellPlan) tea.Cmd {
+	if m.pane != nil {
+		if done, _ := m.pane.Exited(); !done {
+			m.st.Message = "a program is already running here; Enter types into it, x closes it"
+			return nil
+		}
+		m.pane.Close()
+		m.pane = nil
+	}
+	p, err := m.spawn(plan.Argv, plan.Dir, plan.Env, m.w, m.paneRows())
+	if err != nil {
+		m.st.Message = "Could not start: " + clean(err.Error())
+		return nil
+	}
+	label := plan.Label
+	if label == "" {
+		label = "program"
+	}
+	m.pane, m.paneName, m.paneFocus = p, label, true
+	m.st.Message = ""
+	return waitPane(p)
+}
+
+// Close ends a program still running in the Term pane. Call it when the board exits.
+func (m *Model) Close() {
+	if m.pane != nil {
+		m.pane.Close()
+	}
+}
+
+// syncPane copies the pane's screen into the render state.
+func (m *Model) syncPane() {
+	m.st.PaneFocus = m.paneFocus
+	m.st.PaneLines, m.st.PaneTitle, m.st.PaneRunning = nil, "", false
+	if m.pane == nil {
+		return
+	}
+	done, err := m.pane.Exited()
+	m.st.PaneRunning = !done
+	m.st.PaneLines = m.pane.Lines(true, m.paneFocus && !done)
+	switch {
+	case done && err != nil:
+		m.st.PaneTitle = m.paneName + " · exited: " + err.Error()
+	case done:
+		m.st.PaneTitle = m.paneName + " · exited"
+	case m.paneFocus:
+		m.st.PaneTitle = m.paneName + " · typing (Ctrl-] returns to the board)"
+	default:
+		m.st.PaneTitle = m.paneName + " · running (Enter to type)"
+	}
+}
+
 func (m *Model) askShell() tea.Cmd {
 	id := ""
 	if m.st.Tab == "Jobs" {
@@ -324,6 +435,32 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.w, m.h = msg.Width, msg.Height
+		if m.pane != nil {
+			m.pane.Resize(m.w, m.paneRows())
+		}
+	case panePlanMsg:
+		switch {
+		case msg.err != nil:
+			m.st.Message = "Could not start: " + clean(msg.err.Error())
+		case !msg.plan.Available || len(msg.plan.Argv) == 0:
+			m.st.Message = "Cannot start: " + clean(msg.plan.Reason)
+		default:
+			return m, m.startPane(msg.plan)
+		}
+	case paneMsg:
+		if msg.p != m.pane {
+			return m, nil // a pane that was closed or replaced
+		}
+		if done, err := m.pane.Exited(); done {
+			m.paneFocus = false
+			if err != nil {
+				m.st.Message = m.paneName + " exited: " + clean(err.Error())
+			} else {
+				m.st.Message = m.paneName + " exited"
+			}
+			return m, nil
+		}
+		return m, waitPane(m.pane)
 	case tickMsg:
 		return m, tea.Batch(m.fetch(), m.fetchWorkspace(false), m.fetchFleet(false), m.fetchLog(false), m.fetchChatStatus(), m.fetchChat(false), tick())
 	case chatStatusMsg:
@@ -463,6 +600,16 @@ func firstLine(s string) string {
 }
 
 func (m *Model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// While typing into the pane every key belongs to its program, Ctrl-C included, except the one way back.
+	if m.paneFocus && m.pane != nil && m.st.Tab == TermTab {
+		if k.Type == tea.KeyCtrlCloseBracket {
+			m.paneFocus = false
+			m.st.Message = "back on the board; Enter types into " + m.paneName + " again"
+			return m, nil
+		}
+		m.pane.Write(term.KeyBytes(k, m.pane.AppCursor()))
+		return m, nil
+	}
 	if k.Type == tea.KeyCtrlC {
 		return m, tea.Quit
 	}
@@ -477,6 +624,22 @@ func (m *Model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if k.Paste || (k.Type == tea.KeyRunes && len(k.Runes) > 1) {
 		m.st.Message = "Press e before pasting queue text"
 		return m, nil
+	}
+	if m.st.Tab == TermTab {
+		switch k.String() {
+		case "p":
+			return m, m.askPane(true)
+		case "s":
+			return m, m.askPane(false)
+		case "enter":
+			if m.pane != nil {
+				if done, _ := m.pane.Exited(); !done {
+					m.paneFocus = true
+					m.st.Message = ""
+				}
+			}
+			return m, nil
+		}
 	}
 	if k.String() == "c" && m.st.Tab == ChatTab {
 		m.st.Mode, m.st.InputLabel, m.inputFor, m.st.Message = ModeInput, "chat", "chat", ""
@@ -641,6 +804,15 @@ func (m *Model) askRecover() tea.Cmd {
 }
 
 func (m *Model) askStop() tea.Cmd {
+	if m.st.Tab == TermTab {
+		if m.pane == nil {
+			m.st.Message = "nothing is running here"
+			return nil
+		}
+		m.pendingX, m.pendingI = "pane.close", "pane"
+		m.st.Mode, m.st.Prompt = ModeConfirm, "Close "+m.paneName+" (this ends the program)?"
+		return nil
+	}
 	if m.st.Tab == ChatTab {
 		if m.chatID == "" || m.st.Chat == nil || m.st.Chat.State != "running" {
 			m.st.Message = "no turn is running"
@@ -672,6 +844,14 @@ func (m *Model) confirmKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "y":
 		method, id := m.pendingX, m.pendingI
 		m.st.Mode, m.st.Prompt, m.pendingX, m.pendingI = ModeNormal, "", "", ""
+		if method == "pane.close" {
+			if m.pane != nil {
+				m.pane.Close()
+				m.pane, m.paneFocus = nil, false
+			}
+			m.st.Message = "closed"
+			return m, nil
+		}
 		if method == "chat.cancel" {
 			m.st.Message = "stopping " + id
 			src := m.src
@@ -725,6 +905,7 @@ func (m *Model) inputKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) View() string {
+	m.syncPane()
 	lines := RenderLines(m.view, m.st, m.w, m.h)
 	return strings.Join(Decorate(lines), "\n")
 }

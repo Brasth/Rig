@@ -1,0 +1,12 @@
+ Rig · my-repo   ! 1 need attention  ● 1 running  slots 2/3 
+  Job !1   Que 2   Flw 2   Wks   Flt   Log  [Term]          
+─ Term › container shell · exited: exit status 3 ───────────
+bye                                                         
+                                                            
+                                                            
+                                                            
+                                                            
+                                                            
+                                                            
+                                                            
+ Tab pane  p parent CLI  s container shell  Enter type in i…

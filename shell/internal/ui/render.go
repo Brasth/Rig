@@ -42,6 +42,10 @@ type State struct {
 	WorkspaceE   string // why the workspace panel could not load
 	Fleet        *view.Panel
 	FleetE       string
+	PaneLines    []string // the Term pane's screen, already styled by the emulator
+	PaneTitle    string
+	PaneFocus    bool
+	PaneRunning  bool
 	ChatOn       bool // the chat experiment is on: the Chat tab exists
 	Chat         *view.ChatTranscript
 	ChatE        string
@@ -63,7 +67,10 @@ func NewState() State {
 }
 
 // Tabs are the board tabs in order.
-var Tabs = []string{"Jobs", "Queue", "Workflows", WorkspaceTab, FleetTab, LogsTab}
+var Tabs = []string{"Jobs", "Queue", "Workflows", WorkspaceTab, FleetTab, LogsTab, TermTab}
+
+// TermTab hosts one interactive program (the parent CLI, or a shell in the container) on an emulated terminal.
+const TermTab = "Term"
 
 // ChatTab is the EXPERIMENT chat with a headless parent; it exists only while the experiment is on.
 const ChatTab = "Chat"
@@ -125,6 +132,15 @@ func frame(v *view.View, st State, w, h int) []string {
 	if st.EvidenceOpen {
 		lines = append(lines, rule("Evidence › "+sanitize(st.EvidenceID), w))
 		lines = append(lines, evidenceLines(st, w, body)...)
+		lines = append(lines, messageLine(st, w), footerLine(nil, 0, st, w))
+		for len(lines) < h {
+			lines = append(lines, fit("", w))
+		}
+		return lines[:h]
+	}
+	if st.Tab == TermTab {
+		lines = append(lines, rule(termTitle(st), w))
+		lines = append(lines, termBody(st, w, body)...)
 		lines = append(lines, messageLine(st, w), footerLine(nil, 0, st, w))
 		for len(lines) < h {
 			lines = append(lines, fit("", w))
@@ -231,7 +247,7 @@ func headerLine(v *view.View, st State, w int) string {
 }
 
 // tabShort are distinct three-letter forms for a narrow tab bar ("Wor" would be both Workflows and Workspace).
-var tabShort = map[string]string{"Jobs": "Job", "Queue": "Que", "Workflows": "Flw", WorkspaceTab: "Wks", FleetTab: "Flt", LogsTab: "Log", ChatTab: "Cht"}
+var tabShort = map[string]string{"Jobs": "Job", "Queue": "Que", "Workflows": "Flw", WorkspaceTab: "Wks", FleetTab: "Flt", LogsTab: "Log", ChatTab: "Cht", TermTab: "Trm"}
 
 func tabLine(v *view.View, st State, w int) string {
 	if line := tabLineWith(v, st, false); lipgloss.Width(line) <= w {
@@ -444,6 +460,12 @@ func footerLine(rows []view.Row, sel int, st State, w int) string {
 	if st.Tab == LogsTab {
 		keys = []string{"Tab pane", "k/j scroll", "G follow", "s shell", "r refresh", "q quit"}
 	}
+	if st.Tab == TermTab {
+		keys = []string{"Tab pane", "p parent CLI", "s container shell", "Enter type in it", "x close", "q quit"}
+		if st.PaneFocus {
+			keys = []string{"Ctrl-] back to the board (every other key goes to the program)"}
+		}
+	}
 	if st.Tab == ChatTab {
 		keys = []string{"Tab pane", "c write", "N new session", "x stop", "k/j scroll", "G follow", "q quit"}
 	}
@@ -458,6 +480,38 @@ func footerLine(rows []view.Row, sel int, st State, w int) string {
 		keys = append([]string{"a allow", "d deny"}, keys...)
 	}
 	return fit(" "+strings.Join(keys, "  "), w)
+}
+
+func termTitle(st State) string {
+	if st.PaneTitle == "" {
+		return "Term"
+	}
+	return "Term › " + sanitize(st.PaneTitle)
+}
+
+// termBody is the pane's screen, or the help shown while nothing runs.
+func termBody(st State, w, h int) []string {
+	out := make([]string, 0, h)
+	if len(st.PaneLines) == 0 {
+		for _, l := range []string{
+			" Run an interactive program here, with no tmux:",
+			"",
+			"   p  the parent CLI for this project",
+			"   s  a shell in this project's container (dc exec --no-start)",
+			"",
+			" Enter types into it; Ctrl-] returns to the board; x closes it.",
+		} {
+			out = append(out, fit(l, w))
+		}
+	} else {
+		for i := 0; i < h && i < len(st.PaneLines); i++ {
+			out = append(out, fit(st.PaneLines[i], w))
+		}
+	}
+	for len(out) < h {
+		out = append(out, fit("", w))
+	}
+	return out
 }
 
 func chatTitle(st State) string {

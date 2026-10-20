@@ -310,7 +310,7 @@ container and sourced by a wrapper).
 > - **The merge happens inside `rig_job_accept`**, not as a separate step, when `next = complete`. A review handoff (`next = review`) merges nothing.
 > - **A merged job's subject is frozen** at the accepted snapshot (its files live in the base checkout afterwards), so later edits by other jobs do not make it look stale.
 > - **dc-cli leaves stopped containers** after `dc down`; Rig never removes containers, so per-job containers accumulate until `dc prune`. `rig worktrees status` lists the leftovers (read-only).
-> - **Continuations are refused in worktree mode** (a successor would start without the predecessor's unmerged edits); supporting them is not built.
+> - **Continuations in worktree mode** were refused at first; they now share the predecessor's worktree and branch ([261020-worktree-continuation-design.md](261020-worktree-continuation-design.md)), verified end to end with a stand-in native resume.
 > - **A real bug found while verifying:** an installed Rig runtime (it has `install-manifest.json`) made the child MCP try to take a lock inside the read-only runtime mount, so the worker's handshake never answered. Container jobs now set `RIG_RUNTIME_READONLY=1` and skip the lease. Phase 2's live test had passed only because the checkout had no manifest.
 
 
@@ -338,8 +338,8 @@ container and sourced by a wrapper).
 > **Verified:** headless Chromium loads the web board (cookie hand-off, fetches, DOM, a markup-injection attempt through job text); the real shell binary over the real API shows the Logs tab, hands the terminal to a shell and back, and renders and sends a chat turn; adapters through the real launcher in host and container mode (fake `dc`). **Not verified:** any real worker or parent CLI honouring an adapter manifest or the chat stream formats (no real CLI or credentials available).
 >
 > **Deviations**
-> - **Built-in workers did not move to manifests, so `run-worker.sh` did not shrink.** Porting ten workers' launch code to data would risk every worker's byte-identical argv for no user benefit; the launcher gained one generic branch instead, and adapters are for new workers. Adapter workers are chosen explicitly: no smart routing, no model catalog, no resume.
-> - **No terminal emulator.** The parent CLI is not embedded in a pane without tmux; the board, logs and a shell cover plain-text streams. The tmux layout is unchanged.
+> - **Built-in workers did not move to manifests; their argv construction moved to code.** Porting ten workers to data would risk byte-identical argv for no user benefit, so `scripts/worker_commands.py` builds them, pinned to the old shell output by a 480-case fixture, and `run-worker.sh` shrank by about 150 lines. Adapters are for new workers. Adapter workers are chosen explicitly: no smart routing, no model catalog, no resume.
+> - **Terminal panes came in a second step** (the Term tab: a pseudo-terminal plus the `vt10x` emulator, one program at a time, no scrollback, no mouse), so the parent CLI and a container shell run inside the board without tmux. The tmux layout is unchanged and remains the only split view.
 > - **The web board cannot send chat messages.** The plan had a send box; read-only is the web board's guarantee, so sending stays in the terminal board and `rig chat`.
 > - **`bin/rig` stays bash** (measured: the dispatcher is not where time goes).
 > - **An example adapter ships under `examples/adapters/`, not `adapters/`,** so a fake worker is never discovered on a normal install.

@@ -88,6 +88,45 @@ class ShellCommand(Base):
         self.assertEqual(bad["error"]["code"], local_api.INVALID_PARAMS)
 
 
+class PanePlans(Base):
+    def test_the_parent_plan_names_the_cli_the_directory_and_the_environment(self):
+        bindir = self.base / "pbin"
+        bindir.mkdir()
+        (bindir / "codex").write_text("#!/bin/sh\n")
+        (bindir / "codex").chmod(0o755)
+        (self.repo / ".rig" / "harness.toml").write_text('parent = "codex"\n\n[project]\nenabled = true\n')
+        with mock.patch.dict(os.environ, {"PATH": f"{bindir}{os.pathsep}{os.environ['PATH']}", "RIG_BIN": "/opt/rig/bin/rig"}):
+            plan = rig_shell.parent_pane_plan(self.repo)
+        self.assertEqual((plan["available"], plan["label"], plan["dir"]), (True, "codex", str(self.repo)))
+        self.assertEqual(Path(plan["argv"][0]).name, "codex")
+        self.assertEqual(plan["env"], ["RIG_SHELL_ACTIVE=1", f"RIG_REPO={self.repo}", "RIG_BIN=/opt/rig/bin/rig"])
+
+    def test_no_parent_or_one_that_cannot_run_in_a_pane_is_explained(self):
+        (self.repo / ".rig" / "harness.toml").write_text('[project]\nenabled = true\n')
+        with mock.patch("harness.preferred_parent", return_value=""):
+            plan = rig_shell.parent_pane_plan(self.repo)
+        self.assertEqual((plan["available"], plan["argv"]), (False, []))
+        self.assertIn("no parent set", plan["reason"])
+        with mock.patch("harness.preferred_parent", return_value="cursor"):
+            self.assertIn("cannot run in a pane", rig_shell.parent_pane_plan(self.repo)["reason"])
+        with mock.patch("harness.preferred_parent", return_value="codex"), mock.patch("harness.find_worker_bin", return_value=""):
+            self.assertIn("not on PATH", rig_shell.parent_pane_plan(self.repo)["reason"])
+
+    def test_the_container_shell_plan_carries_what_a_pane_needs(self):
+        self.rows(**{str(self.repo): "running"})
+        plan = env_shell.plan(self.repo)
+        self.assertEqual((plan["dir"], plan["label"]), (str(self.repo), "container shell"))
+        self.assertIn(f"RIG_REPO={self.repo}", plan["env"])
+        self.assertEqual(plan["argv"][1:3], ["exec", "--no-start"])
+
+    def test_through_the_api_read_only(self):
+        api = local_api.Api(self.repo, "t" * 64)
+        rows = {r["method"]: r["mutates"] for r in api.dispatch({"jsonrpc": "2.0", "id": 1, "method": "api.methods", "params": {}, "token": "t" * 64})["result"]["methods"]}
+        self.assertIs(rows["shell.parent"], False)
+        reply = api.dispatch({"jsonrpc": "2.0", "id": 2, "method": "shell.parent", "params": {}, "token": "t" * 64})
+        self.assertIn("available", reply["result"])
+
+
 class LogFollow(Base):
     def job(self, job_id, status="running", text="line one\nline two\n"):
         folder = self.repo / ".rig" / "jobs" / job_id

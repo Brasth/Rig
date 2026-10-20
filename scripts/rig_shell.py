@@ -110,6 +110,22 @@ def parent_command(repo: Path, parent: str = "", override: str = "") -> list[str
     return [binary]
 
 
+def pane_env_pairs(repo: Path) -> list[str]:
+    """The extra environment the board gives a program it runs in a pane (KEY=VALUE)."""
+    return ["RIG_SHELL_ACTIVE=1", f"RIG_REPO={Path(repo).resolve()}", f"RIG_BIN={rig_binary()}"]
+
+
+def parent_pane_plan(repo: Path) -> dict:
+    """The command the board runs for the parent CLI in an embedded pane, or why there is none. Decided here so the
+    Go board never works out which CLI is the parent or where it lives."""
+    repo = Path(repo).resolve()
+    try:
+        argv = parent_command(repo)
+    except ShellError as error:
+        return {"available": False, "reason": str(error), "argv": [], "dir": str(repo), "env": [], "label": "parent"}
+    return {"available": True, "reason": "", "argv": argv, "dir": str(repo), "env": pane_env_pairs(repo), "label": Path(argv[0]).name}
+
+
 def session_name(repo: Path) -> str:
     return "rig-shell-" + hashlib.sha256(str(Path(repo).resolve()).encode()).hexdigest()[:8]
 

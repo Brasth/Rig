@@ -38,4 +38,6 @@ def plan(repo, job_id: str = "") -> dict:
     if not running:
         return {"available": False, "argv": [], "workspace": str(workspace),
                 "reason": f"no running container for {workspace}; start it with: rig env up"}
-    return {"available": True, "reason": "", "argv": [binary, "exec", "--no-start", str(workspace)], "workspace": str(workspace)}
+    import rig_shell
+    return {"available": True, "reason": "", "argv": [binary, "exec", "--no-start", str(workspace)], "workspace": str(workspace),
+            "dir": str(repo), "env": rig_shell.pane_env_pairs(repo), "label": "container shell"}

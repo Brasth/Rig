@@ -80,9 +80,7 @@ class Lifecycle(Base):
         (folder / "worktree.json").write_text(json.dumps(record))
         self.assertEqual(worktrees.plan(self.repo, "r3", role="reviewer", writer_job="w1")["path"], str(self.repo.resolve()))
 
-    def test_continuations_and_odd_job_ids_are_refused(self):
-        with self.assertRaisesRegex(worktrees.WorktreeError, "continuations are not supported"):
-            worktrees.plan(self.repo, "j2", continues="j1")
+    def test_odd_job_ids_are_refused(self):
         self.assertFalse(worktrees.plan(self.repo, "j2", role="reviewer", continues="j1")["isolated"])
         for bad in ("..", ".", ".hidden", "a/b", ""):
             with self.assertRaises(worktrees.WorktreeError, msg=bad):
@@ -169,6 +167,122 @@ class Lifecycle(Base):
         with self.assertRaisesRegex(worktrees.WorktreeError, "not the job's own path"):
             worktrees.remove_job(self.repo, folder)
         self.assertTrue(self.base.is_dir())
+
+
+class Continuation(Base):
+    """A continuation shares its predecessor's worktree and branch (docs/journals/261020-worktree-continuation-design.md)."""
+
+    def start(self, job_id, files=("a.txt",)):
+        folder = self.job(job_id)
+        (folder / "meta.json").write_text(json.dumps({"files": list(files)}))
+        return folder
+
+    def test_plan_points_a_continuation_at_the_unmerged_predecessor_worktree(self):
+        first = worktrees.create_job(self.repo, self.start("c1"))
+        plan = worktrees.plan(self.repo, "c2", continues="c1")
+        self.assertEqual((plan["path"], plan["branch"], plan["continues_worktree"]), (first["path"], "rig/c1", "c1"))
+        self.assertEqual(worktrees.plan(self.repo, "c2")["continues_worktree"], "")
+
+    def test_plan_refuses_a_base_checkout_or_removed_predecessor(self):
+        self.start("p0")  # ran without a worktree (mode was off, or a parent wrote directly)
+        with self.assertRaisesRegex(worktrees.WorktreeError, "edited the base checkout"):
+            worktrees.plan(self.repo, "c2", continues="p0")
+        folder = self.start("p1")
+        worktrees.create_job(self.repo, folder)
+        worktrees.remove_job(self.repo, folder, discard=True)
+        with self.assertRaisesRegex(worktrees.WorktreeError, "removed before it was merged"):
+            worktrees.plan(self.repo, "c2", continues="p1")
+        record = worktrees.create_job(self.repo, self.start("p2"))
+        git(self.repo, "worktree", "remove", "--force", record["path"])
+        with self.assertRaisesRegex(worktrees.WorktreeError, "is gone"):
+            worktrees.plan(self.repo, "c2", continues="p2")
+
+    def test_a_merged_predecessor_gives_the_successor_a_fresh_worktree(self):
+        import worktree_merge
+        folder = self.start("m1")
+        record = worktrees.create_job(self.repo, folder)
+        (Path(record["path"]) / "a.txt").write_text("merged\n")
+        worktree_merge.merge(self.repo, folder)
+        plan = worktrees.plan(self.repo, "m2", continues="m1")
+        self.assertEqual(plan["path"], str(self.repo.resolve() / ".rig" / "worktrees" / "m2"))
+        created = worktrees.create_job(self.repo, self.job("m2"), continues="m1")
+        self.assertEqual(created["branch"], "rig/m2")
+        self.assertEqual((Path(created["path"]) / "a.txt").read_text(), "merged\n", "the new base carries the merged work")
+
+    def test_create_joins_the_worktree_and_records_both_sides(self):
+        first_dir = self.start("c1")
+        first = worktrees.create_job(self.repo, first_dir)
+        (Path(first["path"]) / "a.txt").write_text("c1\n")
+        worktrees.commit_job(self.repo, first_dir)
+        second = worktrees.create_job(self.repo, self.job("c2"), continues="c1")
+        self.assertEqual((second["path"], second["branch"], second["continues"], second["worktree_job"]), (first["path"], "rig/c1", "c1", "c1"))
+        self.assertEqual(second["base_head"], first["base_head"])
+        self.assertEqual(worktrees.job_record(first_dir)["continued_by"], ["c2"])
+        self.assertEqual(worktrees.create_job(self.repo, self.job("c2"), continues="c1"), second, "idempotent")
+        third = worktrees.create_job(self.repo, self.job("c3"), continues="c2")
+        self.assertEqual(third["worktree_job"], "c1")
+        self.assertEqual([f.name for f, _ in worktrees.chain(self.repo, self.job("c2"))], ["c1", "c2", "c3"])
+        self.assertEqual(worktrees.work_root(self.repo, self.job("c3")), Path(first["path"]))
+        rows = {row["job_id"]: row["state"] for row in worktrees.job_status(self.repo)["worktrees"]}
+        self.assertEqual((rows["c1"], rows["c2"]), ("unmerged", "unmerged (continues c1, same worktree)"))
+        self.assertFalse((self.repo / ".rig" / "worktrees" / "c2").exists(), "no second checkout")
+
+    def test_create_refuses_a_worktree_that_left_its_branch(self):
+        first = worktrees.create_job(self.repo, self.start("c1"))
+        git(first["path"], "checkout", "-q", "--detach")
+        with self.assertRaisesRegex(worktrees.WorktreeError, "detached HEAD, not rig/c1"):
+            worktrees.create_job(self.repo, self.job("c2"), continues="c1")
+
+    def test_remove_through_any_member_marks_the_chain(self):
+        first_dir = self.start("c1")
+        first = worktrees.create_job(self.repo, first_dir)
+        second_dir = self.job("c2")
+        worktrees.create_job(self.repo, second_dir, continues="c1")
+        worktrees.remove_job(self.repo, second_dir, discard=True)
+        self.assertFalse(Path(first["path"]).exists())
+        self.assertTrue(worktrees.job_record(first_dir)["removed"])
+        self.assertTrue(worktrees.job_record(second_dir)["removed"])
+        forged = worktrees.job_record(self.job("c3")) or dict(worktrees.job_record(second_dir), job_id="c3", worktree_job="nobody")
+        (self.job("c3") / "worktree.json").write_text(json.dumps(forged))
+        with self.assertRaisesRegex(worktrees.WorktreeError, "refusing"):
+            worktrees.remove_job(self.repo, self.job("c3"), discard=True)
+
+    def test_gate_checks_the_union_scope_and_merging_marks_the_chain(self):
+        import worktree_merge
+        first_dir = self.start("c1", files=("a.txt", "b.txt"))
+        first = worktrees.create_job(self.repo, first_dir)
+        (Path(first["path"]) / "b.txt").write_text("from c1\n")
+        worktrees.commit_job(self.repo, first_dir)
+        second_dir = self.start("c2", files=("a.txt",))  # narrower, as admission allows
+        worktrees.create_job(self.repo, second_dir, continues="c1")
+        (Path(first["path"]) / "a.txt").write_text("from c2\n")
+        gate = worktree_merge.gate(self.repo, second_dir)
+        self.assertEqual((sorted(gate["changed"]), gate["chain"]), (["a.txt", "b.txt"], ["c1", "c2"]))
+        (Path(first["path"]) / "c.txt").write_text("outside\n")
+        with self.assertRaisesRegex(worktree_merge.GateRefused, "out_of_scope.*c.txt"):
+            worktree_merge.gate(self.repo, second_dir)
+        (Path(first["path"]) / "c.txt").unlink()  # the gate committed it; the next commit records the deletion
+        merged = worktree_merge.merge(self.repo, second_dir)
+        self.assertTrue(merged["merge_commit"])
+        self.assertEqual((self.repo / "a.txt").read_text() + (self.repo / "b.txt").read_text(), "from c2\nfrom c1\n")
+        for job in ("c1", "c2"):
+            record = worktrees.job_record(self.job(job))
+            self.assertEqual((record["merged"], record["merge_commit"]), (True, merged["merge_commit"]), job)
+        self.assertEqual(worktree_merge.gate(self.repo, first_dir)["merged"], True, "the predecessor is merged by the same commit")
+        self.assertEqual(git(self.repo, "branch", "--list", "rig/c1"), "")
+
+    def test_gate_refuses_a_busy_worktree(self):
+        import worktree_merge
+        folder = self.start("c1")
+        record = worktrees.create_job(self.repo, folder)
+        holder = subprocess.Popen(["sleep", "30"], cwd=record["path"])
+        try:
+            if Path("/proc").is_dir():
+                with self.assertRaisesRegex(worktree_merge.GateRefused, "worktree_busy"):
+                    worktree_merge.gate(self.repo, folder)
+        finally:
+            holder.kill()
+            holder.wait()
 
 
 class Doctor(Base):
@@ -405,6 +519,47 @@ class Flow(FlowBase):
         self.assertEqual((self.repo / "a.txt").read_text(), "M1\ntwo\nM2\n")
         self.assertEqual(git(self.repo, "branch", "--list", "rig/m1", "rig/m2"), "")
         self.assertFalse((self.repo / ".rig" / "worktrees" / "m1").exists())
+
+
+class ContinuationFlow(FlowBase):
+    def test_a_continuation_resumes_in_the_same_worktree_and_merges_both_edits(self):
+        """Job one edits its worktree; its native-resume continuation edits the same checkout; accepting the successor merges both."""
+        import change_evidence as evidence
+        import verification
+        fake_agent(self.bin, "claude", mcp_test_support.inbox_handshake_prelude(ROOT)
+                   + "import os, sys\n_rig_inbox_handshake()\n"
+                   "open('a.txt', 'a').write(os.environ['RIG_JOB_ID'] + '\\n')\n"
+                   "open(os.path.join(os.environ['RIG_JOB_DIR'], 'cwd.txt'), 'w').write(os.getcwd())\n"
+                   "open(os.path.join(os.environ['RIG_JOB_DIR'], 'argv.txt'), 'w').write(' '.join(sys.argv))\n"
+                   "print('{\"type\": \"system\", \"subtype\": \"init\", \"session_id\": \"sess-c1\"}')\n"
+                   "print('{\"type\": \"result\", \"result\": \"edited\", \"session_id\": \"sess-c1\"}')\n")
+        first = self.run_worker("claude", "c1", RIG_LIVE="1", RIG_TIMEOUT="60")
+        self.assertEqual(first.returncode, 0, first.stdout + first.stderr)
+        record = json.loads((self.job("c1") / "worktree.json").read_text())
+        self.assertEqual(json.loads((self.job("c1") / "meta.json").read_text()).get("session_id"), "sess-c1")
+        second = self.run_worker("claude", "c2", RIG_LIVE="1", RIG_TIMEOUT="60", RIG_CONTINUES_JOB_ID="c1")
+        out = second.stdout + second.stderr
+        self.assertEqual(second.returncode, 0, out)
+        successor = json.loads((self.job("c2") / "worktree.json").read_text())
+        self.assertEqual((successor["path"], successor["branch"], successor["continues"]), (record["path"], "rig/c1", "c1"))
+        self.assertEqual((self.job("c2") / "cwd.txt").read_text(), record["path"], "the resume runs where the session was")
+        self.assertIn("--resume sess-c1", (self.job("c2") / "argv.txt").read_text())
+        meta = json.loads((self.job("c2") / "meta.json").read_text())
+        self.assertEqual((meta.get("continues_job_id"), meta.get("continuation_mode")), ("c1", "native"))
+        self.assertEqual(git(self.repo, "show", "rig/c1:a.txt"), "one\ntwo\nthree\nc1\nc2")
+        self.assertEqual((self.repo / "a.txt").read_text(), "one\ntwo\nthree\n", "nothing merges before acceptance")
+        self.assertFalse((self.repo / ".rig" / "worktrees" / "c2").exists())
+        os.environ["RIG_PARENT"] = "grok"
+        folder = self.job("c2")
+        saved = json.loads((folder / "owner-credentials.json").read_text())
+        auth = {**admission.credentials(saved), "owner_session": "wt-parent"}
+        verification.record_requirements(self.repo, folder, [], ["Parent reviewed it"], **auth)
+        snap = evidence.job_snapshot(self.repo, folder, ["a.txt"])["snapshot_id"]
+        accepted = verification.accept(self.repo, folder, "accept", snap, rationale="Reviewed.", **auth)
+        self.assertEqual(accepted["state"], "verified")
+        self.assertEqual((self.repo / "a.txt").read_text(), "one\ntwo\nthree\nc1\nc2\n")
+        self.assertTrue(json.loads((self.job("c1") / "worktree.json").read_text())["merged"])
+        self.assertFalse(Path(record["path"]).exists())
 
 
 class PerJobContainer(FlowBase):

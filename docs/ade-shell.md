@@ -7,7 +7,7 @@ An optional terminal layout for working with a parent agent while Rig runs worke
 | Command | What it does |
 | --- | --- |
 | `rig shell` | One tmux window: the parent CLI unchanged in its own pane, the board (`rig-shell`) beside it, and a log pane following the most relevant job |
-| `rig shell --no-tmux` | The board in this terminal with nothing else installed: no tmux, no parent pane. The Logs tab and the `dc exec` shell cover what the tmux log pane and a second terminal did |
+| `rig shell --no-tmux` | The board in this terminal with nothing else installed, no tmux: its Term tab runs the parent CLI or a container shell on an emulated terminal, and the Logs tab replaces the log pane |
 | `rig shell print`, `rig shell kill` | Show the tmux commands it would run, or remove this repository's session |
 | `rig shell build` | Build `rig-shell` from a Rig clone with Go 1.24+ (no project needed) |
 | `rig init --sandbox` | Detect the workspace and, for a folder with no devcontainer, store dc-cli's generated config under `.rig/sandbox/override.json`; `--write-devcontainer` turns it into `.devcontainer/devcontainer.json` |
@@ -24,7 +24,7 @@ An optional terminal layout for working with a parent agent while Rig runs worke
 
 ## The board
 
-Tabs: Jobs, Queue, Workflows, Workspace, Fleet, Logs. Every state shows a glyph and a word, and labels, ordering and counts come from the same code as `rig tui`, so the two never disagree.
+Tabs: Jobs, Queue, Workflows, Workspace, Fleet, Logs, Term. Every state shows a glyph and a word, and labels, ordering and counts come from the same code as `rig tui`, so the two never disagree.
 
 | Key | Action |
 | --- | --- |
@@ -46,9 +46,13 @@ Pasted text is never run as commands. `RIG_TUI_ASCII=1`, `RIG_TUI_CJK=1` or a no
 
 The **Logs** tab follows the log of the job selected on the Jobs tab (the job worth watching if none is) as plain text, refreshed every two seconds while the tab shows, with terminal escape sequences removed. Scrolling back stops following; `G` follows the tail again.
 
-**`s`** opens a real interactive shell in the job's container. The server decides the command: `dc exec --no-start <workspace>`, where the workspace is the job's own worktree when its container is keyed by that worktree and the repository otherwise. `--no-start` means a shell can enter a container that is running and never start one. If there is no running container, or dc-cli is missing, the board says why and runs nothing. While the shell is open the board is suspended and the terminal is the shell's; exiting returns to the board.
+**`s`** (outside the Term tab) opens a real interactive shell in the job's container. The server decides the command: `dc exec --no-start <workspace>`, where the workspace is the job's own worktree when its container is keyed by that worktree and the repository otherwise. `--no-start` means a shell can enter a container that is running and never start one. If there is no running container, or dc-cli is missing, the board says why and runs nothing. While the shell is open the board is suspended and the terminal is the shell's; exiting returns to the board.
 
-What this deliberately does not do: embed the parent CLI in a pane. That needs a terminal emulator inside the board, which is a large dependency for little gain. Without tmux, run the parent in another terminal. The tmux layout is unchanged.
+### The Term tab
+
+The **Term** tab runs one interactive program on a pseudo-terminal inside the board, so the parent CLI and a container shell work without tmux. `p` starts the parent CLI for the project (the server decides which; the same one `rig shell` puts in its tmux pane), `s` starts a shell in the project's container (`dc exec --no-start`). A program starts with the keyboard: **every key goes to it, Ctrl-C included**, except **Ctrl-]**, which returns to the board; **Enter** types into it again. The program sees the real size and is resized with the window; a full-screen program such as `vi` works. `x` closes it (after a confirmation), a program that exits keeps its last screen until you start another, and quitting the board ends it.
+
+Limits: one program at a time; the live screen only, with no scrollback; the mouse is not forwarded; pasted text goes in as plain input (newlines become Enter), so a paste into a shell runs; wide characters (CJK, emoji) take one cell and can misalign. The tmux layout is unchanged and still gives the side-by-side view; the Term tab is a full-screen tab, not a split.
 
 ## Experiment: headless parent chat
 
@@ -87,6 +91,8 @@ Off by default. `[worktrees] mode = "per-job"` in `.rig/harness.toml` runs each 
 3. the base checkout must have no staged changes and no uncommitted change in a file the merge touches.
 
 When all three hold, `rig_job_accept` with `next = complete` merges the branch (`--no-ff`), records the merge commit, removes the worktree and deletes the branch. A refused gate names the reason and the paths (`merge_gate:conflict`, `out_of_scope`, `base_dirty`, `base_moved`) and leaves the job, its worktree and its reservation as they were so you can resolve it and accept again. A job that changed nothing is accepted without a merge. Rejecting merges nothing; the worktree is kept until `rig worktrees remove --job ID` (it refuses while a process is running there and keeps an unmerged branch unless `--discard`).
+
+A continuation (`continues_job_id`) of an unmerged worktree job runs in that job's worktree, on its branch, so a native session resume wakes up where it left off and sees the predecessor's edits; no second checkout is made. The branch then carries the whole chain, and accepting any job in it merges everything on it once (the gate's scope check is the union of the chain's declared scopes, and its result names the chain). A predecessor that edited the base checkout, or whose worktree was removed before a merge, cannot be continued in this mode; one that was already merged gives its successor a fresh worktree from the new base. A gate is refused while a process is still running in the worktree. Design: [261020-worktree-continuation-design.md](journals/261020-worktree-continuation-design.md).
 
 Admission still refuses writers that clash on a resource (a port, a URL), exceed the slot limits, or run outside worktree mode against a worktree writer's files. A reviewer of a worktree job reads that job's worktree until it is merged. With `[worktrees] container = "per-job"` and `[sandbox] provider = "devcontainer"`, the launcher runs `dc up <worktree>` for each job and the worker runs in that container; the project's devcontainer config must mount the main repository (its `.rig` state and its git directory) at its own path as well as the worktree, and the image needs `git` (the probe checks that `git` works there). dc-cli leaves a stopped container behind when a job ends; Rig never removes containers, so `rig worktrees status` lists them and you clear them with `dc prune`. `rig doctor` reports the mode and checks the git version.
 

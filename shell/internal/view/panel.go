@@ -61,6 +61,9 @@ type ShellPlan struct {
 	Reason    string   `json:"reason"`
 	Argv      []string `json:"argv"`
 	Workspace string   `json:"workspace"`
+	Dir       string   `json:"dir"`   // working directory for a pane
+	Env       []string `json:"env"`   // extra KEY=VALUE entries for a pane
+	Label     string   `json:"label"` // what to call the pane
 }
 
 // ChatStatus is chat.status: whether the headless-parent chat experiment is on, and its recent sessions.

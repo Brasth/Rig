@@ -1,5 +1,5 @@
  Rig · my-repo   ! 1 need attention  ● 1 running  slots 2/3 
-  Job !1   Que 2   Flw 2   Wks  [Fleet]  Log                
+  Job !1   Que 2   Flw 2   Wks  [Fleet]  Log   Trm          
 ─ This repository ──────────────────────────────────────────
  ● repo  running  cpu 0.3%  mem 6.1M/15.7G                  
  ● job job-7  running                                       

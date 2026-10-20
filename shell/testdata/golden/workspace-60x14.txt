@@ -1,5 +1,5 @@
  Rig · my-repo   ! 1 need attention  ● 1 running  slots 2/3 
-  Job !1   Que 2   Flw 2  [Workspace !]  Flt   Log          
+  Job !1   Que 2   Flw 2  [Workspace !]  Flt   Log   Trm    
 ─ Workspace ────────────────────────────────────────────────
  kind     devcontainer                                      
  override none                                              

@@ -163,6 +163,15 @@ func TestGoldenFrames(t *testing.T) {
 		{"chat-input", 80, 12, "Chat", func(s *State) {
 			s.ChatOn, s.Mode, s.InputLabel, s.Prompt = true, ModeInput, "chat", "summarise the open jobs"
 		}},
+		{"term-help", 80, 12, "Term", nil},
+		{"term-100x24-typing", 100, 24, "Term", func(s *State) {
+			s.PaneTitle, s.PaneFocus, s.PaneRunning = "codex · typing (Ctrl-] returns to the board)", true, true
+			s.PaneLines = []string{"$ rig status", "parent codex  workers claude", "$ \x1b[7m \x1b[0m"}
+		}},
+		{"term-60x12-exited", 60, 12, "Term", func(s *State) {
+			s.PaneTitle = "container shell · exited: exit status 3"
+			s.PaneLines = []string{"bye"}
+		}},
 		{"workspace-loading", 80, 12, "Workspace", nil},
 		{"workspace-unavailable", 80, 12, "Workspace", func(s *State) { s.WorkspaceE = "dc ls --json failed (2): engine not running" }},
 	}

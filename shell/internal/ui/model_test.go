@@ -40,6 +40,10 @@ type fakeSource struct {
 	shellErr    error
 	shellIDs    []string
 
+	parentPlan  *view.ShellPlan
+	parentErr   error
+	parentCalls int
+
 	chatStatus      *view.ChatStatus
 	chatStatusErr   error
 	chatStatusCalls int
@@ -88,6 +92,10 @@ func (f *fakeSource) ChatSend(message, session string, _ time.Duration) (*view.C
 func (f *fakeSource) ChatCancel(session string, _ time.Duration) error {
 	f.chatCancelled = append(f.chatCancelled, session)
 	return nil
+}
+func (f *fakeSource) Parent(time.Duration) (*view.ShellPlan, error) {
+	f.parentCalls++
+	return f.parentPlan, f.parentErr
 }
 func (f *fakeSource) Snapshot(int, int, time.Duration) (*view.Snapshot, error) {
 	return f.snap, f.snapErr
@@ -285,12 +293,12 @@ func TestNavigationTabsDetailAndQuit(t *testing.T) {
 	if m.st.Tab != "Queue" {
 		t.Fatalf("tab %q", m.st.Tab)
 	}
-	press(m, "tab", "tab", "tab", "tab", "tab")
+	press(m, "tab", "tab", "tab", "tab", "tab", "tab")
 	if m.st.Tab != "Jobs" {
-		t.Fatalf("tab wraps after Logs, got %q", m.st.Tab)
+		t.Fatalf("tab wraps after Term, got %q", m.st.Tab)
 	}
 	press(m, "shift+tab")
-	if m.st.Tab != "Logs" {
+	if m.st.Tab != "Term" {
 		t.Fatalf("shift+tab goes back and wraps, got %q", m.st.Tab)
 	}
 	press(m, "tab")
