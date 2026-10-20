@@ -4,7 +4,6 @@ from __future__ import annotations
 import fcntl
 import json
 import os
-import socket
 import subprocess
 import sys
 import threading
@@ -15,34 +14,20 @@ from ui_actions import Actions
 from ui_notices import Notices, status_line
 from ui_store import private_directory, read, runtime_directory, write
 
-MAX_REQUEST = 65536
-MAX_RESPONSE = 8 * 1024 * 1024
-
-
-def receive(stream, limit):
-    data = bytearray()
-    while b"\n" not in data:
-        part = stream.recv(min(65536, limit + 1 - len(data)))
-        if not part:
-            raise ValueError("UI connection closed before response")
-        data.extend(part)
-        if len(data) > limit:
-            raise ValueError("UI message exceeds size limit")
-    value = json.loads(bytes(data).split(b"\n", 1)[0])
-    if not isinstance(value, dict):
-        raise ValueError("UI message must be an object")
-    return value
-
 
 def request(endpoint, payload, timeout=2.0):
-    encoded = json.dumps(payload, ensure_ascii=False).encode() + b"\n"
-    if len(encoded) > MAX_REQUEST:
-        raise ValueError("UI request too large")
-    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as stream:
-        stream.settimeout(timeout)
-        stream.connect(str(endpoint))
-        stream.sendall(encoded)
-        return receive(stream, MAX_RESPONSE)
+    """Send one companion operation to the repository's local API server.
+
+    ``endpoint`` is any path inside the runtime directory; the API socket and
+    token beside it are used. The old control socket no longer exists.
+    """
+    import local_api
+    folder = Path(endpoint).parent
+    response = local_api.call_at(folder / "api.sock", folder / "api.token", "ui.request",
+                                 {"payload": payload}, timeout)
+    if "error" in response:
+        raise ValueError(response["error"].get("message") or "UI request failed")
+    return response["result"]
 
 
 def ensure_service(repo):
@@ -50,7 +35,7 @@ def ensure_service(repo):
     if not (repo / ".rig" / "harness.toml").is_file():
         raise ValueError("Repository is not initialized for Rig")
     folder = runtime_directory(repo)
-    endpoint = str(folder / "control.sock")
+    endpoint = str(folder / "api.sock")
     with (folder / "start.lock").open("a") as lock:
         deadline = time.monotonic() + 3
         while True:
@@ -68,7 +53,7 @@ def ensure_service(repo):
             pass
         # The serving process holds this for its entire lifetime, including
         # initialization. Never unlink a socket belonging to a slow live server.
-        with (folder / "run.lock").open("a") as running:
+        with (folder / "api.run.lock").open("a") as running:
             try:
                 fcntl.flock(running, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError:
@@ -218,69 +203,6 @@ class Service:
 
 
 def serve(repo):
-    folder = runtime_directory(repo)
-    with (folder / "run.lock").open("a") as running:
-        try:
-            fcntl.flock(running, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
-            return 2
-        return _serve(repo, folder)
-
-
-def _serve(repo, folder):
-    import admission
-    endpoint = folder / "control.sock"
-    slots = threading.BoundedSemaphore(8)
-    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as listener:
-        listener.bind(str(endpoint))
-        endpoint.chmod(0o600)
-        try:
-            service = Service(repo)
-        except BaseException:
-            endpoint.unlink(missing_ok=True)
-            raise
-        identity = admission.process_identity(os.getpid())
-        write(folder / "owner.json", {"pid": os.getpid(), "start_id": identity.get("start_id"), "repo": str(service.repo)})
-        listener.listen(8)
-        listener.settimeout(1)
-        collector = threading.Thread(target=service.collect, daemon=True, name="rig-ui-observer")
-        collector.start()
-
-        def maintain():
-            while not service.closed.wait(5):
-                service.prune_sessions()
-
-        threading.Thread(target=maintain, daemon=True, name="rig-ui-session-check").start()
-
-        def handle(connection):
-            with connection:
-                connection.settimeout(2)
-                try:
-                    result = service.handle(receive(connection, MAX_REQUEST))
-                except (Exception, SystemExit) as error:
-                    result = {"error": str(error) or "UI request failed", "status": "error"}
-                try:
-                    connection.sendall(json.dumps(result, ensure_ascii=False, default=str).encode() + b"\n")
-                except OSError:
-                    pass
-                finally:
-                    slots.release()
-
-        try:
-            while not service.closed.is_set():
-                try:
-                    connection, _ = listener.accept()
-                    if slots.acquire(blocking=False):
-                        threading.Thread(target=handle, args=(connection,), daemon=True).start()
-                    else:
-                        connection.close()
-                except socket.timeout:
-                    pass
-                if not service.sessions and not service.actions.running and time.monotonic() - service.last_client > 15:
-                    break
-        finally:
-            service.closed.set()
-            service.refresh.set()
-            endpoint.unlink(missing_ok=True)
-            (folder / "owner.json").unlink(missing_ok=True)
-    return 0
+    """Run the repository's local API server, which hosts this UI service."""
+    import local_api
+    return local_api.serve(repo, idle=15.0)

@@ -278,7 +278,7 @@ class ActionTests(unittest.TestCase):
     def test_runtime_socket_path_fits_macos_even_with_a_long_temp_directory(self):
         from ui_store import runtime_directory
         with patch("tempfile.gettempdir", return_value="/var/folders/" + "x" * 120):
-            endpoint = runtime_directory(self.repo) / "control.sock"
+            endpoint = runtime_directory(self.repo) / "api.sock"
         self.assertLess(len(str(endpoint).encode()), 104)
 
     def test_disconnected_client_does_not_cancel_accepted_action(self):

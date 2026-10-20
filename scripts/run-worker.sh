@@ -1092,6 +1092,8 @@ fi
 if [[ "$FLAG" != "true" ]]; then
   refuse "worker '$WORKER' is off in .rig/harness.toml"
 fi
+SANDBOX_ERR="$(python3 "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/sandbox_provider.py" check --repo "$REPO" 2>&1 >/dev/null)" || \
+  refuse "${SANDBOX_ERR#sandbox: }"
 if [[ "$WORKER" == "devin" ]]; then
   if [[ -z "$MODEL" ]]; then
     refuse "Devin requires an exact SWE-2 model"

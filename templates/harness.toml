@@ -44,3 +44,14 @@ enabled = false
 # Effective on = ~/.rig/browser-skill.json opt_in + bsk on PATH + extension connected + enabled=true.
 [browser-skill]
 enabled = false
+
+[sandbox]
+# Where workers run. "host" is today's behaviour. "devcontainer" is reserved for
+# the dc-cli backend and is refused at launch until that backend ships.
+provider = "host"
+
+[mcp]
+# Parent tool list. By default every parent tool is listed ("full"). Add a
+# profile key with the value "core" to hide cost reporting, benchmark and
+# analysis tools; RIG_MCP_PROFILE overrides it. Workers always get the same
+# small child set.

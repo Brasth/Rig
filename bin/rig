@@ -66,6 +66,7 @@ usage: rig <command> [args]
   run "prompt"
   jobs [--json] [--thread [ID]]
   tui
+  api serve | call METHOD [JSON] | methods | doc   # local JSON-RPC API v1 (docs/local-api.md)
   memory [show]
   memory add "standing fact"
   job start [--worker NAME] [--role ROLE] [id]
@@ -1566,6 +1567,7 @@ main() {
   case "$cmd" in init|setup|update|status|doctor|jobs|worktrees|tui|memory|timeline|recovery|task|workflows|workflow|queue|routing|billing|help|-h|--help|"") ;; *) project_guard || return ;; esac
   case "$cmd" in
     ui) python3 "$(py_script rig_ui.py)" "$@" ;;
+    api) python3 "$(py_script local_api.py)" "$@" --repo "$(repo_root)" ;;
     uninstall) python3 "$(py_script ui_install.py)" "$@" ;;
     setup) cmd_setup "$@" ;;
     update) cmd_update "$@" ;;

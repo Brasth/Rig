@@ -112,6 +112,27 @@ class ClaudeWorkerArgv(unittest.TestCase):
         self.assertEqual(Path(env.get("RIG_JOB_DIR") or "").name, "claude-stream")
         self.assertTrue((env.get("RIG_JOB_DIR") or "").endswith("claude-stream"))
 
+    def test_unavailable_sandbox_provider_refuses_launch(self):
+        (self.repo / ".rig" / "harness.toml").write_text(
+            'parent = "codex"\n\n[workers]\ncodex = false\ngrok = true\nclaude = true\n\n'
+            '[sandbox]\nprovider = "devcontainer"\n'
+        )
+        proc = run_worker(self.repo, "claude", "claude-stream", str(self.brief))
+        out = proc.stdout + proc.stderr
+        self.assertNotEqual(proc.returncode, 0, out)
+        self.assertIn("not available in this Rig runtime", out)
+        self.assertNotIn("would run:", out)
+
+    def test_host_sandbox_provider_keeps_dry_run_argv(self):
+        (self.repo / ".rig" / "harness.toml").write_text(
+            'parent = "codex"\n\n[workers]\ncodex = false\ngrok = true\nclaude = true\n\n'
+            '[sandbox]\nprovider = "host"\n'
+        )
+        proc = run_worker(self.repo, "claude", "claude-stream", str(self.brief))
+        out = proc.stdout + proc.stderr
+        self.assertIn(proc.returncode, (0, 127), out)
+        self.assertIn("would run:", out)
+
     def test_claude_haiku_dry_run_omits_effort_flag(self):
         env = {
             "RIG_MODEL": "claude-haiku-4-5-20251001",

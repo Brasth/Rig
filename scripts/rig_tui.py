@@ -19,7 +19,7 @@ import jev_settings  # noqa: E402
 import routing_settings  # noqa: E402
 from tui_routing import RoutingPanel, render_panel  # noqa: E402
 from tui_editor import Draft, InputDecoder  # noqa: E402
-from tui_runtime import BoardRuntime, visible_jobs as _visible_jobs  # noqa: E402
+from tui_runtime import BoardRuntime, DirectBoard, visible_jobs as _visible_jobs  # noqa: E402
 from tui_chrome import layout, message_rows_needed
 from tui_style import initialize  # noqa: E402
 from tui_detail_state import DetailState, HelpState, Notifications  # noqa: E402
@@ -42,7 +42,8 @@ def _snapshot_status(runtime):
     age = f"snapshot {max(0, time.monotonic() - snapshot.captured_at):.1f}s old" if snapshot.captured_at else "loading snapshot"
     if runtime.snapshot_error:
         return f"refresh failed: {runtime.snapshot_error} ({age})"
-    return age + (" · refreshing" if runtime.scanning else "")
+    direct = " · direct read, API unavailable" if getattr(snapshot, "source", "local") == "direct" else ""
+    return age + direct + (" · refreshing" if runtime.scanning else "")
 
 
 def _report_result(notes, result) -> None:
@@ -58,8 +59,9 @@ def _report_result(notes, result) -> None:
         notes.info(str(result.value or "Action completed"))
 
 
-def _paint(stdscr, repo: Path, *, runtime=None, clock=time.monotonic) -> None:
-    runtime = runtime or BoardRuntime(repo)
+def _paint(stdscr, repo: Path, *, runtime=None, clock=time.monotonic, backend=None) -> None:
+    backend = backend or DirectBoard()
+    runtime = runtime or BoardRuntime(repo, loader=backend.snapshot)
     curses.curs_set(0)
     curses.noecho()
     initialize()
@@ -232,7 +234,7 @@ def _paint(stdscr, repo: Path, *, runtime=None, clock=time.monotonic) -> None:
                         text = draft.text
                         submission_id = draft.submission_id
                         if runtime.submit("enqueue", lambda text=text, key=submission_id:
-                                          rig_queue.add_item(repo, text, idempotency_key=key)):
+                                          backend.enqueue(repo, text, key)):
                             draft.submitting = True
                             draft.message = "Saving queue item; board remains active"
                         else:
@@ -267,9 +269,9 @@ def _paint(stdscr, repo: Path, *, runtime=None, clock=time.monotonic) -> None:
                         if action_key in requested:
                             notes.info(f"stop already requested {jid}")
                         else:
-                            action = ((lambda jid=jid: rig_jobs.cancel_job(repo, jid, "tui"))
+                            action = ((lambda jid=jid: backend.cancel_job(repo, jid))
                                       if target_tab == "Jobs" else
-                                      (lambda jid=jid: rig_queue.cancel_item(repo, jid)))
+                                      (lambda jid=jid: backend.cancel_queue(repo, jid)))
                             if runtime.submit(action_key, action, cancellation=True):
                                 requested.add(action_key)
                                 notes.info(f"stop requested {jid}" if target_tab == "Jobs"
@@ -342,7 +344,7 @@ def _paint(stdscr, repo: Path, *, runtime=None, clock=time.monotonic) -> None:
                     recovery_request = f"recovery:{recovery_sequence}"
                     recovery_lines, recovery_offset = ["Reading recorded evidence…"], 0
                     selector = {"job_id": row["job_id"]} if tab == "Jobs" else {"workflow_id": row["workflow_id"]}
-                    if not runtime.submit(recovery_request, lambda selector=selector: recovery_guide.build(repo, **selector)):
+                    if not runtime.submit(recovery_request, lambda selector=selector: backend.recovery(repo, **selector)):
                         recovery_lines = ["Background actions busy; close and reopen recovery guidance."]
                 elif tab == "Settings" and row and key == "c" and row.get("id") == "jev":
                     secret_active, secret_text = True, ""
@@ -373,7 +375,7 @@ def _paint(stdscr, repo: Path, *, runtime=None, clock=time.monotonic) -> None:
                 elif key in ("y", "n") and row and tab == "Jobs":
                     behavior = "allow" if key == "y" else "deny"
                     action_key = f"answer:{row['job_id']}"
-                    if runtime.submit(action_key, lambda row=row, behavior=behavior: rig_jobs.answer_pending(row, behavior)):
+                    if runtime.submit(action_key, lambda row=row, behavior=behavior: backend.answer(repo, row, behavior)):
                         notes.info(f"{behavior} requested {row['job_id']}")
                     else:
                         notes.error("Action already pending or busy")
@@ -413,8 +415,12 @@ def main() -> int:
     if not sys.stdout.isatty() or os.environ.get("RIG_TUI") == "0":
         print(rig_jobs.format_table(rig_jobs.list_jobs(repo), repo))
         return 0
+    backend = None
+    if os.environ.get("RIG_TUI_API") != "0":
+        from tui_runtime import ApiBoard
+        backend = ApiBoard()
     try:
-        curses.wrapper(lambda stdscr: _paint(stdscr, repo))
+        curses.wrapper(lambda stdscr: _paint(stdscr, repo, backend=backend))
     except KeyboardInterrupt:
         return 0
     return 0

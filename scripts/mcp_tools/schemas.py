@@ -1609,6 +1609,25 @@ CHILD_TOOL_ORDER = (
     "rig_memory",
     "rig_job_coordination_request",
 )
+# Parent tool profiles. `full` lists every parent tool. `core` leaves out cost
+# reporting, benchmarking and analysis tools that no required step of the parent
+# protocol depends on. Profiles only change what tools/list shows; they never add
+# authority, and the child set is unaffected.
+TOOL_PROFILES = ("core", "full")
+DEFAULT_TOOL_PROFILE = "full"
+CORE_EXCLUDED_TOOLS = frozenset({
+    "rig_billing_report", "rig_billing_import", "rig_billing_sync",
+    "rig_benchmark_report", "rig_benchmark_create", "rig_benchmark_outcome",
+    "rig_routing_report", "rig_task_timeline",
+})
+
+
+def profile_tool_names(profile):
+    """Parent tool names a profile may list. Unknown profiles are full."""
+    names = frozenset(TOOL_ORDER)
+    return names - CORE_EXCLUDED_TOOLS if profile == "core" else names
+
+
 PARENT_TOOL_NAMES = frozenset(TOOL_ORDER)
 CHILD_TOOL_NAMES = frozenset(CHILD_TOOL_ORDER)
 _TOOLS_BY_NAME = {t["name"]: t for t in TOOLS}
@@ -1617,4 +1636,4 @@ TOOLS = [_TOOLS_BY_NAME[n] for n in TOOL_ORDER if n in _TOOLS_BY_NAME] + [
 ]
 CHILD_TOOLS = [_TOOLS_BY_NAME[n] for n in CHILD_TOOL_ORDER if n in _TOOLS_BY_NAME]
 
-__all__ = ['PICK_ROLES', 'JOB_WORKERS', 'JOB_RECORD_STATUSES', 'JOB_FINISH_STATUSES', 'REVIEW_PROPERTIES', 'TASK_DOMAIN_PROPERTIES', 'ASSESSMENT_LEVELS', 'RAW_ASSESSMENT_SCHEMA', 'ASSESSMENT_PROPERTIES', 'PARENT_METADATA_PROPERTIES', 'JOB_EXECUTION_PROPERTIES', 'ACCEPTANCE_CONTRACT_SCHEMA', 'TOOLS', 'CONTEXT_REFERENCE_SCHEMA', '_JOB_REF_PROPERTIES', '_OWNERSHIP_PROPERTIES', '_WORKFLOW_ID', '_WORKFLOW_OWNER', 'TOOL_ORDER', 'CHILD_TOOL_ORDER', 'PARENT_TOOL_NAMES', 'CHILD_TOOL_NAMES', '_TOOLS_BY_NAME', 'CHILD_TOOLS']
+__all__ = ['PICK_ROLES', 'JOB_WORKERS', 'JOB_RECORD_STATUSES', 'JOB_FINISH_STATUSES', 'REVIEW_PROPERTIES', 'TASK_DOMAIN_PROPERTIES', 'ASSESSMENT_LEVELS', 'RAW_ASSESSMENT_SCHEMA', 'ASSESSMENT_PROPERTIES', 'PARENT_METADATA_PROPERTIES', 'JOB_EXECUTION_PROPERTIES', 'ACCEPTANCE_CONTRACT_SCHEMA', 'TOOLS', 'CONTEXT_REFERENCE_SCHEMA', '_JOB_REF_PROPERTIES', '_OWNERSHIP_PROPERTIES', '_WORKFLOW_ID', '_WORKFLOW_OWNER', 'TOOL_ORDER', 'CHILD_TOOL_ORDER', 'PARENT_TOOL_NAMES', 'CHILD_TOOL_NAMES', '_TOOLS_BY_NAME', 'CHILD_TOOLS', 'TOOL_PROFILES', 'DEFAULT_TOOL_PROFILE', 'CORE_EXCLUDED_TOOLS', 'profile_tool_names']

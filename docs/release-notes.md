@@ -1,5 +1,27 @@
 # Release Notes
 
+## One local API for the board and the companion (2026-10-20)
+
+The board's enqueue, stop, answer and recovery-guidance actions now go through the local API (`queue.add`, `queue.cancel`, `job.cancel`, `job.allow`, `job.deny`, `recovery.guide`). An action falls back to the old direct call only when the API server cannot be reached at all; a request that may already have reached the server is never re-run, and an error the API reports (a disabled project, an unknown item) is shown, not bypassed. Tool results now include a `structured` field where the MCP tool returns one.
+
+The tmux companion's separate `control.sock` is gone. The API server now hosts the same companion service: `ui.request` carries the old operations unchanged, `events.list` and `events.ack` expose notices, and every call needs the API token. `rig ui serve` starts that server. It stays up while a companion session is registered or an action is running and exits after 15 idle seconds otherwise. Companion behavior, receipts and notices are unchanged. Curses board settings panels (Jev key, picker engine, objective, routing domains) still edit configuration directly.
+
+## Board reads through the local API (2026-10-20)
+
+`rig tui` now fetches its jobs, queue, slot, settings and workflow data from the local API (new read-only `board.snapshot` method). If no API server answers, the board starts a detached one that exits after 60 idle seconds and, for that frame and until the server is up, falls back to the previous direct reads, labelled "direct read, API unavailable" in the status line, so the board never blanks. `rig api serve --idle SECONDS` sets the idle exit (default: never). Set `RIG_TUI_API=0` to keep fully direct reads. Board actions (enqueue, stop, answer, routing and key settings, recovery guidance) and the tmux companion are unchanged in this step.
+
+## MCP tool profiles (2026-10-20)
+
+`.rig/harness.toml` gains an optional `[mcp] profile = "full" | "core"` (default and template value `full`, so nothing changes). `core` stops listing eight cost-reporting, benchmark and analysis tools (billing report, import and sync; benchmark create, outcome and report; routing report; task timeline) to shrink the parent's tool list; everything on the launch, wait, check, accept, close, workflow and recovery path stays. `RIG_MCP_PROFILE` overrides the file, and unrecognised values mean `full`. Profiles only filter `tools/list`: they add no authority, hidden tools remain callable by name, and the worker child set is always the same eight tools. `rig doctor` reports the active profile as an optional check.
+
+## Local API v1 (2026-10-20)
+
+`rig api serve` starts a versioned JSON-RPC 2.0 server on a private Unix socket (mode 0600, in the 0700 runtime directory) bound to one repository; `rig api call METHOD [JSON]` and `rig api methods` are the clients. Every request carries the token from `api.token`. Methods map one-to-one onto existing parent MCP tools (session, doctor, status, jobs, queue, workflows, allow, deny, cancel, message), so project-enabled and ownership checks are unchanged, a client-supplied `repo` is ignored, owner tokens are redacted from every response, and a worker child cannot start the server. `docs/local-api.md` is generated from the method registry and a test keeps them in step. Nothing changes for existing workflows; the board and companion move onto this API in a later step.
+
+## Sandbox provider seam (2026-10-20)
+
+`.rig/harness.toml` gains an optional `[sandbox]` section with `provider = "host"` (the default and today's behavior). `scripts/sandbox_provider.py` defines the provider interface a container backend will implement; the host provider changes nothing. `provider = "devcontainer"` is reserved: `run-worker.sh` refuses to launch with it, and so does any unknown value, rather than silently running on the host. `rig doctor` lists the provider as an optional check. Existing repos need no change.
+
 ## OpenCode cheap-model policy (2026-10-15)
 
 Every install and update now limits OpenCode children to three exact OpenCode Go selectors: `opencode-go/glm-5.3-flash` (default, profile `opencode-glm-5.3-flash`), `opencode-go/deepseek-v4.1-flash` (second, `opencode-deepseek-v4.1-flash`), and region-dependent `opencode-go/muse-spark-1.3-contributor` (optional third, `opencode-muse-spark-1.3-contributor`). OpenCode Go is required; the selectors must be listed by `opencode models` for your account and region. Rig does not set up authentication, purchase anything, enable OpenCode, update its binary, or edit your global OpenCode configuration.
