@@ -140,7 +140,12 @@ def optional_check(repo: Path, task: str, *, required: bool) -> dict:
                  required=required, **evidence)
 
 
-_BAD_STATES = frozenset({"fail", "failed", "error", "missing", "unhealthy", "down"})
+_BAD_STATES = frozenset({"fail", "failed", "error", "missing", "unhealthy", "down", "blocker"})
+
+
+def fix_text(recover: str) -> str:
+    """dc-cli's own remediation sentence as is; a bare diagnosis id becomes the dc recover command."""
+    return recover if " " in recover else f"dc recover {recover}"
 
 
 def engine_check(repo: Path) -> dict:
@@ -164,10 +169,11 @@ def engine_check(repo: Path) -> dict:
         state = dc_client.pick(row, "status", "state", "result", default="")
         ok = dc_client.pick(row, "ok", default=None)
         if ok is False or (isinstance(state, str) and state.lower() in _BAD_STATES):
-            problems.append({"name": str(dc_client.pick(row, "name", "check", "id", default="check")),
-                             "recover": str(dc_client.pick(row, "recover", "recover_id", "diagnosis", "diagnosis_id", default="") or "")})
+            problems.append({"name": str(dc_client.pick(row, "id", "name", "check", default="check")),
+                             "summary": str(dc_client.pick(row, "summary", default="") or ""),
+                             "recover": str(dc_client.pick(row, "remediation", "recover", "recover_id", "diagnosis", "diagnosis_id", default="") or "")})
     if problems:
-        text = "; ".join(p["name"] + (f" (fix: dc recover {p['recover']})" if p["recover"] else "") for p in problems)
+        text = "; ".join((p["summary"] or p["name"]) + (f" (fix: {fix_text(p['recover'])})" if p["recover"] else "") for p in problems)
         return check("engine", "failed", f"{len(problems)} problem(s): {text}", required=True, problems=problems)
     if done.returncode != 0:
         return check("engine", "failed", f"dc doctor exited {done.returncode} without naming a problem", required=True)
@@ -200,6 +206,33 @@ def workspace_checks(repo: Path, config: dict, *, deep: bool) -> list[dict]:
                           required=False, **evidence))
     if deep and found:
         rows.append(engine_check(repo))
+        if config["sandbox"]["provider"] == "devcontainer" and not config["sandbox"]["error"]:
+            rows.extend(container_worker_checks(repo, config))
+    return rows
+
+
+def container_worker_checks(repo: Path, config: dict) -> list[dict]:
+    """For each enabled worker: can it run in the container, and does the container have what it needs?"""
+    import container_modes
+    import sandbox_provider
+    rows = []
+    try:
+        provider = sandbox_provider.provider_for(repo)
+    except sandbox_provider.SandboxError as error:
+        return [check("container-workers", "failed", str(error), required=True)]
+    for worker in harness.WORKERS:
+        if config["workers"].get(worker) != "true":
+            continue
+        name = f"container-{worker}"
+        problem = container_modes.credential_problem(worker, config["sandbox"]["credentials"])
+        if problem:
+            rows.append(check(name, "unavailable", problem, required=False))
+            continue
+        try:
+            provider.probe(worker)
+            rows.append(check(name, "ready", f"{worker} can run in the container", required=True))
+        except sandbox_provider.SandboxError as error:
+            rows.append(check(name, "failed", str(error), required=True))
     return rows
 
 
@@ -320,9 +353,17 @@ def build_report(repo: Path, *, task: str = "coding", parent: str = "", model: s
                         mcp_state["error"] or f"{profile} profile lists up to {len(mcp_tools_schemas.profile_tool_names(profile))} parent tools",
                         required=False))
     sandbox_state = config["sandbox"]
-    checks.append(check("sandbox", "missing" if sandbox_state["error"] or sandbox_state["provider"] != "host" else "ready",
-                        sandbox_state["error"] or f"{sandbox_state['provider']} provider",
-                        required=False))
+    if sandbox_state["error"]:
+        checks.append(check("sandbox", "missing", sandbox_state["error"], required=False))
+    elif sandbox_state["provider"] == "devcontainer":
+        import dc_client
+        choices = ", ".join(f"{w}={c}" for w, c in sorted(sandbox_state["credentials"].items())) or "no worker credential choices yet"
+        found = bool(dc_client.dc_binary())
+        checks.append(check("sandbox", "ready" if found else "missing",
+                            f"devcontainer provider ({choices})" if found else "devcontainer provider needs dc-cli, which is not installed",
+                            required=False))
+    else:
+        checks.append(check("sandbox", "ready", "host provider", required=False))
     checks.extend(workspace_checks(repo, config, deep=bool(workspace)))
     checks.append(shell_check())
     checks.append(check("scripts", "ready" if script_ready else "missing", "Rig runtime scripts present" if script_ready else "Rig runtime scripts missing"))

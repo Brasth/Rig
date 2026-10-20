@@ -1818,6 +1818,11 @@ def cu_capture(
                 ok=False, effective=True, action=action, effect="refused",
                 hint="url required with profile_key",
             )
+        try:
+            import sandbox_provider
+            sandbox_provider.check_local_url(repo, target)
+        except sandbox_provider.SandboxError as error:
+            return empty_evidence(ok=False, effective=True, action=action, effect="refused", hint=str(error))
         return _bind_named_profile(
             profile_key=key, url=target, runner=runner, opener=profile_opener,
             px_carry=px_carry,

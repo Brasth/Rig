@@ -845,6 +845,11 @@ def bsk_navigate(repo: Path, url: str = "", *, runner=None) -> dict:
     target = str(url or "").strip()
     if not target:
         return _fail(repo, "navigate", "missing required field url")
+    try:
+        import sandbox_provider
+        sandbox_provider.check_local_url(repo, target)
+    except sandbox_provider.SandboxError as error:
+        return _fail(repo, "navigate", str(error))
     args, hint = _scoped_args(["navigate", target])
     if hint:
         return _fail(repo, "navigate", hint)

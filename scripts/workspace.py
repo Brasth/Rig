@@ -8,6 +8,8 @@ Rig run dc more than once every few seconds.
 """
 from __future__ import annotations
 
+import re
+
 import threading
 import time
 from pathlib import Path
@@ -35,6 +37,33 @@ def containers_view(rows) -> list[dict]:
             "uptime": str(dc_client.pick(row, "uptime", "running_for", "age", default="") or ""),
         })
     return out
+
+
+def parse_forward_status(text: str) -> list[dict]:
+    """Rows from the text ``dc forward --status`` prints (it has no --json): a ``desired:`` list of
+    host:container pairs, then ``actual:`` sidecar lines ``sidecar  NAME<TAB>STATUS<TAB>PORTS``.
+    A wanted port with no running sidecar is a problem row."""
+    section, desired, running = "", [], {}
+    for raw in str(text).splitlines():
+        line = raw.strip()
+        if line in ("desired:", "actual:"):
+            section = line[:-1]
+        elif section == "desired" and re.match(r"\d+:\d+\b", line):
+            desired.append(line.split()[0].split(":")[0])
+        elif section == "actual" and raw.startswith("sidecar"):
+            parts = raw.split("\t")
+            name = parts[0].split(None, 1)[1].strip() if len(parts[0].split(None, 1)) > 1 else ""
+            state = parts[1].strip() if len(parts) > 1 else ""
+            bound = re.findall(r"(\d+)->\d+/", parts[2]) if len(parts) > 2 else []
+            tail = re.search(r"-(\d+)$", name)
+            for port in bound or ([tail.group(1)] if tail else []):
+                running[port] = (name, state)
+    rows = []
+    for port in sorted(set(desired) | set(running), key=int):
+        name, state = running.get(port, ("", "not running"))
+        rows.append({"port": port, "name": name, "state": state, "held_by": "",
+                     "problem": not state.lower().startswith("up")})
+    return rows
 
 
 def ports_view(data) -> list[dict]:
@@ -71,7 +100,7 @@ def status(repo: Path, *, deep: bool = False, now=time.monotonic) -> dict:
               "containers": containers_view(base["containers"]), "ports": [], "doctor": None, "error": base["error"]}
     if deep and base["dc"]["found"]:
         try:
-            result["ports"] = ports_view(dc_client.run_json(["forward", "--status", "--json"], repo, timeout=10))
+            result["ports"] = parse_forward_status(dc_client.run_text(["forward", "--status"], repo, timeout=10))
         except dc_client.DcError as error:
             result["error"] = result["error"] or str(error)
         result["doctor"] = _doctor_summary(repo)
@@ -123,11 +152,12 @@ def view(status: dict) -> dict:
             attention = attention or port["problem"]
         sections.append({"title": "Ports", "lines": lines})
     if status["doctor"] is not None:
+        from doctor import fix_text
         doctor = status["doctor"]
         if doctor["ok"]:
             lines = [_line("● dc doctor reports no problems", "ok")]
         else:
-            lines = [_line("! " + p["name"] + (f"  (fix: dc recover {p['recover']})" if p["recover"] else ""), "attention")
+            lines = [_line("! " + p["name"] + (f"  (fix: {fix_text(p['recover'])})" if p["recover"] else ""), "attention")
                      for p in doctor["problems"]] or [_line("! " + doctor["detail"], "attention")]
             attention = True
         sections.append({"title": "Doctor", "lines": lines})

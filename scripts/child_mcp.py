@@ -63,6 +63,11 @@ def iso_now() -> str:
 
 
 def python_bin() -> str:
+    # Container workers resolve Python by name inside the container; the host's
+    # interpreter path usually does not exist there.
+    override = (os.environ.get("RIG_CHILD_PYTHON") or "").strip()
+    if override:
+        return override
     for path in ("/opt/homebrew/bin/python3", "/usr/local/bin/python3", "/usr/bin/python3"):
         if os.path.isfile(path) and os.access(path, os.X_OK):
             return path

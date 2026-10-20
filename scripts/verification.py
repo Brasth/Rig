@@ -187,11 +187,31 @@ def _artifact(path, folder):
     return {"path": path.relative_to(folder).as_posix(), "sha256": digest.hexdigest(), "bytes": path.stat().st_size}
 
 
+def _container_check(root, folder, command, directory):
+    """(argv, (stop, heartbeat), evidence) for a container run, or (None, None, None) for the host.
+
+    Checks must run where the job ran: the same exact argv, in the container, or not at all.
+    Anything that stops that from being true refuses the check instead of running it on the host.
+    """
+    import sandbox_provider
+    try:
+        provider = sandbox_provider.provider_for(root)
+        if provider.name == "host":
+            return None, None, None
+        token = uuid.uuid4().hex
+        stop, beat = folder / "checks" / f".{token}.stop", folder / "checks" / f".{token}.hb"
+        argv = provider.check_command(command, root / directory, stop, beat)
+        return argv, (stop, beat), {"provider": provider.name, "container": provider.container_info()}
+    except sandbox_provider.SandboxError as error:
+        raise VerificationError(f"cannot run this check in the sandbox: {error}") from error
+
+
 def run_check(repo, job_dir, name, argv, cwd=None, on_tick=None, *,
               reservation_id="", attempt_id="", owner_token="", owner_session=""):
     _parent_only()
     root, folder = evidence.repository(repo), evidence.job_directory(repo, job_dir)
     command, directory, name = _argv(argv), evidence.normalize_cwd(root, cwd), _name(name)
+    container_argv, lease_files, sandbox_record = _container_check(root, folder, command, directory)
     with mutation_guard(root, folder, "check", reservation_id=reservation_id,
                         attempt_id=attempt_id, owner_token=owner_token, owner_session=owner_session):
         with _lock(folder):
@@ -211,6 +231,8 @@ def run_check(repo, job_dir, name, argv, cwd=None, on_tick=None, *,
                       "sequence": max((row.get("sequence", 0) for row in rows), default=0) + 1,
                       "before_snapshot_id": subject["snapshot_id"], "after_snapshot_id": "", "exit_code": None}
             record.update(reservation_id=reservation_id, attempt_id=attempt_id)
+            if sandbox_record:
+                record["sandbox"] = sandbox_record  # where the check ran; absent for host runs
             if frozen is not None:
                 record.update({key: frozen[key] for key in contracts.BINDING_KEYS})
             evidence.write_json(checks / (check_id + ".json"), record)
@@ -223,11 +245,15 @@ def run_check(repo, job_dir, name, argv, cwd=None, on_tick=None, *,
             except BaseException:
                 (folder / "check-running.json").unlink(missing_ok=True)
                 raise
-        process, failure = None, None
+        process, failure, lease = None, None, None
         stdout_path, stderr_path = checks / (check_id + ".stdout.log"), checks / (check_id + ".stderr.log")
         try:
             with stdout_path.open("wb") as stdout, stderr_path.open("wb") as stderr:
-                process = subprocess.Popen(command, cwd=root / directory, shell=False, stdout=stdout, stderr=stderr)
+                if container_argv:
+                    from sandbox_container import Lease
+                    lease = Lease(lease_files[1], lease_files[0]).__enter__()
+                process = subprocess.Popen(container_argv or command, cwd=root / directory, shell=False,
+                                           stdout=stdout, stderr=stderr)
                 active["process_pid"] = process.pid
                 evidence.write_json(folder / "check-running.json", active)
                 if on_tick:
@@ -236,6 +262,14 @@ def run_check(repo, job_dir, name, argv, cwd=None, on_tick=None, *,
                 record["exit_code"] = process.wait()
         except BaseException as error:
             failure = error
+            if process is not None and process.poll() is None and lease is not None:
+                # Killing the host-side dc exec client would leave the check running
+                # in the container; the supervisor ends its whole tree on this request.
+                lease.request_stop()
+                try:
+                    process.wait(timeout=8)
+                except subprocess.TimeoutExpired:
+                    pass
             if process is not None and process.poll() is None:
                 process.terminate()
                 try:
@@ -270,6 +304,8 @@ def run_check(repo, job_dir, name, argv, cwd=None, on_tick=None, *,
                                               "snapshot_id": record["after_snapshot_id"], "last_check_id": check_id})
             finally:
                 (folder / "check-running.json").unlink(missing_ok=True)
+                if lease is not None:
+                    lease.__exit__(None, None, None)
         if failure is not None:
             raise failure
         return record

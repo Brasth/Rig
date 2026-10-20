@@ -7,14 +7,14 @@
     editing src/middleware/limit.ts                           │ job-81c                                                 
   ● Checking      Verify wf-12 auth tests                     │ status working                                          
     running npm test -- login                                 │ agent codex model unknown                               
-  ○ Unverified    Session store refactor                      │ verification unknown / not accepted                     
-    opencode · finished 4m ago; not accepted                  │ independent review unknown; not completed               
-  ✗ Failed        Bump eslint config                          │ role implement                                          
-    pi · check npm run lint failed                            │ task Rate limit POST /login                             
-  ✓ Verified      Settings loader                             │ doing editing src/middleware/limit.ts                   
-    claude · Parent accepted the current, unchanged content s…│ pid 4242 (alive)                                        
-  – Cancelled     Spike: SSE logs                             │                                                         
-    grok · Stop confirmed; the worker is no longer running.   │                                                         
+  ○ Unverified    Session store refactor                      │ sandbox devcontainer · a3f9c1d2e4b5 · node:22-bookworm  
+    opencode · finished 4m ago; not accepted                  │   · sha256:9f1c2d3e4a5b                                 
+  ✗ Failed        Bump eslint config                          │ verification unknown / not accepted                     
+    pi · check npm run lint failed                            │ independent review unknown; not completed               
+  ✓ Verified      Settings loader                             │ role implement                                          
+    claude · Parent accepted the current, unchanged content s…│ task Rate limit POST /login                             
+  – Cancelled     Spike: SSE logs                             │ doing editing src/middleware/limit.ts                   
+    grok · Stop confirmed; the worker is no longer running.   │ pid 4242 (alive)                                        
                                                               │                                                         
                                                               │                                                         
                                                               │                                                         

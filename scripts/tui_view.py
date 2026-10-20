@@ -139,6 +139,21 @@ def _workflow_detail_lines(row: dict) -> list[str]:
     return detail
 
 
+def _sandbox_line(box: dict) -> str:
+    """Where the job ran: provider, then the container facts the launcher recorded."""
+    container = box.get("container") if isinstance(box.get("container"), dict) else {}
+    provider = str(box.get("provider") or "unknown")
+    if not container.get("found"):
+        note = container.get("note")
+        return f"sandbox {provider}; container facts unavailable" + (f" ({note})" if note else "")
+    parts = [provider, str(container.get("id") or container.get("name") or "container")[:12]]
+    if container.get("image"):
+        parts.append(str(container["image"]))
+    if container.get("image_digest"):
+        parts.append(str(container["image_digest"])[:19])
+    return "sandbox " + " · ".join(parts)
+
+
 def _detail_lines(job: dict) -> list[str]:
     state = job.get("display_state") or rig_jobs.job_display_state(job)
     detail = [str(job.get("job_id") or "unknown"), f"status {state}"]
@@ -149,6 +164,8 @@ def _detail_lines(job: dict) -> list[str]:
         detail.append(str(job["display_reason"]))
     model = job.get("model") if job.get("model_source") in {"selected", "observed"} and not job.get("model_inferred") else ""
     detail.append(f"agent  {job.get('worker') or 'unknown'}   model {model or 'unknown'}")
+    if isinstance(job.get("sandbox"), dict):
+        detail.append(_sandbox_line(job["sandbox"]))
     reservation = job.get("reservation") or {}
     if reservation and reservation.get("stage") != "released":
         scope = "exclusive repository scope" if reservation.get("scope_unknown") else json.dumps(reservation.get("files") or [], ensure_ascii=False)
