@@ -1163,6 +1163,43 @@ def _record_changes(repo, session: str, before: str) -> None:
         append(repo, session, "system", f"and {len(rest)} more files changed: " + ", ".join(e["path"] for e in rest[:6]) + (" …" if len(rest) > 6 else ""))
 
 
+MENTION = re.compile(r"(?<![\w@])@([\w.][\w./-]*)(?::(\d+)(?:-(\d+))?)?")
+MENTION_FILES = 8
+MENTION_BYTES = 100_000
+
+
+def _mentions(repo, parent: str, message: str) -> str:
+    """The message with the files it names with @ added after it, for every parent: @path is the whole file, @path:10-40 only
+    those lines. claude reads a plain @path itself, so for claude only a range is added. A name that is not a file of this
+    project (an e-mail address, a person) is left alone."""
+    root, seen, blocks = Path(repo).resolve(), set(), []
+    for found in MENTION.finditer(message):
+        name, first, last = found.group(1).rstrip(".,;:)"), found.group(2), found.group(3)
+        if name in seen or len(blocks) >= MENTION_FILES or (parent == "claude" and not first):
+            continue
+        target = (root / name).resolve()
+        if root not in target.parents or name.split("/")[0] in (".git", ".rig") or not target.is_file():
+            continue
+        try:
+            data = target.read_bytes()[:MENTION_BYTES + 1]
+        except OSError:
+            continue
+        if b"\0" in data:
+            continue
+        seen.add(name)
+        text = data[:MENTION_BYTES].decode(errors="replace")
+        label = name
+        if first:
+            lines = text.splitlines()
+            a = max(1, int(first))
+            b = max(a, int(last or first))
+            text, label = "\n".join(lines[a - 1:b]), f"{name}, lines {a}-{min(b, len(lines))}"
+        elif len(data) > MENTION_BYTES:
+            label += " (the first 100 KB)"
+        blocks.append(f"[File {label}]\n```\n{text}\n```")
+    return message + ("\n\n" + "\n\n".join(blocks) if blocks else "")
+
+
 def _last_user(repo, session: str) -> str:
     """What the last message said, on one line, to name a turn by."""
     try:
@@ -1277,6 +1314,7 @@ def run_turn(repo, session: str) -> int:
     parent = meta["parent"]
     import parent_commands
     message = parent_commands.expand(repo, parent, message)  # /name: the parent's own skill or command
+    message = _mentions(repo, parent, message)  # @file and @file:10-40: what they name goes with the message
     if parent not in RESUMES:
         message = _with_context(repo, session, message)
     elif meta.get("context_from") is not None:

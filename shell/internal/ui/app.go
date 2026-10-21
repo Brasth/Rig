@@ -135,6 +135,9 @@ type AppState struct {
 	ShipScreen           *ShipState
 }
 
+// lineSpan is the end of "@file:10-40" and "@file:25": the lines of a file to add.
+var lineSpan = regexp.MustCompile(`^\d+(-\d+)?$`)
+
 // Palette is Ctrl-K: ask the parent, open a file, or run a command.
 type Palette struct {
 	Query  string
@@ -1232,13 +1235,20 @@ func paletteItems(st State) []paletteItem {
 		out = append(out, recentItems(st, st.App.Palette.Attach)...) // the files opened lately first
 	}
 	if st.App.Palette.Attach {
+		find, span := q, ""
+		if name, rng, ok := strings.Cut(q, ":"); ok && lineSpan.MatchString(rng) {
+			find, span = name, ":"+rng // "auth.py:10-40": just those lines
+		}
 		for _, f := range st.App.Files {
-			if q == "" || strings.Contains(strings.ToLower(f), q) {
+			if find == "" || strings.Contains(strings.ToLower(f), find) {
 				dir, name := "", f
 				if i := strings.LastIndex(f, "/"); i >= 0 {
 					dir, name = f[:i], f[i+1:]
 				}
-				if out = append(out, paletteItem{"add a file", name, dir, "attach:" + f}); len(out) >= 10 {
+				if span != "" {
+					dir = strings.TrimPrefix(dir+" · lines "+span[1:], " · ")
+				}
+				if out = append(out, paletteItem{"add a file", name + span, dir, "attach:" + f + span}); len(out) >= 10 {
 					break
 				}
 			}

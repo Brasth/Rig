@@ -467,6 +467,35 @@ class Turns(Base):
             with mock.patch.object(rig_chat, "_tree", return_value=""):
                 rig_chat.rewind(self.repo, session, 1)
 
+    def test_files_named_with_at_go_with_the_message_whole_or_by_lines(self):
+        (self.repo / "pkg").mkdir()
+        (self.repo / "pkg" / "auth.py").write_text("\n".join(f"line {i}" for i in range(1, 11)) + "\n")
+        (self.repo / "bin.dat").write_bytes(b"\0\1\2")
+        (self.repo / ".rig" / "secret.txt").write_text("no")
+        text = "look at @pkg/auth.py:3-4 and @pkg/auth.py, not @bin.dat, @.rig/secret.txt, @../x, mail me@pkg/auth.py or @nobody."
+        out = rig_chat._mentions(self.repo, "codex", text)
+        self.assertTrue(out.startswith(text))
+        self.assertIn("[File pkg/auth.py, lines 3-4]\n```\nline 3\nline 4\n```", out)
+        self.assertEqual(out.count("[File "), 1, "a name is added once, and only files of the project")
+        self.assertNotIn("secret", out.split(text, 1)[1])
+        whole = rig_chat._mentions(self.repo, "grok", "see @pkg/auth.py.")
+        self.assertIn("[File pkg/auth.py]", whole)
+        self.assertIn("line 10", whole)
+        # claude reads a plain @path itself; a range it cannot, so that one is added
+        self.assertEqual(rig_chat._mentions(self.repo, "claude", "see @pkg/auth.py"), "see @pkg/auth.py")
+        self.assertIn("lines 9-10", rig_chat._mentions(self.repo, "claude", "see @pkg/auth.py:9-99"))
+        self.assertEqual(rig_chat._mentions(self.repo, "codex", "no mentions here"), "no mentions here")
+
+    def test_the_parent_gets_the_lines_asked_for_and_the_transcript_what_was_typed(self):
+        (self.repo / "a.py").write_text("one\ntwo\nthree\n")
+        stand_in(self.bin, "grok", CLAUDE_STREAM)
+        started = rig_chat.send(self.repo, "explain @a.py:2", parent="grok")
+        view = self.wait_idle(started["session"])
+        sent = (rig_chat.turn_dir(self.repo, started["session"]) / "message.txt").read_text()  # grok takes its message from a file
+        self.assertIn("[File a.py, lines 2-2]\n```\ntwo\n```", sent)
+        self.assertNotIn("three", sent)
+        self.assertEqual([e["text"] for e in view["entries"] if e["role"] == "user"], ["explain @a.py:2"])
+
     def test_a_long_patch_and_many_files_are_cut_short(self):
         files = rig_chat.turn_changes(self.repo, "", "x")
         self.assertEqual(files, [], "no trees, no changes")

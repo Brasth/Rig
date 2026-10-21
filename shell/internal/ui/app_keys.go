@@ -542,9 +542,19 @@ func (m *Model) appKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 		}
+		if !k.Paste && k.Type == tea.KeyRunes && len(k.Runes) == 1 && k.Runes[0] == '@' && m.atWordStart() {
+			a.Palette = &Palette{Attach: true} // an @ that starts a word, anywhere in the message, names a file
+			return m, m.loadFiles()
+		}
 		m.insert(string(k.Runes))
 	}
 	return m, nil
+}
+
+// atWordStart is whether the cursor is at the start of the box or just after a space or a new line.
+func (m *Model) atWordStart() bool {
+	r, c := []rune(m.st.Prompt), m.st.caret()
+	return c == 0 || (c <= len(r) && (r[c-1] == ' ' || r[c-1] == '\n' || r[c-1] == '\t'))
 }
 
 // appTabKey is the changes and code tabs' keys.
@@ -1218,10 +1228,7 @@ func (m *Model) runPalette(it paletteItem, query string) tea.Cmd {
 	case it.Action == "ask":
 		return m.appSend(query)
 	case strings.HasPrefix(it.Action, "attach:"):
-		if m.st.Prompt != "" && !strings.HasSuffix(m.st.Prompt, " ") {
-			m.st.Prompt += " "
-		}
-		m.st.Prompt += "@" + strings.TrimPrefix(it.Action, "attach:") + " "
+		m.insert("@" + strings.TrimPrefix(it.Action, "attach:") + " ") // at the cursor, where the @ was typed
 		return nil
 	case strings.HasPrefix(it.Action, "problem:"):
 		return m.openProblem(strings.TrimPrefix(it.Action, "problem:"))
