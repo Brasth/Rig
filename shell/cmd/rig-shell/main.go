@@ -251,7 +251,13 @@ func run(args []string, stdout, stderr io.Writer) int {
 	if *theme != "" {
 		model.SetTheme(*theme)
 	}
-	_, err = tea.NewProgram(model, tea.WithAltScreen()).Run()
+	opts := []tea.ProgramOption{tea.WithAltScreen()}
+	if *layout == "app" && ui.LogosSupported(os.Getenv) {
+		// the design's agent logos, drawn by a terminal with kitty's image placeholders (Ghostty, kitty)
+		model.SetLogos(true)
+		opts = append(opts, tea.WithOutput(ui.NewLogoWriter(os.Stdout, os.Getenv("TMUX") != "")))
+	}
+	_, err = tea.NewProgram(model, opts...).Run()
 	model.Close() // a program running in the Term pane ends with the board
 	if err != nil {
 		fmt.Fprintln(stderr, "rig-shell:", err)

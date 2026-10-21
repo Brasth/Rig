@@ -112,8 +112,8 @@ func (st State) bold(s string) string {
 func (st State) faint(s string) string { return st.paint(colFaint, s) }
 func (st State) dim(s string) string   { return st.paint(colMuted, s) }
 
-// tile is an agent's mark. The design shows each agent's logo in a tile ringed in its colour, and on a terminal
-// without an image protocol "the coloured letter tile": its first letter on its colour, three cells wide.
+// tile is an agent's mark, three cells wide: the design's logo tile ringed in the agent's colour where the terminal
+// draws images (gfx.go), else its fallback, "the coloured letter tile": the first letter on the agent's colour.
 func (st State) tile(agent string) string {
 	c, ok := agentColors[agent]
 	if !ok {
@@ -125,6 +125,9 @@ func (st State) tile(agent string) string {
 	}
 	if !st.Styled {
 		return "[" + letter + "]"
+	}
+	if mark := logoMark(agent); st.Logos && mark != "" {
+		return mark
 	}
 	return lipgloss.NewStyle().Background(lipgloss.Color(c)).Foreground(lipgloss.Color("#ffffff")).Bold(true).Render(" " + letter + " ")
 }

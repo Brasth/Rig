@@ -202,6 +202,9 @@ def board_plan(repo: Path, shell_bin: str, parent: str = "", *, width: int = 200
     return [
         ["new-session", "-d", "-s", session, "-n", "rig", "-x", str(width), "-y", str(height), "-c", str(repo), board],
         ["set-option", "-t", session, "status", "off"],
+        # the agents' logo tiles are images the board sends to the terminal itself (Ghostty, kitty); tmux 3.3+ only
+        # passes them on where this is on, and the board sends them again when a client attaches
+        ["set-option", "-w", "-t", f"{session}:rig", "allow-passthrough", "on"],
     ]
 
 

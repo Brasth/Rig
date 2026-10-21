@@ -24,6 +24,9 @@ type fileMsg struct {
 }
 
 // SetApp opens the board as the app (the design's ADE screens) for the repository at repo.
+// SetLogos draws agents as their logo tiles; main turns it on where the terminal shows images.
+func (m *Model) SetLogos(on bool) { m.st.Logos = on }
+
 func (m *Model) SetApp(repo string) {
 	m.st.App = &AppState{Repo: repo, Branch: gitBranch(repo), Tab: 1}
 	m.st.Tab = SessionTab

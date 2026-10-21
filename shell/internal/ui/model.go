@@ -835,6 +835,9 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		// the board fills the window inside the mockup's thin border; the side columns keep their widths and the chat grows
 		m.winW, m.winH = msg.Width, msg.Height
+		if m.st.Logos {
+			ResendLogos() // a resize may be tmux re-attaching to another terminal, which has not seen the tiles
+		}
 		m.w, m.h, m.framed = msg.Width, msg.Height, false
 		if msg.Width >= sessionMinW+2 && msg.Height >= sessionMinH+2 {
 			m.w, m.h, m.framed = msg.Width-2, msg.Height-2, true
