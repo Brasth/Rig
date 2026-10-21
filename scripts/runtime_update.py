@@ -609,6 +609,22 @@ def execute(root, *, source=None, revision=None, rollback=False, recovery=False,
         return f'{kind.capitalize()} complete: {state["commit"]} → {destination}; fully restart parent/MCP sessions before new work'
 
 
+def refresh_shell(root, source):
+    """After an update, put the shell that goes with it in RIG_HOME/bin: the prebuilt one from the new source, so
+    nobody builds anything. Best effort; an update never fails over it, and the old shell stays if this does."""
+    installer = Path(root) / 'scripts' / 'install-shell.py'
+    if not installer.is_file() or os.environ.get('RIG_SKIP_SHELL_BUILD') == '1':
+        return
+    try:
+        done = subprocess.run([sys.executable, str(installer), '--src', str(source)], stdin=subprocess.DEVNULL,
+                              capture_output=True, text=True, timeout=900, env={**os.environ, 'RIG_HOME': str(root)})
+        note = (done.stdout.strip().splitlines() or [''])[-1]
+        if note:
+            print(note)
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     modes = parser.add_mutually_exclusive_group(required=True)
@@ -638,6 +654,8 @@ def main(argv=None):
         if args.revision:
             with fetched_source(args.revision) as source:
                 result = execute(root, source=source, revision=args.revision, dry_run=args.dry_run)
+                if not args.dry_run and result.startswith('Update complete'):
+                    refresh_shell(root, source)
         else:
             result = execute(root, rollback=args.rollback, recovery=args.recover, dry_run=args.dry_run)
         print(result)

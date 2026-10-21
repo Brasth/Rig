@@ -3,6 +3,10 @@
 
 
 
+## rig-shell ships prebuilt: nothing to build on install or update (2026-10-21)
+
+`rig setup`, `install.sh` and `rig update` now put a prebuilt `rig-shell` (Linux and macOS, x86-64 and arm64, checksum-checked) in `~/.rig/bin`, and `rig shell`, `rig-agent` and `agent-rig` set it up themselves the first time they find none, instead of stopping with "rig-shell is not built". Go is only used for a shell newer than the prebuilt one. Where nothing can run the Go shell, `rig shell` opens the Python board (`rig tui`). `rig doctor` reports a prebuilt shell as ready. Maintainers refresh `prebuilt/` with `python3 scripts/shell_dist.py build`.
+
 ## Run tasks and tests, format, commit diffs and file history (2026-10-21)
 
 `⌃k` › run a task lists the repository's `package.json` scripts, make and just targets and test suites, and runs the chosen one in the terminal split; `F9` runs the test the cursor is in (go, pytest, jest, vitest, cargo). `⌥⇧f` formats the file with the formatter its language has here (gofmt, prettier, ruff, black, rustfmt, shfmt), and Settings › Editor › Format on save makes `⌃s` format first. In the git view `⏎` on a recent commit shows what it changed; `l` on the open file lists its history and `⏎` shows a commit's change to it.

@@ -108,10 +108,28 @@ class Resolution(unittest.TestCase):
             self.assertEqual(rig_shell.shell_binary(), str(fake))
         empty = Path(self.td.name) / "empty"
         empty.mkdir()
-        with mock.patch.dict(os.environ, {"RIG_SHELL_BIN": "", "RIG_HOME": str(empty), "PATH": str(empty)}), \
+        with mock.patch.dict(os.environ, {"RIG_SHELL_BIN": "", "RIG_HOME": str(empty), "PATH": str(empty),
+                                          "RIG_SHELL_NO_DOWNLOAD": "1", "RIG_SRC": str(empty)}), \
                 mock.patch.object(rig_shell, "ROOT", empty):
-            with self.assertRaisesRegex(rig_shell.ShellError, "go build"):
+            with self.assertRaisesRegex(rig_shell.ShellMissing, "could not be set up"):
                 rig_shell.shell_binary()
+
+    def test_a_missing_shell_sets_itself_up_from_the_prebuilt_one(self):
+        import shell_dist
+        name = shell_dist.asset_name()
+        if not name:
+            self.skipTest("no prebuilt target for this platform")
+        src, home = Path(self.td.name) / "src", Path(self.td.name) / "home"
+        (src / "prebuilt").mkdir(parents=True)
+        binary = src / "prebuilt" / name
+        binary.write_text('#!/bin/sh\necho "rig-shell src-abcdef012345"\n')
+        binary.chmod(0o755)
+        (src / "prebuilt" / "SHA256SUMS").write_text(f"{shell_dist.sha256_of(binary)}  {name}\n")
+        with mock.patch.dict(os.environ, {"RIG_SHELL_BIN": "", "RIG_HOME": str(home), "PATH": "/usr/bin:/bin",
+                                          "RIG_SHELL_NO_DOWNLOAD": "1", "RIG_SRC": str(src)}), \
+                mock.patch.object(rig_shell, "ROOT", src):
+            self.assertEqual(rig_shell.shell_binary(), str(home / "bin" / "rig-shell"))
+            self.assertEqual(rig_shell.shell_status()["state"], "prebuilt")
 
     def test_server_args_isolation(self):
         self.assertEqual(rig_shell.server_args({"RIG_SHELL_TMUX_SOCKET": "t1"}), ["-L", "t1", "-f", "/dev/null"])

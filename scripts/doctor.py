@@ -289,7 +289,7 @@ def shell_check() -> dict:
     info = rig_shell.shell_status()
     evidence = {k: info[k] for k in ("path", "version", "core", "state")}
     if info["state"] == "missing":
-        return check("rig-shell", "missing", "rig-shell is not built; optional. Build it with: rig shell build",
+        return check("rig-shell", "missing", "rig-shell is not installed; optional. rig shell sets it up when it starts (or: rig shell build)",
                      required=False, **evidence)
     if info["state"] == "mismatch":
         return check("rig-shell", "failed", f"rig-shell {info['version'][:12]} was built from a different commit than the "
@@ -297,7 +297,8 @@ def shell_check() -> dict:
     if info["state"] == "unreadable":
         return check("rig-shell", "failed", f"{info['path']} did not report a version; rebuild with: rig shell build",
                      required=False, **evidence)
-    note = "matches the installed core" if info["state"] == "match" else "version not comparable (local build or no recorded core commit)"
+    note = {"match": "matches the installed core", "prebuilt": "prebuilt, no build needed"}.get(
+        info["state"], "version not comparable (local build or no recorded core commit)")
     return check("rig-shell", "ready", f"rig-shell {info['version'][:12]} {note}", required=False, **evidence)
 
 

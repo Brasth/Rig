@@ -9,7 +9,7 @@ An optional terminal layout for working with a parent agent while Rig runs worke
 | `rig shell` | The board (`rig-shell`) as the design's one screen in a tmux window, so the session survives a detach. `--parent NAME` picks the parent; `--layout split` gives the earlier arrangement instead: the parent CLI in its own native tmux pane, a narrow board beside it and a log pane |
 | `rig shell --no-tmux` | The same screen in this terminal, with nothing else installed |
 | `rig shell print`, `rig shell kill` | Show the tmux commands it would run, or remove this repository's session |
-| `rig shell build` | Build `rig-shell` from a Rig clone with Go 1.24+ (no project needed) |
+| `rig shell build` | Put `rig-shell` in place from a Rig clone (no project needed): the prebuilt one, or a Go 1.24+ build when the clone's shell sources are newer. Nothing needs it normally: `rig setup`, `rig update` and `rig shell` itself do this |
 | `rig init --sandbox` | Detect the workspace and, for a folder with no devcontainer, store dc-cli's generated config under `.rig/sandbox/override.json`; `--write-devcontainer` turns it into `.devcontainer/devcontainer.json` |
 | `rig env up`, `down`, `status`, `ports [--json]` | Start or stop the workspace container, show what dc-cli reports, and list the ports it forwards |
 | `rig env recover [--apply ID]` | Show the one next step `dc recover` proposes; apply it only by naming the plan id, and only if Rig allows that action (see [Environment recovery](#environment-recovery)) |
@@ -172,7 +172,11 @@ Rig never calls docker. dc-cli owns the container and Rig runs it as a subproces
 
 ## Building and versions
 
-`rig setup` builds `rig-shell` when Go is installed (`--shell-binary` insists, `--no-shell-binary` skips) and stamps it with the source commit. `rig update` does not carry shell sources, so after updating, `rig doctor` reports a mismatch between the binary and the installed core and says to run `rig shell build` from a clone (`RIG_SRC=/path/to/Rig rig shell build`).
+**Nobody has to build the shell.** The repository ships `rig-shell` prebuilt in `prebuilt/` for Linux and macOS on x86-64 and arm64 (`SHA256SUMS` and a `STAMP` of the shell sources they were built from). `rig setup` and `install.sh` copy the right one to `~/.rig/bin/rig-shell` after checking its checksum and that it runs; `rig update` does the same from the new source once the update is in; and `rig shell` (`rig-agent`, `agent-rig`) sets itself up the first time it finds no shell, from the source tree or by downloading the prebuilt file for the installed commit from the repository (checked against `SHA256SUMS`; `RIG_SHELL_NO_DOWNLOAD=1` turns the download off, `RIG_SHELL_DIST_URL` points it at a mirror). A machine the prebuilt shells do not cover and with no Go gets the Python board (`rig tui`) instead of an error.
+
+Go is only for a shell newer than the prebuilt one: when a clone's shell sources differ from the prebuilt `STAMP` and Go 1.24+ is installed, setup builds it (`--shell-binary` insists, `--no-shell-binary` skips), stamped with the source commit; a failed build keeps the working binary. `rig doctor` calls a prebuilt shell ready and reports a different-commit Go build as a mismatch with the fix (`rig shell build`).
+
+Maintainers: after changing anything under `shell/`, refresh the prebuilt files with `python3 scripts/shell_dist.py build` (needs Go 1.24+; it cross-compiles all four) and commit `prebuilt/`; until then installs use the older prebuilt shell, or build the newer one when Go is there.
 
 Developing the shell: see `shell/README.md`.
 

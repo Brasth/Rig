@@ -13,6 +13,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 import doctor  # noqa: E402
 import rig_shell  # noqa: E402
+import shell_dist  # noqa: E402
 
 SCRIPT = ROOT / "scripts" / "install-shell.py"
 # Fake go: logs argv, writes the -o target, can be told to fail or hang.
@@ -52,6 +53,23 @@ class Installer(unittest.TestCase):
                     "PATH": f"{self.bin}:{os.environ['PATH']}"}
         self.env.pop("RIG_SKIP_SHELL_BUILD", None)
         self.env.pop("FAKE_GO_FAIL", None)
+        self.env["RIG_SHELL_NO_DOWNLOAD"] = "1"  # no network in tests; the download has its own test
+
+    def add_prebuilt(self, stamp=None, body=None, sums_ok=True):
+        """A prebuilt shell for this platform in the source tree, as scripts/shell_dist.py build leaves it."""
+        name = shell_dist.asset_name()
+        if not name:
+            self.skipTest("no prebuilt target for this platform")
+        folder = self.src / "prebuilt"
+        folder.mkdir(exist_ok=True)
+        stamp = shell_dist.source_stamp(self.src) if stamp is None else stamp
+        data = body or f'#!/bin/sh\necho "rig-shell src-{stamp}"\n'
+        (folder / name).write_text(data)
+        (folder / name).chmod(0o755)
+        digest = shell_dist.sha256_of(folder / name) if sums_ok else "0" * 64
+        (folder / "SHA256SUMS").write_text(f"{digest}  {name}\n")
+        (folder / "STAMP").write_text(stamp + "\n")
+        return folder
 
     def tearDown(self):
         self.td.cleanup()
@@ -126,6 +144,98 @@ class Installer(unittest.TestCase):
     def test_conflicting_flags_are_rejected(self):
         self.assertNotEqual(self.run_script("--shell", "--no-shell").returncode, 0)
 
+    def bare_env(self):
+        empty = self.base / "empty"
+        empty.mkdir(exist_ok=True)
+        env = {**self.env, "PATH": f"{empty}:/usr/bin:/bin"}
+        if subprocess.run(["sh", "-c", "command -v go"], env=env, capture_output=True).returncode == 0:
+            self.skipTest("a real go is on the system path")
+        return env
+
+    def test_a_current_prebuilt_is_installed_without_go_and_without_building(self):
+        self.add_prebuilt()
+        done = self.run_script("--shell", env=self.bare_env())
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertIn("prebuilt", done.stdout)
+        target = self.home / "bin" / "rig-shell"
+        self.assertEqual(stat.S_IMODE(target.stat().st_mode), 0o755)
+        self.assertIn("rig-shell src-", subprocess.run([str(target), "--version"], capture_output=True, text=True).stdout)
+        self.assertEqual([p.name for p in (self.home / "bin").iterdir()], ["rig-shell"], "no temporary files left")
+        shutil_go = self.run_script("--shell")  # with the fake go on the path the current prebuilt is still the one used
+        self.assertEqual(shutil_go.returncode, 0)
+        self.assertFalse(self.log.exists(), "a current prebuilt means go does not run")
+
+    def test_go_builds_a_newer_shell_than_a_stale_prebuilt(self):
+        self.add_prebuilt(stamp="000000000000")
+        done = self.run_script("--shell")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn("built", done.stdout)
+        self.assertTrue(self.log.exists(), "the sources changed since the prebuilt: go builds")
+
+    def test_without_go_a_stale_prebuilt_still_beats_nothing(self):
+        self.add_prebuilt(stamp="000000000000")
+        done = self.run_script("--shell", env=self.bare_env())
+        self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertIn("prebuilt", done.stdout)
+        self.assertTrue((self.home / "bin" / "rig-shell").is_file())
+
+    def test_a_failed_build_falls_back_to_the_prebuilt(self):
+        self.add_prebuilt(stamp="000000000000")
+        done = self.run_script("--shell", env={**self.env, "FAKE_GO_FAIL": "1"})
+        self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertIn("prebuilt", done.stdout)
+
+    def test_a_prebuilt_that_does_not_match_its_sums_is_never_installed(self):
+        self.add_prebuilt(sums_ok=False)
+        done = self.run_script("--shell", env=self.bare_env())
+        self.assertEqual(done.returncode, 1)
+        self.assertFalse((self.home / "bin" / "rig-shell").exists())
+
+    def test_a_prebuilt_that_does_not_run_is_never_installed(self):
+        self.add_prebuilt(body="not a program\n")
+        done = self.run_script("--shell", env=self.bare_env())
+        self.assertEqual(done.returncode, 1)
+        self.assertFalse((self.home / "bin" / "rig-shell").exists())
+
+    def test_download_from_the_repository_when_the_tree_has_none(self):
+        name = shell_dist.asset_name()
+        if not name:
+            self.skipTest("no prebuilt target for this platform")
+        mirror = self.base / "mirror" / "main" / "prebuilt"
+        mirror.mkdir(parents=True)
+        (mirror / name).write_text('#!/bin/sh\necho "rig-shell src-abc"\n')
+        (mirror / name).chmod(0o755)
+        (mirror / "SHA256SUMS").write_text(f"{shell_dist.sha256_of(mirror / name)}  {name}\n")
+        env = {**self.bare_env(), "RIG_SHELL_NO_DOWNLOAD": "", "RIG_SHELL_DIST_URL": (self.base / "mirror").as_uri()}
+        done = self.run_script("--shell", env=env)
+        self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertIn("downloaded", done.stdout)
+        self.assertTrue((self.home / "bin" / "rig-shell").is_file())
+        (mirror / "SHA256SUMS").write_text(f"{'1' * 64}  {name}\n")
+        (self.home / "bin" / "rig-shell").unlink()
+        refused = self.run_script("--shell", env=env)
+        self.assertEqual(refused.returncode, 1, "a download that does not match the sums is refused")
+        self.assertFalse((self.home / "bin" / "rig-shell").exists())
+
+    def test_the_shipped_prebuilt_folder_is_whole_and_matches_its_sums(self):
+        folder = ROOT / "prebuilt"
+        sums = shell_dist.read_sums((folder / "SHA256SUMS").read_text())
+        self.assertEqual(sorted(sums), sorted(f"rig-shell-{o}-{a}" for o, a in shell_dist.TARGETS))
+        for name, digest in sums.items():
+            self.assertEqual(shell_dist.sha256_of(folder / name), digest, name)
+            self.assertTrue(os.access(folder / name, os.X_OK), name)
+        self.assertEqual(len(shell_dist.read_stamp(folder)), 12)
+
+    def test_the_stamp_follows_the_shell_sources_and_not_their_tests(self):
+        (self.src / "shell" / "main.go").write_text("package main\n")
+        before = shell_dist.source_stamp(self.src)
+        (self.src / "shell" / "main_test.go").write_text("package main\n")
+        (self.src / "shell" / "testdata").mkdir()
+        (self.src / "shell" / "testdata" / "x.go").write_text("package x\n")
+        self.assertEqual(shell_dist.source_stamp(self.src), before)
+        (self.src / "shell" / "main.go").write_text("package main // changed\n")
+        self.assertNotEqual(shell_dist.source_stamp(self.src), before)
+
 
 class DoctorShellCheck(unittest.TestCase):
     def setUp(self):
@@ -162,6 +272,7 @@ class DoctorShellCheck(unittest.TestCase):
             ("echo rig-shell " + full[:7], "v1 " + full + "\n", "match", "ready"),
             ("echo rig-shell " + full, "v1 fedcba9\n", "mismatch", "failed"),
             ("echo rig-shell dev", "v1 abc1234\n", "unverified", "ready"),
+            ("echo rig-shell src-0123456789ab", "v1 abc1234\n", "prebuilt", "ready"),
             ("echo rig-shell " + full, "v1\n", "unverified", "ready"),
             ("exit 0", "v1 abc1234\n", "unreadable", "failed"),
         ]
@@ -178,7 +289,7 @@ class DoctorShellCheck(unittest.TestCase):
         with mock.patch.object(rig_shell, "ROOT", self.base / "no-checkout"):
             check = doctor.shell_check()
         self.assertEqual((check["status"], check["required"], check["state"]), ("missing", False, "missing"))
-        self.assertIn("rig shell build", check["detail"])
+        self.assertIn("rig shell", check["detail"])
 
 
 if __name__ == "__main__":
