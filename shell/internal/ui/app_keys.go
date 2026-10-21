@@ -1098,6 +1098,10 @@ func (m *Model) runPalette(it paletteItem, query string) tea.Cmd {
 		}
 		m.st.Prompt += "@" + strings.TrimPrefix(it.Action, "attach:") + " "
 		return nil
+	case strings.HasPrefix(it.Action, "branch:"):
+		return m.switchBranch(strings.TrimPrefix(it.Action, "branch:"), false)
+	case strings.HasPrefix(it.Action, "branch-new:"):
+		return m.switchBranch(strings.TrimPrefix(it.Action, "branch-new:"), true)
 	case strings.HasPrefix(it.Action, "line:"):
 		n, _ := strconv.Atoi(strings.TrimPrefix(it.Action, "line:"))
 		m.goToLine(n)

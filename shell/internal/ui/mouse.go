@@ -758,6 +758,14 @@ func (m *Model) clickRow(list, at string) (tea.Model, tea.Cmd) {
 				return m, m.openTree(r.path, r.dir)
 			}
 		}
+	case "gitbtn":
+		// the git view's buttons and its branch and message box: each does what its key does
+		key := map[string]string{"commit": "c", "pull": "P", "push": "p", "branch": "b"}[at]
+		if key == "" {
+			return m, nil
+		}
+		a.GitView, a.TreeFocus = true, true
+		return m.gitKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(key)})
 	case "side":
 		// the side bar's heads: the files, or git
 		if at == "git" {

@@ -993,6 +993,10 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.appOn() {
 			return m, m.afterDefinition(msg)
 		}
+	case branchesMsg:
+		if m.appOn() {
+			m.st.App.Branches, m.st.App.RemoteBranches = msg.local, msg.remote
+		}
 	case gitStatusMsg:
 		if m.appOn() {
 			m.st.App.Git = msg.state
@@ -1003,7 +1007,10 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case blameMsg:
 		if a := m.st.App; m.appOn() && msg.file == a.File {
 			if msg.err != nil {
-				a.Blame, m.st.Message = false, "no blame for "+msg.file+": "+clean(msg.err.Error())
+				a.BlameFor, a.BlameLines = msg.file, nil // not in git yet, or no git: no blame to show
+				if a.Blame {
+					a.Blame, m.st.Message = false, "no blame for "+msg.file+": "+clean(msg.err.Error())
+				}
 			} else {
 				a.BlameFor, a.BlameLines = msg.file, msg.lines
 			}
@@ -1137,10 +1144,7 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if msg.err != nil {
 				a.FileErr = msg.err.Error()
 			}
-			cmds := []tea.Cmd{m.fetchGutter()}
-			if a.Blame {
-				cmds = append(cmds, m.fetchBlame())
-			}
+			cmds := []tea.Cmd{m.fetchGutter(), m.fetchBlame()} // the gutter, and blame for the cursor's line
 			if to := a.pendingAt; to != nil && to.file == msg.path && msg.err == nil {
 				a.pendingAt = nil
 				m.goTo(to.at) // go to definition: the cursor on the name
