@@ -35,6 +35,7 @@ type Source interface {
 	ChatAnswer(session, askID, decision string, timeout time.Duration) error
 	ChatSetParent(name string, timeout time.Duration) error
 	Theme(timeout time.Duration) (*view.ThemeReply, error)
+	JobDiff(id string, timeout time.Duration) (*view.JobDiff, error)
 	SetTheme(theme, scope string, timeout time.Duration) (*view.ThemeReply, error)
 }
 
@@ -206,6 +207,8 @@ type Model struct {
 	pickerSeen bool   // the picker opened by itself once, for a project with no parent
 	framed     bool   // the window has room for the mockup's border around the board
 	winW, winH int    // the window; the app uses all of it
+	dfBusy     bool
+	dfLast     time.Time
 	seenJobs   map[string]bool
 	themeFixed bool // rig shell --theme chose the theme for this board; the saved one is not loaded
 	messaging  bool // m was pressed under a request: a and d type again until the message is sent
@@ -844,7 +847,7 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, waitPane(m.pane)
 	case tickMsg:
-		return m, tea.Batch(m.fetch(), m.fetchWorkspace(false), m.fetchFleet(false), m.fetchSettings(false), m.fetchLog(false), m.fetchDock(false), m.fetchChatStatus(), m.fetchChat(false), tick())
+		return m, tea.Batch(m.fetch(), m.fetchWorkspace(false), m.fetchFleet(false), m.fetchSettings(false), m.fetchLog(false), m.fetchDock(false), m.fetchChatStatus(), m.fetchChat(false), m.fetchDiff(false), tick())
 	case chatStatusMsg:
 		m.csBusy, m.csLast = false, m.now()
 		if msg.err != nil || msg.status == nil || !msg.status.Enabled {
@@ -879,6 +882,29 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.st.Chat, m.st.ChatE = msg.chat, ""
 		return m, m.spin()
+	case diffMsg:
+		m.dfBusy, m.dfLast = false, m.now()
+		if m.appOn() {
+			if msg.id != m.st.App.DiffID {
+				m.st.App.DiffFile, m.st.App.DiffOff = 0, 0
+			}
+			m.st.App.Diff, m.st.App.DiffID = msg.diff, msg.id
+			if msg.err != nil || msg.diff == nil {
+				m.st.App.Diff = &view.JobDiff{JobID: msg.id}
+			}
+		}
+	case changedMsg:
+		if m.appOn() {
+			m.st.App.Changed = msg.files
+		}
+	case searchMsg:
+		if m.appOn() && m.st.App.Search != nil && m.st.App.Search.Query == msg.query {
+			m.st.App.Search.Results, m.st.App.Search.Ran = msg.hits, msg.query
+		}
+	case reopenMsg:
+		if m.appOn() && m.st.App.File == msg.path {
+			return m, m.openFile(msg.path)
+		}
 	case filesMsg:
 		if m.appOn() {
 			m.st.App.Files = msg.files

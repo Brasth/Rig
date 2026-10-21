@@ -31,6 +31,20 @@ type AppState struct {
 	FileLines    []string
 	FileErr      string
 	FileOff      int
+	Preview      bool // the file is previewed (markdown rendered, a csv as a table) instead of shown as source
+	Selecting    bool // v: lines are being selected to ask the parent about
+	SelFrom      int
+	SelTo        int
+	Finding      bool // /: typing a word to find in the file
+	Find         string
+	Changed      map[string]string // the files each active helper is changing, by path, to its worker
+	Diff         *view.JobDiff     // the changes tab's job, its diff
+	DiffID       string
+	DiffFile     int
+	DiffOff      int
+	Comments     map[string][]string // what you said to each helper from the changes tab
+	Commenting   bool
+	Search       *SearchState
 }
 
 // Palette is Ctrl-K: ask the parent, open a file, or run a command.
@@ -198,13 +212,16 @@ func AppFrame(v *view.View, st State, w, h int) []string {
 	body := h - 3
 	var main []string
 	var keys [][2]string
+	footer := ""
 	switch {
+	case a.Search != nil:
+		main, footer = searchScreen(st, w, body)
 	case a.Thread != "":
 		main, keys = threadBody(st, w, body)
 	case a.Tab == 2:
-		main, keys = changesBody(v, st, w, body)
+		main, footer = changesScreen(v, st, w, body)
 	case a.Tab == 3:
-		main, keys = codeBody(st, w, body)
+		main, footer = codeScreen(st, w, body)
 	case st.Chat == nil && st.ChatE == "":
 		main, keys = emptyBody(v, st, w, body)
 	default:
@@ -235,6 +252,8 @@ func AppFrame(v *view.View, st State, w, h int) []string {
 		lines = append(lines, center(st.paint(colAmber, st.Prompt)+"   "+st.dim("y")+" "+st.faint("yes")+"    "+st.dim("n")+" "+st.faint("no"), w))
 	case st.Message != "" && problem(st.Message):
 		lines = append(lines, center(st.paint(colAmber, clean(st.Message)), w))
+	case footer != "" && !a.Panel && a.Palette == nil && a.NewJob == nil && !a.Help:
+		lines = append(lines, footer)
 	default:
 		lines = append(lines, keyHints(st, keys, w))
 	}
@@ -661,6 +680,7 @@ var PaletteCommands = [][3]string{
 	{"new conversation", "start again with the parent", "new"},
 	{"queue a task", "park it for the parent to pick", "queue"},
 	{"change theme", "rig, light, dark, material, dracula", "theme"},
+	{"search the code", "text in every file (⌃f)", "search"},
 	{"start the sandbox", "rig env up", "env-up"},
 	{"stop a helper", "from the agents panel", "panel"},
 	{"the board", "jobs, queue, workspace and evidence", "board"},
@@ -750,66 +770,6 @@ func helpBox(st State, hw int) []string {
 		lines = append(lines, st.dim(fmt.Sprintf("%-10s", r[0]))+" "+r[1])
 	}
 	return roundBox(st, indentAll(append(lines, ""), 2, hw-4), hw, false)
-}
-
-// changesBody is the changes tab: what each helper changed and how it was checked.
-func changesBody(v *view.View, st State, w, h int) ([]string, [][2]string) {
-	cw := min(appColumn, w-8)
-	lines := []string{""}
-	rows := v.Rows("Jobs")
-	if len(rows) == 0 {
-		lines = append(lines, "", st.dim("No changes yet. When a helper finishes, its changes show here."))
-	} else {
-		r := rows[clampSel(st.Selected["Jobs"], len(rows))]
-		worker := r.Worker
-		lines = append(lines, st.dot(worker)+"  "+st.bold(clean(r.Title))+"  "+st.faint(worker+" · "+strings.ToLower(clean(r.Label))), "")
-		dock := dockLines(st, &r, cw, dockRows)
-		lines = append(lines, dock...)
-		lines = append(lines, "", st.faint(fmt.Sprintf("job %d of %d · ↑↓ another job · v the full evidence", clampSel(st.Selected["Jobs"], len(rows))+1, len(rows))))
-	}
-	for len(lines) < h {
-		lines = append(lines, "")
-	}
-	return indentAll(lines[:h], (w-cw)/2, w), [][2]string{{"↑↓", "job"}, {"v", "evidence"}, {"1", "conversation"}, {"esc", "back"}}
-}
-
-// codeBody is the code tab: the file Ctrl-K opened, with line numbers.
-func codeBody(st State, w, h int) ([]string, [][2]string) {
-	a := st.App
-	keys := [][2]string{{"⌃k", "find a file"}, {"↑↓", "scroll"}, {"1", "conversation"}, {"esc", "back"}}
-	if a.File == "" {
-		cw := min(appColumn, w-8)
-		lines := []string{"", "", st.dim("Open a file with ⌃k: type part of its name.")}
-		for len(lines) < h {
-			lines = append(lines, "")
-		}
-		return indentAll(lines[:h], (w-cw)/2, w), keys
-	}
-	dir, name := "", a.File
-	if i := strings.LastIndex(a.File, "/"); i >= 0 {
-		dir, name = a.File[:i+1], a.File[i+1:]
-	}
-	lines := []string{"   " + st.faint(dir) + st.bold(name), ""}
-	switch {
-	case a.FileErr != "":
-		lines = append(lines, "   "+st.paint(colAmber, "cannot open: "+clean(a.FileErr)))
-	case a.FileLines == nil:
-		lines = append(lines, "   "+st.faint("loading…"))
-	default:
-		room := h - len(lines)
-		off := min(a.FileOff, max(0, len(a.FileLines)-room))
-		for i := off; i < len(a.FileLines) && len(lines) < h; i++ {
-			lines = append(lines, "  "+st.faint(fmt.Sprintf("%4d  ", i+1))+fit(sanitize(a.FileLines[i]), w-10))
-		}
-	}
-	for len(lines) < h {
-		lines = append(lines, "")
-	}
-	out := make([]string, h)
-	for i := range out {
-		out[i] = fit(lines[i], w)
-	}
-	return out, keys
 }
 
 // threadBody is a helper's thread: its log, followed.

@@ -164,3 +164,40 @@ def build(repo, job_id: str) -> dict:
         except Exception as error:
             sections.append({"title": title, "lines": [_line(f"unavailable: {error}", "attention")]})
     return {"job_id": job_id, "sections": sections}
+
+
+MAX_DIFF = 400_000
+
+
+def diff(repo, job_id: str) -> dict:
+    """What a job changed, as a unified diff, from the same base and branch the Change section counts: the committed
+    branch when there is one, else the worktree against its base. A job with neither has only the recorded paths."""
+    repo = Path(repo).resolve()
+    folder = repo / ".rig" / "jobs" / job_id
+    if not job_id or "/" in job_id or job_id.startswith(".") or not folder.is_dir():
+        raise ValueError(f"no such job: {job_id}")
+    try:
+        record = worktrees.job_record(folder)
+    except worktrees.WorktreeError:
+        record = None
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    where, args, source = None, [], "git"
+    if record and record.get("branch_head"):
+        where, args = repo, [f"{record['base_head']}..{record['branch_head']}"]
+    elif record and Path(record["path"]).is_dir():
+        where, args = Path(record["path"]), [record["base_head"]]
+    files, text = [], ""
+    if where is not None:
+        files = [{"path": name, "added": added, "deleted": deleted} for added, deleted, name in _numstat(where, *args)]
+        try:
+            done = subprocess.run(["git", "-C", str(where), "diff", "--no-color", "--no-renames", "--no-ext-diff", *args],
+                                  capture_output=True, text=True, errors="replace", timeout=30, env=env)
+            text = done.stdout
+        except (OSError, subprocess.TimeoutExpired):
+            text = ""
+    else:
+        report = evidence.read_json(folder / "change-evidence.json") or {}
+        source = "recorded"
+        files = [{"path": name, "added": "", "deleted": ""} for name in report.get("scoped_changed_paths", [])]
+    truncated = len(text) > MAX_DIFF
+    return {"job_id": job_id, "source": source, "files": files, "diff": text[:MAX_DIFF], "truncated": truncated}

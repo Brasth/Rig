@@ -33,11 +33,13 @@ An optional terminal layout for working with a parent agent while Rig runs worke
 - **Commands (`⌃k`):** type to ask the parent, open a file by name (it opens in the code tab), or run a command: switch parent, new conversation, queue a task, change theme, start the sandbox, the board, help, quit.
 - **Who do you want to talk to?** A project with no parent of its own opens this first: the installed parents, `↑↓` and `⏎` to save the choice in `.rig/harness.toml`. `⌃k` › switch parent opens it again.
 - **A helper started:** when the parent starts a helper, a card says so once ("claude started codex"), with the task, its worktree and what it is doing; `⏎` watches its thread, `s` stops it.
-- **Changes (`2`):** the selected helper's diff, checks, contract and ports; `↑↓` moves between helpers. **Code (`3`):** the file `⌃k` opened, with line numbers.
+- **Changes (`2`):** the design's review of one helper's work: its files across the top (`[` `]` move between them), the diff with numbered lines (removed lines red, added green), what you said to the helper, its explanation, and its checks. `←→` moves to another helper; `c` leaves a comment in the helper's inbox (API `job.message`). The diff is the helper's real one (new API method `job.diff`): its committed branch, or its worktree against its base while it works.
+- **Code (`3`):** the file `⌃k` or search opened, with line numbers and colours, a tree of its folder and of the files helpers are changing (a dot in the helper's colour, and "claude is changing this in its copy" above the file). `v` selects lines and `a` asks the parent about them (or `@` adds them to your message), `/` finds a word, `e` opens the file in `$EDITOR`. Markdown is rendered and a CSV is a table (`s` shows the source); an image, PDF or video opens in your default app with `o`.
+- **Search (`⌃f`, or `⌃k` › search the code):** the repository's tracked files, results grouped by file with the word marked and the helper changing each file; `⏎` opens a result in the code tab, `⇥` asks the parent instead.
 
 With the box empty, `2` and `3` switch tabs, `?` lists every key, and `1` and `2` answer a waiting request first. `Esc` clears the box or closes what is open; `Ctrl-C` clears the box, then quits.
 
-Not built yet from the design: the code tab's tree and editor, search, file previews, done today with undo and hold, ship, the onboarding steps (helpers, sandbox, opening a repo, installing an agent), the problem screens, and Settings' sections. The pro and paid screens and sign-in are left out on purpose.
+Not built yet from the design: done today with undo and hold, ship, the onboarding steps (helpers, sandbox, opening a repo, installing an agent), the problem screens, and Settings' sections. The pro and paid screens and sign-in are left out on purpose.
 
 ## The board
 

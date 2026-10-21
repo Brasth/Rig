@@ -88,6 +88,19 @@ type ChatStatus struct {
 	} `json:"sessions"`
 }
 
+// JobDiff is job.diff: what one job changed, as a unified diff with per-file counts.
+type JobDiff struct {
+	JobID  string `json:"job_id"`
+	Source string `json:"source"` // "git", or "recorded" when only the paths are known
+	Files  []struct {
+		Path    string `json:"path"`
+		Added   string `json:"added"`
+		Deleted string `json:"deleted"`
+	} `json:"files"`
+	Diff      string `json:"diff"`
+	Truncated bool   `json:"truncated"`
+}
+
 // ThemeReply is ui.theme and ui.set_theme: the board's theme and where it is kept ("all", "repo" or "default").
 type ThemeReply struct {
 	Theme  string   `json:"theme"`

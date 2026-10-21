@@ -44,6 +44,7 @@ repository. Owner tokens are never returned, and workers may not serve the API.
 | `events.ack` | yes | none | Acknowledge one notice, or all, for a companion session |
 | `events.list` | no | none | Notices for a companion session: approvals, finished work, verification, stop progress |
 | `fleet.status` | no | none | Fleet panel: workspace containers on the engine with observed CPU and memory, ready to render |
+| `job.diff` | no | none | What one job changed, as a unified diff with per-file counts (params: id) |
 | `job.evidence` | no | none | Evidence drawer for one job: where it ran, change, contract, checks, ports (params: id) |
 | `log.follow` | no | none | Tail of a job's log as plain text; without an id, the job worth watching (params: id, lines) |
 | `settings.view` | no | none | Settings tab: what this repository's .rig/harness.toml makes effective, ready to render and read-only |

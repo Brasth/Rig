@@ -65,6 +65,8 @@ type fakeSource struct {
 	parentSet       []string
 	parentSetErr    error
 	theme           *view.ThemeReply
+	diffs           map[string]*view.JobDiff
+	diffIDs         []string
 	themeSaved      [][2]string
 }
 
@@ -109,6 +111,13 @@ func (f *fakeSource) ChatSend(message, session, parent string, _ time.Duration) 
 func (f *fakeSource) ChatAnswer(session, askID, decision string, _ time.Duration) error {
 	f.chatAnswers = append(f.chatAnswers, [3]string{session, askID, decision})
 	return f.chatAnswerErr
+}
+func (f *fakeSource) JobDiff(id string, _ time.Duration) (*view.JobDiff, error) {
+	f.diffIDs = append(f.diffIDs, id)
+	if d, ok := f.diffs[id]; ok {
+		return d, nil
+	}
+	return nil, errors.New("no diff for " + id)
 }
 func (f *fakeSource) Theme(time.Duration) (*view.ThemeReply, error) {
 	if f.theme == nil {

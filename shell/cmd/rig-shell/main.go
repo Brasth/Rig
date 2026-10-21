@@ -130,6 +130,10 @@ func (e *ensuringSource) ChatCancel(session string, timeout time.Duration) error
 	return e.client.ChatCancel(session, timeout)
 }
 
+func (e *ensuringSource) JobDiff(id string, timeout time.Duration) (*view.JobDiff, error) {
+	return e.client.JobDiff(id, timeout)
+}
+
 func (e *ensuringSource) Theme(timeout time.Duration) (*view.ThemeReply, error) {
 	return e.client.Theme(timeout)
 }

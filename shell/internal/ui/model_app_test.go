@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -144,7 +145,7 @@ func TestCtrlKFindsFilesCommandsAndAsksTheParent(t *testing.T) {
 		}
 	}
 	m.Update(tea.KeyMsg{Type: tea.KeyDown})
-	runAll(m, press(m, "enter"))
+	run(press(m, "enter"), m)
 	if m.st.App.Tab != 3 || m.st.App.File != "src/limit.ts" || len(m.st.App.FileLines) == 0 {
 		t.Fatalf("a file opens in the code tab: %+v", m.st.App)
 	}
@@ -207,24 +208,154 @@ func TestANewHelperIsAnnouncedOnce(t *testing.T) {
 	}
 }
 
-func TestTheChangesTabFollowsTheJobs(t *testing.T) {
+const sampleDiff = `diff --git a/src/routes/login.ts b/src/routes/login.ts
+index 1111111..2222222 100644
+--- a/src/routes/login.ts
++++ b/src/routes/login.ts
+@@ -13,4 +13,6 @@ import { audit } from '../audit'
+ export const router = Router()
+ 
+-router.post('/login', async (req, res) => {
++router.post('/login',
++  rateLimit({ windowMs: 60_000, max: 5 }),
++  async (req, res) => {
+   const user = await verify(req.body.email, req.body.password)
+diff --git a/tests/login.test.ts b/tests/login.test.ts
+new file mode 100644
+--- /dev/null
++++ b/tests/login.test.ts
+@@ -0,0 +1,2 @@
++test('limits', () => {})
++// five tries
+`
+
+func TestParseDiffNumbersTheLinesAsTheDesignDoes(t *testing.T) {
+	files := ParseDiff(sampleDiff)
+	if len(files) != 2 || files[0].Path != "src/routes/login.ts" || files[1].Path != "tests/login.test.ts" {
+		t.Fatalf("files %+v", files)
+	}
+	if files[0].Added != 3 || files[0].Deleted != 1 || files[1].Added != 2 {
+		t.Fatalf("counts %+v", files)
+	}
+	got := []string{}
+	for _, l := range files[0].Lines[1:] {
+		got = append(got, fmt.Sprintf("%d%c", l.Num, l.Kind))
+	}
+	if strings.Join(got, " ") != "13  14  15- 15+ 16+ 17+ 18 " {
+		t.Fatalf("numbers %q", strings.Join(got, " "))
+	}
+}
+
+func TestTheChangesTabShowsTheHelpersDiff(t *testing.T) {
 	m, src := appModel(t)
 	withConversation(t, m, src)
 	for i := range m.view.Jobs {
 		m.view.Jobs[i].Ask = false // with a request waiting, 1 and 2 answer it instead
 	}
 	src.evidence = loadEvidence(t)
-	runAll(m, press(m, "2"))
-	if m.st.App.Tab != 2 || len(src.evidenceIDs) == 0 {
-		t.Fatalf("2 opens the changes tab and loads the evidence: %d %v", m.st.App.Tab, src.evidenceIDs)
+	src.diffs = map[string]*view.JobDiff{"job-7f2": {JobID: "job-7f2", Source: "git", Diff: sampleDiff}}
+	run(press(m, "2"), m)
+	if m.st.App.Tab != 2 || len(src.diffIDs) == 0 || src.diffIDs[0] != "job-7f2" {
+		t.Fatalf("2 opens the changes tab and loads the diff: %d %v", m.st.App.Tab, src.diffIDs)
 	}
-	m.dkBusy = false
-	run(m.fetchDock(true), m)
-	if out := appScreen(m); !strings.Contains(out, "2 [changes]") || !strings.Contains(out, "diff") || !strings.Contains(out, "checks") {
-		t.Fatalf("the changes tab:\n%s", out)
+	out := appScreen(m)
+	for _, want := range []string{"2 [changes]", "Add supertest dev dep", "claude · 2 files", "login.ts", "login.test.ts",
+		"src/routes/login.ts   +3 −1", "  13   export const router = Router()", "  15 − router.post('/login', async (req, res) => {",
+		"  16 +   rateLimit({ windowMs: 60_000, max: 5 }),", "[ ] file", "c comment"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q:\n%s", want, out)
+		}
 	}
-	press(m, "1")
+	press(m, "]")
+	if out := appScreen(m); !strings.Contains(out, "tests/login.test.ts   +2 −0") {
+		t.Fatalf("] the next file:\n%s", out)
+	}
+	press(m, "c")
+	typeText(m, "send 429 with a Retry-After header")
+	run(press(m, "enter"), m)
+	if last := src.calls[len(src.calls)-1]; last.method != "job.message" || last.params["id"] != "job-7f2" || last.params["text"] != "send 429 with a Retry-After header" {
+		t.Fatalf("c leaves a comment in the helper's inbox: %v", src.calls)
+	}
+	if out := appScreen(m); !strings.Contains(out, "you     send 429 with a Retry-After header") {
+		t.Fatalf("the comment shows under the diff:\n%s", out)
+	}
+	press(m, "esc")
 	if m.st.App.Tab != 1 {
-		t.Fatal("1 goes back to the conversation")
+		t.Fatal("esc goes back to the conversation")
+	}
+}
+
+func TestTheCodeTabSelectsLinesToAskAboutAndFindsText(t *testing.T) {
+	m, src := appModel(t)
+	withConversation(t, m, src)
+	path := filepath.Join(m.st.App.Repo, "login.ts")
+	if err := os.WriteFile(path, []byte("import { Router } from 'express'\n\nexport const router = Router()\nrouter.post('/login')\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run(m.runPalette(paletteItem{Action: "file:login.ts"}, ""), m)
+	out := appScreen(m)
+	for _, want := range []string{"login.ts", "   1  import { Router } from 'express'", "/ find", "v select", "e open in $EDITOR"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q:\n%s", want, out)
+		}
+	}
+	press(m, "v")
+	press(m, "down", "down")
+	if out := appScreen(m); !strings.Contains(out, "lines 1–3 selected") {
+		t.Fatalf("v then ↓ selects lines:\n%s", out)
+	}
+	press(m, "a")
+	if m.st.App.Tab != 1 || m.st.Prompt != "About login.ts:1-3: " {
+		t.Fatalf("a asks the parent about them: %d %q", m.st.App.Tab, m.st.Prompt)
+	}
+	m.st.App.Tab = 3
+	press(m, "/")
+	typeText(m, "post")
+	run(press(m, "enter"), m)
+	if m.st.App.FileOff != 0 || !strings.Contains(appScreen(m), "[post]") {
+		t.Fatalf("/ finds and marks the word:\n%s", appScreen(m))
+	}
+}
+
+func TestSearchFindsTextAcrossTheRepository(t *testing.T) {
+	m, src := appModel(t)
+	withConversation(t, m, src)
+	m.Update(tea.KeyMsg{Type: tea.KeyCtrlF})
+	m.st.App.Search.Query = "rateLimit"
+	m.Update(searchMsg{query: "rateLimit", hits: []SearchHit{{"src/middleware/limit.ts", 4, "export const rateLimit = (opts = {}) => {"},
+		{"src/routes/login.ts", 2, "import { rateLimit } from '../middleware/limit'"}}})
+	out := appScreen(m)
+	for _, want := range []string{"/ rateLimit▏", "2 results in 2 files", "src/middleware/limit.ts", "4    export const [rateLimit]", "src/routes/login.ts",
+		"⇥ ask claude"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q:\n%s", want, out)
+		}
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if m.st.App.Search != nil || m.st.App.Tab != 3 || m.st.App.File != "src/routes/login.ts" {
+		t.Fatalf("Enter opens the result: %+v", m.st.App)
+	}
+}
+
+func TestMarkdownAndTablesArePreviewed(t *testing.T) {
+	m, src := appModel(t)
+	withConversation(t, m, src)
+	_ = os.WriteFile(filepath.Join(m.st.App.Repo, "README.md"), []byte("# my-repo\n\nThe API.\n\n## Rate limits\n- five a minute\n"), 0o644)
+	_ = os.WriteFile(filepath.Join(m.st.App.Repo, "orders.csv"), []byte("id,city,total\n10421,Hanoi,1240000\n"), 0o644)
+	run(m.runPalette(paletteItem{Action: "file:README.md"}, ""), m)
+	out := appScreen(m)
+	for _, want := range []string{"README.md  rendered · s source", "my-repo", "Rate limits", "• five a minute"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q:\n%s", want, out)
+		}
+	}
+	press(m, "s")
+	if !strings.Contains(appScreen(m), "## Rate limits") {
+		t.Fatal("s shows the source")
+	}
+	run(m.runPalette(paletteItem{Action: "file:orders.csv"}, ""), m)
+	if out := appScreen(m); !strings.Contains(out, "orders.csv  1 rows · table") || !strings.Contains(out, "10421  Hanoi  1240000") {
+		t.Fatalf("a csv is a table:\n%s", out)
 	}
 }

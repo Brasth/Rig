@@ -2,7 +2,7 @@
 
 ## rig shell opens the design's ADE screens (2026-10-21)
 
-`rig shell` now opens the app from the design's "ADE screens" page: one centred conversation in the light theme with the top bar and its three tabs, the first-conversation screen with suggestions, the agents panel on `⇥`, `⌃k` commands (ask, files, commands), "Who do you want to talk to?", the "claude started codex" card, a helper's thread, and the changes and code tabs. The jobs board stays as `rig shell --layout board`. The remaining screens are listed in docs/ade-shell.md.
+`rig shell` now opens the app from the design's "ADE screens" page: one centred conversation in the light theme with the top bar and its three tabs, the first-conversation screen with suggestions, the agents panel on `⇥`, `⌃k` commands (ask, files, commands), "Who do you want to talk to?", the "claude started codex" card, a helper's thread, the changes tab with each helper's real diff (new API method `job.diff`) and comments to it, the code tab with selection, find and `$EDITOR`, search (`⌃f`), and markdown and CSV previews. The jobs board stays as `rig shell --layout board`. The remaining screens are listed in docs/ade-shell.md.
 
 ## The Session screen matches the ADE mockup cell for cell, with an ask line that has the keyboard (2026-10-21)
 

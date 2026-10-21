@@ -2,9 +2,11 @@ package ui
 
 import (
 	"bufio"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -71,6 +73,9 @@ func (m *Model) openFile(rel string) tea.Cmd {
 	repo := m.st.App.Repo
 	return func() tea.Msg {
 		path := filepath.Join(repo, filepath.Clean("/"+rel))
+		if previewKind(rel) == "binary" {
+			return fileMsg{path: rel, lines: []string{}}
+		}
 		data, err := os.ReadFile(path)
 		if err != nil {
 			return fileMsg{path: rel, err: err}
@@ -157,6 +162,8 @@ func (m *Model) appKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.welcomeKey(key)
 	case a.Palette != nil:
 		return m.paletteKey(k)
+	case a.Search != nil:
+		return m.searchKey(k)
 	case a.NewJob != nil:
 		job := *a.NewJob
 		switch key {
@@ -197,6 +204,9 @@ func (m *Model) appKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "ctrl+k":
 		a.Palette = &Palette{}
 		return m, m.loadFiles()
+	case "ctrl+f":
+		a.Search = &SearchState{}
+		return m, m.fetchChanged()
 	case "tab":
 		if matches := slashMatches(m.st.Prompt); len(matches) > 0 {
 			sel := clampSel(m.st.SlashSel, len(matches))
@@ -209,6 +219,9 @@ func (m *Model) appKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		a.Panel = true
 		return m, nil
 	case "esc":
+		if a.Tab != 1 {
+			return m.appTabKey(k)
+		}
 		switch {
 		case m.st.Prompt != "":
 			m.st.Prompt, m.st.SlashSel = "", 0
@@ -234,7 +247,7 @@ func (m *Model) appKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	if a.Tab != 1 {
-		return m.appTabKey(key)
+		return m.appTabKey(k)
 	}
 	matches := slashMatches(m.st.Prompt)
 	switch k.Type {
@@ -277,7 +290,7 @@ func (m *Model) appKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m.answer(r == '1')
 			case r == '2' || r == '3':
 				a.Tab = int(r - '0')
-				return m, m.fetchDock(true)
+				return m, tea.Batch(m.fetchDock(true), m.fetchDiff(true), m.fetchChanged())
 			case r == '?':
 				a.Help = true
 				return m, nil
@@ -290,32 +303,306 @@ func (m *Model) appKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 // appTabKey is the changes and code tabs' keys.
-func (m *Model) appTabKey(key string) (tea.Model, tea.Cmd) {
+func (m *Model) appTabKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	a := m.st.App
+	key := k.String()
+	if a.Tab == 2 && a.Commenting {
+		return m.commentKey(k)
+	}
+	if a.Tab == 3 && a.Finding {
+		return m.findKey(k)
+	}
 	switch key {
 	case "1", "2", "3":
-		a.Tab = int(key[0] - '0')
-		return m, m.fetchDock(true)
-	case "up", "k":
-		if a.Tab == 3 {
-			a.FileOff = max(0, a.FileOff-1)
-			return m, nil
-		}
-		m.move(-1)
-		return m, m.fetchDock(true)
-	case "down", "j":
-		if a.Tab == 3 {
-			a.FileOff++
-			return m, nil
-		}
-		m.move(1)
-		return m, m.fetchDock(true)
-	case "pgdown", " ":
-		a.FileOff += 20
+		a.Tab, a.Selecting = int(key[0]-'0'), false
+		return m, tea.Batch(m.fetchDock(true), m.fetchDiff(true), m.fetchChanged())
 	case "q":
 		return m, tea.Quit
 	case "?":
 		a.Help = true
+		return m, nil
+	}
+	if a.Tab == 2 {
+		switch key {
+		case "up", "k":
+			a.DiffOff = max(0, a.DiffOff-1)
+		case "down", "j":
+			a.DiffOff++
+		case "pgdown", " ":
+			a.DiffOff += 20
+		case "pgup":
+			a.DiffOff = max(0, a.DiffOff-20)
+		case "]":
+			a.DiffFile, a.DiffOff = a.DiffFile+1, 0
+			if a.Diff != nil {
+				a.DiffFile = min(a.DiffFile, max(0, len(ParseDiff(a.Diff.Diff))-1))
+			}
+		case "[":
+			a.DiffFile, a.DiffOff = max(0, a.DiffFile-1), 0
+		case "left", "right", "h", "l":
+			step := 1
+			if key == "left" || key == "h" {
+				step = -1
+			}
+			m.move(step)
+			a.DiffFile, a.DiffOff = 0, 0
+			return m, tea.Batch(m.fetchDock(true), m.fetchDiff(true))
+		case "c":
+			if m.selectedJobID() != "" {
+				a.Commenting, m.st.Prompt = true, ""
+			}
+		case "esc":
+			a.Tab = 1
+		}
+		return m, nil
+	}
+	// the code tab
+	lo := func() int { return min(a.SelFrom, a.SelTo) }
+	hi := func() int { return max(a.SelFrom, a.SelTo) }
+	switch key {
+	case "up", "k":
+		if a.Selecting {
+			a.SelTo = max(0, a.SelTo-1)
+			a.FileOff = min(a.FileOff, a.SelTo)
+		} else {
+			a.FileOff = max(0, a.FileOff-1)
+		}
+	case "down", "j":
+		if a.Selecting {
+			a.SelTo = min(len(a.FileLines)-1, a.SelTo+1)
+		} else {
+			a.FileOff++
+		}
+	case "pgdown", " ":
+		a.FileOff += 20
+	case "pgup":
+		a.FileOff = max(0, a.FileOff-20)
+	case "v":
+		if a.File != "" && !a.Preview {
+			a.Selecting, a.SelFrom, a.SelTo = !a.Selecting, a.FileOff, a.FileOff
+		}
+	case "a", "@":
+		if a.Selecting {
+			ref := fmt.Sprintf("%s:%d-%d", a.File, lo()+1, hi()+1)
+			if key == "a" {
+				m.st.Prompt = "About " + ref + ": "
+			} else {
+				m.st.Prompt = strings.TrimSpace(m.st.Prompt+" @"+ref) + " "
+			}
+			a.Selecting, a.Tab = false, 1
+		}
+	case "/":
+		if a.File != "" {
+			a.Finding, a.Find = true, ""
+		}
+	case "s":
+		if previewKind(a.File) != "" && previewKind(a.File) != "binary" {
+			a.Preview, a.FileOff = !a.Preview, 0
+		}
+	case "e":
+		if a.File != "" {
+			editor := os.Getenv("EDITOR")
+			if editor == "" {
+				editor = "vi"
+			}
+			argv := append(strings.Fields(editor), filepath.Join(a.Repo, filepath.Clean("/"+a.File)))
+			rel := a.File
+			return m, m.exec(argv, func(err error) tea.Msg {
+				if err != nil {
+					return fileMsg{path: rel, err: err}
+				}
+				return reopenMsg{path: rel}
+			})
+		}
+	case "o":
+		if a.File != "" {
+			opener := "xdg-open"
+			if _, err := exec.LookPath(opener); err != nil {
+				opener = "open"
+			}
+			_ = exec.Command(opener, filepath.Join(a.Repo, filepath.Clean("/"+a.File))).Start()
+			m.st.Message = "opened " + a.File + " in your default app"
+		}
+	case "esc":
+		if a.Selecting {
+			a.Selecting = false
+		} else {
+			a.Tab = 1
+		}
+	}
+	return m, nil
+}
+
+type reopenMsg struct{ path string }
+
+// commentKey types a comment for the changes tab's helper; Enter leaves it in the helper's inbox (job.message).
+func (m *Model) commentKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
+	a := m.st.App
+	switch k.Type {
+	case tea.KeyEsc:
+		a.Commenting, m.st.Prompt = false, ""
+	case tea.KeyEnter:
+		text, id := strings.TrimSpace(m.st.Prompt), m.selectedJobID()
+		a.Commenting, m.st.Prompt = false, ""
+		if text == "" || id == "" {
+			return m, nil
+		}
+		if a.Comments == nil {
+			a.Comments = map[string][]string{}
+		}
+		a.Comments[id] = append(a.Comments[id], text)
+		return m, m.act("job.message", map[string]any{"id": id, "text": text}, false)
+	case tea.KeyBackspace:
+		if r := []rune(m.st.Prompt); len(r) > 0 {
+			m.st.Prompt = string(r[:len(r)-1])
+		}
+	case tea.KeyRunes, tea.KeySpace:
+		m.st.Prompt += string(k.Runes)
+	}
+	return m, nil
+}
+
+// findKey types the word to find in the open file; Enter jumps to its next line.
+func (m *Model) findKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
+	a := m.st.App
+	switch k.Type {
+	case tea.KeyEsc:
+		a.Finding, a.Find = false, ""
+	case tea.KeyEnter:
+		term := strings.ToLower(a.Find)
+		for step := 1; term != "" && step <= len(a.FileLines); step++ {
+			i := (a.FileOff + 3 + step) % len(a.FileLines)
+			if strings.Contains(strings.ToLower(a.FileLines[i]), term) {
+				a.FileOff = max(0, i-3)
+				break
+			}
+		}
+	case tea.KeyBackspace:
+		if r := []rune(a.Find); len(r) > 0 {
+			a.Find = string(r[:len(r)-1])
+		}
+	case tea.KeyRunes, tea.KeySpace:
+		a.Find += string(k.Runes)
+	}
+	return m, nil
+}
+
+type diffMsg struct {
+	diff *view.JobDiff
+	err  error
+	id   string
+}
+
+type changedMsg struct{ files map[string]string }
+
+type searchMsg struct {
+	query string
+	hits  []SearchHit
+}
+
+// fetchDiff loads the changes tab's job diff: at once when the job changes, every few seconds after.
+func (m *Model) fetchDiff(force bool) tea.Cmd {
+	if !m.appOn() || m.st.App.Tab != 2 || m.dfBusy {
+		return nil
+	}
+	id := m.selectedJobID()
+	if id == "" || (id == m.st.App.DiffID && !force && m.now().Sub(m.dfLast) < workspaceEvery) {
+		return nil
+	}
+	m.dfBusy = true
+	src := m.src
+	return func() tea.Msg {
+		d, err := src.JobDiff(id, 15*time.Second)
+		return diffMsg{diff: d, err: err, id: id}
+	}
+}
+
+// fetchChanged learns which files each active helper is changing, for the code tab's dots and its header.
+func (m *Model) fetchChanged() tea.Cmd {
+	if !m.appOn() || (m.st.App.Tab != 3 && m.st.App.Search == nil) || m.view == nil {
+		return nil
+	}
+	var ids, workers []string
+	for _, r := range activeJobs(m.view) {
+		if len(ids) == 5 {
+			break
+		}
+		ids, workers = append(ids, r.ID), append(workers, r.Worker)
+	}
+	src := m.src
+	return func() tea.Msg {
+		files := map[string]string{}
+		for i, id := range ids {
+			if d, err := src.JobDiff(id, 10*time.Second); err == nil && d != nil {
+				for _, f := range d.Files {
+					files[f.Path] = workers[i]
+				}
+			}
+		}
+		return changedMsg{files: files}
+	}
+}
+
+// runSearch greps the repository's tracked files for the query (case-insensitive, fixed text, up to 200 matches).
+func (m *Model) runSearch() tea.Cmd {
+	s := m.st.App.Search
+	query, repo := s.Query, m.st.App.Repo
+	if strings.TrimSpace(query) == "" {
+		s.Results, s.Ran = nil, query
+		return nil
+	}
+	return func() tea.Msg {
+		out, _ := exec.Command("git", "-C", repo, "grep", "-n", "-I", "-i", "-F", "--max-count=20", "-e", query).Output()
+		var hits []SearchHit
+		sc := bufio.NewScanner(strings.NewReader(string(out)))
+		for sc.Scan() && len(hits) < 200 {
+			parts := strings.SplitN(sc.Text(), ":", 3)
+			if len(parts) != 3 {
+				continue
+			}
+			n, _ := strconv.Atoi(parts[1])
+			hits = append(hits, SearchHit{Path: parts[0], Line: n, Text: parts[2]})
+		}
+		return searchMsg{query: query, hits: hits}
+	}
+}
+
+// searchKey is the search screen: type, ↑↓ a result, Enter opens it, Tab asks the parent instead.
+func (m *Model) searchKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
+	a := m.st.App
+	s := a.Search
+	switch k.Type {
+	case tea.KeyEsc:
+		a.Search = nil
+	case tea.KeyUp:
+		s.Sel = clampSel(clampSel(s.Sel, len(s.Results))-1, len(s.Results))
+	case tea.KeyDown:
+		s.Sel = clampSel(clampSel(s.Sel, len(s.Results))+1, len(s.Results))
+	case tea.KeyTab:
+		q := s.Query
+		a.Search = nil
+		if strings.TrimSpace(q) == "" {
+			return m, nil
+		}
+		return m, m.appSend("Where is " + q + " used, and what does it do?")
+	case tea.KeyEnter:
+		if len(s.Results) == 0 {
+			return m, nil
+		}
+		hit := s.Results[clampSel(s.Sel, len(s.Results))]
+		a.Search = nil
+		a.Tab, a.File, a.FileLines, a.FileErr, a.FileOff, a.Preview, a.Find = 3, hit.Path, nil, "", max(0, hit.Line-4), false, s.Query
+		return m, tea.Batch(m.openFile(hit.Path), m.fetchChanged())
+	case tea.KeyBackspace:
+		if r := []rune(s.Query); len(r) > 0 {
+			s.Query = string(r[:len(r)-1])
+		}
+		s.Sel = 0
+		return m, m.runSearch()
+	case tea.KeyRunes, tea.KeySpace:
+		s.Query += string(k.Runes)
+		s.Sel = 0
+		return m, m.runSearch()
 	}
 	return m, nil
 }
@@ -414,8 +701,9 @@ func (m *Model) runPalette(it paletteItem, query string) tea.Cmd {
 		return m.appSend(query)
 	case strings.HasPrefix(it.Action, "file:"):
 		rel := strings.TrimPrefix(it.Action, "file:")
-		a.Tab, a.File, a.FileLines, a.FileOff = 3, rel, nil, 0
-		return m.openFile(rel)
+		a.Tab, a.File, a.FileLines, a.FileErr, a.FileOff, a.Selecting, a.Find = 3, rel, nil, "", 0, false, ""
+		a.Preview = previewKind(rel) != ""
+		return tea.Batch(m.openFile(rel), m.fetchChanged())
 	}
 	switch it.Action {
 	case "parent":
@@ -439,6 +727,9 @@ func (m *Model) runPalette(it paletteItem, query string) tea.Cmd {
 		m.st.Mode, m.st.Prompt = ModeConfirm, "Start this project's container (rig env up)?"
 	case "panel":
 		a.Panel = true
+	case "search":
+		a.Search = &SearchState{}
+		return m.fetchChanged()
 	case "board":
 		m.st.App = nil
 		m.st.Tab, m.st.Focus = SessionTab, ""

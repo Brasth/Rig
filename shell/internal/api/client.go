@@ -242,6 +242,15 @@ func (c *Client) ChatCancel(session string, timeout time.Duration) error {
 	return c.Call("chat.cancel", map[string]any{"session": session}, timeout, nil)
 }
 
+// JobDiff is what one job changed (job.diff).
+func (c *Client) JobDiff(id string, timeout time.Duration) (*view.JobDiff, error) {
+	var out view.JobDiff
+	if err := c.Call("job.diff", map[string]any{"id": id}, timeout, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 // Theme is the board's colour theme (ui.theme).
 func (c *Client) Theme(timeout time.Duration) (*view.ThemeReply, error) {
 	var out view.ThemeReply
