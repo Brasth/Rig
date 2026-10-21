@@ -438,10 +438,10 @@ func slashMenu(st State, w int) []string {
 	matches := st.slashes()
 	out := make([]string, 0, len(matches))
 	sel := clampSel(st.SlashSel, len(matches))
-	// ten rows at most, scrolled to keep the chosen one: a parent can have many skills
-	from := max(0, min(sel-9, len(matches)-10))
+	// twelve rows at most, scrolled to keep the chosen one: a parent can have many skills
+	from := max(0, min(sel-11, len(matches)-12))
 	for i, c := range matches {
-		if i < from || i >= from+10 {
+		if i < from || i >= from+12 {
 			continue
 		}
 		line := fit(fmt.Sprintf("   %-12s %s", c.Name+c.Args, c.Help), w-2)

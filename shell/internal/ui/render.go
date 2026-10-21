@@ -119,6 +119,7 @@ var SlashCommands = []SlashCommand{
 	{"/help", "", "every key", false, false},
 	{"/theme", " NAME", "rig, light, dark, material or dracula", false, false},
 	{"/settings", "", "theme, agents, routing, sandbox", false, false},
+	{"/model", "", "the model the parent talks with (or /model NAME)", false, false},
 	{"/quit", "", "leave rig shell", false, false},
 }
 

@@ -1066,6 +1066,8 @@ func (m *Model) runPalette(it paletteItem, query string) tea.Cmd {
 		}
 		m.st.Prompt += "@" + strings.TrimPrefix(it.Action, "attach:") + " "
 		return nil
+	case strings.HasPrefix(it.Action, "model:"):
+		return m.setModel(strings.TrimPrefix(it.Action, "model:"))
 	case strings.HasPrefix(it.Action, "slash:"):
 		m.st.Prompt, m.st.SlashSel, a.Tab, a.Thread = strings.TrimPrefix(it.Action, "slash:")+" ", 0, 1, ""
 		return nil
@@ -1114,6 +1116,9 @@ func (m *Model) runPalette(it paletteItem, query string) tea.Cmd {
 		m.st.Mode, m.st.Prompt = ModeConfirm, "Start this project's container (rig env up)?"
 	case "panel":
 		a.Panel = true
+	case "model":
+		a.Settings, a.Palette = nil, &Palette{Model: true}
+		return m.fetchAppSettings()
 	case "settings":
 		return m.openSettings("general")
 	case "today":

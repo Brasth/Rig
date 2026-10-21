@@ -3,6 +3,10 @@
 
 
 
+## Choose the parent's model, and Settings in the top bar (2026-10-21)
+
+`/model` lists the parent's models (its own setting, claude's `opus` `sonnet` `haiku`, the models codex's config names, or any name typed) and keeps the choice for all repos; the parent gets it as its own `--model` from the next message (`settings.app` reports `parent_models`, `chat.status` the model in use and `model_chosen`; new setting `parent_model.<parent>`). Settings › General shows the parent's model with `⏎ change`. The top bar has a `settings` button, and a click on the parent switches parent.
+
 ## The code tab edits as an IDE does (2026-10-21)
 
 Editing a file in the code tab now works as an IDE: a selection with the mouse, Shift and the arrows, or `⌃a`; copy, cut and paste (`⌃c` `⌃x` `⌃v`, the line with nothing selected); undo and redo (`⌃z` `⌃y`); indent and outdent (`⇥` `⇧⇥`) and comments (`⌃/`); brackets and quotes that close themselves and `⏎` that indents; find in the file (`⌃f`, then `⏎`; `n` `N` while not editing) and go to line (`⌃g`). Each open file keeps its own unsaved changes across tabs (`⌃PgUp` `⌃PgDn`), marked `◆`; `esc` keeps them, and closing a tab or quitting asks first. The explorer makes (`n`), renames (`r`) and deletes (`d`) files. The wheel scrolls the file without moving the cursor.

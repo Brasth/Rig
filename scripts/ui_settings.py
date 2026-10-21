@@ -8,7 +8,9 @@ helpers it may use, how many at once, routing's objective, the sandbox and the w
 Nothing here creates a harness: a new one would turn Rig on for the project."""
 from __future__ import annotations
 
+import json
 import os
+import re
 import shutil
 from pathlib import Path
 
@@ -39,13 +41,18 @@ SETTINGS = {
 }
 for _name in harness.WORKERS:
     SETTINGS[f"workers.{_name}"] = ("workers", _name, _BOOL, ("repo",))
+# the model each parent talks with in the conversation, passed to its own --model; empty means its own setting
+MODEL_PARENTS = ("claude", "codex", "grok", "opencode", "omp", "pi")
+MODEL_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/@+\[\]-]{0,99}$")
+for _name in MODEL_PARENTS:
+    SETTINGS[f"parent_model.{_name}"] = ("parent_model", _name, None, ("all", "repo"))
 
 
 class SettingsError(ValueError):
     pass
 
 
-def _read_key(path: Path, section: str, key: str) -> str:
+def _read_key(path: Path, section: str, key: str, keep_case: bool = False) -> str:
     try:
         text = path.read_text(errors="replace")
     except OSError:
@@ -60,7 +67,8 @@ def _read_key(path: Path, section: str, key: str) -> str:
             continue
         name, _, value = line.partition("=")
         if name.strip() == key:
-            return value.split("#", 1)[0].strip().strip('"\'').lower()
+            value = value.split("#", 1)[0].strip().strip('"\'')
+            return value if keep_case else value.lower()
     return ""
 
 
@@ -96,6 +104,8 @@ def write_key(path: Path, section: str, key: str, raw: str) -> None:
 
 
 def _raw(section: str, value: str) -> str:
+    if section == "parent_model":
+        return json.dumps(value)  # always a string, quoted and escaped
     if value in _BOOL or value.isdigit():
         return value
     return f'"{value}"'
@@ -134,9 +144,60 @@ def read(repo) -> dict:
         "desktop": _ui(repo, "desktop", "false") == "true",
         "routing_table": _routing_table(parsed, installed, parsed["parent"] or "claude"),
         "models": {name: (route_model(name) or "auto") for name in harness.WORKERS},
+        "parent_models": {name: parent_model_info(repo, name) for name in MODEL_PARENTS},
         "runs_today": _runs_today(repo),
         **_facts(repo),
     }
+
+
+def chosen_model(repo, parent: str) -> tuple[str, str]:
+    """The model chosen for the parent in the conversation, and where: this repo's, else the one for all repos."""
+    here = _read_key(harness.harness_path(Path(repo)), "parent_model", parent, keep_case=True)
+    if here:
+        return here, "repo"
+    everywhere = _read_key(ui_theme.global_path(), "parent_model", parent, keep_case=True)
+    return (everywhere, "all") if everywhere else ("", "default")
+
+
+def own_model(parent: str) -> str:
+    """The model the parent CLI's own settings name, as it writes it; empty when they name none."""
+    try:
+        if parent == "claude":
+            model = json.loads((Path.home() / ".claude" / "settings.json").read_text()).get("model")
+            return model.strip() if isinstance(model, str) else ""
+        if parent == "codex":
+            import child_mcp
+            model = child_mcp._load_toml(Path.home() / ".codex" / "config.toml").get("model")
+            return model.strip() if isinstance(model, str) else ""
+    except (OSError, ValueError, AttributeError, UnicodeError):
+        pass
+    return ""
+
+
+def model_suggestions(parent: str) -> list[str]:
+    """Models to offer for a parent: claude's own aliases, and the models codex's own config names (its profiles too).
+    Any other name can be typed; nothing here asks a provider."""
+    out = []
+    if parent == "claude":
+        out = ["opus", "sonnet", "haiku"]
+    elif parent == "codex":
+        try:
+            import child_mcp
+            config = child_mcp._load_toml(Path.home() / ".codex" / "config.toml")
+            out = [config.get("model")] + [p.get("model") for p in (config.get("profiles") or {}).values() if isinstance(p, dict)]
+        except (OSError, ValueError, AttributeError, UnicodeError):
+            out = []
+    seen, result = set(), []
+    for name in out:
+        if isinstance(name, str) and name.strip() and name.strip() not in seen:
+            seen.add(name.strip())
+            result.append(name.strip())
+    return result
+
+
+def parent_model_info(repo, parent: str) -> dict:
+    model, scope = chosen_model(repo, parent)
+    return {"model": model, "scope": scope, "own": own_model(parent), "suggest": model_suggestions(parent)}
 
 
 def route_model(worker: str) -> str:
@@ -238,9 +299,15 @@ def save(repo, key: str, value, scope: str = "repo") -> dict:
     if key not in SETTINGS:
         raise SettingsError(f"{key or 'that'} is not a setting the board changes")
     section, name, allowed, scopes = SETTINGS[key]
-    value = str(value).strip().lower() if not isinstance(value, bool) else ("true" if value else "false")
-    if value not in allowed:
-        raise SettingsError(f"{key} is one of {', '.join(allowed)}, not {value or 'empty'}")
+    if allowed is None:
+        # a model's name, as the parent CLI writes it: kept as typed; empty or "default" goes back to its own setting
+        value = "" if str(value).strip().lower() in ("", "default") else str(value).strip()
+        if value and not MODEL_NAME.match(value):
+            raise SettingsError(f"{value!r} is not a model name")
+    else:
+        value = str(value).strip().lower() if not isinstance(value, bool) else ("true" if value else "false")
+        if value not in allowed:
+            raise SettingsError(f"{key} is one of {', '.join(allowed)}, not {value or 'empty'}")
     if scope not in scopes:
         raise SettingsError(f"{key} is kept in {' or '.join(scopes)}, not {scope}")
     repo = Path(repo).resolve()

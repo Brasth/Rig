@@ -554,6 +554,17 @@ func (m *Model) runSlash(text string) (tea.Cmd, bool) {
 			return m.goTab(SettingsTab), true // the Theme row, where ←→ shows each one
 		}
 		return m.switchTheme(strings.ToLower(rest), m.st.ThemeScope), true
+	case "/model":
+		clear()
+		m.st.Mode, m.st.InputLabel, m.inputFor = ModeNormal, "", ""
+		if !m.appOn() {
+			m.st.Message = "/model is in the app: rig shell"
+			return nil, true
+		}
+		if rest != "" {
+			return m.setModel(rest), true
+		}
+		return m.runPalette(paletteItem{Action: "model"}, ""), true
 	case "/settings":
 		clear()
 		m.st.Mode, m.st.InputLabel, m.inputFor = ModeNormal, "", ""
@@ -1031,6 +1042,8 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.chatID, m.chLast = msg.started.Session, time.Time{}
 		m.st.Message = "undone; " + appParent(m.st) + " is handling anything built on it"
 		return m, tea.Batch(m.fetchChat(true), m.spin())
+	case modelSetMsg:
+		return m, m.afterModelSet()
 	case appSettingsMsg:
 		if msg.err != nil && m.st.AppSettings == nil && IsNotRunning(msg.err) {
 			// the first load, while rig shell is still starting the API server: ask again shortly, quietly

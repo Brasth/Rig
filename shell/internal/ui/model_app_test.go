@@ -419,8 +419,8 @@ func TestSettingsChangeRealSettingsWhereTheyAreKept(t *testing.T) {
 	if last := src.settingsSaved[len(src.settingsSaved)-1]; last != [3]string{"queue.max_running", "2", "repo"} {
 		t.Fatalf("← fewer at the same time: %v", src.settingsSaved)
 	}
-	press(m, "shift+tab") // back to general
-	press(m, "down", "down", "down")
+	press(m, "shift+tab")                    // back to general
+	press(m, "down", "down", "down", "down") // past the theme, the parent, its model and when rig starts
 	press(m, "right")
 	run(press(m, "enter"), m)
 	if m.st.Mode != ModeConfirm || !strings.Contains(m.st.Prompt, "Turn Rig off") {

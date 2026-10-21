@@ -642,6 +642,8 @@ func (m *Model) clickRow(list, at string) (tea.Model, tea.Cmd) {
 		}
 	case "installagent":
 		a.InstallSel = i
+	case "open":
+		return m, m.runPalette(paletteItem{Action: at}, "") // the top bar's parent and settings
 	case "answer":
 		return m.answer(at == "allow")
 	case "suggest":

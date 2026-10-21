@@ -94,6 +94,7 @@ type Palette struct {
 	Query  string
 	Sel    int
 	Attach bool // @: the chosen file goes into your message instead of opening
+	Model  bool // /model: the parent's models, or the name typed
 }
 
 // paletteItem is one row of the palette.
@@ -500,7 +501,7 @@ func topBar(v *view.View, st State, w int) string {
 		}
 		left += st.faint(" / " + branch)
 	}
-	left += "   " + st.tile(appParent(st)) + " " + appParent(st)
+	left += "   " + st.zone("row:open:parent", st.tile(appParent(st))+" "+appParent(st)) // a click switches parent
 	tab := func(n int, name, extra string) string {
 		label := st.faint(fmt.Sprint(n)) + " " + name
 		if a.Tab == n && st.Styled {
@@ -523,9 +524,15 @@ func topBar(v *view.View, st State, w int) string {
 	if panelDocks(st, w) {
 		panel = "hide panel"
 	}
-	right := st.zone("key:⌃k", st.dim("⌃k")) + "   " + st.hint([2]string{"⇥", panel}) + "   "
+	// the window's header ends in Settings; here a click on it opens them, as /settings and ⌃k › settings do
+	right := st.zone("key:⌃k", st.dim("⌃k")) + "   " + st.hint([2]string{"⇥", panel}) + "   " +
+		st.zone("row:open:settings", st.dim("settings")) + "   "
 	if working > 0 {
-		right = st.zone("key:⇥", st.paint(colAccent, "●")+" "+st.dim(fmt.Sprintf("%d working", working))) + "   " + right
+		busy := fmt.Sprintf("%d working", working)
+		if lipgloss.Width(left)+lipgloss.Width(mid)+lipgloss.Width(right)+len(busy)+12 > w {
+			busy = fmt.Sprint(working) // narrow: the count alone keeps the tabs on the line
+		}
+		right = st.zone("key:⇥", st.paint(colAccent, "●")+" "+st.dim(busy)) + "   " + right
 	}
 	return spread(left, mid, right, w)
 }
@@ -971,6 +978,9 @@ func agentsPanel(v *view.View, st State, pw, h int, float bool) []string {
 func paletteItems(st State) []paletteItem {
 	q := strings.ToLower(strings.TrimSpace(st.App.Palette.Query))
 	var out []paletteItem
+	if st.App.Palette.Model {
+		return modelItems(st, q)
+	}
 	if st.App.Palette.Attach {
 		for _, f := range st.App.Files {
 			if q == "" || strings.Contains(strings.ToLower(f), q) {
@@ -1062,6 +1072,7 @@ var PaletteCommands = [][3]string{
 	{"new conversation", "start again with the parent", "new"},
 	{"queue a task", "park it for the parent to pick", "queue"},
 	{"change theme", "rig, light, dark, material, dracula", "theme"},
+	{"change model", "the model the parent talks with", "model"},
 	{"search the code", "text in every file (⌃f)", "search"},
 	{"done today", "what was applied, undo and redo", "today"},
 	{"settings", "theme, agents, routing, sandbox, toml", "settings"},
@@ -1079,6 +1090,9 @@ func paletteBox(v *view.View, st State, pw int) []string {
 		text = "  " + st.faint("›") + " ▏" + st.faint("search files and commands, or ask "+appParent(st))
 		if st.App.Palette.Attach {
 			text = "  " + st.faint("@") + " ▏" + st.faint("a file to add to your message")
+		}
+		if st.App.Palette.Model {
+			text = "  " + st.faint("›") + " ▏" + st.faint("a model for "+appParent(st)+", or type its name")
 		}
 	}
 	lines := []string{text, ""}
@@ -1168,6 +1182,7 @@ func helpBox(st State, hw int) []string {
 		{"↑ ↓", "the lines of your message; in an empty box, what you sent"},
 		{"← →", "move in the box (⌥ a word, ⌃a ⌃e its ends, ⌃w a word back)"},
 		{"⇥", "the agents panel: done today, helpers, the queue"},
+		{"/model", "the model the parent talks with"},
 		{"⌃k", "commands, files, or ask the parent"},
 		{"1 2 3", "conversation, changes, code (with the box empty)"},
 		{"/", "commands: /parent /queue /new /stop /theme /quit"},
