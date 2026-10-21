@@ -538,6 +538,14 @@ func paintSelection(lines []string, s textSel, w int) {
 
 // wheel scrolls what the screen shows: the conversation, the diff and code, or the selection of a list.
 func (m *Model) wheel(up bool) (tea.Model, tea.Cmd) {
+	if a := m.st.App; m.appOn() && a.Term && m.pane != nil && m.hoverY >= m.winH-termRows(m.winH)-1 {
+		if up {
+			a.TermUp += wheelStep
+		} else {
+			a.TermUp = max(0, a.TermUp-wheelStep)
+		}
+		return m, nil
+	}
 	a := m.st.App
 	if a.Splash > 0 || m.st.Mode == ModeConfirm {
 		return m, nil

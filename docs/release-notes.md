@@ -3,6 +3,10 @@
 
 
 
+## Terminal scrollback, problems from checks, movable keys (2026-10-21)
+
+The terminal split keeps 2000 rows of scrollback (`PgUp` `PgDn`, the wheel). The status bar's `✕ n ⚠ n` count the problems the helpers' failed checks found, read from their output (new API method `job.problems`); `m` lists them and `⏎` opens the file on the line. Settings › Keys moves the editor's keys that clash in some terminals: next occurrence, rename, definition, find in conversation, the terminal (`[keys]` in `~/.rig/config.toml`).
+
 ## Find in the conversation, hover info, new-since dots (2026-10-21)
 
 `⌃/` finds in the conversation (matches lit, `⏎` next, `↑` previous). In the code tab, the pointer resting on a name shows the line that defines it and where. A dot on the `1 conversation` tab says an answer arrived while you were elsewhere, and one on `2 changes` that a helper finished; each goes when you look.

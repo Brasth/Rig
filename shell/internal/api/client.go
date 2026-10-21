@@ -171,6 +171,15 @@ func (c *Client) Recover(confirmID string, timeout time.Duration) (string, error
 }
 
 // Log fetches the tail of a job's log. An empty id lets the server pick the job worth watching.
+// JobProblems fetches what a job's failed checks found; an empty id means the newest job with any.
+func (c *Client) JobProblems(id string, timeout time.Duration) (*view.JobProblems, error) {
+	var out view.JobProblems
+	if err := c.Call("job.problems", map[string]any{"id": id}, timeout, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 // JobThread fetches a helper's thread with the parent.
 func (c *Client) JobThread(id string, timeout time.Duration) (*view.JobThread, error) {
 	var out view.JobThread

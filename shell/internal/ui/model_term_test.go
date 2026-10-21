@@ -11,6 +11,7 @@ import (
 )
 
 type fakePane struct {
+	back     []string // rows above the screen
 	writes   [][]byte
 	lines    []string
 	app      bool
@@ -21,6 +22,13 @@ type fakePane struct {
 	updates  chan struct{}
 	cursorOn []bool
 }
+
+func (f *fakePane) LinesFrom(up int, styled, showCursor bool) []string {
+	f.cursorOn = append(f.cursorOn, showCursor)
+	from := max(0, len(f.back)-up)
+	return append(append([]string(nil), f.back[from:]...), f.lines...)
+}
+func (f *fakePane) Scrollback() int { return len(f.back) }
 
 func newFakePane() *fakePane {
 	return &fakePane{updates: make(chan struct{}, 1), lines: []string{"$ ready"}}

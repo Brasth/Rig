@@ -270,3 +270,25 @@ func TestApplicationCursorModeFollowsTheProgram(t *testing.T) {
 		t.Fatal("application cursor keys were requested")
 	}
 }
+
+func TestRowsThatScrollOffTheTopAreKept(t *testing.T) {
+	p, err := Start([]string{"sh", "-c", "seq 1 40"}, "", nil, 20, 5)
+	if err != nil {
+		t.Skip("no pty here:", err)
+	}
+	defer p.Close()
+	if !p.Wait(5 * time.Second) {
+		t.Fatal("the program did not finish")
+	}
+	if n := p.Scrollback(); n < 30 {
+		t.Fatalf("the rows that left the top are kept: %d", n)
+	}
+	up := p.LinesFrom(p.Scrollback(), false, false)
+	if len(up) != 5 || strings.TrimSpace(up[0]) != "1" {
+		t.Fatalf("scrolled all the way up, the first rows: %q", up)
+	}
+	live := p.LinesFrom(0, false, false)
+	if strings.TrimSpace(live[0]) == "1" {
+		t.Fatalf("not scrolled: the screen's own top: %q", live)
+	}
+}

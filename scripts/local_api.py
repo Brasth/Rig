@@ -83,6 +83,7 @@ LOCAL_METHODS = {
     "shell.parent": (False, "The command that runs the parent CLI in a board pane, or why there is none (params: parent)"),
     "env.shell": (False, "The dc exec --no-start command for an interactive shell in a job's container, or why there is none (params: id)"),
     "job.pause": (True, "Pause a running helper (SIGSTOP to its process group) or let it go on (params: id, on)"),
+    "job.problems": (False, "Problems a job's failed checks found (file, line, severity, message); no id: the newest job with any (params: id)"),
     "job.thread": (False, "A helper's thread with the parent: its brief, what it did, messages, its question and result (params: id)"),
     "job.diff": (False, "What one job changed, as a unified diff with per-file counts (params: id)"),
     "job.evidence": (False, "Evidence drawer for one job: where it ran, change, contract, checks, ports (params: id)"),
@@ -190,7 +191,7 @@ class Api:
             return self._board_snapshot(request_id, params)
         if method == "workspace.status":
             return self._workspace(request_id, params)
-        if method in ("job.evidence", "job.diff", "job.thread", "job.pause", "fleet.status", "settings.view", "env.recovery", "env.recover", "log.follow", "env.shell", "shell.parent",
+        if method in ("job.evidence", "job.diff", "job.thread", "job.pause", "job.problems", "fleet.status", "settings.view", "env.recovery", "env.recover", "log.follow", "env.shell", "shell.parent",
                       "chat.status", "chat.transcript", "chat.send", "chat.cancel", "chat.answer", "chat.commands", "chat.models", "chat.parent", "ui.theme", "ui.set_theme", "settings.app", "settings.set",
                       "applies.today", "applies.undo", "applies.redo", "applies.hold", "ship.status", "ship.run"):
             return self._environment(request_id, method, params)
@@ -285,6 +286,12 @@ def _environment(self, request_id, method, params):
                 return _reply(request_id, error=_error(INVALID_PARAMS, "id must be a job id and on a boolean"))
             import job_pause
             result = job_pause.pause(self.repo, job_id) if on else job_pause.resume(self.repo, job_id)
+        elif method == "job.problems":
+            job_id = params.get("id", "")
+            if not isinstance(job_id, str):
+                return _reply(request_id, error=_error(INVALID_PARAMS, "id must be a job id or empty"))
+            import job_problems
+            result = job_problems.problems(self.repo, job_id) if job_id else job_problems.latest(self.repo)
         elif method == "job.thread":
             job_id = params.get("id")
             if not isinstance(job_id, str) or not job_id:

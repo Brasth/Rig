@@ -242,11 +242,22 @@ func (m *Model) appKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.st.Mode, m.pendingX, a.ConfirmLead = ModeNormal, "", ""
 		return m, m.quit()
 	}
-	if key == "ctrl+`" || key == "ctrl+@" {
+	if isKey(k, bound(m.st, "terminal", "ctrl+`")) {
 		return m, m.toggleTerm()
 	}
 	if a.Term && a.TermFocus && m.pane != nil {
-		// the shell has the keys; ⌃] gives them back without closing it
+		// the shell has the keys; ⌃] gives them back without closing it; ⇧PgUp ⇧PgDn scroll its scrollback
+		switch key {
+		case "pgup", "shift+pgup":
+			a.TermUp += termRows(m.winH) - 2
+			return m, nil
+		case "pgdown", "shift+pgdown":
+			a.TermUp = max(0, a.TermUp-(termRows(m.winH)-2))
+			return m, nil
+		}
+		if a.TermUp > 0 && k.Type != tea.KeyCtrlCloseBracket {
+			a.TermUp = 0 // a key typed follows the newest again
+		}
 		if k.Type == tea.KeyCtrlCloseBracket {
 			a.TermFocus = false
 			m.st.Message = "back in rig shell · ⌃` returns to the terminal"
@@ -258,7 +269,7 @@ func (m *Model) appKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if a.ChatFind != nil && a.Tab == 1 && a.Thread == "" {
 		return m.chatFindKey(k)
 	}
-	if (key == "ctrl+/" || key == "ctrl+_") && a.Tab == 1 && a.Thread == "" && a.Palette == nil && m.st.Chat != nil {
+	if isKey(k, bound(m.st, "find_in_chat", "ctrl+/")) && a.Tab == 1 && a.Thread == "" && a.Palette == nil && m.st.Chat != nil {
 		a.ChatFind = &chatFind{}
 		return m, nil
 	}
@@ -692,6 +703,8 @@ func (m *Model) appTabKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.startEdit()
 	case "ctrl+t":
 		return m, m.jumpBackCmd()
+	case "m":
+		return m, m.runPalette(paletteItem{Action: "problems"}, "")
 	case "g":
 		return m, m.openGit()
 	case "b":
@@ -1155,6 +1168,11 @@ func (m *Model) runPalette(it paletteItem, query string) tea.Cmd {
 		}
 		m.st.Prompt += "@" + strings.TrimPrefix(it.Action, "attach:") + " "
 		return nil
+	case strings.HasPrefix(it.Action, "problem:"):
+		return m.openProblem(strings.TrimPrefix(it.Action, "problem:"))
+	case it.Action == "problems":
+		a.Palette = &Palette{Problems: true}
+		return m.fetchProblems(true)
 	case strings.HasPrefix(it.Action, "branch:"):
 		return m.switchBranch(strings.TrimPrefix(it.Action, "branch:"), false)
 	case strings.HasPrefix(it.Action, "branch-new:"):

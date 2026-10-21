@@ -332,6 +332,9 @@ func statusBar(v *view.View, st State, w int) string {
 		}
 		left += "   "
 	}
+	if pc := problemCounts(st); pc != "" {
+		left += pc + "   "
+	}
 	if a.File != "" && a.FileLines != nil {
 		// blame on: who last changed the cursor's line, as an IDE's status bar says
 		line, _ := cursorLine(a)
@@ -627,7 +630,7 @@ func codeScreen(v *view.View, st State, w, h int) ([]string, [][2]string) {
 	}
 	switch {
 	case a.CodeAsk != nil || a.Editing:
-		keys = editKeys(a)
+		keys = editKeys(st, a)
 	case a.TreeFocus && a.GitView:
 		keys = [][2]string{{"space", "stage"}, {"⏎", "diff"}, {"u", "discard"}, {"c", "commit"}, {"P", "pull"}, {"p", "push"}, {"b", "branch"}, {"g", "files"}, {"esc", "back"}}
 	case a.TreeFocus:

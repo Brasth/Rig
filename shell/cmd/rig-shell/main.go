@@ -105,6 +105,10 @@ func (e *ensuringSource) Recover(confirmID string, timeout time.Duration) (strin
 	return e.client.Recover(confirmID, timeout)
 }
 
+func (e *ensuringSource) JobProblems(id string, timeout time.Duration) (*view.JobProblems, error) {
+	return e.client.JobProblems(id, timeout)
+}
+
 func (e *ensuringSource) JobThread(id string, timeout time.Duration) (*view.JobThread, error) {
 	return e.client.JobThread(id, timeout)
 }
