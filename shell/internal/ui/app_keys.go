@@ -190,8 +190,21 @@ func (m *Model) appSend(text string) tea.Cmd {
 		return m.runInTerminal(cmd)
 	}
 	m.rememberSent(text)
+	if m.working() {
+		// the parent is in the middle of a turn: this goes next, when it ends well
+		a := m.st.App
+		a.Outbox = append(a.Outbox, text)
+		m.st.Prompt, m.st.SlashSel = "", 0
+		m.st.Message = "queued: " + appParent(m.st) + " gets it when this turn ends (↑ takes it back)"
+		return nil
+	}
 	m.st.Prompt, m.st.SlashSel, m.st.Message = "", 0, "sending…"
 	m.st.App.Tab, m.st.App.Thread = 1, ""
+	return m.dispatch(text)
+}
+
+// dispatch sends a message to the parent's chat.
+func (m *Model) dispatch(text string) tea.Cmd {
 	src, session, parent := m.src, m.chatID, m.parentName
 	return func() tea.Msg {
 		started, err := src.ChatSend(text, session, parent, 10*time.Second)
@@ -1248,6 +1261,10 @@ func (m *Model) runPalette(it paletteItem, query string) tea.Cmd {
 		return m.setModel(strings.TrimPrefix(it.Action, "model:"))
 	case strings.HasPrefix(it.Action, "effort:"):
 		return m.setEffort(strings.TrimPrefix(it.Action, "effort:"))
+	case strings.HasPrefix(it.Action, "resume:"):
+		return m.resumeSession(strings.TrimPrefix(it.Action, "resume:"))
+	case it.Action == "resume":
+		return m.openResume()
 	case it.Action == "effort-menu":
 		a.Palette = &Palette{Effort: true}
 		return nil

@@ -328,6 +328,13 @@ func (m *Model) editKey(k tea.KeyMsg) bool {
 // recall puts a message sent before in the box: step -1 an older one (↑), +1 a newer one (↓), and past the newest
 // the draft that was there before ↑. False when there is nothing to go to.
 func (m *Model) recall(step int) bool {
+	if a := m.st.App; a != nil && step < 0 && m.st.Prompt == "" && len(a.Outbox) > 0 {
+		// a message queued behind the turn that is running: ↑ takes the last one back to edit
+		last := a.Outbox[len(a.Outbox)-1]
+		a.Outbox = a.Outbox[:len(a.Outbox)-1]
+		m.setPrompt(last, len([]rune(last)))
+		return true
+	}
 	if len(m.history) == 0 || (m.histAt < 0 && step > 0) {
 		return false
 	}

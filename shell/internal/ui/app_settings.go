@@ -212,11 +212,12 @@ func settingRows(st State, section string) []setRow {
 		}
 	case "notify":
 		needs := toggle("Something needs me", "ui.notify_needs", s.NotifyNeeds, "a request waiting for you, or a sandbox problem")
+		done := toggle("A long turn ended", "ui.notify_done", s.NotifyDone, "the parent finished or failed after 20 seconds or more")
 		applied := toggle("Work was applied", "ui.notify_applied", s.NotifyApplied, "")
 		bell := toggle("Terminal bell", "ui.bell", s.Bell, "")
 		bell.Scoped, bell.Group = true, true
 		desktop := toggle("Desktop notice", "ui.desktop", s.Desktop, "Ghostty, kitty, iTerm2 and others show it")
-		return []setRow{needs, applied, bell, desktop}
+		return []setRow{needs, done, applied, bell, desktop}
 	}
 	return nil
 }

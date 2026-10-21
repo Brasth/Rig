@@ -346,6 +346,34 @@ def sessions(repo) -> list[dict]:
     return sorted(rows, key=lambda row: row.get("created", ""), reverse=True)
 
 
+def _title(repo, session: str) -> str:
+    """What a conversation was about: its first message, on one line."""
+    path = chat_dir(repo) / f"{session}.jsonl"
+    try:
+        with path.open(errors="replace") as stream:
+            for line in stream:
+                try:
+                    row = json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(row, dict) and row.get("role") == "user" and isinstance(row.get("text"), str):
+                    return " ".join(row["text"].split())[:100]
+    except OSError:
+        pass
+    return ""
+
+
+def _updated(repo, session: str) -> float:
+    """When the conversation was last used: its transcript or its state file, whichever was written last."""
+    stamps = []
+    for path in (chat_dir(repo) / f"{session}.jsonl", _meta_path(repo, session)):
+        try:
+            stamps.append(path.stat().st_mtime)
+        except OSError:
+            pass
+    return max(stamps) if stamps else 0.0
+
+
 def new_session(repo, parent: str) -> dict:
     folder = chat_dir(repo)
     folder.mkdir(parents=True, exist_ok=True)
@@ -415,6 +443,7 @@ def transcript(repo, session, tail: int = 200) -> dict:
         row["parent"] = who
     return {"session": meta["id"], "parent": meta["parent"], "state": meta["state"], "turns": meta.get("turns", 0),
             "note": meta.get("note", ""), "plan": bool(meta.get("plan")), "native": str(meta.get("native") or ""),
+            "successor": str(meta.get("successor") or ""), "context_pct": context_percent(meta),
             "entries": rows, "ask": pending_ask(repo, meta["id"]),
             "partial": _partial(repo, meta) if meta["state"] == "running" else "",
             "asks": bool(meta.get("asks", meta["parent"] in ASKS))}
@@ -454,7 +483,9 @@ def status(repo) -> dict:
     result = {"enabled": on, "parents": sorted(HEADLESS), "available": available, "sessions": [], "parent": parent,
               "configured": configured, "model": chosen or parent_model(parent), "model_chosen": bool(chosen), "effort": effort}
     if on:
-        result["sessions"] = [{"id": s["id"], "parent": s["parent"], "state": s["state"], "turns": s.get("turns", 0)} for s in sessions(repo)[:20]]
+        rows = [{"id": s["id"], "parent": s["parent"], "state": s["state"], "turns": s.get("turns", 0),
+                 "title": _title(repo, s["id"]), "updated": _updated(repo, s["id"])} for s in sessions(repo)[:60]]
+        result["sessions"] = sorted(rows, key=lambda row: row["updated"], reverse=True)  # the one used last first, for /resume
     return result
 
 
@@ -543,6 +574,56 @@ def set_parent(repo, name: str) -> dict:
 
 
 PLAN_COMMAND = re.compile(r"/plan(?:\s+(.*))?", re.S)
+COMPACT_COMMAND = re.compile(r"/compact(?:\s+(.*))?", re.S)
+# /compact asks the parent, which still has the whole conversation, for a summary; the next conversation starts from it
+COMPACT_PROMPT = ("[Compact] Write a summary of this conversation so that I can continue it in a fresh one without losing anything "
+                  "that matters: what we are doing and why, the decisions made, the files and commands that matter, what is done, "
+                  "what is left, and anything I told you to keep in mind. Be specific and concise (under 400 words). Change "
+                  "nothing and call no tools; reply with the summary only.")
+CONTEXT_WARN = 80  # percent of the window at which a turn's end says so, once
+
+
+def _window(meta: dict) -> int:
+    """How many tokens of context the parent's model holds, when it is known: claude's, 1M for its [1m] models."""
+    if meta.get("parent") != "claude":
+        return 0
+    return 1_000_000 if "[1m]" in str(meta.get("model", "")) else 200_000
+
+
+def context_percent(meta: dict) -> int:
+    """How full the parent's context is after its last turn, in percent; -1 when it is not known."""
+    used = meta.get("usage") if isinstance(meta.get("usage"), dict) else {}
+    window = _window(meta)
+    if not window or not used.get("context"):
+        return -1
+    return min(100, int(used["context"]) * 100 // window)
+
+
+def _finish_compaction(repo, fresh: dict, error: bool) -> None:
+    """After a /compact turn: the summary the parent wrote starts a new conversation, and this one points to it."""
+    fresh["compacting"] = False
+    if error:
+        append(repo, fresh["id"], "system", "compact failed: the turn did not finish; nothing changed")
+        return
+    rows = []
+    path = chat_dir(repo) / f"{fresh['id']}.jsonl"
+    for line in path.read_text(errors="replace").splitlines() if path.is_file() else []:
+        try:
+            rows.append(json.loads(line))
+        except ValueError:
+            continue
+    last_user = max((i for i, r in enumerate(rows) if r.get("role") == "user"), default=-1)
+    summary = "\n\n".join(r["text"] for r in rows[last_user + 1:] if r.get("role") == "assistant" and isinstance(r.get("text"), str)).strip()
+    if not summary:
+        append(repo, fresh["id"], "system", "compact failed: the parent wrote no summary; nothing changed")
+        return
+    new = new_session(repo, fresh["parent"])
+    new.update(summary=summary[:12000], plan=bool(fresh.get("plan")), compacted_from=fresh["id"])
+    _write_json(_meta_path(repo, new["id"]), new)
+    append(repo, new["id"], "system", f"continuing from {fresh['id']}: the summary below goes with your next message")
+    append(repo, new["id"], "summary", _clean(summary, 6000))
+    fresh["successor"] = new["id"]
+    append(repo, fresh["id"], "system", f"compacted: continuing in {new['id']} (this one stays in /resume)")
 INFO_COMMAND = re.compile(r"/(cost|context|mcp)\s*")
 PROMPT_COMMAND = re.compile(r"/(init|review|security-review)(?:\s+(.*))?", re.S)
 
@@ -599,9 +680,10 @@ def _info(repo, meta: dict, what: str) -> str:
     if what == "context":
         if not used:
             return f"nothing counted yet: {parent} reports its context when a turn ends"
-        window = 1_000_000 if "[1m]" in str(meta.get("model", "")) else 200_000
-        share = f" of {_tokens(window)} ({used['context'] * 100 // window}%)" if parent == "claude" else ""
-        return f"context: about {_tokens(used['context'])} tokens in the last turn{share}"
+        window = _window(meta)
+        share = f" of {_tokens(window)} ({used['context'] * 100 // window}%)" if window else ""
+        return f"context: about {_tokens(used['context'])} tokens in the last turn{share}" + (
+            "; /compact continues in a fresh conversation from a summary" if window and used["context"] * 100 // window >= 50 else "")
     servers = _mcp_servers(repo, parent)
     return ("MCP servers for " + parent + ": " + ", ".join(servers)) if servers else (
         f"no MCP servers found in {parent}'s own config" if parent in ("claude", "codex") else f"{parent}'s MCP servers are in its own settings")
@@ -641,6 +723,14 @@ def send(repo, message: str, session: str = "", parent: str = "") -> dict:
             append(repo, meta["id"], "system", "plan mode off")
         else:
             meta["plan"], message = True, arg
+    compact = COMPACT_COMMAND.fullmatch(message)
+    if compact:
+        if not meta.get("turns"):
+            append(repo, meta["id"], "system", "nothing to compact yet: this conversation has no turns")
+            return {"session": meta["id"], "parent": meta["parent"], "state": meta["state"], "turn": 0}
+        rest = (compact.group(1) or "").strip()
+        message = COMPACT_PROMPT + (f"\nFocus on: {rest}" if rest else "")
+        meta["compacting"] = True
     prompt = PROMPT_COMMAND.fullmatch(message)
     if prompt:
         import parent_commands
@@ -1058,6 +1148,10 @@ def run_turn(repo, session: str) -> int:
     if meta.get("context_from") is not None:
         meta["context_from"] = None  # told once; from here its own session carries the conversation
         _write_json(_meta_path(repo, session), meta)
+    if meta.get("summary"):
+        message = "[Summary of our earlier conversation, which was compacted]\n" + meta["summary"] + "\n\n[Now]\n" + message
+        meta["summary"] = ""  # told once; from here its own session carries the conversation
+        _write_json(_meta_path(repo, session), meta)
     if meta.get("plan") and parent != "claude":
         message = PLAN_PREFIX + message  # claude has a flag for plan mode; the others are told in the message
     (folder / "message.txt").write_text(message)
@@ -1080,9 +1174,11 @@ def run_turn(repo, session: str) -> int:
             _write_json(folder / "meta.json", {"status": "idle"})
             fresh = read_meta(repo, session) if _meta_path(repo, session).exists() else meta
             fresh.update(native=meta.get("native", ""), state="failed" if error else "idle", runner_pid=0,
-                         note="see the transcript" if error else "", asks=True)
+                         note="see the transcript" if error else "", asks=True, model=meta.get("model", ""))
             if fresh.get("note") == "cancelled":
                 fresh["state"] = "idle"
+            if fresh.get("compacting"):
+                _finish_compaction(repo, fresh, error)
             _write_json(_meta_path(repo, session), fresh)
             return 1 if error else 0
         # this codex has no MCP server mode, or it did not start: the plain headless mode, which cannot ask
@@ -1156,13 +1252,18 @@ def run_turn(repo, session: str) -> int:
         error = True
     fresh = read_meta(repo, session) if _meta_path(repo, session).exists() else meta
     fresh.update(native=meta.get("native", ""), state="failed" if error else "idle", runner_pid=0, note="" if not error else "see the transcript",
-                 asks=parent == "claude")  # codex reaches this plain headless mode only when its server mode did not start
+                 asks=parent == "claude", model=meta.get("model", ""))  # codex reaches this plain headless mode only when its server mode did not start
     if fresh.get("note") == "cancelled":
         fresh["state"] = "idle"
     if used:  # what the turn cost and how full the parent's context is, for /cost and /context
         total = fresh.get("usage") if isinstance(fresh.get("usage"), dict) else {}
         fresh["usage"] = {"cost": round(float(total.get("cost", 0)) + used["cost"], 6), "input": int(total.get("input", 0)) + used["input"],
                           "output": int(total.get("output", 0)) + used["output"], "context": used["context"], "turns": int(total.get("turns", 0)) + 1}
+    if fresh.get("compacting"):
+        _finish_compaction(repo, fresh, error)
+    elif used and context_percent(fresh) >= CONTEXT_WARN and not fresh.get("warned"):
+        fresh["warned"] = True
+        append(repo, session, "system", f"context is {context_percent(fresh)}% full: /compact continues in a fresh conversation from a summary")
     _write_json(_meta_path(repo, session), fresh)
     return 0 if not error else 1
 

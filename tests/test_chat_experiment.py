@@ -409,6 +409,86 @@ class Turns(Base):
         self.assertTrue(shown[-1].startswith("… ") and shown[-1].endswith("more lines"))
         self.assertEqual((files[0]["added"], files[0]["deleted"]), (200, 0))
 
+    def test_status_lists_conversations_with_what_they_were_about_and_the_one_used_last_first(self):
+        stand_in(self.bin, "claude", CLAUDE_STREAM)
+        first = rig_chat.send(self.repo, "Add rate limiting\nto POST /login")
+        self.wait_idle(first["session"])
+        second = rig_chat.send(self.repo, "/init")
+        self.wait_idle(second["session"])
+        rows = rig_chat.status(self.repo)["sessions"]
+        self.assertEqual([r["id"] for r in rows], [second["session"], first["session"]])
+        self.assertEqual(rows[1]["title"], "Add rate limiting to POST /login", "the first message, on one line")
+        self.assertEqual(rows[0]["title"], "/init")
+        self.assertGreater(rows[0]["updated"], 0)
+        again = rig_chat.send(self.repo, "and a test", first["session"])
+        self.wait_idle(first["session"])
+        rows = rig_chat.status(self.repo)["sessions"]
+        self.assertEqual(rows[0]["id"], first["session"], "using an old conversation again puts it first")
+        self.assertEqual(rows[0]["turns"], 2)
+        self.assertEqual(again["session"], first["session"])
+
+    def test_compact_starts_a_fresh_conversation_from_the_parents_own_summary(self):
+        stand_in(self.bin, "claude", CLAUDE_STREAM)
+        first = rig_chat.send(self.repo, "what is in a.txt?")
+        old = first["session"]
+        self.wait_idle(old)
+        compacting = rig_chat.send(self.repo, "/compact the a.txt part", old)
+        self.assertEqual(compacting["state"], "running", "a summary turn runs in the conversation that has the context")
+        self.wait_idle(old)
+        sent = self.calls()[1]["argv"][-1]
+        self.assertIn("Write a summary of this conversation", sent)
+        self.assertTrue(sent.endswith("Focus on: the a.txt part"))
+        view = rig_chat.transcript(self.repo, old)
+        successor = view["successor"]
+        self.assertRegex(successor, r"c-[0-9a-f]{8}")
+        self.assertIn("compacted: continuing in " + successor, view["entries"][-1]["text"])
+        users = [e["text"] for e in view["entries"] if e["role"] == "user"]
+        self.assertEqual(users[-1], "/compact the a.txt part", "the conversation shows what was typed")
+        new = rig_chat.transcript(self.repo, successor)
+        self.assertEqual([e["role"] for e in new["entries"]], ["system", "summary"])
+        self.assertIn("It says one.", new["entries"][1]["text"])
+        self.assertEqual((new["parent"], new["state"], new["turns"]), ("claude", "idle", 0))
+        rig_chat.send(self.repo, "and a.txt's neighbour?", successor)
+        self.wait_idle(successor)
+        carried = self.calls()[2]["argv"][-1]
+        self.assertTrue(carried.startswith("[Summary of our earlier conversation, which was compacted]\n"), carried)
+        self.assertIn("It says one.", carried)
+        self.assertTrue(carried.endswith("[Now]\nand a.txt's neighbour?"))
+        rig_chat.send(self.repo, "once more", successor)
+        self.wait_idle(successor)
+        self.assertEqual(self.calls()[3]["argv"][-1], "once more", "the summary goes with the first message only")
+        empty = rig_chat.new_session(self.repo, "claude")
+        rig_chat.send(self.repo, "/compact", empty["id"])
+        self.assertIn("nothing to compact", rig_chat.transcript(self.repo, empty["id"])["entries"][-1]["text"])
+
+    def test_a_compact_that_fails_changes_nothing(self):
+        stand_in(self.bin, "claude", CLAUDE_STREAM)
+        first = rig_chat.send(self.repo, "hello")
+        self.wait_idle(first["session"])
+        stand_in(self.bin, "claude", CLAUDE_STREAM, exit_code=3)
+        rig_chat.send(self.repo, "/compact", first["session"])
+        view = self.wait_idle(first["session"])
+        self.assertEqual(view["successor"], "")
+        self.assertIn("compact failed", view["entries"][-1]["text"])
+
+    def test_the_context_is_shown_as_a_percentage_and_warned_about_once(self):
+        busy = [dict(e) for e in CLAUDE_STREAM]
+        busy[-1] = {**busy[-1], "usage": {"input_tokens": 100, "cache_read_input_tokens": 170000, "output_tokens": 500}}
+        stand_in(self.bin, "claude", busy)
+        started = rig_chat.send(self.repo, "go")
+        view = self.wait_idle(started["session"])
+        self.assertEqual(view["context_pct"], 85)
+        warnings = [e["text"] for e in view["entries"] if e["role"] == "system" and "context is 85% full" in e["text"]]
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("/compact", warnings[0])
+        rig_chat.send(self.repo, "again", started["session"])
+        view = self.wait_idle(started["session"])
+        self.assertEqual(len([e for e in view["entries"] if "% full" in e["text"]]), 1, "once, not every turn")
+        quiet = rig_chat.new_session(self.repo, "claude")
+        self.assertEqual(rig_chat.transcript(self.repo, quiet["id"])["context_pct"], -1, "unknown before a turn")
+        self.assertEqual(rig_chat.context_percent({"parent": "codex", "usage": {"context": 9000}}), -1, "only where the window is known")
+        self.assertEqual(rig_chat.context_percent({"parent": "claude", "model": "sonnet[1m]", "usage": {"context": 100000}}), 10)
+
     def test_tools_and_what_they_answered_are_shown(self):
         claude = lambda event: rig_chat.decode_event("claude", event)["entries"]
         use = {"type": "assistant", "message": {"content": [

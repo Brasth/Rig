@@ -102,14 +102,19 @@ type ChatStatus struct {
 	// ModelChosen: Model was chosen in rig shell (/model), not taken from the CLI's settings.
 	ModelChosen bool `json:"model_chosen"`
 	// Effort is the reasoning level chosen for the parent (/model, /effort); empty means its CLI's own setting.
-	Effort   string   `json:"effort"`
-	Parents  []string `json:"parents"` // every parent the chat can run
-	Sessions []struct {
-		ID     string `json:"id"`
-		Parent string `json:"parent"`
-		State  string `json:"state"`
-		Turns  int    `json:"turns"`
-	} `json:"sessions"`
+	Effort   string        `json:"effort"`
+	Parents  []string      `json:"parents"` // every parent the chat can run
+	Sessions []ChatSession `json:"sessions"`
+}
+
+// ChatSession is one conversation in chat.status: what it was about and when it was last used, for /resume.
+type ChatSession struct {
+	ID      string  `json:"id"`
+	Parent  string  `json:"parent"`
+	State   string  `json:"state"`
+	Turns   int     `json:"turns"`
+	Title   string  `json:"title"`   // its first message
+	Updated float64 `json:"updated"` // when it was last used, as unix seconds
 }
 
 // JobProblems is job.problems: what a job's failed checks found, as an IDE's Problems view lists them.
@@ -189,6 +194,7 @@ type AppSettings struct {
 	FormatOnSave      bool              `json:"format_on_save"` // ⌃s runs the file's formatter first
 	Keys              map[string]string `json:"keys"`           // the editor's keys that can be moved: next_occurrence, find_in_chat, terminal, rename, definition, references
 	NotifyNeeds       bool              `json:"notify_needs"`
+	NotifyDone        bool              `json:"notify_done"` // a long turn ended or failed
 	NotifyApplied     bool              `json:"notify_applied"`
 	Desktop           bool              `json:"desktop"` // a desktop notice through the terminal, as well as or instead of the bell
 	RoutingTable      []struct {
@@ -290,7 +296,11 @@ type ChatTranscript struct {
 	Asks    bool        `json:"asks"`    // this parent's headless mode can ask for permission at all
 	Partial string      `json:"partial"` // the answer streaming in, before it joins the entries
 	Plan    bool        `json:"plan"`    // /plan: the parent plans and changes nothing
-	Native  string      `json:"native"`  // the parent CLI's own id for this conversation, so /native can resume it
+	Native  string      `json:"native"`  // the parent CLI's own id for this conversation
+	// Successor is the conversation /compact started from this one's summary; ContextPct how full the parent's context
+	// is after its last turn (nil from a server that does not say, -1 when it is not known).
+	Successor  string `json:"successor"`
+	ContextPct *int   `json:"context_pct"`
 }
 
 // ChatAsk is a permission request the parent is blocked on; chat.answer allows or denies it by ID.

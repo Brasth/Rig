@@ -14,12 +14,7 @@ import (
 func chatOn(sessions ...string) *view.ChatStatus {
 	st := &view.ChatStatus{Enabled: true, Available: []string{"claude"}, Configured: "claude", Parent: "claude"}
 	for _, id := range sessions {
-		st.Sessions = append(st.Sessions, struct {
-			ID     string `json:"id"`
-			Parent string `json:"parent"`
-			State  string `json:"state"`
-			Turns  int    `json:"turns"`
-		}{ID: id, Parent: "claude", State: "idle", Turns: 1})
+		st.Sessions = append(st.Sessions, view.ChatSession{ID: id, Parent: "claude", State: "idle", Turns: 1})
 	}
 	return st
 }

@@ -123,6 +123,8 @@ type AppState struct {
 	RedoHunk             *redoTarget       // the hunk a request to redo is being written for
 	BoxTop, BoxTotal     int               // the reply box as last drawn: its first row shown and how many rows the draft has
 	Attached             []attachment      // pictures dropped on the box, shown above it while the draft names them
+	Outbox               []string          // messages typed while the parent was working, sent one by one as its turns end
+	Sending              bool              // a queued message is on its way: the next waits for it
 	Search               *SearchState
 	Settings             *SettingsScreen
 	Onboard              *Onboarding // the first-run steps after the parent: helpers, then where agents work
@@ -140,6 +142,7 @@ type Palette struct {
 	Attach   bool // @: the chosen file goes into your message instead of opening
 	Model    bool // /model: the parent's models, or the name typed
 	Effort   bool // /effort, or the reasoning row of /model: the parent's reasoning levels
+	Resume   bool // /resume: the conversations of this repository, to open one again
 	Symbols  bool // ⌃o in the code tab: the open file's functions and types, to go to
 	Branch   bool // b in the git view: a branch to switch to, or a new one
 	Problems bool // m in the code tab: what the helpers' checks found, each to go to
@@ -672,6 +675,14 @@ func conversationBody(v *view.View, st State, w, h int) ([]string, [][2]string) 
 	if st.Chat.Plan {
 		state = st.paint(colAccent, "plan mode") + st.faint(" · "+state)
 	}
+	if pct := st.Chat.ContextPct; pct != nil && *pct >= 0 {
+		note := fmt.Sprintf("context %d%%", *pct)
+		if *pct >= 80 {
+			state += st.faint(" · ") + st.paint(colAmber, note)
+		} else {
+			state += st.faint(" · " + note)
+		}
+	}
 	lines = append(lines, "     "+st.faint(parent+" · ")+state)
 	lines = append(lines, "", "")
 	// the transcript's lines are made once for each transcript, width and theme: a long conversation scrolls at once
@@ -703,6 +714,7 @@ func conversationBody(v *view.View, st State, w, h int) ([]string, [][2]string) 
 	keys = append(keys, [2]string{"⏎", "send"})
 	if st.Chat.State == "running" && st.Chat.Ask == nil {
 		lines = append(lines, workingLine(st))
+		lines = append(lines, queuedRows(st, cw)...)
 	}
 	if st.Prompt != "" {
 		keys = [][2]string{{"⏎", "send"}, {"⌥⏎", "new line"}, {"esc", "clear"}, {"⇥", "agents"}, {"⌃k", "commands"}}
@@ -758,6 +770,16 @@ func entryLines(st State, entries []view.ChatEntry, cw int) []string {
 			continue
 		case "diff":
 			lines = append(lines, diffLines(st, e.Text, cw)...)
+			continue
+		case "summary":
+			// what /compact carried over from the conversation before, with its lines kept
+			lines = append(lines, center(st.faint("── summary carried over ──"), cw))
+			for _, raw := range strings.Split(strings.TrimRight(e.Text, "\n"), "\n") {
+				for _, l := range wrap(plainMarkdown(sanitize(raw)), cw-4, "") {
+					lines = append(lines, "  "+st.dim(l))
+				}
+			}
+			lines = append(lines, center(st.faint("──"), cw), "")
 			continue
 		case "result", "result-error":
 			colour := ""
@@ -1178,6 +1200,9 @@ func paletteItems(st State) []paletteItem {
 	if st.App.Palette.Effort {
 		return effortItems(st, appParent(st), q)
 	}
+	if st.App.Palette.Resume {
+		return resumeItems(st, q)
+	}
 	if st.App.Palette.Symbols {
 		return symbolItems(st, q)
 	}
@@ -1291,6 +1316,7 @@ var PaletteCommands = [][3]string{
 	{"queue a task", "park it for the parent to pick", "queue"},
 	{"change theme", "rig, light, dark, material, dracula", "theme"},
 	{"change model", "the model the parent talks with", "model"},
+	{"resume a conversation", "open an earlier one again (/resume)", "resume"},
 	{"search the code", "text in every file (⌃f)", "search"},
 	{"find references", "every use of the name at the cursor (F7)", "references"},
 	{"run a task", "a script, make or just target, or the tests, in the terminal", "tasks"},
@@ -1319,6 +1345,9 @@ func paletteBox(v *view.View, st State, pw int) []string {
 		}
 		if st.App.Palette.Effort {
 			text = "  " + st.faint("›") + " ▏" + st.faint("how much "+appParent(st)+" reasons: low, medium, high…")
+		}
+		if st.App.Palette.Resume {
+			text = "  " + st.faint("⟲") + " ▏" + st.faint("an earlier conversation to open again: type to search")
 		}
 		if st.App.Palette.Symbols {
 			text = "  " + st.faint("›") + " ▏" + st.faint("a function or type in "+filepath.Base(st.App.File))
