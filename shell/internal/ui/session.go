@@ -14,8 +14,10 @@ import (
 const (
 	sessionMinW = 120
 	sessionMinH = 30
-	sessLeftW   = 26
+	sessLeftW   = 26 // the mockup's widths at 120 columns; wider terminals keep its proportions up to the caps
 	sessRightW  = 40
+	sessLeftMax = 44
+	sessRightMx = 72
 	dockRows    = 4
 )
 
@@ -30,8 +32,10 @@ func sessionGeometry(w, h int) sessionGeom {
 	if w < sessionMinW || h < sessionMinH {
 		return sessionGeom{}
 	}
+	left := min(sessLeftMax, max(sessLeftW, w*sessLeftW/sessionMinW))
+	right := min(sessRightMx, max(sessRightW, w*sessRightW/sessionMinW))
 	// header, tab bar, evidence rule, message and footer take five rows; the dock takes dockRows more
-	return sessionGeom{ok: true, left: sessLeftW, right: sessRightW, mid: w - sessLeftW - sessRightW - 2, grid: h - 5 - dockRows}
+	return sessionGeom{ok: true, left: left, right: right, mid: w - left - right - 2, grid: h - 5 - dockRows}
 }
 
 // SessionPaneSize is the room the middle column gives the parent's terminal (its title takes the first row).
@@ -85,7 +89,7 @@ func sessionKeys(st State, row *view.Row) []string {
 	if st.PaneFocus {
 		return []string{"Ctrl-] back to the board (every other key goes to the program)"}
 	}
-	keys := []string{"Tab pane", "Enter type", "p parent", "s shell", "e enqueue", "v evidence", "? help", "q quit"}
+	keys := []string{"Tab pane", "Enter type", "p parent", "e enqueue", "v evidence", "w workspace", "? help", "q quit"}
 	switch {
 	case st.Mode == ModeInput:
 		return []string{"Enter queue it", "Esc discard"}
@@ -139,7 +143,7 @@ func leftColumn(st State, w, h int) []string {
 // midColumn is the parent's terminal when one runs, else how to start it.
 func midColumn(st State, w, h int) []string {
 	out := make([]string, 0, h)
-	out = append(out, heavy(st, termTitle(st), w))
+	out = append(out, heavy(st, parentTitle(st), w))
 	if len(st.PaneLines) == 0 {
 		for _, l := range []string{
 			"",
@@ -164,7 +168,7 @@ func midColumn(st State, w, h int) []string {
 
 // rightColumn is the Jobs list (attention first, finished last) with the queue under it.
 func rightColumn(v *view.View, st State, w, h int) []string {
-	jobs := v.Rows("Jobs")
+	jobs := withID(v.Rows("Jobs"))
 	queue := v.Rows("Queue")
 	sel := clampSel(st.Selected["Jobs"], len(jobs))
 	qBlock := 0
@@ -216,6 +220,42 @@ func rightColumn(v *view.View, st State, w, h int) []string {
 		out = append(out, fit("", w))
 	}
 	return out[:h]
+}
+
+// parentTitle is the middle column's heading, as the mockup words it: "Parent · codex", and what it is doing.
+// How to get back to the board is the footer's job, so the heading never carries it.
+func parentTitle(st State) string {
+	if st.PaneTitle == "" {
+		return "Parent"
+	}
+	title := sanitize(st.PaneTitle)
+	if i := strings.Index(title, " ("); i > 0 {
+		title = title[:i]
+	}
+	return "Parent · " + title
+}
+
+// withID puts the job id after the worker on a job's second line, as the mockup shows it: "claude · job-7f2 · ASK".
+func withID(rows []view.Row) []view.Row {
+	out := make([]view.Row, len(rows))
+	for i, r := range rows {
+		out[i] = r
+		if r.ID == "" || strings.Contains(r.Second, r.ID) {
+			continue
+		}
+		lead := r.Worker + " · "
+		switch {
+		case r.Worker == "":
+			out[i].Second = r.ID + " · " + r.Second
+		case strings.HasPrefix(r.Second, lead):
+			out[i].Second = lead + r.ID + " · " + strings.TrimPrefix(r.Second, lead)
+		case r.Second == r.Worker || r.Second == "":
+			out[i].Second = r.Worker + " · " + r.ID
+		default: // an active job's second line is what it is doing now
+			out[i].Second = lead + r.ID + " · " + r.Second
+		}
+	}
+	return out
 }
 
 func dockTitle(st State, row *view.Row) string {

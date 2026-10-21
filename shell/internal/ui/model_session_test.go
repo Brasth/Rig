@@ -1,12 +1,14 @@
 package ui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/Brasth/Rig/shell/internal/api"
 	"github.com/Brasth/Rig/shell/internal/view"
 )
 
@@ -58,8 +60,8 @@ func TestTheParentRunsInTheMiddleColumnAndFollowsResizes(t *testing.T) {
 		t.Fatalf("pane %dx%d, want the 52x26 middle column", c.cols, c.rows)
 	}
 	m.Update(tea.WindowSizeMsg{Width: 140, Height: 40})
-	if got := (*panes)[0].resizes; len(got) != 1 || got[0] != [2]int{72, 30} {
-		t.Fatalf("resizes %v, want the 72x30 middle column", got)
+	if got := (*panes)[0].resizes; len(got) != 1 || got[0] != [2]int{62, 30} {
+		t.Fatalf("resizes %v, want the 62x30 middle column (the side columns widen in proportion)", got)
 	}
 	m.Update(tea.WindowSizeMsg{Width: 100, Height: 36})
 	if got := (*panes)[0].resizes; got[len(got)-1] != [2]int{100, 31} {
@@ -172,4 +174,66 @@ func TestTheSessionFrameShowsEveryColumnAndTheAttentionLine(t *testing.T) {
 		}
 	}
 	assertGrid(t, Render(m.view, m.st, 120, 36), 120, 36)
+}
+
+func TestEveryJobsSecondLineNamesTheWorkerAndIdAsTheMockupDoes(t *testing.T) {
+	rows := withID([]view.Row{
+		{ID: "job-7f2", Worker: "claude", Second: "permission: npm i -D supertest"},
+		{ID: "job-4c1", Worker: "opencode", Second: "opencode · finished 4m ago"},
+		{ID: "job-9", Worker: "pi", Second: ""},
+		{ID: "job-1", Second: "queued"},
+		{ID: "job-2", Worker: "grok", Second: "grok · job-2 · already there"},
+	})
+	want := []string{"claude · job-7f2 · permission: npm i -D supertest", "opencode · job-4c1 · finished 4m ago",
+		"pi · job-9", "job-1 · queued", "grok · job-2 · already there"}
+	for i, w := range want {
+		if rows[i].Second != w {
+			t.Errorf("row %d: %q, want %q", i, rows[i].Second, w)
+		}
+	}
+}
+
+func TestTheMiddleColumnIsTitledParentAndKeepsTheHintInTheFooter(t *testing.T) {
+	for title, want := range map[string]string{
+		"": "Parent",
+		"codex · typing (Ctrl-] returns to the board)": "Parent · codex · typing",
+		"codex · exited: exit status 1":                "Parent · codex · exited: exit status 1",
+	} {
+		if got := parentTitle(State{PaneTitle: title}); got != want {
+			t.Errorf("%q -> %q, want %q", title, got, want)
+		}
+	}
+}
+
+func TestWideTerminalsKeepTheMockupsProportions(t *testing.T) {
+	for _, c := range []struct{ w, left, right int }{{120, 26, 40}, {180, 39, 60}, {240, 44, 72}, {400, 44, 72}} {
+		g := sessionGeometry(c.w, 40)
+		if g.left != c.left || g.right != c.right || g.left+g.mid+g.right+2 != c.w {
+			t.Errorf("%d columns: %d|%d|%d, want left %d right %d", c.w, g.left, g.mid, g.right, c.left, c.right)
+		}
+	}
+}
+
+func TestTheParentNamedByRigShellIsTheOneAsked(t *testing.T) {
+	m, src, _, _ := sessionModel(t, 120, 36)
+	m.SetParent("claude")
+	runAll(m, press(m, "p"))
+	if len(src.parentNames) != 1 || src.parentNames[0] != "claude" {
+		t.Fatalf("asked %v", src.parentNames)
+	}
+}
+
+func TestTheAPIStartingUpIsLoadingNotAFailure(t *testing.T) {
+	m := NewModel(&fakeSource{}, false)
+	m.Update(tea.WindowSizeMsg{Width: 120, Height: 36})
+	m.SetTab(SessionTab)
+	m.Update(workspaceMsg{err: fmt.Errorf("dial: %w", api.ErrNotRunning)})
+	if m.st.WorkspaceE != "" || !m.wsLast.IsZero() {
+		t.Fatalf("starting up must read as loading and retry soon: %q %v", m.st.WorkspaceE, m.wsLast)
+	}
+	m.lastOK = time.Now()
+	m.Update(workspaceMsg{err: fmt.Errorf("dial: %w", api.ErrNotRunning)})
+	if m.st.WorkspaceE == "" {
+		t.Fatal("after the board has run, a lost server is a failure to show")
+	}
 }

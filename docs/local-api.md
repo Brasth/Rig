@@ -45,6 +45,6 @@ repository. Owner tokens are never returned, and workers may not serve the API.
 | `job.evidence` | no | none | Evidence drawer for one job: where it ran, change, contract, checks, ports (params: id) |
 | `log.follow` | no | none | Tail of a job's log as plain text; without an id, the job worth watching (params: id, lines) |
 | `settings.view` | no | none | Settings tab: what this repository's .rig/harness.toml makes effective, ready to render and read-only |
-| `shell.parent` | no | none | The command that runs the parent CLI in a board pane, or why there is none |
+| `shell.parent` | no | none | The command that runs the parent CLI in a board pane, or why there is none (params: parent) |
 | `ui.request` | yes | none | Companion operations (snapshot, enqueue, stop, reply, details, sessions) on the hosted UI service |
 | `workspace.status` | no | none | Workspace panel: container, ports and dc-cli diagnosis as ready-to-render sections (params: deep) |

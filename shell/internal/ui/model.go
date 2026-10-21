@@ -27,7 +27,7 @@ type Source interface {
 	Recover(confirmID string, timeout time.Duration) (string, error)
 	Log(id string, lines int, timeout time.Duration) (*view.LogReply, error)
 	Shell(id string, timeout time.Duration) (*view.ShellPlan, error)
-	Parent(timeout time.Duration) (*view.ShellPlan, error)
+	Parent(name string, timeout time.Duration) (*view.ShellPlan, error)
 	ChatStatus(timeout time.Duration) (*view.ChatStatus, error)
 	ChatTranscript(session string, tail int, timeout time.Duration) (*view.ChatTranscript, error)
 	ChatSend(message, session string, timeout time.Duration) (*view.ChatStarted, error)
@@ -146,31 +146,32 @@ type actionMsg struct {
 
 // Model is the Bubble Tea model for the board pane.
 type Model struct {
-	src       Source
-	st        State
-	view      *view.View
-	w, h      int
-	fetching  bool
-	wsBusy    bool
-	wsLast    time.Time
-	flBusy    bool
-	flLast    time.Time
-	lgBusy    bool
-	lgLast    time.Time
-	chBusy    bool
-	chLast    time.Time
-	csBusy    bool
-	csLast    time.Time
-	dkBusy    bool
-	stBusy    bool
-	stLast    time.Time
-	dkLast    time.Time
-	pane      Pane
-	paneName  string
-	paneFocus bool
-	spawn     func(argv []string, dir string, env []string, cols, rows int) (Pane, error)
-	chatID    string // the session the Chat tab follows; empty until one exists
-	inputFor  string // "chat" while the input line is a chat message, else enqueue
+	src        Source
+	st         State
+	view       *view.View
+	w, h       int
+	fetching   bool
+	wsBusy     bool
+	wsLast     time.Time
+	flBusy     bool
+	flLast     time.Time
+	lgBusy     bool
+	lgLast     time.Time
+	chBusy     bool
+	chLast     time.Time
+	csBusy     bool
+	csLast     time.Time
+	dkBusy     bool
+	stBusy     bool
+	stLast     time.Time
+	dkLast     time.Time
+	pane       Pane
+	paneName   string
+	paneFocus  bool
+	parentName string // the parent CLI `rig shell --parent` asked for; empty means the project's own
+	spawn      func(argv []string, dir string, env []string, cols, rows int) (Pane, error)
+	chatID     string // the session the Chat tab follows; empty until one exists
+	inputFor   string // "chat" while the input line is a chat message, else enqueue
 	// exec hands the terminal to a command and returns when it exits; tests replace it.
 	exec     func(argv []string, done func(error) tea.Msg) tea.Cmd
 	lastOK   time.Time
@@ -370,12 +371,12 @@ func waitPane(p Pane) tea.Cmd {
 
 // askPane fetches the server's command for the parent CLI or for a container shell.
 func (m *Model) askPane(parent bool) tea.Cmd {
-	src := m.src
+	src, parentName := m.src, m.parentName
 	return func() tea.Msg {
 		var plan *view.ShellPlan
 		var err error
 		if parent {
-			plan, err = src.Parent(callTimeout)
+			plan, err = src.Parent(parentName, callTimeout)
 		} else {
 			plan, err = src.Shell("", callTimeout)
 		}
@@ -587,6 +588,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.id != m.st.DockID {
 			return m, m.fetchDock(false) // the selection moved on while this was loading
 		}
+		if m.startingUp(msg.err) {
+			m.dkLast = time.Time{} // still loading, not a failure: try again on the next tick
+			return m, nil
+		}
 		if msg.err != nil {
 			m.st.DockE = msg.err.Error()
 			return m, nil
@@ -640,6 +645,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(m.fetchWorkspace(true), m.fetch())
 	case workspaceMsg:
 		m.wsBusy, m.wsLast = false, m.now()
+		if m.startingUp(msg.err) && m.st.Workspace == nil {
+			m.wsLast = time.Time{} // the API server is still starting: keep "Loading", retry on the next tick
+			return m, nil
+		}
 		if msg.err != nil {
 			// Keep the last good panel on screen; say why it is stale.
 			m.st.WorkspaceE = msg.err.Error()
@@ -882,6 +891,9 @@ func (m *Model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// SetParent names the parent CLI to talk to (`rig shell --parent`); empty means the project's configured one.
+func (m *Model) SetParent(name string) { m.parentName = name }
+
 // SetTab opens the board on a tab; the first refresh loads whatever it needs.
 func (m *Model) SetTab(name string) { m.st.Tab = name }
 
@@ -1045,6 +1057,12 @@ func (m *Model) View() string {
 	m.syncPane()
 	lines := RenderLines(m.view, m.st, m.w, m.h)
 	return strings.Join(Decorate(lines), "\n")
+}
+
+// startingUp is true for the "no API server yet" error before the first snapshot has ever arrived: the board starts
+// the server itself, so that is a moment of loading, not a failure to show.
+func (m *Model) startingUp(err error) bool {
+	return err != nil && m.lastOK.IsZero() && IsNotRunning(err)
 }
 
 // IsNotRunning reports whether err means no API server answered.

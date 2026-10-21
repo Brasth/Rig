@@ -47,6 +47,7 @@ type fakeSource struct {
 	parentPlan  *view.ShellPlan
 	parentErr   error
 	parentCalls int
+	parentNames []string
 
 	chatStatus      *view.ChatStatus
 	chatStatusErr   error
@@ -101,8 +102,9 @@ func (f *fakeSource) ChatCancel(session string, _ time.Duration) error {
 	f.chatCancelled = append(f.chatCancelled, session)
 	return nil
 }
-func (f *fakeSource) Parent(time.Duration) (*view.ShellPlan, error) {
+func (f *fakeSource) Parent(name string, _ time.Duration) (*view.ShellPlan, error) {
 	f.parentCalls++
+	f.parentNames = append(f.parentNames, name)
 	return f.parentPlan, f.parentErr
 }
 func (f *fakeSource) Snapshot(int, int, time.Duration) (*view.Snapshot, error) {

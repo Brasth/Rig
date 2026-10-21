@@ -179,10 +179,15 @@ func (c *Client) Log(id string, lines int, timeout time.Duration) (*view.LogRepl
 	return &out, nil
 }
 
-// Parent asks the server for the command that runs the parent CLI in a pane.
-func (c *Client) Parent(timeout time.Duration) (*view.ShellPlan, error) {
+// Parent asks the server for the command that runs the parent CLI in a pane. name picks one of the parent
+// CLIs the server allows (from `rig shell --parent`); empty means the project's configured parent.
+func (c *Client) Parent(name string, timeout time.Duration) (*view.ShellPlan, error) {
 	var out view.ShellPlan
-	if err := c.Call("shell.parent", nil, timeout, &out); err != nil {
+	var params map[string]any
+	if name != "" {
+		params = map[string]any{"parent": name}
+	}
+	if err := c.Call("shell.parent", params, timeout, &out); err != nil {
 		return nil, err
 	}
 	return &out, nil

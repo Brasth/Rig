@@ -106,8 +106,8 @@ func (e *ensuringSource) Log(id string, lines int, timeout time.Duration) (*view
 	return e.client.Log(id, lines, timeout)
 }
 
-func (e *ensuringSource) Parent(timeout time.Duration) (*view.ShellPlan, error) {
-	return e.client.Parent(timeout)
+func (e *ensuringSource) Parent(name string, timeout time.Duration) (*view.ShellPlan, error) {
+	return e.client.Parent(name, timeout)
 }
 
 func (e *ensuringSource) Shell(id string, timeout time.Duration) (*view.ShellPlan, error) {
@@ -188,8 +188,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 		}
 		model.SetTab(ui.TabAlias(*start))
 	} else if from := ui.TabAlias(os.Getenv("RIG_SHELL_START")); from != "" && ui.ValidTab(from) {
-		model.SetTab(from) // set by `rig shell --no-tmux`; an unknown value is ignored
+		model.SetTab(from) // set by `rig shell`; an unknown value is ignored
 	}
+	model.SetParent(os.Getenv("RIG_SHELL_PARENT")) // from `rig shell --parent`; empty means the project's own
 	_, err = tea.NewProgram(model, tea.WithAltScreen()).Run()
 	model.Close() // a program running in the Term pane ends with the board
 	if err != nil {

@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""`rig shell`: lay out the parent agent, the board and a log pane in tmux.
+"""`rig shell`: the Rig board (rig-shell, shell/) as the design's one screen, in tmux or in this terminal.
 
-Rig owns the layout, not the parent: the parent CLI runs unchanged in its own
-pane. The board pane is rig-shell (shell/), the log pane follows the most
-relevant job through the local API. This does not use the companion launcher,
-so no F8/F9 popups are bound in these sessions.
+By default tmux holds a single window with the board, which runs the parent CLI in its middle column, so the
+session survives a detach and looks the same as `--no-tmux`. `--layout split` keeps the earlier arrangement: the
+parent unchanged in its own native tmux pane, a narrow board and a log pane that follows the most relevant job.
+This does not use the companion launcher, so no F8/F9 popups are bound in these sessions.
 """
 from __future__ import annotations
 
@@ -115,12 +115,13 @@ def pane_env_pairs(repo: Path) -> list[str]:
     return ["RIG_SHELL_ACTIVE=1", f"RIG_REPO={Path(repo).resolve()}", f"RIG_BIN={rig_binary()}"]
 
 
-def parent_pane_plan(repo: Path) -> dict:
+def parent_pane_plan(repo: Path, parent: str = "") -> dict:
     """The command the board runs for the parent CLI in an embedded pane, or why there is none. Decided here so the
-    Go board never works out which CLI is the parent or where it lives."""
+    Go board never works out which CLI is the parent or where it lives. ``parent`` names one of PANE_PARENTS
+    (from `rig shell --parent`); it is a name, never a command."""
     repo = Path(repo).resolve()
     try:
-        argv = parent_command(repo)
+        argv = parent_command(repo, parent)
     except ShellError as error:
         return {"available": False, "reason": str(error), "argv": [], "dir": str(repo), "env": [], "label": "parent"}
     return {"available": True, "reason": "", "argv": argv, "dir": str(repo), "env": pane_env_pairs(repo), "label": Path(argv[0]).name}
@@ -166,6 +167,34 @@ def plan(repo: Path, parent_cmd: list[str], shell_bin: str, *, width: int = 200,
     ]
 
 
+def check_parent_name(parent: str) -> None:
+    """The board layout runs the parent through the server, so only a name it allows can be asked for. Whether that
+    CLI is installed is the board's to report, so a missing one never stops the board from opening."""
+    if parent and parent not in PANE_PARENTS:
+        raise ShellError(f"parent {parent!r} cannot run in the board; use one of {', '.join(PANE_PARENTS)}")
+
+
+def board_env(repo: Path, parent: str = "") -> list[str]:
+    """What the full-window board needs to open as the design's Session screen, with the conversation with the
+    parent in its middle column (the chat, on for this board). ``parent`` is a name from PANE_PARENTS."""
+    pairs = ["RIG_SHELL_START=Session", "RIG_EXPERIMENT_CHAT=1"]
+    if parent:
+        pairs.append(f"RIG_SHELL_PARENT={parent}")
+    return pairs
+
+
+def board_plan(repo: Path, shell_bin: str, parent: str = "", *, width: int = 200, height: int = 50) -> list[list[str]]:
+    """The default layout: one tmux window holding the board, which is the whole design screen (workspace, the
+    parent in its middle column, jobs, evidence). tmux only hosts it, so the session survives a detach."""
+    repo = Path(repo).resolve()
+    session = session_name(repo)
+    board = shlex.join(pane_env(repo) + board_env(repo, parent) + [shell_bin, "--repo", str(repo)])
+    return [
+        ["new-session", "-d", "-s", session, "-n", "rig", "-x", str(width), "-y", str(height), "-c", str(repo), board],
+        ["set-option", "-t", session, "status", "off"],
+    ]
+
+
 def tmux(binary: str, args: list[str], check: bool = True) -> subprocess.CompletedProcess:
     return subprocess.run([binary, *server_args(), *args], capture_output=True, text=True, check=check)
 
@@ -174,17 +203,27 @@ def session_exists(binary: str, session: str) -> bool:
     return tmux(binary, ["has-session", "-t", session], check=False).returncode == 0
 
 
-def start(repo: Path, *, parent: str = "", parent_cmd: str = "", attach: bool = True) -> str:
+def layout_steps(repo: Path, layout: str, parent: str, parent_cmd: str, *, width: int = 200, height: int = 50) -> list[list[str]]:
+    """The tmux commands for a layout, after checking the parent can run (so a bad --parent fails here, clearly)."""
+    if layout == "split":
+        return plan(repo, parent_command(repo, parent, parent_cmd), shell_binary(), width=width, height=height)
+    check_parent_name(parent)
+    if parent_cmd:
+        raise ShellError("--parent-cmd runs an arbitrary command, which only the split layout's own pane can do; "
+                         "use --layout split, or --parent NAME")
+    return board_plan(repo, shell_binary(), parent, width=width, height=height)
+
+
+def start(repo: Path, *, parent: str = "", parent_cmd: str = "", attach: bool = True, layout: str = "board") -> str:
     repo = Path(repo).resolve()
     harness.assert_project_enabled(repo)
     binary = tmux_binary()
     session = session_name(repo)
     if not session_exists(binary, session):
-        command = parent_command(repo, parent, parent_cmd)
-        board = shell_binary()
         width, height = shutil.get_terminal_size((200, 50))
+        steps = layout_steps(repo, layout, parent, parent_cmd, width=width, height=height)
         try:
-            for step in plan(repo, command, board, width=width, height=height):
+            for step in steps:
                 tmux(binary, step)
         except subprocess.CalledProcessError as error:
             tmux(binary, ["kill-session", "-t", session], check=False)
@@ -276,14 +315,17 @@ def follow_logs(repo: Path, interval: float = 2.0) -> int:
 
 
 def main(argv=None) -> int:
-    parser = argparse.ArgumentParser(prog="rig shell", description="Parent, board and logs in one tmux layout")
+    parser = argparse.ArgumentParser(prog="rig shell", description="The Rig board: the parent, workspace, jobs and evidence on one screen")
     parser.add_argument("command", nargs="?", choices=["start", "logs", "kill", "print"], default="start")
     parser.add_argument("--repo", default="")
     parser.add_argument("--parent", default="", help="parent CLI to run in the parent pane")
     parser.add_argument("--parent-cmd", default="", help="exact command for the parent pane (overrides --parent)")
     parser.add_argument("--detach", action="store_true", help="create the session without attaching")
     parser.add_argument("--no-tmux", action="store_true",
-                        help="run the board (with its Logs tab and dc exec shell) in this terminal; no parent pane, no tmux")
+                        help="run the same board in this terminal without tmux (no detach)")
+    parser.add_argument("--layout", choices=["board", "split"], default="board",
+                        help="board: the design's one screen, parent in its middle column (default); "
+                             "split: the parent in its own native tmux pane beside a narrow board and a log pane")
     args = parser.parse_args(argv)
     try:
         import jobs
@@ -294,18 +336,21 @@ def main(argv=None) -> int:
             print("killed" if kill(repo) else "no rig shell session for this repository")
             return 0
         if args.no_tmux and args.command in ("start", "print"):
+            if args.parent_cmd:
+                raise ShellError("--parent-cmd needs the split layout's tmux pane; use --parent NAME without tmux")
+            check_parent_name(args.parent)  # a bad --parent fails here, before the screen is taken over
             command = [shell_binary(), "--repo", str(repo)]
+            extra = board_env(repo, args.parent)
             if args.command == "print":
-                print(shlex.join(pane_env(repo) + ["RIG_SHELL_START=Session"] + command))
+                print(shlex.join(pane_env(repo) + extra + command))
                 return 0
-            # Without tmux there is no parent pane beside the board, so it opens on the Session tab, where the parent runs.
             os.execvpe(command[0], command, {**os.environ, "RIG_SHELL_ACTIVE": "1", "RIG_REPO": str(repo), "RIG_BIN": rig_binary(),
-                                             "RIG_SHELL_START": "Session"})
+                                             **dict(pair.split("=", 1) for pair in extra)})
         if args.command == "print":
-            steps = plan(repo, parent_command(repo, args.parent, args.parent_cmd), shell_binary())
+            steps = layout_steps(repo, args.layout, args.parent, args.parent_cmd)
             print("\n".join(shlex.join(["tmux", *server_args(), *step]) for step in steps))
             return 0
-        session = start(repo, parent=args.parent, parent_cmd=args.parent_cmd, attach=not args.detach)
+        session = start(repo, parent=args.parent, parent_cmd=args.parent_cmd, attach=not args.detach, layout=args.layout)
         print(f"rig shell: session {session} is ready (attach with: tmux {' '.join(server_args())} attach -t {session})".replace("  ", " "))
         return 0
     except (ShellError, ValueError, SystemExit) as error:
