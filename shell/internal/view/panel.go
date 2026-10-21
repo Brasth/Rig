@@ -88,6 +88,13 @@ type ChatStatus struct {
 	} `json:"sessions"`
 }
 
+// ThemeReply is ui.theme and ui.set_theme: the board's theme and where it is kept ("all", "repo" or "default").
+type ThemeReply struct {
+	Theme  string   `json:"theme"`
+	Scope  string   `json:"scope"`
+	Themes []string `json:"themes"`
+}
+
 // ChatEntry is one line of a chat transcript.
 type ChatEntry struct {
 	Role string `json:"role"`

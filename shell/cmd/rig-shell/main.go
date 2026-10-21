@@ -130,6 +130,14 @@ func (e *ensuringSource) ChatCancel(session string, timeout time.Duration) error
 	return e.client.ChatCancel(session, timeout)
 }
 
+func (e *ensuringSource) Theme(timeout time.Duration) (*view.ThemeReply, error) {
+	return e.client.Theme(timeout)
+}
+
+func (e *ensuringSource) SetTheme(theme, scope string, timeout time.Duration) (*view.ThemeReply, error) {
+	return e.client.SetTheme(theme, scope, timeout)
+}
+
 func (e *ensuringSource) ChatSetParent(name string, timeout time.Duration) error {
 	return e.client.ChatSetParent(name, timeout)
 }
@@ -159,6 +167,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	noEnsure := fs.Bool("no-ensure", false, "do not start the API server when it is not running")
 	rigBin := fs.String("rig", os.Getenv("RIG_BIN"), "path to the rig CLI used to start the API server")
 	showVersion := fs.Bool("version", false, "print the version and exit")
+	theme := fs.String("theme", os.Getenv("RIG_SHELL_THEME"), "draw this board in a theme without saving it: "+strings.Join(ui.ThemeNames(), ", "))
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -178,6 +187,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 		*repo = wd
 	}
 	useASCII := wantASCII(*ascii, os.Getenv)
+	if *theme != "" && !ui.ApplyTheme(*theme) {
+		fmt.Fprintln(stderr, "rig-shell: --theme must be one of", strings.Join(ui.ThemeNames(), ", "))
+		return 2
+	}
 
 	if *once {
 		return renderOnce(stdout, stderr, *repo, *rigBin, *fixture, *wsFixture, *fleetFixture, *evFixture, *settingsFixture, *size, *tab, useASCII, !*noEnsure)
@@ -199,6 +212,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 		model.SetTab(from) // set by `rig shell`; an unknown value is ignored
 	}
 	model.SetParent(os.Getenv("RIG_SHELL_PARENT")) // from `rig shell --parent`; empty means the project's own
+	if *theme != "" {
+		model.SetTheme(*theme)
+	}
 	_, err = tea.NewProgram(model, tea.WithAltScreen()).Run()
 	model.Close() // a program running in the Term pane ends with the board
 	if err != nil {

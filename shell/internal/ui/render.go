@@ -69,6 +69,8 @@ type State struct {
 	DockE        string
 	Styled       bool      // apply colour and reverse video to list rows; golden tests leave it off
 	ChatModel    string    // the parent's model, for the title "Parent · claude opus"
+	Theme        string    // the colour theme in use; empty is the default, rig
+	ThemeScope   string    // where it is kept: "all" repos, this "repo", "default" or "this board" (rig shell --theme)
 	Focus        string    // the Session screen's pane with the keyboard: "" (the jobs, as the mockup opens), "parent" or "workspace"
 	Picker       *Picker   // the parent picker, while it is open
 	SlashSel     int       // the chosen line of the / command list
@@ -102,6 +104,7 @@ var SlashCommands = []SlashCommand{
 	{"/jobs", "", "the Jobs tab"},
 	{"/env", "", "the container, ports and worktrees"},
 	{"/help", "", "every key"},
+	{"/theme", " NAME", "rig, light, dark, material or dracula"},
 	{"/quit", "", "leave rig shell"},
 }
 
@@ -309,7 +312,18 @@ func frame(v *view.View, st State, w, h int) []string {
 		}
 		return lines[:h]
 	}
-	if st.Tab == EnvTab || st.Tab == SettingsTab {
+	if st.Tab == SettingsTab {
+		lines = append(lines, ruleS(st, "Theme", w))
+		lines = append(lines, themeLines(st, w)...)
+		lines = append(lines, ruleS(st, panelTitle(st), w))
+		lines = append(lines, panelBody(st, w, body-len(themeLines(st, w))-1)...)
+		lines = append(lines, messageLine(st, w), footerLine(nil, 0, st, w))
+		for len(lines) < h {
+			lines = append(lines, fit("", w))
+		}
+		return lines[:h]
+	}
+	if st.Tab == EnvTab {
 		lines = append(lines, ruleS(st, panelTitle(st), w))
 		lines = append(lines, panelBody(st, w, body)...)
 		lines = append(lines, messageLine(st, w), footerLine(nil, 0, st, w))
@@ -703,7 +717,7 @@ func footerLine(rows []view.Row, sel int, st State, w int) string {
 		}
 	}
 	if st.Tab == SettingsTab {
-		keys = []string{"Tab pane", "j/k scroll", "r refresh", "read-only: edit .rig/harness.toml", "? help", "q quit"}
+		keys = []string{"←→ theme", "g where", "j/k scroll", "rest read-only: edit .rig/harness.toml", "? help", "q quit"}
 	}
 	if st.Tab == LogsTab {
 		keys = []string{"Esc back to jobs", "k/j scroll", "G follow", "s shell", "r refresh", "q quit"}
@@ -989,6 +1003,38 @@ func panelTitle(st State) string {
 		return sanitize((*sections)[0].Title)
 	}
 	return EnvTab
+}
+
+// themeLines is the Settings tab's Theme row, as the design's Settings › General draws it: the themes in a row with
+// the one in use on a chip, and where it is kept.
+func themeLines(st State, w int) []string {
+	current := st.Theme
+	if current == "" {
+		current = "rig"
+	}
+	row := "  ›"
+	for _, name := range ThemeNames() {
+		chip := "  " + name + "  "
+		if name == current {
+			chip = " [" + name + "] "
+			if st.Styled {
+				chip = " " + lipgloss.NewStyle().Background(lipgloss.Color(colSelBg)).Foreground(lipgloss.Color(colText)).Bold(true).Render(" "+name+" ") + " "
+			}
+		} else if st.Styled {
+			chip = muted(chip)
+		}
+		row += chip
+	}
+	where := map[string]string{"repo": "this repo", "all": "all repos", "this board": "this board only (--theme)"}[st.ThemeScope]
+	if where == "" {
+		where = "all repos (not saved yet)"
+	}
+	row += "   " + where + "   "
+	hint := "←→ change · g all repos / this repo"
+	if st.Styled {
+		hint = muted(hint)
+	}
+	return []string{fit(row+hint, w)}
 }
 
 // panelBody renders the Env or Settings tab.

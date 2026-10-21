@@ -64,6 +64,8 @@ type fakeSource struct {
 	chatCancelled   []string
 	parentSet       []string
 	parentSetErr    error
+	theme           *view.ThemeReply
+	themeSaved      [][2]string
 }
 
 func (f *fakeSource) Workspace(bool, time.Duration) (*view.Workspace, error) {
@@ -107,6 +109,16 @@ func (f *fakeSource) ChatSend(message, session, parent string, _ time.Duration) 
 func (f *fakeSource) ChatAnswer(session, askID, decision string, _ time.Duration) error {
 	f.chatAnswers = append(f.chatAnswers, [3]string{session, askID, decision})
 	return f.chatAnswerErr
+}
+func (f *fakeSource) Theme(time.Duration) (*view.ThemeReply, error) {
+	if f.theme == nil {
+		return nil, errors.New("no theme here")
+	}
+	return f.theme, nil
+}
+func (f *fakeSource) SetTheme(theme, scope string, _ time.Duration) (*view.ThemeReply, error) {
+	f.themeSaved = append(f.themeSaved, [2]string{theme, scope})
+	return &view.ThemeReply{Theme: theme, Scope: scope}, nil
 }
 func (f *fakeSource) ChatSetParent(name string, _ time.Duration) error {
 	f.parentSet = append(f.parentSet, name)

@@ -1,5 +1,7 @@
  Rig · my-repo                       ! 1 need attention  ● 1 running  slots 2/3 
  Session   Jobs !1   Queue 2   Workflows   Env  [Settings]                      
+─ Theme ────────────────────────────────────────────────────────────────────────
+  › [rig]   light    dark    material    dracula     all repos (not saved yet) …
 ─ Settings ─────────────────────────────────────────────────────────────────────
  Settings unavailable: connection refused                                       
                                                                                 
@@ -7,6 +9,4 @@
                                                                                 
                                                                                 
                                                                                 
-                                                                                
-                                                                                
- Tab pane  j/k scroll  r refresh  read-only: edit .rig/harness.toml  ? help  q …
+ ←→ theme  g where  j/k scroll  rest read-only: edit .rig/harness.toml  ? help …

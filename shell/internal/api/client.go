@@ -242,6 +242,24 @@ func (c *Client) ChatCancel(session string, timeout time.Duration) error {
 	return c.Call("chat.cancel", map[string]any{"session": session}, timeout, nil)
 }
 
+// Theme is the board's colour theme (ui.theme).
+func (c *Client) Theme(timeout time.Duration) (*view.ThemeReply, error) {
+	var out view.ThemeReply
+	if err := c.Call("ui.theme", map[string]any{}, timeout, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// SetTheme keeps the board's colour theme for all repos ("all") or this repo ("repo").
+func (c *Client) SetTheme(theme, scope string, timeout time.Duration) (*view.ThemeReply, error) {
+	var out view.ThemeReply
+	if err := c.Call("ui.set_theme", map[string]any{"theme": theme, "scope": scope}, timeout, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 // ChatSetParent names the project's parent CLI in .rig/harness.toml.
 func (c *Client) ChatSetParent(name string, timeout time.Duration) error {
 	return c.Call("chat.parent", map[string]any{"name": name}, timeout, nil)

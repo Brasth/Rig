@@ -34,6 +34,8 @@ type Source interface {
 	ChatCancel(session string, timeout time.Duration) error
 	ChatAnswer(session, askID, decision string, timeout time.Duration) error
 	ChatSetParent(name string, timeout time.Duration) error
+	Theme(timeout time.Duration) (*view.ThemeReply, error)
+	SetTheme(theme, scope string, timeout time.Duration) (*view.ThemeReply, error)
 }
 
 const (
@@ -140,6 +142,12 @@ type parentSetMsg struct {
 
 type spinMsg struct{}
 
+type themeMsg struct {
+	reply *view.ThemeReply
+	err   error
+	saved bool
+}
+
 type shellPlanMsg struct {
 	plan *view.ShellPlan
 	err  error
@@ -197,6 +205,7 @@ type Model struct {
 	pendingI   string // id for a confirmed stop
 	pickerSeen bool   // the picker opened by itself once, for a project with no parent
 	framed     bool   // the window has room for the mockup's border around the board
+	themeFixed bool   // rig shell --theme chose the theme for this board; the saved one is not loaded
 	messaging  bool   // m was pressed under a request: a and d type again until the message is sent
 	spinning   bool   // the spinner's tick is scheduled
 	chatStat   *view.ChatStatus
@@ -221,7 +230,69 @@ func randomKey() string {
 	return "shell-" + hex.EncodeToString(b)
 }
 
-func (m *Model) Init() tea.Cmd { return tea.Batch(m.fetch(), tick()) }
+func (m *Model) Init() tea.Cmd { return tea.Batch(m.fetch(), tick(), m.fetchTheme()) }
+
+// fetchTheme loads the saved theme once at the start (a server that predates themes keeps the default).
+func (m *Model) fetchTheme() tea.Cmd {
+	if m.themeFixed {
+		return nil
+	}
+	src := m.src
+	return func() tea.Msg {
+		reply, err := src.Theme(callTimeout)
+		return themeMsg{reply: reply, err: err}
+	}
+}
+
+// SetTheme draws this board in the named theme without saving it (rig shell --theme); false for an unknown name.
+func (m *Model) SetTheme(name string) bool {
+	if !ApplyTheme(name) {
+		return false
+	}
+	m.st.Theme, m.st.ThemeScope, m.themeFixed = name, "this board", true
+	return true
+}
+
+// switchTheme applies a theme at once and keeps it where the current one is kept: this repo, or all repos.
+func (m *Model) switchTheme(name, scope string) tea.Cmd {
+	if !ApplyTheme(name) {
+		m.st.Message = "no theme called " + name + "; the themes are " + strings.Join(ThemeNames(), ", ")
+		return nil
+	}
+	if scope != "repo" {
+		scope = "all"
+	}
+	m.st.Theme, m.themeFixed = name, false
+	src := m.src
+	return func() tea.Msg {
+		reply, err := src.SetTheme(name, scope, callTimeout)
+		return themeMsg{reply: reply, err: err, saved: true}
+	}
+}
+
+// themeKey is the Settings tab's Theme row: ←→ change the theme, g keeps it for all repos or only this one.
+func (m *Model) themeKey(key string) (tea.Cmd, bool) {
+	names := ThemeNames()
+	at := 0
+	for i, n := range names {
+		if n == m.st.Theme {
+			at = i
+		}
+	}
+	switch key {
+	case "left", "h":
+		return m.switchTheme(names[(at+len(names)-1)%len(names)], m.st.ThemeScope), true
+	case "right", "l":
+		return m.switchTheme(names[(at+1)%len(names)], m.st.ThemeScope), true
+	case "g":
+		scope := "repo"
+		if m.st.ThemeScope == "repo" {
+			scope = "all"
+		}
+		return m.switchTheme(names[at], scope), true
+	}
+	return nil, false
+}
 
 func tick() tea.Cmd { return tea.Tick(pollEvery, func(time.Time) tea.Msg { return tickMsg{} }) }
 
@@ -430,6 +501,13 @@ func (m *Model) runSlash(text string) (tea.Cmd, bool) {
 		clear()
 		m.st.Mode, m.st.InputLabel, m.inputFor = ModeNormal, "", ""
 		m.st.HelpOpen = true
+	case "/theme":
+		clear()
+		if rest == "" {
+			m.st.Mode, m.st.InputLabel, m.inputFor = ModeNormal, "", ""
+			return m.goTab(SettingsTab), true // the Theme row, where ←→ shows each one
+		}
+		return m.switchTheme(strings.ToLower(rest), m.st.ThemeScope), true
 	case "/quit":
 		return tea.Quit, true
 	default:
@@ -787,6 +865,19 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.st.Chat, m.st.ChatE = msg.chat, ""
 		return m, m.spin()
+	case themeMsg:
+		switch {
+		case msg.err != nil && msg.saved:
+			m.st.Message = "Could not save the theme: " + msg.err.Error()
+		case msg.err != nil || msg.reply == nil:
+			// a server without themes, or none saved: keep the default
+		case msg.saved:
+			m.st.ThemeScope = msg.reply.Scope
+			where := map[string]string{"repo": "this repo (.rig/harness.toml)", "all": "all repos (~/.rig/config.toml)"}[msg.reply.Scope]
+			m.st.Message = "theme " + msg.reply.Theme + " for " + where
+		case !m.themeFixed && ApplyTheme(msg.reply.Theme):
+			m.st.Theme, m.st.ThemeScope = msg.reply.Theme, msg.reply.Scope
+		}
 	case spinMsg:
 		m.spinning = false
 		return m, tea.Batch(m.spin(), m.fetchChat(false))
@@ -1059,6 +1150,11 @@ func (m *Model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		}
 		return m, nil
+	}
+	if m.st.Tab == SettingsTab {
+		if cmd, ok := m.themeKey(k.String()); ok {
+			return m, cmd
+		}
 	}
 	if m.view == nil {
 		if k.String() == "q" {

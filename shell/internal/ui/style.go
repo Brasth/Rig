@@ -1,14 +1,19 @@
 package ui
 
 import (
+	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/muesli/termenv"
 )
 
-// The board's palette is the design mockup's: xterm-256 values, so it reads the same on any 256-colour terminal.
-const (
+// The board's palette. The default, "rig", is the ADE mockup's: xterm-256 values, so it reads the same on any
+// 256-colour terminal. The others are the design's themes (Settings › General): hex values, drawn in true colour where
+// the terminal has it and as the nearest 256 colour where it does not. ApplyTheme switches between them.
+var (
 	colAccent = "111" // #87afff  running, active
 	colAmber  = "179" // #d7af5f  needs attention
 	colGreen  = "114" // #87d787  verified
@@ -17,7 +22,67 @@ const (
 	colMuted  = "249" // #b2b2b2  secondary text
 	colText   = "255" // #eeeeee
 	colSelBg  = "235" // #262626  selected row
+	colGround = "233" // #121212
 )
+
+// Theme is one palette: ground and text, secondary text, rules, and the four state colours.
+type Theme struct {
+	Ground, Text, Muted, Border, SelBg, Accent, Amber, Green, Red string
+}
+
+// Themes are the board's palettes by name, in the order the Settings tab offers them.
+var Themes = []struct {
+	Name  string
+	Theme Theme
+}{
+	{"rig", Theme{"233", "255", "249", "60", "235", "111", "179", "114", "210"}},
+	// the design's terminal boards: #fafafa window, #18181b text, indigo accent
+	{"light", Theme{"#fafafa", "#18181b", "#52525b", "#d4d4d8", "#f0f0f2", "#4f46e5", "#9a5a06", "#15803d", "#b91c1c"}},
+	{"dark", Theme{"#15161a", "#ececf1", "#a2a4b0", "#3a3c46", "#1f2026", "#8b8cff", "#f5c66b", "#62e09c", "#ff7b7b"}},
+	{"material", Theme{"#1d1b20", "#e6e0e9", "#cac4d0", "#605d66", "#2b2930", "#d0bcff", "#ffd68c", "#a8e2b2", "#ffb4ab"}},
+	{"dracula", Theme{"#282a36", "#f8f8f2", "#c5c8d6", "#6272a4", "#343746", "#8be9fd", "#f1fa8c", "#50fa7b", "#ff5555"}},
+}
+
+// ThemeNames lists the theme names in order.
+func ThemeNames() []string {
+	out := make([]string, len(Themes))
+	for i, t := range Themes {
+		out[i] = t.Name
+	}
+	return out
+}
+
+// ApplyTheme switches the palette; an unknown name keeps the current one and returns false.
+func ApplyTheme(name string) bool {
+	for _, t := range Themes {
+		if t.Name == name {
+			p := t.Theme
+			colGround, colText, colMuted, colBorder, colSelBg = p.Ground, p.Text, p.Muted, p.Border, p.SelBg
+			colAccent, colAmber, colGreen, colRed = p.Accent, p.Amber, p.Green, p.Red
+			return true
+		}
+	}
+	return false
+}
+
+// sgrColor is the SGR parameters for a palette colour as foreground or background: a 256-colour index as is, a hex
+// colour in true colour when the terminal has it, else its nearest 256 colour.
+func sgrColor(c string, bg bool) string {
+	base := "38"
+	if bg {
+		base = "48"
+	}
+	if !strings.HasPrefix(c, "#") {
+		return base + ";5;" + c
+	}
+	if lipgloss.ColorProfile() == termenv.TrueColor {
+		r, _ := strconv.ParseUint(c[1:3], 16, 8)
+		g, _ := strconv.ParseUint(c[3:5], 16, 8)
+		b, _ := strconv.ParseUint(c[5:7], 16, 8)
+		return fmt.Sprintf("%s;2;%d;%d;%d", base, r, g, b)
+	}
+	return base + ";" + strings.TrimPrefix(termenv.ANSI256.Color(c).Sequence(false), "38;")
+}
 
 // Tone names come from the server (tui_rows). Colour only reinforces the label
 // and glyph already on every row; nothing depends on it.
@@ -134,11 +199,11 @@ func sepTop(st State) string {
 	return "┬"
 }
 
-// The mockup's ground: #eeeeee text on #121212, so the board looks the same whatever the terminal's theme.
-const (
-	colGround = "233" // #121212
-	baseSGR   = "\x1b[38;5;" + colText + ";48;5;" + colGround + "m"
-)
+// baseSGR is the theme's text colour on its ground (the mockup's #eeeeee on #121212 by default), so the board looks
+// the same whatever the terminal's own theme.
+func baseSGR() string {
+	return "\x1b[" + sgrColor(colText, false) + ";" + sgrColor(colGround, true) + "m"
+}
 
 var sgrSeq = regexp.MustCompile(`\x1b\[([0-9;]*)m`)
 
@@ -147,8 +212,9 @@ var sgrSeq = regexp.MustCompile(`\x1b\[([0-9;]*)m`)
 // emulated pane's own output and the padding all sit on the same ground. It never changes a line's width.
 func Paint(frame []string) []string {
 	out := make([]string, len(frame))
+	base := baseSGR()
 	for i, line := range frame {
-		out[i] = baseSGR + sgrSeq.ReplaceAllStringFunc(line, fixSGR) + "\x1b[0m"
+		out[i] = base + sgrSeq.ReplaceAllStringFunc(line, fixSGR) + "\x1b[0m"
 	}
 	return out
 }
@@ -157,10 +223,10 @@ func Paint(frame []string) []string {
 func fixSGR(seq string) string {
 	fgDefault, bgDefault := sgrDefaults(seq)
 	if fgDefault {
-		seq += "\x1b[38;5;" + colText + "m"
+		seq += "\x1b[" + sgrColor(colText, false) + "m"
 	}
 	if bgDefault {
-		seq += "\x1b[48;5;" + colGround + "m"
+		seq += "\x1b[" + sgrColor(colGround, true) + "m"
 	}
 	return seq
 }
@@ -196,17 +262,10 @@ func sgrDefaults(seq string) (fgDefault, bgDefault bool) {
 	return fgDefault, bgDefault
 }
 
-// Tinted panels, as codex and grok draw theirs: the side columns and the dock sit on a slightly lighter panel, the
-// conversation on the darkest ground, and the ask box, its menus and the selected row on a raised surface.
-const (
-	colPanel  = "234" // #1c1c1c
-	colRaised = colSelBg
-)
-
 // tint lays a background under a styled segment: every escape that drops the background to the default puts the
 // tint back. It ends on the default background, which Paint turns into the ground. It never changes a width.
 func tint(s, bg string) string {
-	on := "\x1b[48;5;" + bg + "m"
+	on := "\x1b[" + sgrColor(bg, true) + "m"
 	return on + sgrSeq.ReplaceAllStringFunc(s, func(seq string) string {
 		if _, bgDefault := sgrDefaults(seq); bgDefault {
 			return seq + on

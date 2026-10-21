@@ -49,4 +49,6 @@ repository. Owner tokens are never returned, and workers may not serve the API.
 | `settings.view` | no | none | Settings tab: what this repository's .rig/harness.toml makes effective, ready to render and read-only |
 | `shell.parent` | no | none | The command that runs the parent CLI in a board pane, or why there is none (params: parent) |
 | `ui.request` | yes | none | Companion operations (snapshot, enqueue, stop, reply, details, sessions) on the hosted UI service |
+| `ui.set_theme` | yes | none | Keep the board's colour theme for all repos or this repo (params: theme, scope all|repo) |
+| `ui.theme` | no | none | The board's colour theme and where it is kept (all repos or this repo) |
 | `workspace.status` | no | none | Workspace panel: container, ports and dc-cli diagnosis as ready-to-render sections (params: deep) |

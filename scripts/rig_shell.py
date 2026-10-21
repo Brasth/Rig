@@ -174,21 +174,27 @@ def check_parent_name(parent: str) -> None:
         raise ShellError(f"parent {parent!r} cannot run in the board; use one of {', '.join(PANE_PARENTS)}")
 
 
-def board_env(repo: Path, parent: str = "") -> list[str]:
+def board_env(repo: Path, parent: str = "", theme: str = "") -> list[str]:
     """What the full-window board needs to open as the design's Session screen, with the conversation with the
-    parent in its middle column (the chat, on for this board). ``parent`` is a name from PANE_PARENTS."""
+    parent in its middle column (the chat, on for this board). ``parent`` is a name from PANE_PARENTS; ``theme`` draws
+    this board in one of ui_theme.THEMES without saving it."""
     pairs = ["RIG_SHELL_START=Session", "RIG_EXPERIMENT_CHAT=1"]
     if parent:
         pairs.append(f"RIG_SHELL_PARENT={parent}")
+    if theme:
+        import ui_theme
+        if theme not in ui_theme.THEMES:
+            raise ShellError(f"--theme is one of {', '.join(ui_theme.THEMES)}, not {theme}")
+        pairs.append(f"RIG_SHELL_THEME={theme}")
     return pairs
 
 
-def board_plan(repo: Path, shell_bin: str, parent: str = "", *, width: int = 200, height: int = 50) -> list[list[str]]:
+def board_plan(repo: Path, shell_bin: str, parent: str = "", *, width: int = 200, height: int = 50, theme: str = "") -> list[list[str]]:
     """The default layout: one tmux window holding the board, which is the whole design screen (workspace, the
     parent in its middle column, jobs, evidence). tmux only hosts it, so the session survives a detach."""
     repo = Path(repo).resolve()
     session = session_name(repo)
-    board = shlex.join(pane_env(repo) + board_env(repo, parent) + [shell_bin, "--repo", str(repo)])
+    board = shlex.join(pane_env(repo) + board_env(repo, parent, theme) + [shell_bin, "--repo", str(repo)])
     return [
         ["new-session", "-d", "-s", session, "-n", "rig", "-x", str(width), "-y", str(height), "-c", str(repo), board],
         ["set-option", "-t", session, "status", "off"],
@@ -203,7 +209,8 @@ def session_exists(binary: str, session: str) -> bool:
     return tmux(binary, ["has-session", "-t", session], check=False).returncode == 0
 
 
-def layout_steps(repo: Path, layout: str, parent: str, parent_cmd: str, *, width: int = 200, height: int = 50) -> list[list[str]]:
+def layout_steps(repo: Path, layout: str, parent: str, parent_cmd: str, *, width: int = 200, height: int = 50,
+                 theme: str = "") -> list[list[str]]:
     """The tmux commands for a layout, after checking the parent can run (so a bad --parent fails here, clearly)."""
     if layout == "split":
         return plan(repo, parent_command(repo, parent, parent_cmd), shell_binary(), width=width, height=height)
@@ -211,17 +218,17 @@ def layout_steps(repo: Path, layout: str, parent: str, parent_cmd: str, *, width
     if parent_cmd:
         raise ShellError("--parent-cmd runs an arbitrary command, which only the split layout's own pane can do; "
                          "use --layout split, or --parent NAME")
-    return board_plan(repo, shell_binary(), parent, width=width, height=height)
+    return board_plan(repo, shell_binary(), parent, width=width, height=height, theme=theme)
 
 
-def start(repo: Path, *, parent: str = "", parent_cmd: str = "", attach: bool = True, layout: str = "board") -> str:
+def start(repo: Path, *, parent: str = "", parent_cmd: str = "", attach: bool = True, layout: str = "board", theme: str = "") -> str:
     repo = Path(repo).resolve()
     harness.assert_project_enabled(repo)
     binary = tmux_binary()
     session = session_name(repo)
     if not session_exists(binary, session):
         width, height = shutil.get_terminal_size((200, 50))
-        steps = layout_steps(repo, layout, parent, parent_cmd, width=width, height=height)
+        steps = layout_steps(repo, layout, parent, parent_cmd, width=width, height=height, theme=theme)
         try:
             for step in steps:
                 tmux(binary, step)
@@ -320,6 +327,8 @@ def main(argv=None) -> int:
     parser.add_argument("--repo", default="")
     parser.add_argument("--parent", default="", help="parent CLI to run in the parent pane")
     parser.add_argument("--parent-cmd", default="", help="exact command for the parent pane (overrides --parent)")
+    parser.add_argument("--theme", default="", help="draw this board in a theme without saving it: rig, light, dark, "
+                                                        "material or dracula (the Settings tab saves one)")
     parser.add_argument("--detach", action="store_true", help="create the session without attaching")
     parser.add_argument("--no-tmux", action="store_true",
                         help="run the same board in this terminal without tmux (no detach)")
@@ -340,17 +349,18 @@ def main(argv=None) -> int:
                 raise ShellError("--parent-cmd needs the split layout's tmux pane; use --parent NAME without tmux")
             check_parent_name(args.parent)  # a bad --parent fails here, before the screen is taken over
             command = [shell_binary(), "--repo", str(repo)]
-            extra = board_env(repo, args.parent)
+            extra = board_env(repo, args.parent, args.theme)
             if args.command == "print":
                 print(shlex.join(pane_env(repo) + extra + command))
                 return 0
             os.execvpe(command[0], command, {**os.environ, "RIG_SHELL_ACTIVE": "1", "RIG_REPO": str(repo), "RIG_BIN": rig_binary(),
                                              **dict(pair.split("=", 1) for pair in extra)})
         if args.command == "print":
-            steps = layout_steps(repo, args.layout, args.parent, args.parent_cmd)
+            steps = layout_steps(repo, args.layout, args.parent, args.parent_cmd, theme=args.theme)
             print("\n".join(shlex.join(["tmux", *server_args(), *step]) for step in steps))
             return 0
-        session = start(repo, parent=args.parent, parent_cmd=args.parent_cmd, attach=not args.detach, layout=args.layout)
+        session = start(repo, parent=args.parent, parent_cmd=args.parent_cmd, attach=not args.detach, layout=args.layout,
+                        theme=args.theme)
         print(f"rig shell: session {session} is ready (attach with: tmux {' '.join(server_args())} attach -t {session})".replace("  ", " "))
         return 0
     except (ShellError, ValueError, SystemExit) as error:

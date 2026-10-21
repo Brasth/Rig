@@ -65,6 +65,8 @@ LOCAL_METHODS = {
     "chat.transcript": (False, "EXPERIMENT: a chat session's transcript (params: session, tail)"),
     "chat.send": (True, "EXPERIMENT: send one message to the headless parent; the answer arrives in the transcript (params: message, session, parent)"),
     "chat.cancel": (True, "EXPERIMENT: stop a chat session's running turn (params: session)"),
+    "ui.theme": (False, "The board's colour theme and where it is kept (all repos or this repo)"),
+    "ui.set_theme": (True, "Keep the board's colour theme for all repos or this repo (params: theme, scope all|repo)"),
     "chat.parent": (True, "Name the project's parent CLI in .rig/harness.toml, as rig use does (params: name)"),
     "chat.answer": (True, "Allow or deny the parent's pending permission request in a chat session (params: session, ask_id, decision)"),
     "log.follow": (False, "Tail of a job's log as plain text; without an id, the job worth watching (params: id, lines)"),
@@ -175,7 +177,7 @@ class Api:
         if method == "workspace.status":
             return self._workspace(request_id, params)
         if method in ("job.evidence", "fleet.status", "settings.view", "env.recovery", "env.recover", "log.follow", "env.shell", "shell.parent",
-                      "chat.status", "chat.transcript", "chat.send", "chat.cancel", "chat.answer", "chat.parent"):
+                      "chat.status", "chat.transcript", "chat.send", "chat.cancel", "chat.answer", "chat.parent", "ui.theme", "ui.set_theme"):
             return self._environment(request_id, method, params)
         if method in ("ui.request", "events.list", "events.ack"):
             return self._companion(request_id, method, params)
@@ -281,6 +283,15 @@ def _environment(self, request_id, method, params):
                 return _reply(request_id, error=_error(INVALID_PARAMS, "id must be a string"))
             import env_shell
             result = env_shell.plan(self.repo, job_id)
+        elif method in ("ui.theme", "ui.set_theme"):
+            import ui_theme
+            if method == "ui.theme":
+                result = ui_theme.read(self.repo)
+            else:
+                theme, scope = params.get("theme"), params.get("scope", "all")
+                if not isinstance(theme, str) or scope not in ("all", "repo"):
+                    return _reply(request_id, error=_error(INVALID_PARAMS, "theme must be a string and scope all or repo"))
+                result = ui_theme.save(self.repo, theme, scope)
         elif method.startswith("chat."):
             import rig_chat
             session, tail = params.get("session", ""), params.get("tail", 200)

@@ -417,7 +417,7 @@ func pickerLines(st State, w int) []string {
 		switch {
 		case !st.Styled:
 		case i == pk.Sel:
-			line = " " + tint(lipgloss.NewStyle().Foreground(lipgloss.Color(colAccent)).Bold(true).Render(fit(fmt.Sprintf("%s%-10s %s", mark, item.Name, note), w-2)), colRaised) + " "
+			line = " " + tint(lipgloss.NewStyle().Foreground(lipgloss.Color(colAccent)).Bold(true).Render(fit(fmt.Sprintf("%s%-10s %s", mark, item.Name, note), w-2)), colSelBg) + " "
 		case !item.Installed:
 			line = muted(line)
 		}
@@ -445,7 +445,7 @@ func slashMenu(st State, w int) []string {
 			if i == sel {
 				style = lipgloss.NewStyle().Foreground(lipgloss.Color(colAccent)).Bold(true)
 			}
-			line = tint(style.Render(line), colRaised)
+			line = tint(style.Render(line), colSelBg)
 		}
 		out = append(out, " "+line+" ")
 	}
