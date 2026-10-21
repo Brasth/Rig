@@ -88,3 +88,40 @@ func TestTheTopBarOpensSettingsAndSwitchesParent(t *testing.T) {
 		t.Fatal("a click on the parent opens the parents to switch to")
 	}
 }
+
+func TestSlashModelListsEveryModelTheParentOffers(t *testing.T) {
+	m, src := appModel(t)
+	withConversation(t, m, src)
+	withModels(t, src)
+	src.parentModels = &view.ParentModels{Parent: "claude"}
+	_ = json.Unmarshal([]byte(`{"parent": "claude", "models": [{"name": "opus", "detail": "the newest Opus"},
+		{"name": "claude-sonnet-5-5", "detail": ""}, {"name": "claude-haiku-4-5-20251001", "detail": ""}]}`), src.parentModels)
+	m.st.ModelsFor = ""
+	cmd := m.runPalette(paletteItem{Action: "model"}, "")
+	if m.st.ModelsFor != "loading:claude" || !strings.Contains(paletteText(m.st), "asking claude for its models") {
+		t.Fatalf("the menu says it is asking: %q %s", m.st.ModelsFor, paletteText(m.st))
+	}
+	run(cmd, m)
+	got := paletteText(m.st)
+	for _, want := range []string{"opus · the newest Opus", "claude-sonnet-5-5", "claude-haiku-4-5-20251001", "sonnet", "haiku"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in %s", want, got)
+		}
+	}
+	if strings.Contains(got, "asking") || strings.Count(got, "| opus ·") != 1 {
+		t.Fatalf("each model once, no longer asking: %s", got)
+	}
+	asks := src.modelAsks
+	run(m.runPalette(paletteItem{Action: "model"}, ""), m)
+	if src.modelAsks != asks {
+		t.Fatal("the list is kept a while, not asked at each /model")
+	}
+}
+
+func paletteText(st State) string {
+	var labels []string
+	for _, it := range paletteItems(st) {
+		labels = append(labels, it.Label+" · "+it.Detail)
+	}
+	return "| " + strings.Join(labels, " | ")
+}

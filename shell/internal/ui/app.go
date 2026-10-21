@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -91,10 +92,11 @@ type AppState struct {
 
 // Palette is Ctrl-K: ask the parent, open a file, or run a command.
 type Palette struct {
-	Query  string
-	Sel    int
-	Attach bool // @: the chosen file goes into your message instead of opening
-	Model  bool // /model: the parent's models, or the name typed
+	Query   string
+	Sel     int
+	Attach  bool // @: the chosen file goes into your message instead of opening
+	Model   bool // /model: the parent's models, or the name typed
+	Symbols bool // ⌃o in the code tab: the open file's functions and types, to go to
 }
 
 // paletteItem is one row of the palette.
@@ -981,6 +983,9 @@ func paletteItems(st State) []paletteItem {
 	if st.App.Palette.Model {
 		return modelItems(st, q)
 	}
+	if st.App.Palette.Symbols {
+		return symbolItems(st, q)
+	}
 	if st.App.Palette.Attach {
 		for _, f := range st.App.Files {
 			if q == "" || strings.Contains(strings.ToLower(f), q) {
@@ -1093,6 +1098,9 @@ func paletteBox(v *view.View, st State, pw int) []string {
 		}
 		if st.App.Palette.Model {
 			text = "  " + st.faint("›") + " ▏" + st.faint("a model for "+appParent(st)+", or type its name")
+		}
+		if st.App.Palette.Symbols {
+			text = "  " + st.faint("›") + " ▏" + st.faint("a function or type in "+filepath.Base(st.App.File))
 		}
 	}
 	lines := []string{text, ""}

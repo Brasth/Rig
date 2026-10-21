@@ -276,6 +276,32 @@ def job_snapshot(repo, job_dir, files, cache=None):
     return snapshot(work_root(repo, job_dir), files, cache=cache)
 
 
+MAX_BLOB = 2_000_000
+
+
+def keep_contents(root, folder, when, files):
+    """Keep the job's files as they are now in Git's object store, so the shell can show exactly what the job changed
+    even when it edits the repository in place. Best effort: the evidence itself never depends on it."""
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    blobs = {}
+    for name in files:
+        path, blob = Path(root) / name, None
+        try:
+            if path.is_file() and not path.is_symlink() and path.stat().st_size <= MAX_BLOB:
+                done = subprocess.run(["git", "-C", str(root), "hash-object", "-w", "--", name], capture_output=True,
+                                      text=True, timeout=10, env=env)
+                blob = done.stdout.strip() if done.returncode == 0 else None
+        except (OSError, subprocess.TimeoutExpired):
+            blob = None
+        blobs[name] = blob
+    try:
+        kept = read_json(Path(folder) / "change-contents.json") or {}
+        kept[when] = blobs
+        write_json(Path(folder) / "change-contents.json", kept)
+    except (OSError, ValueError, TypeError, EvidenceError):
+        pass
+
+
 def begin(repo, job_dir, files):
     state, folder = repository(repo), job_directory(repo, job_dir)
     root = work_root(state, folder)
@@ -289,6 +315,7 @@ def begin(repo, job_dir, files):
         return previous
     value = {**_capture(root, names), "job_id": folder.name}
     write_json(folder / "change-before.json", value)
+    keep_contents(root, folder, "before", names)
     return value
 
 
@@ -320,6 +347,7 @@ def finish(repo, job_dir):
                              "Out-of-scope concurrent changes are observations, not worker attribution."]}
     write_json(folder / "change-after.json", after)
     write_json(folder / "change-evidence.json", value)
+    keep_contents(root, folder, "after", files)
     return value
 
 

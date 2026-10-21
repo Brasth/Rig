@@ -408,6 +408,11 @@ def main(argv=None) -> int:
             repo = last  # Settings › General › When rig starts: the last project
         if args.command == "start":
             remember(repo)
+            try:
+                import local_api
+                local_api.replace_outdated(repo)  # a server from before an update would answer with its old code
+            except (OSError, ValueError):
+                pass
         if args.no_tmux and args.command in ("start", "print"):
             if args.parent_cmd:
                 raise ShellError("--parent-cmd needs the split layout's tmux pane; use --parent NAME without tmux")

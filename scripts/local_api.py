@@ -66,6 +66,7 @@ LOCAL_METHODS = {
     "chat.send": (True, "EXPERIMENT: send one message to the headless parent; the answer arrives in the transcript (params: message, session, parent)"),
     "chat.cancel": (True, "EXPERIMENT: stop a chat session's running turn (params: session)"),
     "chat.commands": (False, "The parent's own skills and slash commands, for the shell's / menu (params: parent)"),
+    "chat.models": (False, "Every model the parent CLI lists or Rig knows for it, for the shell's /model (params: parent)"),
     "applies.today": (False, "Done today: the helpers' work applied, undone or held, newest first"),
     "applies.undo": (True, "Undo an applied job: revert its merge commit on its base branch (params: id)"),
     "applies.redo": (True, "Apply an undone job again (params: id)"),
@@ -129,6 +130,7 @@ class Api:
     def __init__(self, repo, token):
         self.repo = Path(repo).resolve()
         self.token = token
+        self.build = ""  # the code it serves, set by serve()
         self._service = None
         self._service_lock = threading.Lock()
 
@@ -175,7 +177,7 @@ class Api:
             return _reply(request_id, error=_error(INVALID_PARAMS, "params must be an object"))
         method = message["method"]
         if method == "api.ping":
-            return _reply(request_id, result={"ok": True, "version": API_VERSION, "repo": str(self.repo)})
+            return _reply(request_id, result={"ok": True, "version": API_VERSION, "repo": str(self.repo), "build": self.build})
         if method == "api.methods":
             rows = [{"method": name, "mutates": mutates, "summary": summary}
                     for name, (_, mutates, summary) in sorted(METHODS.items())]
@@ -187,7 +189,7 @@ class Api:
         if method == "workspace.status":
             return self._workspace(request_id, params)
         if method in ("job.evidence", "job.diff", "fleet.status", "settings.view", "env.recovery", "env.recover", "log.follow", "env.shell", "shell.parent",
-                      "chat.status", "chat.transcript", "chat.send", "chat.cancel", "chat.answer", "chat.commands", "chat.parent", "ui.theme", "ui.set_theme", "settings.app", "settings.set",
+                      "chat.status", "chat.transcript", "chat.send", "chat.cancel", "chat.answer", "chat.commands", "chat.models", "chat.parent", "ui.theme", "ui.set_theme", "settings.app", "settings.set",
                       "applies.today", "applies.undo", "applies.redo", "applies.hold", "ship.status", "ship.run"):
             return self._environment(request_id, method, params)
         if method in ("ui.request", "events.list", "events.ack"):
@@ -359,6 +361,15 @@ def _environment(self, request_id, method, params):
                     return _reply(request_id, error=_error(INVALID_PARAMS, "parent must be a string"))
                 parent = parent or rig_chat.default_parent(self.repo)
                 result = {"parent": parent, "commands": parent_commands.commands(self.repo, parent)}
+            elif method == "chat.models":
+                import parent_models
+                parent = params.get("parent", "")
+                if not isinstance(parent, str):
+                    return _reply(request_id, error=_error(INVALID_PARAMS, "parent must be a string"))
+                parent = parent or rig_chat.default_parent(self.repo)
+                if parent not in rig_chat.PREFERRED:
+                    return _reply(request_id, error=_error(INVALID_PARAMS, f"{parent!r} is not a parent Rig runs"))
+                result = {"parent": parent, "models": parent_models.models(parent)}
             elif method == "chat.parent":
                 name = params.get("name")
                 if not isinstance(name, str):
@@ -444,6 +455,19 @@ def _receive(connection):
     return bytes(data).split(b"\n", 1)[0]
 
 
+def build() -> str:
+    """The code this server runs, as its files stand on disk: a server started before an update sees it change."""
+    import hashlib
+    digest = hashlib.sha256()
+    for path in sorted(HERE.glob("*.py")):
+        try:
+            info = path.stat()
+        except OSError:
+            continue
+        digest.update(f"{path.name}:{info.st_mtime_ns}:{info.st_size};".encode())
+    return digest.hexdigest()[:16]
+
+
 def serve(repo, idle: float = 0.0) -> int:
     if (os.environ.get("RIG_JOB_ID") or os.environ.get("RIG_JOB_DIR") or "").strip():
         print("rig api: a worker child may not serve the API", file=sys.stderr)
@@ -473,6 +497,15 @@ def serve(repo, idle: float = 0.0) -> int:
         api = Api(repo, token)
         slots = threading.BoundedSemaphore(8)
         last_request = [time.monotonic()]
+        started, checked = build(), [time.monotonic()]
+        api.build = started
+
+        def outdated() -> bool:
+            # Rig was updated under a running server: it leaves when idle, and the next client starts the new code
+            if time.monotonic() - checked[0] < 3:
+                return False
+            checked[0] = time.monotonic()
+            return build() != started and not api.busy()
 
         def handle(connection):
             last_request[0] = time.monotonic()
@@ -504,6 +537,9 @@ def serve(repo, idle: float = 0.0) -> int:
             print(f"rig api: listening for {repo}", file=sys.stderr)
             try:
                 while True:
+                    if outdated():
+                        print("rig api: rig was updated; leaving so the new code serves", file=sys.stderr)
+                        break
                     try:
                         connection, _ = listener.accept()
                     except socket.timeout:
@@ -522,6 +558,35 @@ def serve(repo, idle: float = 0.0) -> int:
                 token_path.unlink(missing_ok=True)
                 (endpoint.parent / "owner.json").unlink(missing_ok=True)
     return 0
+
+
+def replace_outdated(repo, wait: float = 5.0) -> bool:
+    """Stop a running server whose code is not the code on disk (one started before Rig was updated), so the next
+    client starts the new one. Only the process that owner.json names, and only while it is still that process."""
+    try:
+        reply = call(repo, "api.ping", timeout=0.5)
+    except (ConnectionError, OSError, ValueError):
+        return False
+    if (reply.get("result") or {}).get("build") == build():
+        return False
+    endpoint, _ = runtime_paths(Path(repo).resolve())
+    try:
+        owner = json.loads((endpoint.parent / "owner.json").read_text())
+        pid = int(owner["pid"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return False
+    import admission
+    start_id = admission.process_identity(pid).get("start_id")
+    if not start_id or start_id != owner.get("start_id"):
+        return False
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except OSError:
+        return False
+    deadline = time.monotonic() + wait
+    while endpoint.exists() and time.monotonic() < deadline:
+        time.sleep(0.05)
+    return True
 
 
 def ensure(repo, idle: float = 60.0) -> bool:

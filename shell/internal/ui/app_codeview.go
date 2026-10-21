@@ -363,11 +363,16 @@ func statusBar(v *view.View, st State, w int) string {
 	return line
 }
 
-// codeTabs is the row of open files, the open one lit, and ⌃w to close it.
+// codeTabs is the row of open files, the open one lit, each with × to close it. When they do not all fit, the row
+// shows the ones around the open file, with ‹ › for those left out on either side.
 func codeTabs(st State, w int) string {
 	a := st.App
-	var parts []string
-	for _, f := range a.Tabs {
+	if len(a.Tabs) == 0 {
+		return ""
+	}
+	parts := make([]string, len(a.Tabs))
+	at := 0
+	for i, f := range a.Tabs {
 		name := " " + filepath.Base(f) + " "
 		if who := a.Changed[f]; who != "" {
 			name += st.paint(agentColor(who), "●") + " "
@@ -376,6 +381,7 @@ func codeTabs(st State, w int) string {
 			name = strings.TrimSuffix(name, " ") + " " + st.paint(colText, "◆") + " " // not saved
 		}
 		if f == a.File {
+			at = i
 			if st.Styled {
 				name = tint(lipgloss.NewStyle().Bold(true).Underline(true).Render(" "+filepath.Base(f))+" "+
 					strings.TrimPrefix(name, " "+filepath.Base(f)+" "), colRaised)
@@ -385,13 +391,41 @@ func codeTabs(st State, w int) string {
 		} else {
 			name = st.dim(name)
 		}
-		parts = append(parts, st.zone("row:tabfile:"+f, " "+name+" "))
+		x := st.faint("×")
+		if f == a.File {
+			x = st.dim("×")
+		}
+		parts[i] = st.zone("row:tabfile:"+f, " "+name) + st.zone("row:tabclose:"+f, x) + " "
 	}
-	close := ""
-	if len(a.Tabs) > 0 {
-		close = st.zone("key:⌃w", st.faint("⌃w close")) + "  "
+	close := st.zone("key:⌃w", st.faint("⌃w close")) + "  "
+	room := w - lipgloss.Width(close)
+	if room < 30 {
+		close, room = "", w
 	}
-	return spread(strings.Join(parts, ""), "", close, w)
+	// the open tab first, then its neighbours while they fit, keeping room for ‹ and ›
+	from, to := at, at+1
+	used := lipgloss.Width(parts[at])
+	for grew := true; grew; {
+		grew = false
+		if from > 0 && used+lipgloss.Width(parts[from-1])+6 <= room {
+			from--
+			used += lipgloss.Width(parts[from])
+			grew = true
+		}
+		if to < len(parts) && used+lipgloss.Width(parts[to])+6 <= room {
+			used += lipgloss.Width(parts[to])
+			to++
+			grew = true
+		}
+	}
+	row := strings.Join(parts[from:to], "")
+	if from > 0 {
+		row = st.zone("row:tabfile:"+a.Tabs[from-1], st.faint(fmt.Sprintf("‹%d", from))) + row
+	}
+	if to < len(parts) {
+		row += st.zone("row:tabfile:"+a.Tabs[to], st.faint(fmt.Sprintf("%d›", len(parts)-to)))
+	}
+	return spread(row, "", close, w)
 }
 
 // breadcrumb is where the cursor is: the file's folders, its name and the code around the cursor; and which agent is
@@ -426,6 +460,19 @@ func codeRows(st State, w, room int) []string {
 	off := min(a.FileOff, max(0, len(a.FileLines)-room))
 	marks := a.ChangedLines[a.File]
 	who := a.Changed[a.File]
+	word, wordBg := "", "#e5e7eb"
+	if !lightGround() {
+		wordBg = "#3a3d4a"
+	}
+	var brackets []pos
+	if a.Editing && a.CurLine < len(a.FileLines) {
+		if _, _, ok := a.selRange(); !ok {
+			word = wordAt(a.FileLines[a.CurLine], a.CurCol)
+		}
+		if p, q, ok := matchBracket(a.FileLines, a.cursor()); ok {
+			brackets = []pos{p, q}
+		}
+	}
 	var out []string
 	last := len(a.FileLines)
 	if !a.Editing && last > 1 && a.FileLines[last-1] == "" {
@@ -438,6 +485,17 @@ func codeRows(st State, w, room int) []string {
 			text = mark(st, text, a.Find)
 		} else {
 			text = highlight(st, text)
+		}
+		if a.Editing && a.Find == "" {
+			// the word under the cursor where else it is, and the bracket that pairs with the one at the cursor
+			for _, s := range wordSpans(a.FileLines[i], word) {
+				text = paintCells(st, text, displayCol(a.FileLines[i], s[0], tabSize(st)), displayCol(a.FileLines[i], s[1], tabSize(st)), wordBg)
+			}
+			for _, b := range brackets {
+				if b.l == i {
+					text = paintCells(st, text, displayCol(a.FileLines[i], b.c, tabSize(st)), displayCol(a.FileLines[i], b.c+1, tabSize(st)), wordBg)
+				}
+			}
 		}
 		if from, to, ok := a.selRange(); ok && a.Editing && i >= from.l && i <= to.l {
 			// the selection: from its start on its first line, to its end on its last, a cell past a line it runs on from
@@ -457,7 +515,8 @@ func codeRows(st State, w, room int) []string {
 		if marks[i+1] {
 			gutter = st.paint(agentColor(who), "▎")
 		}
-		if a.Editing {
+		if a.Editing || canEdit(a) {
+			// a click in the text puts the cursor there, and starts editing
 			text = st.zone(fmt.Sprintf("text:code:%d", i), text+strings.Repeat(" ", max(0, w-6-ansi.StringWidth(text))))
 		}
 		row := gutter + st.paint("#c3c5ce", fmt.Sprintf("%3d  ", i+1)) + text
@@ -487,6 +546,15 @@ func displayCol(line string, col, tab int) int {
 
 // selectCells lights cells d0 to d1 of a coloured line as the editor's selection.
 func selectCells(st State, line string, d0, d1 int) string {
+	bg := "#c7d2fe"
+	if !lightGround() {
+		bg = "#3f3f8f"
+	}
+	return paintCells(st, line, d0, d1, bg)
+}
+
+// paintCells puts a background behind cells d0 to d1 of a coloured line.
+func paintCells(st State, line string, d0, d1 int, bg string) string {
 	if d1 <= d0 {
 		return line
 	}
@@ -495,10 +563,6 @@ func selectCells(st State, line string, d0, d1 int) string {
 	}
 	if !st.Styled {
 		return line
-	}
-	bg := "#c7d2fe"
-	if !lightGround() {
-		bg = "#3f3f8f"
 	}
 	return ansi.Truncate(line, d0, "") + tint(ansi.Cut(line, d0, d1), bg) + "\x1b[49m" + ansi.TruncateLeft(line, d1, "")
 }
@@ -552,8 +616,17 @@ func codeScreen(v *view.View, st State, w, h int) ([]string, [][2]string) {
 	switch {
 	case a.CodeAsk != nil:
 		bottom = "      " + st.dim(a.CodeAsk.label+" ›") + " " + a.CodeAsk.text + "▏"
-		if a.CodeAsk.kind == "find" {
-			bottom += "   " + st.faint("⏎ next · esc close")
+		switch a.CodeAsk.kind {
+		case "find", "replace":
+			find := a.CodeAsk.text
+			if a.CodeAsk.kind == "replace" {
+				find = a.CodeAsk.find
+			}
+			if n, at := matchCount(a, find); find != "" && n == 0 {
+				bottom += "   " + st.paint(colAmber, "no results")
+			} else if find != "" {
+				bottom += "   " + st.faint(fmt.Sprintf("%d of %d", at, n))
+			}
 		}
 	case a.Finding:
 		bottom = "      " + st.dim("/") + " " + a.Find + "▏"

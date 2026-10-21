@@ -39,6 +39,7 @@ repository. Owner tokens are never returned, and workers may not serve the API.
 | `chat.answer` | yes | none | Allow or deny the parent's pending permission request in a chat session (params: session, ask_id, decision) |
 | `chat.cancel` | yes | none | EXPERIMENT: stop a chat session's running turn (params: session) |
 | `chat.commands` | no | none | The parent's own skills and slash commands, for the shell's / menu (params: parent) |
+| `chat.models` | no | none | Every model the parent CLI lists or Rig knows for it, for the shell's /model (params: parent) |
 | `chat.parent` | yes | none | Name the project's parent CLI in .rig/harness.toml, as rig use does (params: name) |
 | `chat.send` | yes | none | EXPERIMENT: send one message to the headless parent; the answer arrives in the transcript (params: message, session, parent) |
 | `chat.status` | no | none | EXPERIMENT: whether the headless-parent chat is on, which parents can run, and recent sessions |

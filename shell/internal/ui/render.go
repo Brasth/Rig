@@ -29,6 +29,8 @@ const (
 // State is everything Render needs besides the view. It holds no I/O.
 type State struct {
 	ParentCommands []SlashCommand // the parent's skills and commands, in the / menu after Rig's
+	ModelList      []ModelChoice  // every model the parent offers, for /model
+	ModelsFor      string         // the parent ModelList is for; "loading:<parent>" while it is asked
 	Mouse          bool           // clickable places are marked as zones (mouse.go)
 	Logos          bool           // agents drawn as their logo tiles with kitty's image placeholders (gfx.go)
 	Tab            string

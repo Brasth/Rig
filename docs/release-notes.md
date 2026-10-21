@@ -3,6 +3,16 @@
 
 
 
+## The changes of a job that edited in place (2026-10-21)
+
+The changes tab showed only the file name for a job that edited the repository in place (no worktree): Rig had kept just the files' fingerprints. It now keeps the files' contents in Git's object store when a job begins and finishes (`change-contents.json` in the job's folder; best effort, the evidence does not depend on it), and `job.diff` shows exactly that change (`source: contents`), even after later edits. A job from before this shows its files as they are now against the last commit (`source: working tree`), labelled so.
+
+## Every model in /model, a fuller code editor, and tabs that close (2026-10-21)
+
+`/model` now lists every model the parent offers: what the CLI itself lists (codex's own model list, `opencode models`, `pi --list-models`, `omp models`), claude's aliases, the models in the CLIs' own files and the ones Rig routes them to (new method `chat.models`, cached for an hour). Choosing one no longer fails with "parent_model.codex is not a setting the board changes": that came from an API server started before the update, still running the old code. A server now leaves when Rig's files change under it (once idle), and `rig shell` replaces one that runs other code (`api.ping` reports its `build`).
+
+The code tab's editor does more: a click in the file starts editing there (`⇧`-click selects, a third click selects the line), `⌃r` finds and replaces (one at a time or all), find says which match of how many, `⌥↑` `⌥↓` move lines and `⇧⌥↑` `⇧⌥↓` copy them, `⌃l` selects lines, `⌃o` goes to a function or type, the matching bracket and the word under the cursor are lit (`⌃]` jumps to the bracket), and `⌃p` and `⌃k` work while editing. Each tab has a `×` to close it (a middle click closes it too), and a row of tabs too long for the window keeps the open one in view with `‹` `›`.
+
 ## Choose the parent's model, and Settings in the top bar (2026-10-21)
 
 `/model` lists the parent's models (its own setting, claude's `opus` `sonnet` `haiku`, the models codex's config names, or any name typed) and keeps the choice for all repos; the parent gets it as its own `--model` from the next message (`settings.app` reports `parent_models`, `chat.status` the model in use and `model_chosen`; new setting `parent_model.<parent>`). Settings › General shows the parent's model with `⏎ change`. The top bar has a `settings` button, and a click on the parent switches parent.

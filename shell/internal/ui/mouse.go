@@ -192,8 +192,14 @@ func (m *Model) mouse(e tea.MouseMsg) (tea.Model, tea.Cmd) {
 	case e.Action == tea.MouseActionMotion && e.Button == tea.MouseButtonNone:
 		m.hoverX, m.hoverY = e.X, e.Y
 		return m, nil
+	case e.Action == tea.MouseActionPress && e.Button == tea.MouseButtonMiddle:
+		// a middle click on a tab closes it, as in a browser or an editor
+		if id, _ := hitAt(m.zones, e.X, e.Y); strings.HasPrefix(id, "row:tabfile:") {
+			return m, m.closeTabFile(strings.TrimPrefix(id, "row:tabfile:"))
+		}
+		return m, nil
 	case e.Action == tea.MouseActionPress && e.Button == tea.MouseButtonLeft:
-		if m.textPress(e.X, e.Y) {
+		if m.textPress(e.X, e.Y, e.Shift) {
 			return m, nil // in the reply box or a file being edited: the cursor goes there, as in an editor
 		}
 		// a press only marks where: lifting the button there clicks, dragging away selects text
@@ -283,13 +289,17 @@ func (m *Model) boxAt(x, y int) (int, bool) {
 
 // textPress puts the cursor where the reply box or a file being edited was pressed; a second press there soon after
 // selects the word under it. False when the press was elsewhere.
-func (m *Model) textPress(x, y int) bool {
+func (m *Model) textPress(x, y int, shift bool) bool {
 	a := m.st.App
 	if a.Palette != nil || a.Help || a.NewJob != nil || (a.Panel && !panelDocks(m.st, m.winW)) || m.st.Mode == ModeConfirm {
 		return false
 	}
 	double := m.now().Sub(m.clickAt) < 400*time.Millisecond && m.clickX == x && m.clickY == y
-	m.clickAt, m.clickX, m.clickY = m.now(), x, y
+	m.clicks = 1
+	if double {
+		m.clicks = m.clickN + 1
+	}
+	m.clickAt, m.clickX, m.clickY, m.clickN = m.now(), x, y, m.clicks
 	if at, ok := m.boxAt(x, y); ok {
 		m.sel = nil
 		m.st.PromptSel = false
@@ -313,15 +323,35 @@ func (m *Model) textPress(x, y int) bool {
 		return true
 	}
 	z, ok := m.zoneAt(x, y)
-	if !ok || !strings.HasPrefix(z.id, "text:code:") || !a.Editing {
+	if !ok || !strings.HasPrefix(z.id, "text:code:") || !(a.Editing || canEdit(a)) {
 		return false
 	}
 	line, err := strconv.Atoi(strings.TrimPrefix(z.id, "text:code:"))
 	if err != nil || line < 0 || line >= len(a.FileLines) {
 		return false
 	}
+	if !a.Editing {
+		m.startEdit() // a click in the file edits it there, as in an IDE
+		if !a.Editing {
+			return false
+		}
+	}
 	at := pos{line, runeAtCell(a.FileLines[line], x-z.x0, tabSize(m.st))}
-	m.moveTo(at, false)
+	m.moveTo(at, shift) // with Shift, the selection runs from where the cursor was
+	if m.clicks >= 3 {
+		// a third click selects the line
+		a.EdSel, a.EdAnchor = true, pos{line, 0}
+		if line+1 < len(a.FileLines) {
+			a.setCursor(pos{line + 1, 0})
+		} else {
+			a.setCursor(pos{line, len([]rune(a.FileLines[line]))})
+		}
+		return true
+	}
+	if shift {
+		m.codeDrag = true
+		return true
+	}
 	if double {
 		r := []rune(a.FileLines[line])
 		from, to := at.c, at.c
@@ -661,6 +691,8 @@ func (m *Model) clickRow(list, at string) (tea.Model, tea.Cmd) {
 		}
 	case "file", "tabfile":
 		return m, m.runPalette(paletteItem{Action: "file:" + at}, "")
+	case "tabclose":
+		return m, m.closeTabFile(at)
 	case "tree":
 		for _, r := range treeRows(a) {
 			if r.path == at {

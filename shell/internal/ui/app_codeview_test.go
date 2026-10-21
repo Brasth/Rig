@@ -1,12 +1,14 @@
 package ui
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // codeRepo opens the code tab on a small repository: src/routes/login.ts and two more files.
@@ -147,5 +149,37 @@ func TestThePanelDocksInAWideTerminal(t *testing.T) {
 	press(m, "tab")
 	if !m.st.App.Panel || !strings.Contains(appScreen(m), "╭") {
 		t.Fatal("narrower, ⇥ opens it as a floating card")
+	}
+}
+
+func TestATabClosesByItsCrossOrAMiddleClick(t *testing.T) {
+	m, _ := codeRepo(t)
+	m.SetMouse(true)
+	run(m.runPalette(paletteItem{Action: "file:src/routes/logout.ts"}, ""), m)
+	_ = os.WriteFile(filepath.Join(m.st.App.Repo, "main.go"), []byte("package main\n"), 0o644)
+	run(m.runPalette(paletteItem{Action: "file:main.go"}, ""), m)
+	x, y := findOnScreen(t, m, "logout.ts ×")
+	clickAt(m, x+len("logout.ts "), y)
+	if m.st.App.File != "main.go" || strings.Join(m.st.App.Tabs, ",") != "src/routes/login.ts,main.go" {
+		t.Fatalf("× closes a tab that is not open, the open file stays: %q %v", m.st.App.File, m.st.App.Tabs)
+	}
+	x, y = findOnScreen(t, m, "main.go ×")
+	run(mouseAt(m, tea.MouseButtonMiddle, tea.MouseActionPress, x, y), m)
+	if m.st.App.File != "src/routes/login.ts" || len(m.st.App.Tabs) != 1 {
+		t.Fatalf("a middle click closes the open tab and opens the one beside it: %q %v", m.st.App.File, m.st.App.Tabs)
+	}
+}
+
+func TestTabsThatDoNotFitKeepTheOpenOneShown(t *testing.T) {
+	m, _ := codeRepo(t)
+	for i := 0; i < 12; i++ {
+		m.st.App.Tabs = append(m.st.App.Tabs, fmt.Sprintf("pkg/some-long-file-name-%02d.go", i))
+	}
+	m.st.App.Tabs = append(m.st.App.Tabs, "src/routes/logout.ts")
+	run(m.runPalette(paletteItem{Action: "file:src/routes/logout.ts"}, ""), m)
+	row := ansi.Strip(codeTabs(m.st, 100))
+	if ansi.StringWidth(row) != 100 || !strings.Contains(row, "logout.ts ×") || !strings.Contains(row, "‹") ||
+		!strings.Contains(row, "⌃w close") {
+		t.Fatalf("the open tab, ‹ for the ones left out and ⌃w close fit the row: %q", row)
 	}
 }

@@ -71,6 +71,15 @@ type ShellPlan struct {
 	Label     string   `json:"label"` // what to call the pane
 }
 
+// ParentModels is chat.models: every model the parent CLI lists or Rig knows for it, for /model.
+type ParentModels struct {
+	Parent string `json:"parent"`
+	Models []struct {
+		Name   string `json:"name"`
+		Detail string `json:"detail"`
+	} `json:"models"`
+}
+
 // ParentCommands is chat.commands: the parent's own skills and slash commands, for the / menu.
 type ParentCommands struct {
 	Parent   string `json:"parent"`
@@ -104,7 +113,7 @@ type ChatStatus struct {
 // JobDiff is job.diff: what one job changed, as a unified diff with per-file counts.
 type JobDiff struct {
 	JobID  string `json:"job_id"`
-	Source string `json:"source"` // "git", or "recorded" when only the paths are known
+	Source string `json:"source"` // "git"; "contents" or "working tree" for a job that edited in place; "recorded" when only the paths are known
 	Files  []struct {
 		Path    string `json:"path"`
 		Added   string `json:"added"`
