@@ -922,7 +922,21 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.st.Message = msg.text
 		}
 		m.fetching = false
+		if msg.err == nil && msg.tell != "" {
+			return m, tea.Batch(m.fetchToday(), m.fetchShip(), m.fetch(), m.tellParent(msg.tell))
+		}
 		return m, tea.Batch(m.fetchToday(), m.fetchShip(), m.fetch())
+	case noteSentMsg:
+		if msg.err != nil || msg.started == nil {
+			m.st.Message = "undone, but " + appParent(m.st) + " could not be told"
+			if msg.err != nil {
+				m.st.Message += ": " + msg.err.Error()
+			}
+			return m, nil
+		}
+		m.chatID, m.chLast = msg.started.Session, time.Time{}
+		m.st.Message = "undone; " + appParent(m.st) + " is handling anything built on it"
+		return m, tea.Batch(m.fetchChat(true), m.spin())
 	case appSettingsMsg:
 		if msg.err != nil {
 			m.st.Message = "Could not save the setting: " + msg.err.Error()
@@ -1524,8 +1538,10 @@ func (m *Model) confirmKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		switch method {
 		case "applies.undo", "applies.redo":
-			word := map[string]string{"applies.undo": "undone ", "applies.redo": "applied again "}[method]
-			return m, m.applyAct(method, map[string]any{"id": id}, word+id)
+			if method == "applies.undo" {
+				return m, m.applyThenTell(method, map[string]any{"id": id}, "undone "+id, m.undoNote(id))
+			}
+			return m, m.applyAct(method, map[string]any{"id": id}, "applied again "+id)
 		case "ship.push":
 			return m, m.applyAct("ship.run", map[string]any{"mode": "push"}, "pushed")
 		case "ship.pr":

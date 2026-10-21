@@ -12,6 +12,7 @@ be on the job's base branch with no staged or unstaged changes to tracked files.
 from __future__ import annotations
 
 import fcntl
+import json
 import os
 import re
 import subprocess
@@ -77,7 +78,6 @@ def _clean_on(repo: Path, branch: str) -> None:
 
 
 def _title(folder: Path) -> tuple[str, str]:
-    import json
     try:
         meta = json.loads((folder / "meta.json").read_text())
     except (OSError, ValueError):
@@ -108,14 +108,82 @@ def _counts(repo: Path, commit: str) -> dict:
     return {"files": files, "added": added, "deleted": deleted}
 
 
+ALLOWED = "allowed.jsonl"
+
+
+def record_allowed(repo, worker: str, command: str, by: str) -> None:
+    """Note a command someone allowed (the parent for a helper, or you for the parent) for done today. Never raises:
+    an answer must not fail because this note could not be written."""
+    try:
+        folder = Path(repo) / ".rig" / "applies"
+        folder.mkdir(parents=True, exist_ok=True)
+        line = {"at": time.time(), "worker": str(worker or ""), "command": " ".join(str(command or "").split())[:200],
+                "by": str(by or "")}
+        with (folder / ALLOWED).open("a") as stream:
+            stream.write(json.dumps(line) + "\n")
+    except OSError:
+        pass
+
+
+def _allowed(repo: Path, since: float) -> list[dict]:
+    rows = []
+    try:
+        lines = (repo / ".rig" / "applies" / ALLOWED).read_text(errors="replace").splitlines()[-500:]
+    except OSError:
+        return rows
+    for line in lines:
+        try:
+            row = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(row, dict) or not isinstance(row.get("at"), (int, float)) or row["at"] < since:
+            continue
+        rows.append({"job_id": "", "title": "allowed " + str(row.get("command", "")), "worker": str(row.get("worker", "")),
+                     "by": str(row.get("by", "")), "branch": "", "state": "command", "at": row["at"], "commit": ""})
+    return rows
+
+
+def _checks(folder: Path) -> list[dict]:
+    """The latest result of each check the job ran: name and whether it passed."""
+    import verification
+    try:
+        rows = verification._check_rows(folder)
+    except Exception:
+        return []
+    latest = {}
+    for row in rows:
+        latest[row.get("requirement_id", "")] = row
+    return [{"name": name, "ok": row.get("status") == "passed" and row.get("exit_code") == 0}
+            for name, row in latest.items() if name and row.get("status") in ("passed", "failed", "error")]
+
+
+def _reviews(root: Path) -> dict:
+    """Finished review jobs by the job they reviewed: writer job id to the reviewer's worker."""
+    found = {}
+    for folder in root.iterdir() if root.is_dir() else []:
+        try:
+            meta = json.loads((folder / "meta.json").read_text())
+        except (OSError, ValueError):
+            continue
+        writer = meta.get("writer_job_id")
+        if writer and meta.get("role") in ("review", "reviewer") and meta.get("status") == "ok":
+            found[writer] = str(meta.get("worker") or "")
+    return found
+
+
+def _since_midnight() -> float:
+    local = time.localtime()
+    return time.mktime((local.tm_year, local.tm_mon, local.tm_mday, 0, 0, 0, 0, 0, -1))
+
+
 def today(repo, since: float | None = None) -> dict:
-    """Done today: applied (merged) jobs, undone ones, and held ones, newest first."""
+    """Done today: applied (merged) jobs, undone ones, held ones and allowed commands, newest first."""
     repo = Path(repo).resolve()
     if since is None:
-        local = time.localtime()
-        since = time.mktime((local.tm_year, local.tm_mon, local.tm_mday, 0, 0, 0, 0, 0, -1))
-    rows = []
+        since = _since_midnight()
+    rows = _allowed(repo, since)
     root = repo / ".rig" / "jobs"
+    reviews = _reviews(root)
     for folder in sorted(root.iterdir()) if root.is_dir() else []:
         try:
             record = worktrees.job_record(folder)
@@ -138,7 +206,8 @@ def today(repo, since: float | None = None) -> dict:
             continue
         state = "undone" if record.get("undone") else "applied"
         rows.append({**row, "state": state, "at": record.get("undone_at", at) if state == "undone" else at,
-                     "commit": record["merge_commit"][:7], **_counts(repo, record["merge_commit"])})
+                     "commit": record["merge_commit"][:7], **_counts(repo, record["merge_commit"]),
+                     "checks": _checks(folder), "review": reviews.get(folder.name, "")})
     rows.sort(key=lambda r: r["at"], reverse=True)
     return {"rows": rows[:MAX_ROWS]}
 
@@ -213,11 +282,22 @@ def ship_status(repo) -> dict:
     if upstream:
         log = _git(repo, "log", "--format=%h%x09%s", f"{upstream}..HEAD", check=False).stdout
         rows = [{"commit": c, "subject": s} for c, _, s in (line.partition("\t") for line in log.splitlines()) if c]
+    # A helper's merge is shown as its task, which the parent wrote; its checks count toward the ones shown here.
+    applied = {r["commit"]: r for r in today(repo, since=0)["rows"] if r["state"] == "applied" and r["commit"]}
+    tasks, checks = [], {}
+    for row in rows:
+        job = next((applied[c] for c in applied if row["commit"].startswith(c) or c.startswith(row["commit"])), None)
+        if job:
+            tasks.append(job["title"])
+            for check in job.get("checks", []):
+                checks[check["name"]] = checks.get(check["name"], True) and check["ok"]
     subjects = [r["subject"] for r in rows if not r["subject"].startswith(("rig: merge job", "Revert "))] or [r["subject"] for r in rows]
-    title = "; ".join(subjects[:3])[:72] if subjects else ""
-    slug = _SLUG.sub("-", (subjects[0] if subjects else "changes").lower()).strip("-")[:40] or "changes"
+    named = tasks or subjects
+    title = "; ".join(named[:3])[:72] if named else ""
+    slug = _SLUG.sub("-", (named[0] if named else "changes").lower()).strip("-")[:40] or "changes"
     gh = subprocess.run(["sh", "-c", "command -v gh"], capture_output=True).returncode == 0
-    return {"branch": branch, "upstream": upstream, "ahead": rows, "title": title, "pr_branch": f"rig/{slug}", "gh": gh}
+    return {"branch": branch, "upstream": upstream, "ahead": rows, "title": title, "title_from": "tasks" if tasks else "commits",
+            "checks": [{"name": k, "ok": v} for k, v in checks.items()], "pr_branch": f"rig/{slug}", "gh": gh}
 
 
 def ship(repo, mode: str, title: str = "", body: str = "") -> dict:

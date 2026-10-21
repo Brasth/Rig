@@ -64,6 +64,38 @@ class Applies(Gate):
         with self.assertRaisesRegex(applies.ApplyError, "already applied"):
             applies.hold(self.repo, "w1", True)
 
+    def test_done_today_shows_checks_the_review_and_allowed_commands(self):
+        self.start("w1", edit={"a.txt": self.lines(l1="ONE")})
+        self.accept("w1")
+        checks = self.repo / ".rig" / "jobs" / "w1" / "checks"
+        checks.mkdir(parents=True, exist_ok=True)
+        for seq, (name, code) in enumerate([("lint", 0), ("tests", 1), ("tests", 0)], 1):
+            (checks / f"c{seq}.json").write_text(json.dumps({"version": 1, "check_id": f"c{seq}", "requirement_id": name, "sequence": seq,
+                                                              "status": "passed" if code == 0 else "failed", "exit_code": code}))
+        review = self.repo / ".rig" / "jobs" / "r1"
+        review.mkdir()
+        (review / "meta.json").write_text(json.dumps({"role": "review", "writer_job_id": "w1", "status": "ok", "worker": "codex"}))
+        row = applies.today(self.repo)["rows"][0]
+        self.assertEqual(row["checks"], [{"name": "lint", "ok": True}, {"name": "tests", "ok": True}], "the latest of each")
+        self.assertEqual(row["review"], "codex")
+        applies.record_allowed(self.repo, "claude", "prisma  migrate\ndev", "you")
+        rows = applies.today(self.repo)["rows"]
+        self.assertEqual([(r["state"], r["title"], r["worker"], r["by"]) for r in rows if r["state"] == "command"],
+                         [("command", "allowed prisma migrate dev", "claude", "you")])
+        self.assertEqual(applies.today(self.repo, since=rows[0]["at"] + 3600)["rows"], [], "only today's")
+
+    def test_a_helpers_allowed_command_is_recorded(self):
+        import jobs
+        from unittest import mock
+        folder = self.repo / ".rig" / "jobs" / "w9"
+        folder.mkdir(parents=True)
+        job = {"job_id": "w9", "dir": str(folder), "worker": "codex", "effective": "ask", "ask": {"preview": "npm test"}}
+        with mock.patch.object(jobs.rig_ask, "write_reply"):
+            jobs.answer_pending(job, "deny")
+            jobs.answer_pending(job, "allow")
+        rows = [r for r in applies.today(self.repo)["rows"] if r["state"] == "command"]
+        self.assertEqual([(r["title"], r["worker"], r["by"]) for r in rows], [("allowed npm test", "codex", "parent")])
+
     def test_ship_pushes_what_is_ahead(self):
         remote = Path(self.temp.name) / "remote.git"
         subprocess.run(["git", "init", "-q", "--bare", str(remote)], check=True)
@@ -77,6 +109,7 @@ class Applies(Gate):
         self.accept("w1")
         status = applies.ship_status(self.repo)
         self.assertEqual(status["upstream"], f"origin/{branch}")
+        self.assertEqual(status["title_from"], "tasks", "the merge is shown as the parent's task")
         self.assertTrue(status["ahead"])
         self.assertTrue(status["pr_branch"].startswith("rig/"))
         self.assertEqual(applies.ship(self.repo, "push")["shipped"], "push")

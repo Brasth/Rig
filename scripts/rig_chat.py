@@ -502,6 +502,9 @@ def answer(repo, session: str, ask_id: str, decision: str) -> dict:
         raise ChatError("that request is no longer waiting; refresh")
     ask.write_reply(folder, decision, expected=request)
     append(repo, meta["id"], "system", ("allowed: " if decision == "allow" else "denied: ") + _clean(request.get("preview", ""), 200))
+    if decision == "allow":
+        import applies
+        applies.record_allowed(repo, meta.get("parent", ""), request.get("preview", "") or request.get("tool_name", ""), "you")
     return {"session": meta["id"], "answered": decision}
 
 

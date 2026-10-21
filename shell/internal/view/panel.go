@@ -126,20 +126,29 @@ type AppSettings struct {
 	Shell             string          `json:"shell"`
 }
 
-// Today is applies.today: the helpers' work applied, undone or held, newest first.
+// Today is applies.today: the helpers' work applied, undone or held, and commands allowed, newest first.
 type Today struct {
 	Rows []struct {
 		JobID   string  `json:"job_id"`
 		Title   string  `json:"title"`
 		Worker  string  `json:"worker"`
 		Branch  string  `json:"branch"`
-		State   string  `json:"state"` // applied, undone or held
+		State   string  `json:"state"` // applied, undone, held or command
 		At      float64 `json:"at"`
 		Commit  string  `json:"commit"`
 		Files   int     `json:"files"`
 		Added   int     `json:"added"`
 		Deleted int     `json:"deleted"`
+		Checks  []Check `json:"checks"`
+		Review  string  `json:"review"` // the worker of a finished review of this job
+		By      string  `json:"by"`     // who allowed a command: "parent" or "you"
 	} `json:"rows"`
+}
+
+// Check is one check a job ran and whether it passed.
+type Check struct {
+	Name string `json:"name"`
+	OK   bool   `json:"ok"`
 }
 
 // ShipStatus is ship.status: what is ahead of the upstream branch.
@@ -150,9 +159,11 @@ type ShipStatus struct {
 		Commit  string `json:"commit"`
 		Subject string `json:"subject"`
 	} `json:"ahead"`
-	Title    string `json:"title"`
-	PRBranch string `json:"pr_branch"`
-	GH       bool   `json:"gh"`
+	Title     string  `json:"title"`
+	TitleFrom string  `json:"title_from"` // "tasks" (the parent's) or "commits"
+	Checks    []Check `json:"checks"`
+	PRBranch  string  `json:"pr_branch"`
+	GH        bool    `json:"gh"`
 }
 
 // ThemeReply is ui.theme and ui.set_theme: the board's theme and where it is kept ("all", "repo" or "default").

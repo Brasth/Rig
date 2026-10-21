@@ -552,9 +552,11 @@ func TestAStoppedSandboxSaysSoAndOffersTheWaysOut(t *testing.T) {
 func sampleToday() *view.Today {
 	var t view.Today
 	_ = json.Unmarshal([]byte(`{"rows": [
-		{"job_id": "job-3b9", "title": "Rate limit POST /login", "worker": "claude", "branch": "main", "state": "applied", "at": 1792500000, "commit": "7f3a2c1", "files": 3, "added": 151, "deleted": 1},
+		{"job_id": "job-3b9", "title": "Rate limit POST /login", "worker": "claude", "branch": "main", "state": "applied", "at": 1792500000, "commit": "7f3a2c1", "files": 3, "added": 151, "deleted": 1,
+			"checks": [{"name": "lint", "ok": true}, {"name": "tests", "ok": true}], "review": "codex"},
 		{"job_id": "job-4c1", "title": "Add index to session store", "worker": "opencode", "branch": "main", "state": "undone", "at": 1792499000, "commit": "4e91b0c", "files": 1, "added": 4, "deleted": 0},
-		{"job_id": "job-81c", "title": "Tests for password reset", "worker": "codex", "branch": "main", "state": "held", "at": 1792498000}]}`), &t)
+		{"job_id": "job-81c", "title": "Tests for password reset", "worker": "codex", "branch": "main", "state": "held", "at": 1792498000},
+		{"job_id": "", "title": "allowed prisma migrate dev", "worker": "claude", "by": "you", "state": "command", "at": 1792497000}]}`), &t)
 	return &t
 }
 
@@ -563,8 +565,9 @@ func TestDoneTodayUndoesAndRedoesAfterAQuestion(t *testing.T) {
 	src.today = sampleToday()
 	run(m.runPalette(paletteItem{Action: "today"}, ""), m)
 	out := appScreen(m)
-	for _, want := range []string{"done today", "Done today  applied, held and undone", "Rate limit POST /login", "applied",
-		"undone by you", "held", "3 files +151 −1", "on main as 7f3a2c1", "u undo"} {
+	for _, want := range []string{"done today", "Done today  applied, held and allowed by claude", "Rate limit POST /login", "applied",
+		"undone by you", "held", "allowed prisma migrate dev", "command", "3 files +151 −1 · ✓ lint ✓ tests ✓ review by codex",
+		"on main as 7f3a2c1 · undo reverts it; claude handles anything built on", "u undo", "r redo", "d diff", "a let claude apply"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q:\n%s", want, out)
 		}
@@ -573,9 +576,17 @@ func TestDoneTodayUndoesAndRedoesAfterAQuestion(t *testing.T) {
 	if m.st.Mode != ModeConfirm || !strings.Contains(m.st.Prompt, "It reverts 7f3a2c1 on main") {
 		t.Fatalf("undo asks first: %q", m.st.Prompt)
 	}
-	run(press(m, "y"), m)
+	src.chatStarted = &view.ChatStarted{Session: "c-9", Parent: "claude"}
+	_, next := m.Update(press(m, "y")())
+	run(next, m)
 	if last := src.calls[len(src.calls)-1]; last.method != "applies.undo" || last.params["id"] != "job-3b9" {
 		t.Fatalf("undone: %v", src.calls)
+	}
+	if len(src.chatSent) != 1 || !strings.Contains(src.chatSent[0][0], `I undid "Rate limit POST /login" (job job-3b9, merged as 7f3a2c1 on main)`) {
+		t.Fatalf("the parent is told, to handle anything built on it: %v", src.chatSent)
+	}
+	if m.chatID != "c-9" || m.st.App.History == nil {
+		t.Fatalf("done today stays open while the parent works: %q", m.chatID)
 	}
 	press(m, "down")
 	press(m, "r")
@@ -584,9 +595,26 @@ func TestDoneTodayUndoesAndRedoesAfterAQuestion(t *testing.T) {
 		t.Fatalf("redone: %v", src.calls)
 	}
 	press(m, "down")
-	run(press(m, "h"), m)
+	run(press(m, "a"), m)
 	if last := src.calls[len(src.calls)-1]; last.method != "applies.hold" || last.params["on"] != false {
 		t.Fatalf("released: %v", src.calls)
+	}
+	press(m, "down")
+	if out := appScreen(m); !strings.Contains(out, "allowed by you at") {
+		t.Errorf("a command row says who allowed it:\n%s", out)
+	}
+}
+
+func TestDoneTodayOpensAnAppliedJobsDiff(t *testing.T) {
+	m, src := appModel(t)
+	withConversation(t, m, src)
+	today := sampleToday()
+	today.Rows[0].JobID = m.view.Rows("Jobs")[1].ID
+	src.today = today
+	run(m.runPalette(paletteItem{Action: "today"}, ""), m)
+	run(press(m, "d"), m)
+	if m.st.App.History != nil || m.st.App.Tab != 2 || m.st.Selected["Jobs"] != 1 {
+		t.Fatalf("d opens the changes tab on that job: tab %d sel %d", m.st.App.Tab, m.st.Selected["Jobs"])
 	}
 }
 
@@ -613,12 +641,14 @@ func TestShipPushesOrOpensAPullRequestAfterAQuestion(t *testing.T) {
 	src.today = sampleToday()
 	var ship view.ShipStatus
 	_ = json.Unmarshal([]byte(`{"branch": "main", "upstream": "origin/main", "title": "Rate limit login, reset-token tests", "pr_branch": "rig/rate-limit-login", "gh": true,
+		"title_from": "tasks", "checks": [{"name": "lint", "ok": true}, {"name": "build", "ok": true}],
 		"ahead": [{"commit": "7f3a2c1", "subject": "rig: merge job job-3b9"}, {"commit": "b81e09d", "subject": "fix typo in reset email"}]}`), &ship)
 	src.shipStatus = &ship
 	run(m.runPalette(paletteItem{Action: "ship"}, ""), m)
 	out := appScreen(m)
 	for _, want := range []string{"ship", "Ship 2 changes", "main is 2 ahead of origin/main", "Rate limit POST /login", "7f3a2c1", "fix typo in reset email",
-		"[open pull request]", "push to main", "branch rig/rate-limit-login", "title  Rate limit login, reset-token tests", "agents never push; you do"} {
+		"[open pull request]", "push to main", "branch rig/rate-limit-login", "title  Rate limit login, reset-token tests", "written by claude · e to edit",
+		"✓ lint  ✓ build  agents never push; you do"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q:\n%s", want, out)
 		}
