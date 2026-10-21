@@ -84,9 +84,12 @@ func commitMessage(st State) string {
 		if line == "" {
 			continue
 		}
-		if i := strings.IndexAny(line, ".:;"); i > 20 {
-			line = line[:i]
+		for _, end := range []string{". ", ": ", "; "} { // the first sentence; a dot inside a name (a.py) is not an end
+			if i := strings.Index(line, end); i > 20 {
+				line = line[:i]
+			}
 		}
+		line = strings.TrimSuffix(line, ".")
 		if r := []rune(line); len(r) > 72 {
 			line = strings.TrimRight(string(r[:71]), " ,") + "…"
 		}

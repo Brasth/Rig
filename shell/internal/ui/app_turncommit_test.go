@@ -12,6 +12,9 @@ func TestAfterATurnGShowsItsFilesAndCCommitsJustThose(t *testing.T) {
 	a := m.st.App
 	a.Tab, a.File, a.Editing, a.TreeFocus, a.GitView = 1, "", false, false, false
 	tr := transcript("idle", ce("user", "give the user a role"), ce("assistant", "I added a `role` constant to the login route. The tests still pass."))
+	if got := commitMessage(State{Chat: transcript("idle", ce("user", "x"), ce("assistant", "I appended print(4) to a.py so it still starts with print('hi')."))}); got != "I appended print(4) to a.py so it still starts with print('hi')" {
+		t.Fatalf("a dot inside a file name does not end the sentence: %q", got)
+	}
 	tr.Marks = []view.ChatMark{{Turn: 1, Title: "give the user a role", Files: []view.ChatFile{{Path: "src/routes/login.ts", Added: 2, Deleted: 1}}}}
 	m.st.Chat = tr
 	if got := commitMessage(m.st); got != "I added a role constant to the login route" {

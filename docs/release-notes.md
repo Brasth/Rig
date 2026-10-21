@@ -3,6 +3,10 @@
 
 
 
+## Steer a turn, see what is running, commit a turn's files, notes for the parent (2026-10-21)
+
+`/steer TEXT` interrupts the parent mid-turn and it goes on from TEXT; a stopped turn keeps and shows what it changed. A running tool call shows how long it has taken, and `/running` lists the parent's tool, the helpers and the terminal, `x` stopping one. After a turn, `g` shows just its files in the git view and `c` commits only those with a message from the answer. `/remember NOTE` keeps notes in `.rig/notes.md` that go with every conversation's first message; `/notes` opens them. New API method `chat.steer`.
+
 ## /rewind, /fork, @ files with lines, a permission mode, /export and conversation search (2026-10-21)
 
 `/rewind` puts files back as they were before a turn (all of it or one file), keeps what was there so it can be undone, and tells the parent once. `@` names a file anywhere in a message, `@file:10-40` just those lines, and the parent gets what it names (every parent). `/fork` branches a conversation from a turn into a new one. `⇧Tab` goes round ask, auto-edit and plan (claude `--permission-mode acceptEdits`, codex file approvals), shown in the status line; `/mode` does the same. `/export` writes a conversation as markdown, and `/resume` searches what was said in every conversation. New API methods `chat.rewind`, `chat.fork`, `chat.search`; `chat.transcript` carries `marks`, `can_undo` and `mode`; Settings › Keys has a Permission mode row.
