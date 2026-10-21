@@ -66,6 +66,8 @@ type fakeSource struct {
 	parentSetErr    error
 	theme           *view.ThemeReply
 	diffs           map[string]*view.JobDiff
+	appSettings     *view.AppSettings
+	settingsSaved   [][3]string
 	diffIDs         []string
 	themeSaved      [][2]string
 }
@@ -118,6 +120,16 @@ func (f *fakeSource) JobDiff(id string, _ time.Duration) (*view.JobDiff, error) 
 		return d, nil
 	}
 	return nil, errors.New("no diff for " + id)
+}
+func (f *fakeSource) AppSettings(time.Duration) (*view.AppSettings, error) {
+	if f.appSettings == nil {
+		return nil, errors.New("no settings here")
+	}
+	return f.appSettings, nil
+}
+func (f *fakeSource) SetSetting(key, value, scope string, _ time.Duration) (*view.AppSettings, error) {
+	f.settingsSaved = append(f.settingsSaved, [3]string{key, value, scope})
+	return f.appSettings, nil
 }
 func (f *fakeSource) Theme(time.Duration) (*view.ThemeReply, error) {
 	if f.theme == nil {

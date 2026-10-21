@@ -101,6 +101,31 @@ type JobDiff struct {
 	Truncated bool   `json:"truncated"`
 }
 
+// AppSettings is settings.app: what the Settings screen can change, and where each value is kept.
+type AppSettings struct {
+	Theme             string          `json:"theme"`
+	ThemeScope        string          `json:"theme_scope"`
+	Themes            []string        `json:"themes"`
+	Bell              bool            `json:"bell"`
+	BellScope         string          `json:"bell_scope"`
+	Parent            string          `json:"parent"`
+	Enabled           bool            `json:"enabled"`
+	Workers           map[string]bool `json:"workers"`
+	Installed         []string        `json:"installed"`
+	MaxRunning        int             `json:"max_running"`
+	Objective         string          `json:"objective"`
+	RoutingMode       string          `json:"routing_mode"`
+	Sandbox           string          `json:"sandbox"`
+	Worktrees         string          `json:"worktrees"`
+	WorktreeContainer string          `json:"worktree_container"`
+	Harness           string          `json:"harness"`
+	HarnessText       string          `json:"harness_text"`
+	Problems          []string        `json:"problems"`
+	Global            string          `json:"global"`
+	Editor            string          `json:"editor"`
+	Shell             string          `json:"shell"`
+}
+
 // ThemeReply is ui.theme and ui.set_theme: the board's theme and where it is kept ("all", "repo" or "default").
 type ThemeReply struct {
 	Theme  string   `json:"theme"`

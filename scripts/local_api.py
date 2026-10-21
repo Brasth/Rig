@@ -65,6 +65,8 @@ LOCAL_METHODS = {
     "chat.transcript": (False, "EXPERIMENT: a chat session's transcript (params: session, tail)"),
     "chat.send": (True, "EXPERIMENT: send one message to the headless parent; the answer arrives in the transcript (params: message, session, parent)"),
     "chat.cancel": (True, "EXPERIMENT: stop a chat session's running turn (params: session)"),
+    "settings.app": (False, "The board's Settings screen: the values it can change and where each is kept"),
+    "settings.set": (True, "Change one of the board's settings (params: key, value, scope all|repo)"),
     "ui.theme": (False, "The board's colour theme and where it is kept (all repos or this repo)"),
     "ui.set_theme": (True, "Keep the board's colour theme for all repos or this repo (params: theme, scope all|repo)"),
     "chat.parent": (True, "Name the project's parent CLI in .rig/harness.toml, as rig use does (params: name)"),
@@ -178,7 +180,7 @@ class Api:
         if method == "workspace.status":
             return self._workspace(request_id, params)
         if method in ("job.evidence", "job.diff", "fleet.status", "settings.view", "env.recovery", "env.recover", "log.follow", "env.shell", "shell.parent",
-                      "chat.status", "chat.transcript", "chat.send", "chat.cancel", "chat.answer", "chat.parent", "ui.theme", "ui.set_theme"):
+                      "chat.status", "chat.transcript", "chat.send", "chat.cancel", "chat.answer", "chat.parent", "ui.theme", "ui.set_theme", "settings.app", "settings.set"):
             return self._environment(request_id, method, params)
         if method in ("ui.request", "events.list", "events.ack"):
             return self._companion(request_id, method, params)
@@ -290,6 +292,15 @@ def _environment(self, request_id, method, params):
                 return _reply(request_id, error=_error(INVALID_PARAMS, "id must be a string"))
             import env_shell
             result = env_shell.plan(self.repo, job_id)
+        elif method in ("settings.app", "settings.set"):
+            import ui_settings
+            if method == "settings.app":
+                result = ui_settings.read(self.repo)
+            else:
+                key, value, scope = params.get("key"), params.get("value"), params.get("scope", "repo")
+                if not isinstance(key, str) or not isinstance(value, (str, bool, int)) or scope not in ("all", "repo"):
+                    return _reply(request_id, error=_error(INVALID_PARAMS, "key and value are needed, and scope is all or repo"))
+                result = ui_settings.save(self.repo, key, value if not isinstance(value, int) or isinstance(value, bool) else str(value), scope)
         elif method in ("ui.theme", "ui.set_theme"):
             import ui_theme
             if method == "ui.theme":

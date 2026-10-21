@@ -74,6 +74,7 @@ type State struct {
 	Focus        string    // the Session screen's pane with the keyboard: "" (the jobs, as the mockup opens), "parent" or "workspace"
 	Picker       *Picker   // the parent picker, while it is open
 	App          *AppState // the app (the design's ADE screens); nil while the board shows
+	AppSettings  *view.AppSettings
 	SlashSel     int       // the chosen line of the / command list
 	Now          time.Time // the clock, for the working spinner and its elapsed time; zero in golden tests
 }
@@ -106,6 +107,7 @@ var SlashCommands = []SlashCommand{
 	{"/env", "", "the container, ports and worktrees"},
 	{"/help", "", "every key"},
 	{"/theme", " NAME", "rig, light, dark, material or dracula"},
+	{"/settings", "", "theme, agents, routing, sandbox"},
 	{"/quit", "", "leave rig shell"},
 }
 

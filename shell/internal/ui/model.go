@@ -36,6 +36,8 @@ type Source interface {
 	ChatSetParent(name string, timeout time.Duration) error
 	Theme(timeout time.Duration) (*view.ThemeReply, error)
 	JobDiff(id string, timeout time.Duration) (*view.JobDiff, error)
+	AppSettings(timeout time.Duration) (*view.AppSettings, error)
+	SetSetting(key, value, scope string, timeout time.Duration) (*view.AppSettings, error)
 	SetTheme(theme, scope string, timeout time.Duration) (*view.ThemeReply, error)
 }
 
@@ -209,6 +211,8 @@ type Model struct {
 	winW, winH int    // the window; the app uses all of it
 	dfBusy     bool
 	dfLast     time.Time
+	lastAsk    string // the request the bell last rang for
+	ringer     func() // rings the terminal bell; tests replace it
 	seenJobs   map[string]bool
 	themeFixed bool // rig shell --theme chose the theme for this board; the saved one is not loaded
 	messaging  bool // m was pressed under a request: a and d type again until the message is sent
@@ -235,7 +239,12 @@ func randomKey() string {
 	return "shell-" + hex.EncodeToString(b)
 }
 
-func (m *Model) Init() tea.Cmd { return tea.Batch(m.fetch(), tick(), m.fetchTheme()) }
+func (m *Model) Init() tea.Cmd {
+	if m.appOn() {
+		return tea.Batch(m.fetch(), tick(), m.fetchTheme(), m.fetchAppSettings())
+	}
+	return tea.Batch(m.fetch(), tick(), m.fetchTheme())
+}
 
 // fetchTheme loads the saved theme once at the start (a server that predates themes keeps the default).
 func (m *Model) fetchTheme() tea.Cmd {
@@ -513,6 +522,13 @@ func (m *Model) runSlash(text string) (tea.Cmd, bool) {
 			return m.goTab(SettingsTab), true // the Theme row, where ←→ shows each one
 		}
 		return m.switchTheme(strings.ToLower(rest), m.st.ThemeScope), true
+	case "/settings":
+		clear()
+		m.st.Mode, m.st.InputLabel, m.inputFor = ModeNormal, "", ""
+		if m.appOn() {
+			return m.openSettings("general"), true
+		}
+		return m.goTab(SettingsTab), true
 	case "/quit":
 		return tea.Quit, true
 	default:
@@ -881,7 +897,18 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.st.Chat, m.st.ChatE = msg.chat, ""
+		if m.appOn() {
+			return m, tea.Batch(m.spin(), m.bell())
+		}
 		return m, m.spin()
+	case appSettingsMsg:
+		if msg.err != nil {
+			m.st.Message = "Could not save the setting: " + msg.err.Error()
+			return m, nil
+		}
+		m.st.AppSettings = msg.s
+	case settingsEditedMsg:
+		return m, m.fetchAppSettings()
 	case diffMsg:
 		m.dfBusy, m.dfLast = false, m.now()
 		if m.appOn() {
@@ -1072,6 +1099,9 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.view = &msg.snap.View
 		m.reselect()
 		m.noticeNewJobs()
+		if m.appOn() {
+			return m, m.bell()
+		}
 	case actionMsg:
 		switch {
 		case msg.err != nil && msg.enqueue:
@@ -1469,6 +1499,9 @@ func (m *Model) confirmKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.st.Message = "stopping " + id
 			src := m.src
 			return m, func() tea.Msg { return chatCancelMsg{err: src.ChatCancel(id, callTimeout)} }
+		}
+		if method == "settings.set" {
+			return m, m.saveConfirmed(id)
 		}
 		if method == "env.up" {
 			m.st.Message = "starting the container (rig env up)"

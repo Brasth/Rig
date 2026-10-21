@@ -47,6 +47,8 @@ repository. Owner tokens are never returned, and workers may not serve the API.
 | `job.diff` | no | none | What one job changed, as a unified diff with per-file counts (params: id) |
 | `job.evidence` | no | none | Evidence drawer for one job: where it ran, change, contract, checks, ports (params: id) |
 | `log.follow` | no | none | Tail of a job's log as plain text; without an id, the job worth watching (params: id, lines) |
+| `settings.app` | no | none | The board's Settings screen: the values it can change and where each is kept |
+| `settings.set` | yes | none | Change one of the board's settings (params: key, value, scope all|repo) |
 | `settings.view` | no | none | Settings tab: what this repository's .rig/harness.toml makes effective, ready to render and read-only |
 | `shell.parent` | no | none | The command that runs the parent CLI in a board pane, or why there is none (params: parent) |
 | `ui.request` | yes | none | Companion operations (snapshot, enqueue, stop, reply, details, sessions) on the hosted UI service |

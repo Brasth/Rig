@@ -359,3 +359,81 @@ func TestMarkdownAndTablesArePreviewed(t *testing.T) {
 		t.Fatalf("a csv is a table:\n%s", out)
 	}
 }
+
+func sampleSettings() *view.AppSettings {
+	return &view.AppSettings{Theme: "light", ThemeScope: "default", Themes: ThemeNames(), BellScope: "default", Parent: "claude",
+		Enabled: true, Workers: map[string]bool{"claude": true, "codex": true, "grok": false}, Installed: []string{"claude", "codex"},
+		MaxRunning: 3, Objective: "balanced", RoutingMode: "smart", Sandbox: "host", Worktrees: "off", WorktreeContainer: "shared",
+		Harness: ".rig/harness.toml", HarnessText: "parent = \"claude\"\n\n[project]\nenabled = true\n", Global: "~/.rig/config.toml"}
+}
+
+func TestSettingsChangeRealSettingsWhereTheyAreKept(t *testing.T) {
+	m, src := appModel(t)
+	src.appSettings = sampleSettings()
+	run(m.runPalette(paletteItem{Action: "settings"}, ""), m)
+	out := appScreen(m)
+	for _, want := range []string{"←  Settings   [all repos]", "[general]", "agents", "routing", "toml", "› Theme", "[light]", "dracula",
+		"Default parent", "Rig in this repo", "off keeps history and memory", "←→ change    ⇥ section    g all repos / this repo"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "billing") {
+		t.Fatal("no billing")
+	}
+	run(press(m, "right"), m)
+	if colGround != "#15161a" || src.themeSaved[0] != [2]string{"dark", "all"} {
+		t.Fatalf("→ switches the theme at once and keeps it: %v", src.themeSaved)
+	}
+	press(m, "tab")
+	press(m, "down")
+	run(press(m, " "), m)
+	if src.settingsSaved[0] != [3]string{"workers.codex", "false", "repo"} {
+		t.Fatalf("space turns a helper off in this repo: %v", src.settingsSaved)
+	}
+	for i := 0; i < 4; i++ {
+		press(m, "down")
+	}
+	run(press(m, "left"), m)
+	if last := src.settingsSaved[len(src.settingsSaved)-1]; last != [3]string{"queue.max_running", "2", "repo"} {
+		t.Fatalf("← fewer at the same time: %v", src.settingsSaved)
+	}
+	press(m, "shift+tab") // back to general
+	press(m, "down", "down")
+	run(press(m, "right"), m)
+	if m.st.Mode != ModeConfirm || !strings.Contains(m.st.Prompt, "Turn Rig off") {
+		t.Fatalf("turning Rig off asks first: %q", m.st.Prompt)
+	}
+	run(press(m, "y"), m)
+	if last := src.settingsSaved[len(src.settingsSaved)-1]; last != [3]string{"project.enabled", "false", "repo"} {
+		t.Fatalf("saved %v", src.settingsSaved)
+	}
+	m.st.App.Settings.Section = len(SettingsSections) - 1
+	if out := appScreen(m); !strings.Contains(out, "[toml]") || !strings.Contains(out, "  1  parent = \"claude\"") || !strings.Contains(out, "✓ valid") {
+		t.Fatalf("the toml section:\n%s", out)
+	}
+	press(m, "esc")
+	if m.st.App.Settings != nil {
+		t.Fatal("esc leaves the settings")
+	}
+}
+
+func TestTheBellRingsOnceForANewRequest(t *testing.T) {
+	m, src := appModel(t)
+	rings := 0
+	m.ringer = func() { rings++ }
+	src.appSettings = sampleSettings()
+	src.appSettings.Bell = true
+	run(m.fetchAppSettings(), m)
+	run(m.bell(), m)
+	run(m.bell(), m)
+	if rings != 1 {
+		t.Fatalf("one ring for job-7f2's request, rang %d", rings)
+	}
+	m.st.AppSettings.Bell = false
+	m.lastAsk = ""
+	run(m.bell(), m)
+	if rings != 1 {
+		t.Fatal("no ring with the bell off")
+	}
+}

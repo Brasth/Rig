@@ -45,6 +45,7 @@ type AppState struct {
 	Comments     map[string][]string // what you said to each helper from the changes tab
 	Commenting   bool
 	Search       *SearchState
+	Settings     *SettingsScreen
 }
 
 // Palette is Ctrl-K: ask the parent, open a file, or run a command.
@@ -207,6 +208,22 @@ func AppFrame(v *view.View, st State, w, h int) []string {
 	}
 	if a.Welcome {
 		return welcomeScreen(st, w, h)
+	}
+	if a.Settings != nil {
+		lines := settingsScreenLines(v, st, w, h-1)
+		keys := [][2]string{{"←→", "change"}, {"⇥", "section"}, {"g", "all repos / this repo"}, {"esc", "back"}}
+		if SettingsSections[a.Settings.Section] == "toml" {
+			keys = [][2]string{{"E", "edit in $EDITOR"}, {"⇥", "section"}, {"esc", "back"}}
+		}
+		switch {
+		case st.Mode == ModeConfirm:
+			lines = append(lines, center(st.paint(colAmber, st.Prompt)+"   "+st.dim("y")+" "+st.faint("yes")+"    "+st.dim("n")+" "+st.faint("no"), w))
+		case st.Message != "" && problem(st.Message):
+			lines = append(lines, center(st.paint(colAmber, clean(st.Message)), w))
+		default:
+			lines = append(lines, keyHints(st, keys, w))
+		}
+		return lines
 	}
 	lines := []string{topBar(v, st, w), st.paint(colBorder, strings.Repeat("─", w))}
 	body := h - 3
@@ -681,6 +698,7 @@ var PaletteCommands = [][3]string{
 	{"queue a task", "park it for the parent to pick", "queue"},
 	{"change theme", "rig, light, dark, material, dracula", "theme"},
 	{"search the code", "text in every file (⌃f)", "search"},
+	{"settings", "theme, agents, routing, sandbox, toml", "settings"},
 	{"start the sandbox", "rig env up", "env-up"},
 	{"stop a helper", "from the agents panel", "panel"},
 	{"the board", "jobs, queue, workspace and evidence", "board"},

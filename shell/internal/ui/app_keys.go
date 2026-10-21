@@ -31,6 +31,9 @@ func (m *Model) SetApp(repo string) {
 		m.st.Theme = "light"
 	}
 	m.noticeNewJobs() // the helpers already at work are not new
+	if m.ringer == nil {
+		m.ringer = func() { _, _ = os.Stdout.WriteString("\a") }
+	}
 }
 
 func (m *Model) appOn() bool { return m.st.App != nil }
@@ -160,6 +163,8 @@ func (m *Model) appKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case a.Welcome:
 		return m.welcomeKey(key)
+	case a.Settings != nil:
+		return m.settingsKey(k)
 	case a.Palette != nil:
 		return m.paletteKey(k)
 	case a.Search != nil:
@@ -727,6 +732,8 @@ func (m *Model) runPalette(it paletteItem, query string) tea.Cmd {
 		m.st.Mode, m.st.Prompt = ModeConfirm, "Start this project's container (rig env up)?"
 	case "panel":
 		a.Panel = true
+	case "settings":
+		return m.openSettings("general")
 	case "search":
 		a.Search = &SearchState{}
 		return m.fetchChanged()

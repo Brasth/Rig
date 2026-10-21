@@ -134,6 +134,14 @@ func (e *ensuringSource) JobDiff(id string, timeout time.Duration) (*view.JobDif
 	return e.client.JobDiff(id, timeout)
 }
 
+func (e *ensuringSource) AppSettings(timeout time.Duration) (*view.AppSettings, error) {
+	return e.client.AppSettings(timeout)
+}
+
+func (e *ensuringSource) SetSetting(key, value, scope string, timeout time.Duration) (*view.AppSettings, error) {
+	return e.client.SetSetting(key, value, scope, timeout)
+}
+
 func (e *ensuringSource) Theme(timeout time.Duration) (*view.ThemeReply, error) {
 	return e.client.Theme(timeout)
 }

@@ -251,6 +251,24 @@ func (c *Client) JobDiff(id string, timeout time.Duration) (*view.JobDiff, error
 	return &out, nil
 }
 
+// AppSettings is the Settings screen's values (settings.app).
+func (c *Client) AppSettings(timeout time.Duration) (*view.AppSettings, error) {
+	var out view.AppSettings
+	if err := c.Call("settings.app", map[string]any{}, timeout, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// SetSetting changes one setting (settings.set) and returns the screen's values after it.
+func (c *Client) SetSetting(key, value, scope string, timeout time.Duration) (*view.AppSettings, error) {
+	var out view.AppSettings
+	if err := c.Call("settings.set", map[string]any{"key": key, "value": value, "scope": scope}, timeout, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 // Theme is the board's colour theme (ui.theme).
 func (c *Client) Theme(timeout time.Duration) (*view.ThemeReply, error) {
 	var out view.ThemeReply
