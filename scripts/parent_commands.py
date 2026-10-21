@@ -89,6 +89,11 @@ def _found(repo, parent: str):
                 card = skill / "SKILL.md"
                 if card.is_file():
                     yield "skill", skill.name, card
+                elif skill.name.startswith(".") and skill.is_dir():
+                    # a CLI's own bundled skills, one folder down (codex keeps them in .system)
+                    for inner in sorted(skill.iterdir()):
+                        if (inner / "SKILL.md").is_file():
+                            yield "skill", inner.name, inner / "SKILL.md"
         for folder in COMMAND_DIRS.get(parent, []):
             base = root / folder
             if not base.is_dir():
@@ -143,8 +148,25 @@ def _toml_prompt(text: str) -> str:
     return match.group(1) if match else ""
 
 
+MENTION = re.compile(r"(?<!\S)\$([A-Za-z0-9][A-Za-z0-9_.:-]*)")
+
+
+def _mentions(repo, parent: str, message: str) -> str:
+    """$name names a skill in the message, as codex's own box does: the parent is told where each one is."""
+    named = [m.group(1) for m in MENTION.finditer(message)]
+    if not named:
+        return message
+    skills = {item["name"]: item["path"] for item in commands(repo, parent) if item["kind"] == "skill"}
+    notes = []
+    for name in dict.fromkeys(named):
+        if name in skills:
+            notes.append(f"Use your {name} skill (its instructions are in {skills[name]}).")
+    return message + ("\n\n" + "\n".join(notes) if notes else "")
+
+
 def expand(repo, parent: str, message: str) -> str:
-    """What to send for a /name message: the message itself for claude or for a name the parent does not have."""
+    """What to send for a /name message or one naming $skills: the message itself when there is nothing to add."""
+    message = _mentions(repo, parent, message)
     if parent in NATIVE or not message.startswith("/"):
         return message
     head, _, args = message[1:].partition(" ")

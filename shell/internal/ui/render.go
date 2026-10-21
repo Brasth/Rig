@@ -102,26 +102,38 @@ type PickItem struct {
 type SlashCommand struct {
 	Name, Args, Help string
 	Parent           bool // the parent's own skill or command, sent to it
+	Skill            bool // a skill, which $name also names (as in codex's box)
 }
 
 // SlashCommands are what the ask box understands besides a message for the parent.
 var SlashCommands = []SlashCommand{
-	{"/parent", "", "choose the parent CLI", false},
-	{"/queue", " TEXT", "park a task in the queue instead", false},
-	{"/new", "", "start a new conversation", false},
-	{"/stop", "", "stop the parent's running turn", false},
-	{"/jobs", "", "the Jobs tab", false},
-	{"/env", "", "the container, ports and worktrees", false},
-	{"/help", "", "every key", false},
-	{"/theme", " NAME", "rig, light, dark, material or dracula", false},
-	{"/settings", "", "theme, agents, routing, sandbox", false},
-	{"/quit", "", "leave rig shell", false},
+	{"/parent", "", "choose the parent CLI", false, false},
+	{"/queue", " TEXT", "park a task in the queue instead", false, false},
+	{"/new", "", "start a new conversation", false, false},
+	{"/stop", "", "stop the parent's running turn", false, false},
+	{"/jobs", "", "the Jobs tab", false, false},
+	{"/env", "", "the container, ports and worktrees", false, false},
+	{"/help", "", "every key", false, false},
+	{"/theme", " NAME", "rig, light, dark, material or dracula", false, false},
+	{"/settings", "", "theme, agents, routing, sandbox", false, false},
+	{"/quit", "", "leave rig shell", false, false},
 }
 
 // slashes is the commands a draft that starts with / could be, until it has a space: Rig's own, then the parent's
 // skills and commands.
 func (st State) slashes() []SlashCommand {
 	prompt := st.Prompt
+	if word := mentionWord(prompt); word != "" {
+		// a $ word anywhere in the message names one of the parent's skills, as codex's box does
+		var out []SlashCommand
+		for _, c := range st.ParentCommands {
+			name := "$" + strings.TrimPrefix(c.Name, "/")
+			if c.Skill && (strings.HasPrefix(name, word) || (len(word) > 2 && strings.Contains(name, word[1:]))) {
+				out = append(out, SlashCommand{Name: name, Help: c.Help, Parent: true, Skill: true})
+			}
+		}
+		return out
+	}
 	if !strings.HasPrefix(prompt, "/") || strings.Contains(prompt, " ") {
 		return nil
 	}
@@ -132,6 +144,30 @@ func (st State) slashes() []SlashCommand {
 		}
 	}
 	return out
+}
+
+// mentionWord is the $ word being typed at the end of the box, or "".
+func mentionWord(prompt string) string {
+	if prompt == "" || strings.HasSuffix(prompt, " ") {
+		return ""
+	}
+	word := prompt[strings.LastIndexAny(prompt, " \n")+1:]
+	if !strings.HasPrefix(word, "$") {
+		return ""
+	}
+	return word
+}
+
+// completeSlash is the box once a menu row is chosen: a $ skill takes the place of the word typed, a / command the
+// whole box, with a space where arguments follow.
+func completeSlash(prompt string, c SlashCommand) string {
+	if strings.HasPrefix(c.Name, "$") {
+		return strings.TrimSuffix(prompt, mentionWord(prompt)) + c.Name + " "
+	}
+	if c.Args != "" {
+		return c.Name + " "
+	}
+	return c.Name
 }
 
 // typingChat: the ask box has the keyboard.

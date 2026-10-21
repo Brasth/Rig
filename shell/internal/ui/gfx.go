@@ -161,6 +161,30 @@ func NewLogoWriter(f *os.File, tmux bool) *LogoWriter {
 	return logoOut
 }
 
+// NewTermWriter wraps the terminal f without the tiles, for a terminal that does not draw images: what Copy queues
+// still goes out with the next frame.
+func NewTermWriter(f *os.File, tmux bool) *LogoWriter {
+	logoOut = &LogoWriter{File: f, tmux: tmux}
+	return logoOut
+}
+
+// Copy puts text on the clipboard of the terminal the board is drawn in (OSC 52), with the next frame. Inside tmux it
+// goes both through to the terminal and to tmux itself, whichever of the two lets it.
+func Copy(text string) bool {
+	if logoOut == nil {
+		return false
+	}
+	seq := "\x1b]52;c;" + base64.StdEncoding.EncodeToString([]byte(text)) + "\x07"
+	out := []byte(seq)
+	if logoOut.tmux {
+		out = append([]byte("\x1bPtmux;"+strings.ReplaceAll(seq, "\x1b", "\x1b\x1b")+"\x1b\\"), out...)
+	}
+	logoOut.mu.Lock()
+	logoOut.extra = append(logoOut.extra, out)
+	logoOut.mu.Unlock()
+	return true
+}
+
 func (w *LogoWriter) Write(p []byte) (int, error) {
 	n, err := w.File.Write(p)
 	if err != nil {
@@ -172,7 +196,7 @@ func (w *LogoWriter) Write(p []byte) (int, error) {
 	extra := w.extra
 	w.extra = nil
 	w.mu.Unlock()
-	if send {
+	if send && len(w.payload) > 0 {
 		_, err = w.File.Write(w.payload)
 	}
 	for _, e := range extra {

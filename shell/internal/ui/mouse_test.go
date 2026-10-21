@@ -1,18 +1,24 @@
 package ui
 
 import (
+	"encoding/base64"
+	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
+
+	"github.com/Brasth/Rig/shell/internal/view"
 )
 
 // clickOn clicks the first cell of text on the screen, as a terminal reports it.
 func clickOn(t *testing.T, m *Model, text string) {
 	t.Helper()
 	x, y := findOnScreen(t, m, text)
-	run(mouseAt(m, tea.MouseButtonLeft, tea.MouseActionPress, x, y), m)
+	clickAt(m, x, y)
 }
 
 func findOnScreen(t *testing.T, m *Model, text string) (int, int) {
@@ -25,6 +31,12 @@ func findOnScreen(t *testing.T, m *Model, text string) (int, int) {
 	}
 	t.Fatalf("%q is not on the screen:\n%s", text, ansi.Strip(m.View()))
 	return 0, 0
+}
+
+// clickAt presses the left button and lets it go at one cell, as a click arrives.
+func clickAt(m *Model, x, y int) {
+	run(mouseAt(m, tea.MouseButtonLeft, tea.MouseActionPress, x, y), m)
+	run(mouseAt(m, tea.MouseButtonLeft, tea.MouseActionRelease, x, y), m)
 }
 
 func mouseAt(m *Model, b tea.MouseButton, act tea.MouseAction, x, y int) tea.Cmd {
@@ -89,7 +101,7 @@ func TestClickingTheTopBarAndFooterWorksAsTheirKeys(t *testing.T) {
 	if m.st.App.Palette == nil {
 		t.Fatal("the footer's ⌃k opens the palette")
 	}
-	run(mouseAt(m, tea.MouseButtonLeft, tea.MouseActionPress, 1, 30), m)
+	clickAt(m, 1, 30)
 	if m.st.App.Palette != nil {
 		t.Fatal("a click outside the palette closes it")
 	}
@@ -97,7 +109,7 @@ func TestClickingTheTopBarAndFooterWorksAsTheirKeys(t *testing.T) {
 	if !m.st.App.Panel {
 		t.Fatal("⇥ panel opens the agents panel")
 	}
-	run(mouseAt(m, tea.MouseButtonLeft, tea.MouseActionPress, 2, 20), m)
+	clickAt(m, 2, 20)
 	if m.st.App.Panel {
 		t.Fatal("a click beside the panel closes it")
 	}
@@ -110,7 +122,7 @@ func TestClickingAPaletteRowRunsIt(t *testing.T) {
 	m.Update(tea.KeyMsg{Type: tea.KeyCtrlK})
 	m.st.App.Palette.Query = "settings"
 	x, y := findOnScreen(t, m, "│     settings")
-	run(mouseAt(m, tea.MouseButtonLeft, tea.MouseActionPress, x+6, y), m)
+	clickAt(m, x+6, y)
 	if m.st.App.Settings == nil || m.st.App.Palette != nil {
 		t.Fatal("the clicked row ran: Settings is open")
 	}
@@ -148,8 +160,20 @@ func TestClickingAnAnswerChipAnswers(t *testing.T) {
 func TestTheWheelScrollsAndTheMovingPointerHovers(t *testing.T) {
 	m, src := mouseModel(t)
 	withConversation(t, m, src)
+	m.View()
 	run(mouseAt(m, tea.MouseButtonWheelUp, tea.MouseActionPress, 50, 10), m)
-	if m.st.ChatUp != 3 {
+	if m.st.ChatUp != 0 {
+		t.Fatal("a conversation that fits does not scroll")
+	}
+	var long []view.ChatEntry
+	for i := 0; i < 40; i++ {
+		long = append(long, ce("user", fmt.Sprint("question ", i)), ce("assistant", "an answer"))
+	}
+	src.chatView = transcript("idle", long...)
+	run(m.fetchChat(true), m)
+	m.View()
+	run(mouseAt(m, tea.MouseButtonWheelUp, tea.MouseActionPress, 50, 10), m)
+	if m.st.ChatUp != wheelStep {
 		t.Fatalf("the wheel scrolls the conversation: %d", m.st.ChatUp)
 	}
 	run(mouseAt(m, tea.MouseButtonWheelDown, tea.MouseActionPress, 50, 10), m)
@@ -166,7 +190,7 @@ func TestTheWheelScrollsAndTheMovingPointerHovers(t *testing.T) {
 func TestAClickSkipsTheSplash(t *testing.T) {
 	m, _ := mouseModel(t)
 	m.st.App.Splash = 3
-	run(mouseAt(m, tea.MouseButtonLeft, tea.MouseActionPress, 5, 5), m)
+	clickAt(m, 5, 5)
 	if m.st.App.Splash != 0 {
 		t.Fatal("a click goes straight to the screen")
 	}
@@ -225,5 +249,93 @@ func TestTheLauncherOpensAClickedProject(t *testing.T) {
 	}
 	if l.confirm == "" || !strings.Contains(l.confirm, "web") {
 		t.Fatalf("a click on the project not set up asks to set it up: %q (open %q, base %s)", l.confirm, l.Open, base)
+	}
+}
+
+func TestAThreadScrollsWithTheWheelAndPages(t *testing.T) {
+	m, src := mouseModel(t)
+	withConversation(t, m, src)
+	var log []string
+	for i := 1; i <= 120; i++ {
+		log = append(log, fmt.Sprintf("line %03d %s", i, strings.Repeat("word ", 30)))
+	}
+	m.st.App.Thread = "job-7f2"
+	m.st.Log = &view.LogReply{Text: strings.Join(log, "\n")}
+	screen := ansi.Strip(m.View())
+	if !strings.Contains(screen, "line 120") || strings.Contains(screen, "line 100 ") {
+		t.Fatalf("the newest lines, wrapped:\n%s", screen)
+	}
+	run(mouseAt(m, tea.MouseButtonWheelUp, tea.MouseActionPress, 50, 10), m)
+	if m.st.LogUp != wheelStep || m.st.ChatUp != 0 {
+		t.Fatalf("the wheel scrolls the thread, not the conversation: %d %d", m.st.LogUp, m.st.ChatUp)
+	}
+	for i := 0; i < 60; i++ {
+		run(press(m, "pgup"), m)
+		m.View()
+	}
+	if m.st.LogUp != m.st.App.LogMax {
+		t.Fatalf("it stops at the oldest line: %d of %d", m.st.LogUp, m.st.App.LogMax)
+	}
+	if screen := ansi.Strip(m.View()); !strings.Contains(screen, "line 001") || !strings.Contains(screen, "G newest") {
+		t.Fatalf("PgUp reaches the oldest line:\n%s", screen)
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'G'}})
+	if m.st.LogUp != 0 {
+		t.Fatal("G follows the newest lines again")
+	}
+}
+
+func TestDraggingSelectsTextAndLettingGoCopiesIt(t *testing.T) {
+	m, src := mouseModel(t)
+	withConversation(t, m, src)
+	out, err := os.Create(filepath.Join(t.TempDir(), "out"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer out.Close()
+	NewTermWriter(out, true)
+	t.Cleanup(func() { logoOut = nil })
+	x, y := findOnScreen(t, m, "I put a sliding-window")
+	run(mouseAt(m, tea.MouseButtonLeft, tea.MouseActionPress, x+2, y), m)
+	run(mouseAt(m, tea.MouseButtonLeft, tea.MouseActionMotion, x+20, y), m)
+	if line := strings.Split(m.View(), "\n")[y]; !strings.Contains(line, "\x1b[7m") {
+		t.Fatalf("what is dragged over is lit: %q", line)
+	}
+	run(mouseAt(m, tea.MouseButtonLeft, tea.MouseActionRelease, x+20, y), m)
+	if !strings.HasPrefix(m.st.Message, "copied 19 characters") {
+		t.Fatalf("letting go copies: %q", m.st.Message)
+	}
+	if screen := ansi.Strip(m.View()); !strings.Contains(screen, "✓ copied 19 characters") || m.sel != nil {
+		t.Fatal("the footer says so, and the highlight goes")
+	}
+	logoOut.Write([]byte("frame"))
+	data, _ := os.ReadFile(out.Name())
+	want := base64.StdEncoding.EncodeToString([]byte("put a sliding-windo"))
+	if !strings.Contains(string(data), "\x1b]52;c;"+want+"\x07") || !strings.Contains(string(data), "\x1bPtmux;\x1b\x1b]52;c;"+want) {
+		t.Fatalf("to the clipboard, through tmux too: %q", data)
+	}
+	run(mouseAt(m, tea.MouseButtonLeft, tea.MouseActionPress, x+2, y), m)
+	run(mouseAt(m, tea.MouseButtonLeft, tea.MouseActionMotion, x+5, y), m)
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
+	if m.sel != nil {
+		t.Fatal("a key ends the selection")
+	}
+	m.press = nil
+	tx, ty := findOnScreen(t, m, "changes")
+	run(mouseAt(m, tea.MouseButtonLeft, tea.MouseActionPress, tx, ty), m)
+	run(mouseAt(m, tea.MouseButtonLeft, tea.MouseActionMotion, tx+20, ty), m)
+	run(mouseAt(m, tea.MouseButtonLeft, tea.MouseActionRelease, tx+20, ty), m)
+	if m.st.App.Tab != 1 {
+		t.Fatal("a drag that starts on a tab selects, it does not click")
+	}
+}
+
+func TestASelectionOverSeveralRowsLosesTheMargin(t *testing.T) {
+	plain := []string{"     first row of it   ", "     second row", "     third row   "}
+	if got := selectedText(plain, textSel{ax: 11, ay: 0, bx: 9, by: 2}); got != "row of it\nsecond row\nthird" {
+		t.Fatalf("%q", got)
+	}
+	if got := selectedText(plain, textSel{ax: 9, ay: 2, bx: 11, by: 0}); got != "row of it\nsecond row\nthird" {
+		t.Fatalf("dragged upwards: %q", got)
 	}
 }

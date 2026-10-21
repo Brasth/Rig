@@ -81,3 +81,34 @@ func TestAnOlderServerLeavesRigsOwnCommands(t *testing.T) {
 		t.Fatal("no chat.commands: asked once, nothing added")
 	}
 }
+
+func TestADollarWordListsTheParentsSkillsAsCodexDoes(t *testing.T) {
+	m, src := appModel(t)
+	withConversation(t, m, src)
+	withParentCommands(t, m, src)
+	typeText(m, "please $rev")
+	if got := m.st.slashes(); len(got) != 1 || got[0].Name != "$review" {
+		t.Fatalf("the skill, not the command: %v", got)
+	}
+	if screen := appScreen(m); !strings.Contains(screen, "$review") {
+		t.Fatalf("the menu shows it:\n%s", screen)
+	}
+	run(press(m, "enter"), m)
+	if m.st.Prompt != "please $review " || len(src.chatSent) != 0 {
+		t.Fatalf("⏎ completes the word in place and sends nothing yet: %q", m.st.Prompt)
+	}
+	typeText(m, "the login change")
+	run(press(m, "enter"), m)
+	if n := len(src.chatSent); n == 0 || src.chatSent[n-1][0] != "please $review the login change" {
+		t.Fatalf("sent as typed: %v", src.chatSent)
+	}
+	m.st.Prompt = ""
+	typeText(m, "$")
+	if got := m.st.slashes(); len(got) != 1 {
+		t.Fatalf("$ alone lists every skill (commands are not $ names): %v", got)
+	}
+	typeText(m, "5 off")
+	if got := m.st.slashes(); got != nil {
+		t.Fatal("a space ends the word")
+	}
+}

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/Brasth/Rig/shell/internal/api"
 	"github.com/Brasth/Rig/shell/internal/term"
@@ -228,6 +229,8 @@ type Model struct {
 	chatStat    *view.ChatStatus
 	cmdsFor     string    // the parent whose skills and commands the / menu has
 	zones       []hitZone // where the last frame's clickable places are (mouse.go)
+	plain       []string  // the last frame's text, for copying a selection
+	press, sel  *textSel  // where the button went down, and the text dragged over since
 	hoverX      int       // the pointer, for the zone drawn underlined
 	hoverY      int
 }
@@ -642,12 +645,12 @@ func (m *Model) fetchLog(force bool) tea.Cmd {
 		return nil
 	}
 	m.lgBusy = true
-	src, id := m.src, m.selectedJobID()
+	src, id, rows := m.src, m.selectedJobID(), logFetchRows
 	if thread {
-		id = m.st.App.Thread
+		id, rows = m.st.App.Thread, 500 // the most log.follow gives: a thread scrolls back through it
 	}
 	return func() tea.Msg {
-		l, err := src.Log(id, logFetchRows, callTimeout)
+		l, err := src.Log(id, rows, callTimeout)
 		return logMsg{log: l, err: err, at: time.Now()}
 	}
 }
@@ -675,7 +678,7 @@ func (m *Model) fetchParentCommands(parent string) tea.Cmd {
 		for _, c := range got.Commands {
 			if name := "/" + c.Name; !taken[name] {
 				taken[name] = true
-				list = append(list, SlashCommand{Name: name, Args: " …", Help: c.Kind + " · " + c.Help, Parent: true})
+				list = append(list, SlashCommand{Name: name, Args: " …", Help: c.Kind + " · " + c.Help, Parent: true, Skill: c.Kind == "skill"})
 			}
 		}
 		return parentCmdsMsg{parent: parent, list: list}
@@ -1248,6 +1251,7 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.fetching = false
 		return m, m.fetch()
 	case tea.KeyMsg:
+		m.sel = nil // a key ends a selection, as in a terminal
 		return m.key(msg)
 	case tea.MouseMsg:
 		return m.mouse(msg)
@@ -1853,6 +1857,13 @@ func (m *Model) View() string {
 		}
 		frame, zones := zonesOf(AppFrame(m.view, m.st, w, h), m.hoverX, m.hoverY)
 		m.zones = zones
+		m.plain = make([]string, len(frame))
+		for i, l := range frame {
+			m.plain[i] = strings.ReplaceAll(ansi.Strip(l), placeholderCells, "   ")
+		}
+		if m.sel != nil {
+			paintSelection(frame, *m.sel, w)
+		}
 		return strings.Join(Paint(frame), "\n")
 	}
 	lines := Decorate(RenderLines(m.view, m.st, m.w, m.h))

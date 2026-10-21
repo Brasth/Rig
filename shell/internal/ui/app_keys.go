@@ -142,6 +142,15 @@ func (m *Model) openFile(rel string) tea.Cmd {
 	}
 }
 
+// scrollBy moves the conversation, or the helper's thread on screen, n lines up (down when n < 0).
+func (m *Model) scrollBy(n int) {
+	if a := m.st.App; a.Thread != "" {
+		m.st.LogUp = max(0, min(a.LogMax, m.st.LogUp+n))
+		return
+	}
+	m.st.ChatUp = max(0, min(m.st.App.ChatMax, m.st.ChatUp+n))
+}
+
 // appSend sends the box's text to the parent, or runs it as a / command.
 func (m *Model) appSend(text string) tea.Cmd {
 	text = strings.TrimSpace(text)
@@ -242,7 +251,7 @@ func (m *Model) appKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		job := *a.NewJob
 		switch key {
 		case "enter":
-			a.NewJob, a.Thread, a.Panel = nil, job.ID, false
+			a.NewJob, a.Thread, a.Panel, m.st.LogUp = nil, job.ID, false, 0
 			m.lgLast = time.Time{}
 			return m, m.fetchLog(true)
 		case "s":
@@ -261,7 +270,7 @@ func (m *Model) appKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			a.PanelSel = clampSel(a.PanelSel+1, len(jobs))
 		case "enter":
 			if len(jobs) > 0 {
-				a.Thread, a.Panel = jobs[clampSel(a.PanelSel, len(jobs))].ID, false
+				a.Thread, a.Panel, m.st.LogUp = jobs[clampSel(a.PanelSel, len(jobs))].ID, false, 0
 				m.st.Log, m.st.LogE, m.lgLast = nil, "", time.Time{}
 				return m, m.fetchLog(true)
 			}
@@ -305,8 +314,8 @@ func (m *Model) appKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		if matches := m.st.slashes(); len(matches) > 0 {
 			sel := clampSel(m.st.SlashSel, len(matches))
-			m.st.Prompt, m.st.SlashSel = matches[sel].Name, 0
-			if matches[sel].Args != "" {
+			m.st.Prompt, m.st.SlashSel = completeSlash(m.st.Prompt, matches[sel]), 0
+			if matches[sel].Args != "" && !strings.HasSuffix(m.st.Prompt, " ") {
 				m.st.Prompt += " "
 			}
 			return m, nil
@@ -327,10 +336,14 @@ func (m *Model) appKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case "pgup":
-		m.st.ChatUp += 8
+		m.scrollBy(8)
 		return m, nil
 	case "pgdown":
-		m.st.ChatUp = max(0, m.st.ChatUp-8)
+		m.scrollBy(-8)
+		return m, nil
+	}
+	if a.Thread != "" && key == "G" {
+		m.st.LogUp = 0 // the thread follows its newest lines again
 		return m, nil
 	}
 	if a.Thread != "" && key == "s" {
@@ -364,8 +377,8 @@ func (m *Model) appKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case tea.KeyEnter:
 		if len(matches) > 0 {
 			sel := matches[clampSel(m.st.SlashSel, len(matches))]
-			if sel.Args != "" {
-				m.st.Prompt, m.st.SlashSel = sel.Name+" ", 0
+			if sel.Args != "" || sel.Skill {
+				m.st.Prompt, m.st.SlashSel = completeSlash(m.st.Prompt, sel), 0
 				return m, nil
 			}
 			return m, m.appSend(sel.Name)
