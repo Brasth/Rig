@@ -166,7 +166,7 @@ APP_JS = r"""(function () {
     main.appendChild(el('h3', { 'class': 'muted' }, 'Chat · ' + view.session + ' · ' + view.parent + ' · ' + view.state + (view.note ? ' (' + view.note + ')' : '')));
     var box = el('div', { 'class': 'section' });
     (view.entries || []).forEach(function (entry) {
-      box.appendChild(el('div', { 'class': entry.role === 'error' ? 'tone-failed' : entry.role === 'tool' || entry.role === 'system' ? 'muted' : '' }, (entry.role === 'user' ? 'you' : entry.role) + ' › ' + entry.text));
+      box.appendChild(el('div', { 'class': entry.role === 'error' ? 'tone-failed' : entry.role === 'tool' || entry.role === 'system' || entry.role === 'switch' ? 'muted' : '' }, (entry.role === 'user' ? 'you' : entry.role === 'assistant' && entry.parent ? entry.parent : entry.role) + ' › ' + entry.text));
     });
     main.appendChild(box);
   }

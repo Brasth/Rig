@@ -980,15 +980,10 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.openPicker()
 			}
 		}
-		// When rig shell opens, pick up the newest conversation with the parent in use. Only then: after a switch of
-		// parent or a new conversation, an old one must not come back.
-		if m.chatID == "" && !m.chatAdopted {
-			for _, s := range msg.status.Sessions {
-				if s.Parent == m.st.ChatParent {
-					m.chatID, m.chatAdopted = s.ID, true
-					break
-				}
-			}
+		// When rig shell opens, pick up the newest conversation, whichever parent had it last: the parent in use takes it
+		// over with the next message. Only then: after a new conversation, an old one must not come back.
+		if m.chatID == "" && !m.chatAdopted && len(msg.status.Sessions) > 0 {
+			m.chatID, m.chatAdopted = msg.status.Sessions[0].ID, true
 		}
 		if m.appOn() && m.st.ChatParent != "" && m.st.ChatParent != m.cmdsFor {
 			return m, m.fetchParentCommands(m.st.ChatParent) // the / menu offers this parent's skills and commands
@@ -1150,10 +1145,12 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.chatStat != nil {
 			m.chatStat.Configured = msg.name
 		}
-		if was != msg.name || (m.st.Chat != nil && m.st.Chat.Parent != msg.name) {
-			m.chatID, m.st.Chat, m.st.ChatUp, m.chatAdopted = "", nil, 0, true // another CLI cannot resume this one's session
-		}
 		m.st.Message = "parent: " + msg.name + " (saved in .rig/harness.toml)"
+		if m.chatID != "" && m.st.Chat != nil && m.st.Chat.Parent != msg.name {
+			// the conversation goes on: the new parent is told what was said with your next message
+			m.st.Message = msg.name + " takes this conversation over from " + m.st.Chat.Parent + " with your next message"
+		}
+		_ = was
 	case chatSentMsg:
 		if msg.err == nil && msg.started == nil {
 			msg.err = errors.New("the server sent no session")

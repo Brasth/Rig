@@ -277,11 +277,11 @@ func appProject(v *view.View, a *AppState) string {
 }
 
 func appParent(st State) string {
+	if st.ChatParent != "" {
+		return st.ChatParent // the parent chosen; a conversation another one had is handed to it
+	}
 	if st.Chat != nil && st.Chat.Parent != "" {
 		return st.Chat.Parent
-	}
-	if st.ChatParent != "" {
-		return st.ChatParent
 	}
 	return "parent"
 }
@@ -624,6 +624,10 @@ func conversationBody(v *view.View, st State, w, h int) ([]string, [][2]string) 
 	if st.Chat.State == "running" && strings.TrimSpace(st.Chat.Partial) != "" {
 		lines = append(lines, entryLines(st, []view.ChatEntry{{Role: "assistant", Text: st.Chat.Partial}}, cw)...)
 	}
+	if st.Chat.Parent != "" && parent != st.Chat.Parent && st.Chat.State != "running" {
+		// switched, not yet sent: the next message hands the conversation over
+		lines = append(lines, center(st.faint("── "+parent+" takes over from "+st.Chat.Parent+" with your next message ──"), cw), "")
+	}
 	for _, r := range appliedCards(v, st) {
 		lines = append(lines, changeCard(st, r, cw)...)
 		lines = append(lines, "")
@@ -658,8 +662,25 @@ func conversationBody(v *view.View, st State, w, h int) ([]string, [][2]string) 
 // entryLines is the conversation's entries as lines: your messages as bubbles, the parent's answers, tool calls and errors.
 func entryLines(st State, entries []view.ChatEntry, cw int) []string {
 	var lines []string
+	several := false // more than one parent in this conversation: each answer says whose it is
 	for _, e := range entries {
+		several = several || e.Role == "switch"
+	}
+	last := ""
+	for _, e := range entries {
+		role := e.Role
+		if role == "tool" {
+			role = last // a tool call does not end the parent's answer
+		}
+		if e.Role == "assistant" && several && last != "assistant" && e.Parent != "" {
+			lines = append(lines, st.tile(e.Parent)+"  "+st.faint(e.Parent))
+		}
+		last = role
 		switch e.Role {
+		case "switch":
+			from, to, _ := strings.Cut(e.Text, " → ")
+			lines = append(lines, center(st.faint("── "+to+" takes over from "+from+" ──"), cw), "")
+			continue
 		case "user":
 			lines = append(lines, bubble(st, e.Text, cw)...)
 		case "assistant":

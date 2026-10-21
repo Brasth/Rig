@@ -931,3 +931,25 @@ func TestAFinishedHelpersThreadStaysInThePanel(t *testing.T) {
 		t.Fatal("a finished helper has nothing to stop")
 	}
 }
+
+func TestAConversationHandedToAnotherParentSaysWhoSaidWhat(t *testing.T) {
+	m, src := appModel(t)
+	withConversation(t, m, src)
+	src.chatView = transcript("idle", ce("user", "what is in a.txt?"), view.ChatEntry{Role: "assistant", Text: "It says one.", Parent: "claude"},
+		view.ChatEntry{Role: "switch", Text: "claude → codex", Parent: "codex"}, ce("user", "rename it"),
+		view.ChatEntry{Role: "assistant", Text: "Renamed to b.txt.", Parent: "codex"})
+	src.chatView.Parent = "codex"
+	m.chBusy = false
+	run(m.fetchChat(true), m)
+	m.st.ChatParent = "codex"
+	out := appScreen(m)
+	for _, want := range []string{"claude", "It says one.", "── codex takes over from claude ──", "codex", "Renamed to b.txt."} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("missing %q:\n%s", want, out)
+		}
+	}
+	m.st.ChatParent = "grok"
+	if out := appScreen(m); !strings.Contains(out, "── grok takes over from codex with your next message ──") {
+		t.Fatalf("a switch not sent yet says what happens next:\n%s", out)
+	}
+}

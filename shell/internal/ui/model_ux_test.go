@@ -192,15 +192,6 @@ func TestAProjectWithNoParentChoosesOneInThePicker(t *testing.T) {
 	}
 }
 
-func TestChangingTheParentStartsANewConversation(t *testing.T) {
-	m, _, _ := chatSession(t)
-	m.chatID = "c-1a2b3c4d"
-	m.Update(parentSetMsg{name: "codex"})
-	if m.chatID != "" || m.st.Chat != nil {
-		t.Fatal("codex cannot resume claude's session: the next message starts a new one")
-	}
-}
-
 func TestTheReplyStreamsUnderASpinnerWithTheTimeItHasTaken(t *testing.T) {
 	m, src, _ := chatSession(t)
 	now := time.Date(2026, 10, 21, 12, 0, 42, 0, time.UTC)

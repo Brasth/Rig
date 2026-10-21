@@ -383,7 +383,7 @@ class RealBrowser(ApiFixture, unittest.TestCase):
             rig_chat.append(self.repo, meta["id"], "tool", "Read /repo/a.txt")
         dom = self.dom("#Chat")
         text = self.text(dom)
-        for expected in ("Chat", "EXPERIMENT", "you › what is &lt;b&gt;in&lt;/b&gt; a.txt?", "assistant › It says one.", "tool › Read /repo/a.txt", meta["id"]):
+        for expected in ("Chat", "EXPERIMENT", "you › what is &lt;b&gt;in&lt;/b&gt; a.txt?", "claude › It says one.", "tool › Read /repo/a.txt", meta["id"]):
             self.assertIn(expected, text)
         self.assertNotIn("<b>in</b>", dom)
         self.assertNotIn("send-box", dom.lower(), "this page has no way to send")

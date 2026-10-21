@@ -242,9 +242,10 @@ type ThemeReply struct {
 
 // ChatEntry is one line of a chat transcript.
 type ChatEntry struct {
-	Role string `json:"role"`
-	Text string `json:"text"`
-	At   string `json:"at"`
+	Role   string `json:"role"` // user, assistant, tool, error, system, or switch (another parent took over)
+	Text   string `json:"text"`
+	At     string `json:"at"`
+	Parent string `json:"parent"` // the parent at the time: who said an assistant line
 }
 
 // ChatTranscript is chat.transcript.
