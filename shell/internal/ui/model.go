@@ -236,6 +236,8 @@ type Model struct {
 	zones       []hitZone // where the last frame's clickable places are (mouse.go)
 	plain       []string  // the last frame's text, for copying a selection
 	press, sel  *textSel  // where the button went down, and the text dragged over since
+	clip        string    // what the code editor copied or cut, for ⌃v
+	codeDrag    bool      // the button went down in a file being edited: dragging selects
 	boxDrag     bool      // the button went down in the reply box: dragging selects its text
 	boxFrom     int       // where in the box's text it went down
 	clickAt     time.Time // the last press, for a double click
@@ -1077,6 +1079,7 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a := m.st.App
 			a.FileLines, a.FileErr, a.ImageCols, a.ImageRows = msg.lines, "", 0, 0
 			a.FileCRLF, a.FileTruncated, a.Dirty = msg.crlf, msg.truncated, false
+			a.SavedID, a.Undo, a.Redo, a.EdSel = linesID(msg.lines), nil, nil, false
 			if msg.err != nil {
 				a.FileErr = msg.err.Error()
 			}
@@ -1663,6 +1666,16 @@ func (m *Model) confirmKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, m.applyAct("applies.hold", map[string]any{"id": id, "on": true}, "holding "+id)
 		case "applies.hold-all":
 			return m, m.holdAll()
+		case "file.delete":
+			m.deleteFile(id)
+			return m, nil
+		case "tab.discard":
+			m.pendingX = "tab.discard"
+			cmd := m.closeTab()
+			m.pendingX = ""
+			return m, cmd
+		case "quit.unsaved":
+			return m, tea.Quit
 		case "search.replace":
 			if m.st.App != nil && m.st.App.Search != nil {
 				cmd := m.replaceAll(id)

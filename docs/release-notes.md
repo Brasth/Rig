@@ -3,6 +3,10 @@
 
 
 
+## The code tab edits as an IDE does (2026-10-21)
+
+Editing a file in the code tab now works as an IDE: a selection with the mouse, Shift and the arrows, or `⌃a`; copy, cut and paste (`⌃c` `⌃x` `⌃v`, the line with nothing selected); undo and redo (`⌃z` `⌃y`); indent and outdent (`⇥` `⇧⇥`) and comments (`⌃/`); brackets and quotes that close themselves and `⏎` that indents; find in the file (`⌃f`, then `⏎`; `n` `N` while not editing) and go to line (`⌃g`). Each open file keeps its own unsaved changes across tabs (`⌃PgUp` `⌃PgDn`), marked `◆`; `esc` keeps them, and closing a tab or quitting asks first. The explorer makes (`n`), renames (`r`) and deletes (`d`) files. The wheel scrolls the file without moving the cursor.
+
 ## The mouse places the cursor and selects in the reply box (2026-10-21)
 
 As in codex's and grok's box, a click in the reply box puts the cursor there, dragging selects text (and copies it), a double click selects a word, and Shift with the arrows, Home and End selects from the keyboard; typing, a paste, `⌫` or Delete replace or remove the selection. While a file is edited in the code tab, a click puts the cursor where you click.
