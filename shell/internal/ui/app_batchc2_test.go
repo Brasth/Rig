@@ -343,3 +343,21 @@ func TestBangRunsACommandInTheTerminalAndMemoryOpensTheInstructionsFile(t *testi
 		t.Fatal("/clear starts a new conversation")
 	}
 }
+
+func TestTheFilesATurnChangedShowAsADiffUnderTheAnswer(t *testing.T) {
+	m, src := appModel(t)
+	src.chatView = transcript("idle", ce("user", "change things"), ce("assistant", "Done."),
+		ce("diff", "a.py +2 −1\n@@ -1,3 +1,4 @@\n one\n-two\n+TWO\n three\n+four"), ce("diff", "new.txt +1 −0\n@@ -0,0 +1 @@\n+hello"),
+		ce("system", "and 3 more files changed: x.go, y.go, z.go"))
+	m.chatID, m.chBusy = "c-1a2b3c4d", false
+	run(m.fetchChat(true), m)
+	out := appScreen(m)
+	for _, want := range []string{"● a.py  +2 −1", "− two", "+ TWO", "+ four", "      one", "● new.txt  +1 −0", "+ hello", "and 3 more files changed"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("each changed file is a header and its lines; missing %q:\n%s", want, out)
+		}
+	}
+	if strings.Index(out, "Done.") > strings.Index(out, "● a.py") {
+		t.Fatal("the diff comes after the answer it belongs to")
+	}
+}

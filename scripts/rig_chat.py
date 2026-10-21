@@ -960,6 +960,88 @@ def run_codex_server(repo: Path, session: str, message: str, meta: dict, folder:
         stop()
 
 
+# -- what a turn changed -----------------------------------------------------
+DIFF_FILES = 8        # files shown per turn; the rest are counted
+DIFF_LINES = 60       # lines shown per file
+DIFF_SECONDS = 25
+
+
+def _tree(repo) -> str:
+    """A tree naming the working tree as it is now: tracked and new files, not ignored ones, nor .rig. It is made through a
+    copy of the index, so the repository's own index and branch are never touched. Empty when this is not a git repository."""
+    import tempfile
+    repo = str(repo)
+    try:
+        top = subprocess.run(["git", "-C", repo, "rev-parse", "--git-dir"], capture_output=True, text=True, timeout=10)
+        if top.returncode != 0:
+            return ""
+        git_dir = Path(top.stdout.strip())
+        git_dir = git_dir if git_dir.is_absolute() else Path(repo) / git_dir
+        fd, index = tempfile.mkstemp(prefix="rig-index-")
+        os.close(fd)
+        try:
+            try:
+                shutil.copyfile(git_dir / "index", index)  # keeps git's stat cache, so a big repository is not read again
+            except OSError:
+                os.unlink(index)  # no index yet: an empty one
+            env = {**os.environ, "GIT_INDEX_FILE": index}
+            added = subprocess.run(["git", "-C", repo, "add", "-A", "--", "."], capture_output=True, text=True,
+                                   timeout=DIFF_SECONDS, env=env)
+            if added.returncode != 0:
+                return ""
+            # Rig's own files change while a turn runs; an exclude pathspec would fail where .rig is ignored, so they are taken out after
+            subprocess.run(["git", "-C", repo, "rm", "-r", "--cached", "-q", "--ignore-unmatch", "--", ".rig"], capture_output=True,
+                           text=True, timeout=DIFF_SECONDS, env=env)
+            out = subprocess.run(["git", "-C", repo, "write-tree"], capture_output=True, text=True, timeout=10, env=env)
+            return out.stdout.strip() if out.returncode == 0 else ""
+        finally:
+            if os.path.exists(index):
+                os.unlink(index)
+    except (OSError, subprocess.SubprocessError):
+        return ""
+
+
+def turn_changes(repo, before: str, after: str) -> list[dict]:
+    """The files that differ between two trees: {path, added, deleted, text} where text is the patch's hunks, cut short."""
+    if not before or not after or before == after:
+        return []
+    try:
+        stat = subprocess.run(["git", "-C", str(repo), "diff", "--numstat", "--no-color", "--no-ext-diff", before, after],
+                              capture_output=True, text=True, timeout=DIFF_SECONDS)
+        patch = subprocess.run(["git", "-C", str(repo), "diff", "--no-color", "--no-ext-diff", "-U2", before, after],
+                               capture_output=True, text=True, timeout=DIFF_SECONDS, errors="replace")
+    except (OSError, subprocess.SubprocessError):
+        return []
+    counts = {}
+    for row in stat.stdout.splitlines():
+        a, _, rest = row.partition("\t")
+        d, _, path = rest.partition("\t")
+        counts[path] = (int(a) if a.isdigit() else 0, int(d) if d.isdigit() else 0)
+    files = []
+    for chunk in re.split(r"(?m)^diff --git ", patch.stdout)[1:]:
+        head, _, body = chunk.partition("\n")
+        path = head.rsplit(" b/", 1)[-1].strip()
+        lines = [l for l in body.splitlines() if not l.startswith(("index ", "--- ", "+++ ", "new file", "deleted file", "similarity", "rename "))]
+        if any(l.startswith("Binary files") for l in lines):
+            lines = ["binary file"]
+        if len(lines) > DIFF_LINES:
+            lines = lines[:DIFF_LINES] + [f"… {len(lines) - DIFF_LINES} more lines"]
+        added, deleted = counts.get(path, (0, 0))
+        files.append({"path": path, "added": added, "deleted": deleted, "text": "\n".join(lines)})
+    return files
+
+
+def _record_changes(repo, session: str, before: str) -> None:
+    """After a turn: one entry for each file it changed, with what changed, for any parent."""
+    after = _tree(repo)
+    files = turn_changes(repo, before, after)
+    for entry in files[:DIFF_FILES]:
+        append(repo, session, "diff", _clean(f"{entry['path']} +{entry['added']} −{entry['deleted']}\n{entry['text']}", 6000))
+    if len(files) > DIFF_FILES:
+        rest = files[DIFF_FILES:]
+        append(repo, session, "system", f"and {len(rest)} more files changed: " + ", ".join(e["path"] for e in rest[:6]) + (" …" if len(rest) > 6 else ""))
+
+
 def run_turn(repo, session: str) -> int:
     """The detached runner: spawn the parent in its headless mode and write what it says to the transcript."""
     repo = Path(repo).resolve()
@@ -990,9 +1072,11 @@ def run_turn(repo, session: str) -> int:
     native = meta.get("native", "")
     if parent == "grok" and not native:
         meta["native"] = turn["new_id"]  # grok takes the id we give it, and later turns resume it
+    before = _tree(repo)  # what the working tree is before the parent starts, to show what its turn changed
     if parent == "codex" and shutil.which("codex"):
         started, error, _ = run_codex_server(repo, session, message, meta, folder)
         if started:
+            _record_changes(repo, session, before)
             _write_json(folder / "meta.json", {"status": "idle"})
             fresh = read_meta(repo, session) if _meta_path(repo, session).exists() else meta
             fresh.update(native=meta.get("native", ""), state="failed" if error else "idle", runner_pid=0,
@@ -1063,6 +1147,7 @@ def run_turn(repo, session: str) -> int:
             write("assistant", _clean("\n".join(lines)))
     stderr = proc.stderr.read()
     code = proc.wait()
+    _record_changes(repo, session, before)
     if parent in ASKS:
         _write_json(folder / "meta.json", {"status": "idle"})  # a late answer to this turn's request is refused
     if code != 0 and not error:

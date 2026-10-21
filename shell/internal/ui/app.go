@@ -733,7 +733,7 @@ func entryLines(st State, entries []view.ChatEntry, cw int) []string {
 	last := ""
 	for _, e := range entries {
 		role := e.Role
-		if role == "tool" || role == "result" || role == "result-error" {
+		if role == "tool" || role == "result" || role == "result-error" || role == "diff" {
 			role = last // a tool call and its answer do not end the parent's answer
 		}
 		if e.Role == "assistant" && several && last != "assistant" && e.Parent != "" {
@@ -755,6 +755,9 @@ func entryLines(st State, entries []view.ChatEntry, cw int) []string {
 			}
 		case "tool":
 			lines = append(lines, toolLine(st, e.Text, cw))
+			continue
+		case "diff":
+			lines = append(lines, diffLines(st, e.Text, cw)...)
 			continue
 		case "result", "result-error":
 			colour := ""
@@ -782,6 +785,42 @@ func entryLines(st State, entries []view.ChatEntry, cw int) []string {
 func toolLine(st State, text string, cw int) string {
 	name, detail, _ := strings.Cut(clean(text), " ")
 	return "  " + st.paint(colAccent, "●") + " " + st.bold(name) + st.faint(" "+fit(detail, max(4, cw-6-lipgloss.Width(name))))
+}
+
+// diffLines is a file the parent's turn changed, as its own screen shows an edit: the file with its counts, then the
+// changed lines with the removed ones red and the added ones green.
+func diffLines(st State, text string, cw int) []string {
+	head, body, _ := strings.Cut(text, "\n")
+	path, counts, _ := strings.Cut(head, " +")
+	added, deleted, _ := strings.Cut(counts, " −")
+	out := []string{"  " + st.paint(colAccent, "●") + " " + st.bold(path) + "  " + st.paint(colGreen, "+"+added) + " " + st.paint(colRed, "−"+deleted)}
+	add, del := tints()
+	for _, raw := range strings.Split(body, "\n") {
+		if raw == "" {
+			continue
+		}
+		switch {
+		case strings.HasPrefix(raw, "@@"):
+			out = append(out, st.faint("      ⋯"))
+		case strings.HasPrefix(raw, "+"):
+			out = append(out, tintLine(st, st.paint(colGreen, fit("    + "+sanitize(raw[1:]), cw-2)), add))
+		case strings.HasPrefix(raw, "-"):
+			out = append(out, tintLine(st, st.paint(colRed, fit("    − "+sanitize(raw[1:]), cw-2)), del))
+		case strings.HasPrefix(raw, "…") || raw == "binary file":
+			out = append(out, st.faint("    "+raw))
+		default:
+			out = append(out, st.dim(fit("      "+sanitize(strings.TrimPrefix(raw, " ")), cw-2)))
+		}
+	}
+	return out
+}
+
+// tintLine puts a background behind a coloured line, as the diffs elsewhere do.
+func tintLine(st State, line, bg string) string {
+	if st.Styled && bg != "" {
+		return tint(line, bg)
+	}
+	return line
 }
 
 // resultLine is what the tool answered, under it: its first line, in amber when the tool failed.

@@ -2,6 +2,7 @@
 """EXPERIMENT: headless parent with a Rig-rendered chat. Decoders, sessions, the runner and the API, with stand-in parents."""
 import json
 import os
+import shutil
 import signal
 import stat
 import subprocess
@@ -361,6 +362,52 @@ class Turns(Base):
         users = [e["text"] for e in rig_chat.transcript(self.repo, started["session"])["entries"] if e["role"] == "user"]
         self.assertEqual(users, ["/init", "/review the login change", "/security-review"], "the conversation shows what was typed")
         self.assertIn("AGENTS.md", rig_chat._builtin_prompt("codex", "init", ""))
+
+    def test_the_files_a_turn_changed_are_shown_with_what_changed(self):
+        if shutil.which("git") is None:
+            self.skipTest("no git here")
+        subprocess.run(["git", "init", "-q", str(self.repo)], check=True)
+        (self.repo / "a.py").write_text("one\ntwo\nthree\n")
+        (self.repo / ".gitignore").write_text("ignored.txt\n.rig/\n")
+        stand_in(self.bin, "claude", CLAUDE_STREAM)
+        script = self.bin / "claude"
+        text = script.read_text().replace("import json, os, subprocess, sys, time\n", "import json, os, subprocess, sys, time\n"
+            "open('a.py', 'w').write('one\\nTWO\\nthree\\nfour\\n')\nopen('new.txt', 'w').write('hello\\n')\nopen('ignored.txt', 'w').write('x')\n", 1)
+        script.write_text(text)
+        started = rig_chat.send(self.repo, "change things")
+        self.wait_idle(started["session"])
+        entries = rig_chat.transcript(self.repo, started["session"])["entries"]
+        diffs = [e["text"] for e in entries if e["role"] == "diff"]
+        self.assertEqual([d.splitlines()[0] for d in diffs], ["a.py +2 −1", "new.txt +1 −0"], str([(e["role"], e["text"][:40]) for e in entries]))
+        self.assertIn("-two", diffs[0])
+        self.assertIn("+TWO", diffs[0])
+        self.assertIn("+four", diffs[0])
+        self.assertNotIn("ignored", "".join(diffs), "ignored files and .rig are not part of it")
+        self.assertEqual(entries[-1]["role"], "diff", "after the answer")
+        # nothing changed: nothing shown
+        stand_in(self.bin, "claude", CLAUDE_STREAM)
+        rig_chat.send(self.repo, "just look", started["session"])
+        self.wait_idle(started["session"])
+        later = rig_chat.transcript(self.repo, started["session"])["entries"]
+        self.assertEqual([e["role"] for e in later if e["role"] == "diff"], ["diff", "diff"], "no new ones")
+        # the index of the repository is left as it was
+        self.assertEqual(subprocess.run(["git", "-C", str(self.repo), "diff", "--cached", "--name-only"], capture_output=True, text=True).stdout, "")
+
+    def test_a_long_patch_and_many_files_are_cut_short(self):
+        files = rig_chat.turn_changes(self.repo, "", "x")
+        self.assertEqual(files, [], "no trees, no changes")
+        text = "\n".join(f"+line {i}" for i in range(200))
+        import types
+        fake = types.SimpleNamespace(stdout="", returncode=0)
+        with mock.patch.object(rig_chat.subprocess, "run", side_effect=[
+                types.SimpleNamespace(stdout="200\t0\tbig.py\n", returncode=0),
+                types.SimpleNamespace(stdout="diff --git a/big.py b/big.py\nnew file mode 100644\nindex 0..1\n--- /dev/null\n+++ b/big.py\n@@ -0,0 +1,200 @@\n" + text + "\n", returncode=0)]):
+            files = rig_chat.turn_changes(self.repo, "a" * 40, "b" * 40)
+        self.assertEqual(len(files), 1)
+        shown = files[0]["text"].splitlines()
+        self.assertEqual(len(shown), rig_chat.DIFF_LINES + 1)
+        self.assertTrue(shown[-1].startswith("… ") and shown[-1].endswith("more lines"))
+        self.assertEqual((files[0]["added"], files[0]["deleted"]), (200, 0))
 
     def test_tools_and_what_they_answered_are_shown(self):
         claude = lambda event: rig_chat.decode_event("claude", event)["entries"]

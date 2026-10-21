@@ -964,6 +964,8 @@ func chatAll(st State, w int) []string {
 				prefix = "    ⎿ "
 			case "result-error":
 				prefix = "    ⎿ ! "
+			case "diff":
+				prefix = "  ± "
 			case "error":
 				prefix = "! "
 			case "system":

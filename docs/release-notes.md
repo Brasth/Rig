@@ -3,6 +3,10 @@
 
 
 
+## What each turn changed, shown under the answer (2026-10-21)
+
+When a parent's turn ends, every file it changed is shown as a diff under its answer: counts, and the changed lines in red and green. It works the same for every parent, because Rig compares the working tree before and after the turn.
+
 ## Reasoning level, plan mode, the parent's commands and tools in rig shell (2026-10-21)
 
 `/model` now has a reasoning row and `/effort LEVEL` sets it, passed to each parent's own flag. `/plan` puts the parent in plan mode. `/cost`, `/context`, `/mcp`, `/memory`, `/init`, `/review`, `/security-review`, `/clear` and `!command` work inside rig shell; the parent's own skills and commands still pass through. Every tool the parent calls is shown with what it answered. A long draft scrolls inside the reply box with the wheel, and a dropped picture shows above it. The palette scrolls to the row you choose past the twelfth.
