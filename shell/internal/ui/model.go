@@ -593,14 +593,6 @@ func (m *Model) runSlash(text string) (tea.Cmd, bool) {
 			return nil, true
 		}
 		return m.openRunning(), true
-	case "/steer", "/now":
-		clear()
-		m.st.Mode, m.st.InputLabel, m.inputFor = ModeNormal, "", ""
-		if !m.appOn() {
-			m.st.Message = "/steer is in the app: rig shell"
-			return nil, true
-		}
-		return m.steer(rest), true
 	case "/stop":
 		clear()
 		if m.chatID == "" || m.st.Chat == nil || m.st.Chat.State != "running" {

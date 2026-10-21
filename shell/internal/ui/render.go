@@ -145,7 +145,6 @@ var SlashCommands = []SlashCommand{
 	{"/compact", " [FOCUS]", "continue in a fresh conversation from the parent's own summary", false, false},
 	{"/resume", "", "open an earlier conversation again", false, false},
 	{"/running", "", "what is running: the parent's tool call, the helpers, the terminal", false, false},
-	{"/steer", " TEXT", "interrupt the turn with this message; the parent goes on from it (or sends the queued one now)", false, false},
 	{"/mode", " [ask|edits|plan]", "how much the parent may do without asking (⇧Tab goes round)", false, false},
 	{"/export", " [FILE]", "write this conversation as markdown (default .rig/exports/ID.md)", false, false},
 	{"/fork", "", "branch from a turn into a new conversation", false, false},

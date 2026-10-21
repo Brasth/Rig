@@ -3,9 +3,9 @@
 
 
 
-## Steer a turn, see what is running, commit a turn's files, notes for the parent (2026-10-21)
+## Send now while the parent works, see what is running, commit a turn's files, notes for the parent (2026-10-21)
 
-`/steer TEXT` interrupts the parent mid-turn and it goes on from TEXT; a stopped turn keeps and shows what it changed. A running tool call shows how long it has taken, and `/running` lists the parent's tool, the helpers and the terminal, `x` stopping one. After a turn, `g` shows just its files in the git view and `c` commits only those with a message from the answer. `/remember NOTE` keeps notes in `.rig/notes.md` that go with every conversation's first message; `/notes` opens them. New API method `chat.steer`.
+With a message queued behind the parent's turn, `⏎` again sends it now: the turn stops, keeps and shows what it changed, and the parent goes on from the message. A running tool call shows how long it has taken, and `/running` lists the parent's tool, the helpers and the terminal, `x` stopping one. After a turn, `g` shows just its files in the git view and `c` commits only those with a message from the answer. `/remember NOTE` keeps notes in `.rig/notes.md` that go with every conversation's first message; `/notes` opens them. New API method `chat.steer`.
 
 ## /rewind, /fork, @ files with lines, a permission mode, /export and conversation search (2026-10-21)
 

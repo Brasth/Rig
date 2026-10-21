@@ -195,7 +195,7 @@ func (m *Model) appSend(text string) tea.Cmd {
 		a := m.st.App
 		a.Outbox = append(a.Outbox, text)
 		m.st.Prompt, m.st.SlashSel = "", 0
-		m.st.Message = "queued: " + appParent(m.st) + " gets it when this turn ends (↑ takes it back · /steer sends it now)"
+		m.st.Message = "queued: " + appParent(m.st) + " gets it when this turn ends · ⏎ again sends it now · ↑ takes it back"
 		return nil
 	}
 	m.st.Prompt, m.st.SlashSel, m.st.Message = "", 0, "sending…"
@@ -517,6 +517,9 @@ func (m *Model) appKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			deny := a.AnswerDeny
 			a.AnswerDeny = false
 			return m.answer(!deny)
+		}
+		if strings.TrimSpace(m.st.Prompt) == "" && len(a.Outbox) > 0 && m.working() {
+			return m, m.steer("") // ⏎ again, on the empty box: the queued message goes now, interrupting the turn
 		}
 		return m, m.appSend(m.st.Prompt)
 	case tea.KeyRunes, tea.KeySpace:
