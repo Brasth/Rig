@@ -75,6 +75,7 @@ type ShellPlan struct {
 type ChatStatus struct {
 	Enabled   bool     `json:"enabled"`
 	Available []string `json:"available"`
+	Parent    string   `json:"parent"` // who answers a new conversation; empty when no parent CLI is installed
 	Sessions  []struct {
 		ID     string `json:"id"`
 		Parent string `json:"parent"`

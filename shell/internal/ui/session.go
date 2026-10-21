@@ -75,10 +75,17 @@ func sessionFrame(v *view.View, st State, w, h int) []string {
 	lines = append(lines, ruleS(st, dockTitle(st, row), w))
 	lines = append(lines, dockLines(st, row, w, dockRows)...)
 	msg := messageLine(st, w)
-	if st.Mode == ModeInput && st.InputLabel == "chat" { // the box is in the middle column; say what Enter does
-		msg = fit(" Enter sends to the parent · /queue TEXT parks it in the queue · Esc discards", w)
-		if st.Styled {
-			msg = muted(msg)
+	if st.Mode == ModeInput && st.InputLabel == "chat" { // the box shows the draft; this line says why a send failed, or what Enter does
+		if st.Message != "" {
+			msg = fit(" "+clean(st.Message), w)
+			if st.Styled {
+				msg = tone("attention").Render(msg)
+			}
+		} else {
+			msg = fit(" Enter sends to the parent · /queue TEXT parks it in the queue · Esc discards", w)
+			if st.Styled {
+				msg = muted(msg)
+			}
 		}
 	} else if strings.TrimSpace(msg) == "" && st.Chat != nil && st.Chat.Ask != nil && !st.PaneRunning {
 		msg = fit(" the parent needs input: a allows, d denies.", w)
@@ -247,7 +254,11 @@ func rightColumn(v *view.View, st State, w, h int) []string {
 // chatColumn is the conversation: the transcript, a rule, and the "› Ask the parent" box.
 func chatColumn(st State, w, h int) []string {
 	title := "Parent"
+	if st.ChatParent != "" {
+		title += " · " + clean(st.ChatParent)
+	}
 	if st.Chat != nil {
+		title = "Parent"
 		title += " · " + clean(st.Chat.Parent)
 		if st.Chat.State == "running" {
 			title += " · working"
@@ -257,8 +268,15 @@ func chatColumn(st State, w, h int) []string {
 	body := h - 3
 	var lines []string
 	if st.Chat == nil && st.ChatE == "" {
-		lines = []string{"", " No conversation yet.", "", " Enter writes to the parent; the answer appears here.",
-			" /queue TEXT parks a task instead; p opens the parent's own screen."}
+		who := "the parent (" + clean(st.ChatParent) + ")"
+		if st.ChatParent == "" {
+			who = "the parent; none is installed here, so install claude or codex, or start with rig shell --parent NAME"
+		}
+		lines = []string{"", " No conversation yet.", ""}
+		for _, l := range wrap("Press Enter and type to talk to "+who+". The answer appears here.", max(8, w-2), " ") {
+			lines = append(lines, " "+l)
+		}
+		lines = append(lines, " /queue TEXT parks a task instead; p opens the parent's own screen.")
 		if st.Styled {
 			for i := range lines {
 				lines[i] = muted(lines[i])

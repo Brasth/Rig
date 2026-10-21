@@ -48,7 +48,8 @@ type State struct {
 	PaneTitle    string
 	PaneFocus    bool
 	PaneRunning  bool
-	ChatOn       bool // the chat experiment is on: the Chat tab exists
+	ChatOn       bool   // the chat experiment is on: the Chat tab exists
+	ChatParent   string // who answers a new conversation (chat.status); empty when no parent CLI is installed
 	Chat         *view.ChatTranscript
 	ChatE        string
 	ChatUp       int    // lines scrolled back from the newest

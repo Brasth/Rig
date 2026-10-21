@@ -171,6 +171,7 @@ type Model struct {
 	pane       Pane
 	paneName   string
 	paneFocus  bool
+	winW, winH int    // the terminal; w and h are the board drawn in it (the mockup's size when the terminal is larger)
 	parentName string // the parent CLI `rig shell --parent` asked for; empty means the project's own
 	spawn      func(argv []string, dir string, env []string, cols, rows int) (Pane, error)
 	chatID     string // the session the Chat tab follows; empty until one exists
@@ -538,7 +539,8 @@ func (m *Model) reselect() {
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
-		m.w, m.h = msg.Width, msg.Height
+		m.winW, m.winH = msg.Width, msg.Height
+		m.w, m.h = BoardSize(msg.Width, msg.Height)
 		m.st.WideSession = sessionGeometry(m.w, m.h).ok
 		if m.pane != nil {
 			m.pane.Resize(m.paneSize())
@@ -578,6 +580,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.st.ChatOn = true
+		m.st.ChatParent = msg.status.Parent
+		if m.parentName != "" {
+			m.st.ChatParent = m.parentName
+		}
 		if m.chatID == "" && len(msg.status.Sessions) > 0 {
 			m.chatID = msg.status.Sessions[0].ID
 		}
@@ -1112,8 +1118,11 @@ func (m *Model) inputKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (m *Model) View() string {
 	m.syncPane()
-	lines := RenderLines(m.view, m.st, m.w, m.h)
-	return strings.Join(Paint(Decorate(lines)), "\n")
+	lines := Decorate(RenderLines(m.view, m.st, m.w, m.h))
+	if m.winW > m.w || m.winH > m.h {
+		lines = Frame(lines, m.w, m.h, m.winW, m.winH)
+	}
+	return strings.Join(Paint(lines), "\n")
 }
 
 // startingUp is true for the "no API server yet" error before the first snapshot has ever arrived: the board starts
