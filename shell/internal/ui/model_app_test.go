@@ -808,3 +808,14 @@ func TestNotificationsGoWhereSettingsSay(t *testing.T) {
 		t.Fatalf("a new apply notifies: %v", notices)
 	}
 }
+
+func TestThePreviewPageKeepsItsKeysAtTheFoot(t *testing.T) {
+	m, src := appModel(t)
+	withConversation(t, m, src)
+	_ = os.WriteFile(filepath.Join(m.st.App.Repo, "README.md"), []byte("# my-repo\n"), 0o644)
+	run(m.runPalette(paletteItem{Action: "file:README.md"}, ""), m)
+	lines := strings.Split(appScreen(m), "\n")
+	if len(lines) != 36 || !strings.Contains(lines[35], "⇥ next file") || !strings.Contains(lines[1]+lines[0], "› preview") {
+		t.Fatalf("the keys on the last line:\n%s", strings.Join(lines, "\n"))
+	}
+}

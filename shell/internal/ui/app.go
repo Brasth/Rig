@@ -347,6 +347,10 @@ func AppFrame(v *view.View, st State, w, h int) []string {
 		lines = []string{fit(rigBarLeft(st, v)+st.faint(" › preview"), w), fit("", w)}
 		cw := min(appColumn, w-8)
 		main = indentAll(previewLines(st, a, cw, body), (w-cw)/2, w)
+		for len(main) < body {
+			main = append(main, fit("", w)) // the keys stay at the foot of the window
+		}
+		main = main[:body]
 		keys = [][2]string{{"⇥", "next file"}, {"s", "source"}, {"/", "filter rows"}, {"o", "open in app"}, {"?", "ask " + appParent(st)}}
 		if a.Finding {
 			keys = [][2]string{{"⏎", "keep"}, {"esc", "all rows"}}
