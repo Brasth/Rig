@@ -328,6 +328,7 @@ func (l *Launcher) View() string {
 	if w == 0 {
 		w, h = 120, 36
 	}
+	h -= 2 // a row of room above the bar and below the footer, as the app has
 	lines := []string{rigBar(st, w, 0), fit("", w)}
 	cw := min(70, w-8)
 	var body []string
@@ -419,7 +420,7 @@ func (l *Launcher) View() string {
 	case l.message != "":
 		foot = center(st.paint(colAmber, l.message), w)
 	}
-	lines = append(lines[:h-1], foot)
+	lines = append(append([]string{fit("", w)}, lines[:h-1]...), foot, fit("", w))
 	lines, l.zones = zonesOf(lines, l.hoverX, l.hoverY)
 	return strings.Join(Paint(lines), "\n")
 }

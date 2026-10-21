@@ -38,6 +38,7 @@ type State struct {
 	DetailOff      int
 	Mode           Mode
 	Prompt         string // confirm question or input draft
+	PromptBack     int    // the app's box: how many runes of the draft are after the cursor
 	Message        string
 	Stale          string // set when the last refresh failed; shown until one succeeds
 	Loading        bool

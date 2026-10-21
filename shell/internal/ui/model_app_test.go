@@ -698,6 +698,10 @@ func TestTheConversationFooterAndAnswerChipsAreTheDesigns(t *testing.T) {
 	m, src := appModel(t)
 	withConversation(t, m, src)
 	lines := strings.Split(appScreen(m), "\n")
+	if strings.TrimSpace(lines[0]) != "" || strings.TrimSpace(lines[len(lines)-1]) != "" {
+		t.Fatal("a row of room above the top bar and below the footer")
+	}
+	lines = lines[1 : len(lines)-1]
 	foot := lines[len(lines)-1]
 	for _, want := range []string{"d see changes", "← → pick answer", "⏎ send", "u undo   h hold   ⌃p files   ? help"} {
 		if !strings.Contains(foot, want) {
@@ -829,7 +833,7 @@ func TestThePreviewPageKeepsItsKeysAtTheFoot(t *testing.T) {
 	_ = os.WriteFile(filepath.Join(m.st.App.Repo, "README.md"), []byte("# my-repo\n"), 0o644)
 	run(m.runPalette(paletteItem{Action: "file:README.md"}, ""), m)
 	lines := strings.Split(appScreen(m), "\n")
-	if len(lines) != 36 || !strings.Contains(lines[35], "⇥ next file") || !strings.Contains(lines[1]+lines[0], "› preview") {
+	if len(lines) != 36 || !strings.Contains(lines[34], "⇥ next file") || !strings.Contains(lines[1]+lines[2], "› preview") {
 		t.Fatalf("the keys on the last line:\n%s", strings.Join(lines, "\n"))
 	}
 }

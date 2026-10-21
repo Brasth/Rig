@@ -277,15 +277,24 @@ func doneJobs(v *view.View) []view.Row {
 
 // AppFrame renders the app at w by h.
 func AppFrame(v *view.View, st State, w, h int) []string {
-	a := st.App
-	if w < 60 || h < 16 {
+	if w < 60 || h < 18 {
 		lines := make([]string, h)
 		for i := range lines {
 			lines[i] = fit("", w)
 		}
-		lines[0] = fit(" rig · window too small (need 60×16); q quits", w)
+		lines[0] = fit(" rig · window too small (need 60×18); q quits", w)
 		return lines
 	}
+	if st.App.Splash > 0 {
+		return splashScreen(v, st, w, h)
+	}
+	// a row of room above the top bar and below the footer, so neither sits on the window's edge
+	return append(append([]string{fit("", w)}, appBody(v, st, w, h-2)...), fit("", w))
+}
+
+// appBody is the screen inside AppFrame's margin.
+func appBody(v *view.View, st State, w, h int) []string {
+	a := st.App
 	confirm := func(lines []string) []string {
 		switch {
 		case st.Mode == ModeConfirm:
@@ -487,12 +496,7 @@ func countLabel(v *view.View, label string) int {
 func replyBox(st State, w int, placeholder string, lit bool) []string {
 	text := " " + st.faint("›") + " "
 	if st.Prompt != "" {
-		draft := st.Prompt + "▏"
-		if lipgloss.Width(draft) > w-6 {
-			r := []rune(st.Prompt)
-			draft = "…" + string(r[max(0, len(r)-(w-8)):]) + "▏"
-		}
-		text += draft
+		text += st.draft(w - 7)
 	} else {
 		text += "▏" + st.faint(placeholder)
 	}
@@ -699,7 +703,7 @@ func emptyBody(v *view.View, st State, w, h int) ([]string, [][2]string) {
 	lines = append(lines, st.dim(parent+" plans, starts helpers when needed, checks and applies."), "")
 	text := " " + st.faint("›") + " "
 	if st.Prompt != "" {
-		text += st.Prompt + "▏"
+		text += st.draft(cw - 7)
 	} else {
 		text += "▏" + st.faint("ask "+parent+" anything about "+repo)
 	}
@@ -1105,6 +1109,8 @@ func tintIf(st State, s, bg string) string {
 func helpBox(st State, hw int) []string {
 	rows := [][2]string{
 		{"type, ⏎", "talk to the parent"},
+		{"↑ ↓", "the messages you sent before, newest first"},
+		{"← →", "move in the box (⌥ a word, ⌃a ⌃e its ends, ⌃w a word back)"},
 		{"⇥", "the agents panel: done today, helpers, the queue"},
 		{"⌃k", "commands, files, or ask the parent"},
 		{"1 2 3", "conversation, changes, code (with the box empty)"},

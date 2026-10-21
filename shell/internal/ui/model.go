@@ -228,6 +228,11 @@ type Model struct {
 	spinning    bool // the spinner's tick is scheduled
 	chatStat    *view.ChatStatus
 	cmdsFor     string    // the parent whose skills and commands the / menu has
+	edited      string    // the box as the editor last left it (app_edit.go)
+	history     []string  // what was sent from the box, oldest first, for ↑
+	histAt      int       // the message ↑ brought back; -1 while typing
+	histDraft   string    // what was being typed before ↑
+	histFor     string    // the conversation history was seeded from
 	zones       []hitZone // where the last frame's clickable places are (mouse.go)
 	plain       []string  // the last frame's text, for copying a selection
 	press, sel  *textSel  // where the button went down, and the text dragged over since
@@ -241,7 +246,7 @@ func NewModel(src Source, ascii bool) *Model {
 	st.Loading, st.ASCII, st.Styled = true, ascii, true
 	st.WideSession = sessionGeometry(120, 36).ok
 	return &Model{src: src, st: st, w: 120, h: 36, now: time.Now, newKey: randomKey, selID: map[string]string{}, exec: execProcess, spawn: spawnPane,
-		hoverX: -1, hoverY: -1}
+		hoverX: -1, hoverY: -1, histAt: -1}
 }
 
 func execProcess(argv []string, done func(error) tea.Msg) tea.Cmd {
@@ -973,6 +978,7 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.st.Chat, m.st.ChatE = msg.chat, ""
 		if m.appOn() {
+			m.rememberChat()
 			return m, tea.Batch(m.spin(), m.bell())
 		}
 		return m, m.spin()
@@ -1859,6 +1865,7 @@ func (m *Model) View() string {
 		if w == 0 {
 			w, h = m.w, m.h
 		}
+		m.syncCaret()
 		frame, zones := zonesOf(AppFrame(m.view, m.st, w, h), m.hoverX, m.hoverY)
 		m.zones = zones
 		m.plain = make([]string, len(frame))
