@@ -142,6 +142,7 @@ var SlashCommands = []SlashCommand{
 	{"/clear", "", "start a new conversation", false, false},
 	{"/compact", " [FOCUS]", "continue in a fresh conversation from the parent's own summary", false, false},
 	{"/resume", "", "open an earlier conversation again", false, false},
+	{"/fork", "", "branch from a turn into a new conversation", false, false},
 	{"/rewind", "", "put files back as they were before a turn", false, false},
 	{"/model", "", "the model the parent talks with (or /model NAME [LEVEL])", false, false},
 	{"/effort", " LEVEL", "how much the parent reasons: low, medium, high…", false, false},

@@ -577,6 +577,7 @@ def set_parent(repo, name: str) -> dict:
 
 
 PLAN_COMMAND = re.compile(r"/plan(?:\s+(.*))?", re.S)
+FORK_COMMAND = re.compile(r"/fork(?:\s+(\d+))?\s*")
 REWIND_COMMAND = re.compile(r"/rewind(?:\s+(\S+))?\s*")
 COMPACT_COMMAND = re.compile(r"/compact(?:\s+(.*))?", re.S)
 # /compact asks the parent, which still has the whole conversation, for a summary; the next conversation starts from it
@@ -710,6 +711,11 @@ def send(repo, message: str, session: str = "", parent: str = "") -> dict:
     if info:
         append(repo, meta["id"], "system", _info(repo, meta, info.group(1)))
         return {"session": meta["id"], "parent": meta["parent"], "state": meta["state"], "turn": meta.get("turns", 0)}
+    forked = FORK_COMMAND.fullmatch(message)
+    if forked:
+        if meta["state"] == "running":
+            raise ChatError(f"session {meta['id']} is still answering; wait for it or cancel it")
+        return fork(repo, meta["id"], int(forked.group(1) or 0))  # the new conversation: the caller moves to it
     rewound = REWIND_COMMAND.fullmatch(message)
     if rewound:
         # /rewind lists the turns that changed files; /rewind N puts them back as before turn N; /rewind undo takes it back
@@ -844,6 +850,51 @@ def _handoff(repo, session, meta: dict, message: str) -> str:
     return (f"You are taking this conversation over from {by}. What was said since you last took part:\n"
             + "\n".join(_said(rows, meta["parent"]))
             + "\n\nHelpers started earlier keep their work; Rig's job tools list them.\n\nNow: " + message)
+
+
+FORK_ROWS = 12  # of the conversation, what the fork's parent is told
+
+
+def fork(repo, session: str, turn: int = 0) -> dict:
+    """A new conversation that starts as a copy of this one up to a turn (the whole of it when turn is 0): the same parent, the
+    same transcript and the same turns to rewind to. The parent starts fresh and is told once what was said, so the two
+    conversations go different ways from the same point and both stay in /resume."""
+    repo = Path(repo).resolve()
+    require_enabled(repo)
+    meta = read_meta(repo, session)
+    path = chat_dir(repo) / f"{meta['id']}.jsonl"
+    try:
+        lines = path.read_text(errors="replace").splitlines()
+    except OSError:
+        lines = []
+    rows, kept, users = [], [], 0
+    for line in lines:
+        try:
+            row = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(row, dict) or not isinstance(row.get("text"), str):
+            continue
+        if row.get("role") == "user":
+            users += 1
+            if turn and users > int(turn):
+                break
+        kept.append(line)
+        rows.append(row)
+    if not users or (turn and int(turn) > users):
+        raise ChatError(f"no turn {turn} to fork from" if turn else "nothing to fork yet: this conversation has no turns")
+    cut = users if not turn else int(turn)
+    fresh = new_session(repo, meta["parent"])
+    new_path = chat_dir(repo) / f"{fresh['id']}.jsonl"
+    new_path.write_text("\n".join(kept) + "\n")
+    told = [r for r in rows if r.get("role") in ("user", "assistant")][-FORK_ROWS:]
+    fresh.update(turns=cut, plan=bool(meta.get("plan")), fork_of=meta["id"],
+                 marks=[m for m in (meta.get("marks") or []) if isinstance(m, dict) and int(m.get("turn", 0)) <= cut],
+                 notes=["[This conversation is a fork of an earlier one, at turn " + str(cut) + ". What was said:\n"
+                        + "\n".join(_said([{**r, "parent": meta["parent"]} for r in told], meta["parent"])) + "]"])
+    append(repo, fresh["id"], "system", f"forked from {meta['id']} at turn {cut}: the two go their own ways from here")
+    _write_json(_meta_path(repo, fresh["id"]), fresh)
+    return {"session": fresh["id"], "parent": fresh["parent"], "state": "idle", "turn": cut, "forked_from": meta["id"]}
 
 
 def _ask_server(folder: Path) -> str:

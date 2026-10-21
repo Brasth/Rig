@@ -337,6 +337,14 @@ type ChatAsk struct {
 	Preview string `json:"preview"`
 }
 
+// ChatForked is the chat.fork result: the new conversation, which begins as a copy of the one it was made from.
+type ChatForked struct {
+	Session    string `json:"session"`
+	Parent     string `json:"parent"`
+	Turn       int    `json:"turn"`
+	ForkedFrom string `json:"forked_from"`
+}
+
 // ChatStarted is the chat.send result.
 type ChatStarted struct {
 	Session string `json:"session"`

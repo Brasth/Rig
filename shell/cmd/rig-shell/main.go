@@ -145,6 +145,9 @@ func (e *ensuringSource) ChatSend(message, session, parent string, timeout time.
 	return e.client.ChatSend(message, session, parent, timeout)
 }
 
+func (e *ensuringSource) ChatFork(session string, turn int, timeout time.Duration) (*view.ChatForked, error) {
+	return e.client.ChatFork(session, turn, timeout)
+}
 func (e *ensuringSource) ChatRewind(session string, turn int, path string, dry, undo bool, timeout time.Duration) (*view.ChatRewound, error) {
 	return e.client.ChatRewind(session, turn, path, dry, undo, timeout)
 }

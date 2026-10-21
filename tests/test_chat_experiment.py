@@ -496,6 +496,38 @@ class Turns(Base):
         self.assertNotIn("three", sent)
         self.assertEqual([e["text"] for e in view["entries"] if e["role"] == "user"], ["explain @a.py:2"])
 
+    def test_a_fork_copies_the_conversation_up_to_a_turn_and_tells_its_parent_once(self):
+        stand_in(self.bin, "claude", CLAUDE_STREAM)
+        first = rig_chat.send(self.repo, "first question")["session"]
+        self.wait_idle(first)
+        rig_chat.send(self.repo, "second question", first)
+        self.wait_idle(first)
+        with self.assertRaisesRegex(rig_chat.ChatError, "no turn 5"):
+            rig_chat.fork(self.repo, first, 5)
+        forked = rig_chat.fork(self.repo, first, 1)
+        view = rig_chat.transcript(self.repo, forked["session"])
+        users = [e["text"] for e in view["entries"] if e["role"] == "user"]
+        self.assertEqual((users, view["turns"], forked["forked_from"]), (["first question"], 1, first))
+        self.assertIn(f"forked from {first} at turn 1", view["entries"][-1]["text"])
+        self.assertEqual(len(rig_chat.transcript(self.repo, first)["entries"]) > len(view["entries"]), True, "the original is untouched")
+        rig_chat.send(self.repo, "a different way", forked["session"])
+        self.wait_idle(forked["session"])
+        rig_chat.send(self.repo, "and on", forked["session"])
+        self.wait_idle(forked["session"])
+        told, later = self.calls()[2]["argv"][-1], self.calls()[3]["argv"][-1]
+        self.assertIn("a fork of an earlier one, at turn 1", told)
+        self.assertIn("user: first question", told)
+        self.assertNotIn("second question", told, "only what came before the cut")
+        self.assertTrue(told.endswith("a different way"))
+        self.assertNotIn("fork of an earlier", later, "told once")
+        # as a command: the whole conversation, and the caller moves to the new one
+        copy = rig_chat.send(self.repo, "/fork", first)
+        self.assertNotEqual(copy["session"], first)
+        self.assertEqual(copy["turn"], 2)
+        self.assertEqual(len(self.calls()), 4, "forking starts no turn")
+        with self.assertRaisesRegex(rig_chat.ChatError, "nothing to fork"):
+            rig_chat.fork(self.repo, rig_chat.send(self.repo, "/cost")["session"])
+
     def test_a_long_patch_and_many_files_are_cut_short(self):
         files = rig_chat.turn_changes(self.repo, "", "x")
         self.assertEqual(files, [], "no trees, no changes")

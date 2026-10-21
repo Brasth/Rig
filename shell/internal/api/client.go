@@ -289,6 +289,15 @@ func (c *Client) ChatRewind(session string, turn int, path string, dry, undo boo
 	return &out, nil
 }
 
+// ChatFork starts a conversation that begins as a copy of this one up to turn (all of it when 0).
+func (c *Client) ChatFork(session string, turn int, timeout time.Duration) (*view.ChatForked, error) {
+	var out view.ChatForked
+	if err := c.Call("chat.fork", map[string]any{"session": session, "turn": turn}, timeout, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 // JobDiff is what one job changed (job.diff).
 func (c *Client) JobDiff(id string, timeout time.Duration) (*view.JobDiff, error) {
 	var out view.JobDiff

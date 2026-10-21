@@ -70,6 +70,11 @@ func (m *Model) resumeSession(id string) tea.Cmd {
 	if !found {
 		return nil
 	}
+	return m.openSession(id, parent, shortTitle(m.st.ChatSessions, id))
+}
+
+// openSession makes a conversation the one the box talks to, with its own parent.
+func (m *Model) openSession(id, parent, title string) tea.Cmd {
 	a := m.st.App
 	if id == m.chatID && m.st.Chat != nil {
 		a.Tab, a.Thread = 1, ""
@@ -84,7 +89,7 @@ func (m *Model) resumeSession(id string) tea.Cmd {
 	a.chatKey = ""
 	a.SeenChat, a.NewChat = 0, false
 	m.chLast = time.Time{}
-	m.st.Message = "opened: " + shortTitle(m.st.ChatSessions, id)
+	m.st.Message = "opened: " + title
 	return tea.Batch(m.fetchChat(true), m.fetchChatStatus())
 }
 

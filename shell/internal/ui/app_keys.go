@@ -1274,6 +1274,11 @@ func (m *Model) runPalette(it paletteItem, query string) tea.Cmd {
 		return m.openResume()
 	case it.Action == "rewind":
 		return m.openRewind()
+	case it.Action == "fork":
+		return m.openFork()
+	case strings.HasPrefix(it.Action, "fork:"):
+		n, _ := strconv.Atoi(strings.TrimPrefix(it.Action, "fork:"))
+		return m.doFork(n)
 	case strings.HasPrefix(it.Action, "rewind-turn:"):
 		n, _ := strconv.Atoi(strings.TrimPrefix(it.Action, "rewind-turn:"))
 		return m.planRewind(n)
