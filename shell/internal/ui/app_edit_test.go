@@ -88,6 +88,17 @@ func TestUpAndDownBringBackWhatWasSent(t *testing.T) {
 	}
 }
 
+func TestTheCursorIsABlockOnTheCharacterUnderIt(t *testing.T) {
+	st := State{Prompt: "hrewe te", PromptBack: 3, Styled: true}
+	if got := st.draft(40); got != "hrewe\x1b[7m \x1b[27mte" {
+		t.Fatalf("the text keeps its place, the space under the cursor lit: %q", got)
+	}
+	st.PromptBack = 0
+	if got := st.draft(40); got != "hrewe te\x1b[7m \x1b[27m" {
+		t.Fatalf("at the end, a lit space: %q", got)
+	}
+}
+
 func TestALongDraftShowsTheTextAroundTheCursor(t *testing.T) {
 	st := State{Prompt: strings.Repeat("a", 50) + "MIDDLE" + strings.Repeat("b", 50)}
 	st.PromptBack = 53

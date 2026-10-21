@@ -5,7 +5,7 @@
 
 ## The box edits as codex's and grok's do (2026-10-21)
 
-Every screen of the app and the launcher keeps a row of room above its top bar and below its footer. `←` `→` move the cursor in the reply box and typing goes in where it is, with word moves (`⌥←` `⌥→`), `⌃a` `⌃e`, Home and End, Delete, `⌃w`, `⌥⌫`, `⌥d` and `⌃u`; `↑` `↓` bring back the messages you sent, the conversation's own included, and `↓` past the newest restores your draft.
+Every screen of the app and the launcher keeps a row of room above its top bar and below its footer. The cursor is a block on the character under it, as in codex and grok, so moving it no longer opens a gap in the text. `←` `→` move the cursor in the reply box and typing goes in where it is, with word moves (`⌥←` `⌥→`), `⌃a` `⌃e`, Home and End, Delete, `⌃w`, `⌥⌫`, `⌥d` and `⌃u`; `↑` `↓` bring back the messages you sent, the conversation's own included, and `↓` past the newest restores your draft.
 
 ## The box names skills as each parent does (2026-10-21)
 

@@ -18,23 +18,31 @@ func (st State) caret() int {
 	return n - min(max(0, st.PromptBack), n)
 }
 
-// draft is the box's text with the cursor drawn in it, kept to room cells around the cursor.
+// draft is the box's text with the cursor drawn in it, kept to room cells around the cursor. With colour the cursor is
+// a block on the character under it, as codex and grok draw theirs, so the text keeps its place; without, a bar.
 func (st State) draft(room int) string {
 	r := []rune(st.Prompt)
 	c := st.caret()
-	if len(r) < room {
-		return string(r[:c]) + "▏" + string(r[c:])
+	from, to := 0, len(r)
+	if len(r) >= room {
+		from = max(0, min(c-room/2, len(r)-room+1))
+		to = min(len(r), from+room-1)
 	}
-	from := max(0, min(c-room/2, len(r)-room+1))
-	to := min(len(r), from+room-1)
-	out := string(r[from:c]) + "▏" + string(r[c:to])
+	before, after := string(r[from:c]), string(r[c:to])
 	if from > 0 {
-		out = "…" + string([]rune(out)[1:])
+		before = "…" + string([]rune(before)[1:])
 	}
 	if to < len(r) {
-		out = string([]rune(out)[:len([]rune(out))-1]) + "…"
+		after = string([]rune(after)[:len([]rune(after))-1]) + "…"
 	}
-	return out
+	if !st.Styled {
+		return before + "▏" + after
+	}
+	under, rest := " ", after
+	if a := []rune(after); len(a) > 0 && c < to {
+		under, rest = string(a[0]), string(a[1:])
+	}
+	return before + "\x1b[7m" + under + "\x1b[27m" + rest
 }
 
 // syncCaret puts the cursor at the end of a box that something other than the editor filled or emptied.
