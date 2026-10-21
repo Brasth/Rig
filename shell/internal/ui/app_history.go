@@ -96,8 +96,19 @@ func historyScreen(st State, w, h int) []string {
 			if state == "undone" {
 				state = "undone by you"
 			}
-			left := st.faint(when) + "  " + st.dot(r.Worker) + " " + fit(clean(r.Title), cw-34)
+			title := fit(clean(r.Title), cw-34)
+			if r.State == "undone" && st.Styled {
+				text := strings.TrimRight(title, " ")
+				title = lipgloss.NewStyle().Strikethrough(true).Render(text) + strings.Repeat(" ", lipgloss.Width(title)-lipgloss.Width(text))
+			}
 			right := st.paint(stateColour(r.State), state)
+			if i == sel {
+				when, right = st.bold(when), st.bold(right)
+				if r.State != "undone" {
+					title = st.bold(title)
+				}
+			}
+			left := st.faint(when) + "  " + st.dot(r.Worker) + " " + title
 			row := left + strings.Repeat(" ", max(2, cw-2-lipgloss.Width(left)-lipgloss.Width(right))) + right
 			if i == sel {
 				row = st.bold("›") + " " + row
@@ -111,17 +122,15 @@ func historyScreen(st State, w, h int) []string {
 		}
 		r := st.Today.Rows[sel]
 		body = append(body, "", "", st.bold(clean(r.Title)))
+		keys = [][2]string{{"u", "undo"}, {"r", "redo"}, {"a", "let " + parent + " apply"}, {"esc", "back"}}
 		switch r.State {
 		case "held":
-			body = append(body, st.dim("held: "+parent+"'s acceptance will not apply it until you release it (h)"))
-			keys = [][2]string{{"h", "release"}, {"esc", "back"}}
+			body = append(body, st.dim("held: "+parent+"'s acceptance will not apply it until you let it (a)"))
 		case "undone":
 			body = append(body, st.dim(fmt.Sprintf("%d files +%d −%d · undone; r applies it again", r.Files, r.Added, r.Deleted)))
-			keys = [][2]string{{"r", "redo"}, {"esc", "back"}}
 		default:
 			body = append(body, st.dim(fmt.Sprintf("%d files ", r.Files))+st.paint(colGreen, fmt.Sprintf("+%d", r.Added))+" "+st.paint(colRed, fmt.Sprintf("−%d", r.Deleted)),
 				st.faint("on "+r.Branch+" as "+r.Commit+" · undo reverts it; the history keeps both"))
-			keys = [][2]string{{"u", "undo"}, {"esc", "back"}}
 		}
 	}
 	lines = append(lines, indentAll(body, (w-cw)/2, w)...)
@@ -150,26 +159,31 @@ func shipScreen(st State, w, h int) []string {
 		body = append(body, "", st.bold("Nothing to ship"), st.dim(s.Branch+" is level with "+s.Upstream+"."))
 	default:
 		body = append(body, "", st.bold(fmt.Sprintf("Ship %d changes", len(s.Ahead)))+"  "+st.faint(fmt.Sprintf("%s is %d ahead of %s", s.Branch, len(s.Ahead), s.Upstream)), "")
-		for i, c := range s.Ahead {
-			if i == 12 {
-				body = append(body, st.faint(fmt.Sprintf("   +%d more", len(s.Ahead)-12)))
-				break
-			}
-			subject := clean(c.Subject)
-			who := ""
+		// Each commit as the helper's task when done today knows it, the hashes in one column after the longest.
+		shown := s.Ahead[:min(len(s.Ahead), 12)]
+		subjects, whos := make([]string, len(shown)), make([]string, len(shown))
+		col := 0
+		for i, c := range shown {
+			subjects[i] = clean(c.Subject)
 			if st.Today != nil {
 				for _, r := range st.Today.Rows {
 					if strings.HasPrefix(c.Commit, r.Commit) && r.Commit != "" {
-						who, subject = r.Worker, clean(r.Title)
+						whos[i], subjects[i] = r.Worker, clean(r.Title)
 					}
 				}
 			}
+			col = max(col, lipgloss.Width(subjects[i]))
+		}
+		col = min(col, cw-14)
+		for i, c := range shown {
 			mark := "  "
-			if who != "" {
-				mark = st.dot(who) + " "
+			if whos[i] != "" {
+				mark = st.dot(whos[i]) + " "
 			}
-			left := mark + fit(subject, cw-14)
-			body = append(body, left+strings.Repeat(" ", max(2, cw-2-lipgloss.Width(left)-len(c.Commit)))+st.faint(c.Commit))
+			body = append(body, mark+fit(subjects[i], col)+"   "+st.faint(c.Commit))
+		}
+		if len(s.Ahead) > len(shown) {
+			body = append(body, st.faint(fmt.Sprintf("   +%d more", len(s.Ahead)-len(shown))))
 		}
 		chip := func(text string, on bool) string {
 			if on && st.Styled {
@@ -190,12 +204,12 @@ func shipScreen(st State, w, h int) []string {
 			if sh.Editing {
 				title, edit = title+"▏", st.faint("⏎ done")
 			}
-			body = append(body, "    "+st.faint("branch ")+s.PRBranch, "", st.faint("title  ")+title, "       "+edit)
+			body = append(body, "    "+st.faint("branch ")+s.PRBranch, "", st.faint("title  ")+st.bold(title), "       "+edit)
 			if !s.GH {
 				body = append(body, "", st.paint(colAmber, "opening a pull request needs the gh CLI; push still works"))
 			}
 		}
-		body = append(body, "", "", st.faint("agents never push · you do"))
+		body = append(body, "", "", st.faint("agents never push; you do"))
 		enter := "open pull request"
 		if sh.Push {
 			enter = "push"
@@ -237,7 +251,7 @@ func (m *Model) historyKey(key string) (tea.Model, tea.Cmd) {
 		if r.State == "undone" {
 			m.askApply("applies.redo", r.JobID, "Apply "+clean(r.Title)+" again?")
 		}
-	case "h":
+	case "a", "h":
 		if r.State == "held" {
 			return m, m.applyAct("applies.hold", map[string]any{"id": r.JobID, "on": false}, "released "+r.JobID)
 		}

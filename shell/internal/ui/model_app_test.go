@@ -618,7 +618,7 @@ func TestShipPushesOrOpensAPullRequestAfterAQuestion(t *testing.T) {
 	run(m.runPalette(paletteItem{Action: "ship"}, ""), m)
 	out := appScreen(m)
 	for _, want := range []string{"ship", "Ship 2 changes", "main is 2 ahead of origin/main", "Rate limit POST /login", "7f3a2c1", "fix typo in reset email",
-		"[open pull request]", "push to main", "branch rig/rate-limit-login", "title  Rate limit login, reset-token tests", "agents never push · you do"} {
+		"[open pull request]", "push to main", "branch rig/rate-limit-login", "title  Rate limit login, reset-token tests", "agents never push; you do"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q:\n%s", want, out)
 		}
