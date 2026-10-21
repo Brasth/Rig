@@ -3,6 +3,14 @@
 
 
 
+## Switching parent keeps the conversation (2026-10-21)
+
+Switching parent used to start a new conversation, because one CLI cannot resume another's session. Now the conversation goes on: the new parent takes it over with your next message (`chat.send` with the session and another `parent`), told once what was said since it last took part (the last 12 messages, each shortened), and from then on its own session carries it. Each parent keeps its own native session, so switching back resumes it. The transcript marks each switch (a `switch` entry) and names the parent of each answer (`parent` on each entry); the shell shows a divider and, with several parents, who wrote what. On opening, `rig shell` picks up the newest conversation whichever parent had it. `/new` starts a clean one.
+
+## A helper's thread with the parent, finished helpers in the panel (2026-10-21)
+
+The agents panel kept only the helpers at work, so a helper's thread could not be opened once it finished. The panel now also lists the last five that finished, with how each ended, and `⏎` opens any of them. The thread reads as a conversation between the parent and the helper: the task the parent gave it, its work step by step, a message waiting for it, a question it asks, what it reported and how it ended (new API method `job.thread`).
+
 ## The changes of a job that edited in place (2026-10-21)
 
 The changes tab showed only the file name for a job that edited the repository in place (no worktree): Rig had kept just the files' fingerprints. It now keeps the files' contents in Git's object store when a job begins and finishes (`change-contents.json` in the job's folder; best effort, the evidence does not depend on it), and `job.diff` shows exactly that change (`source: contents`), even after later edits. A job from before this shows its files as they are now against the last commit (`source: working tree`), labelled so.

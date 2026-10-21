@@ -286,7 +286,7 @@ func (m *Model) appKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case a.Panel:
-		jobs := activeJobs(m.view)
+		jobs := panelJobs(m.view)
 		switch key {
 		case "up", "k":
 			a.PanelSel = clampSel(a.PanelSel-1, len(jobs))
@@ -299,8 +299,8 @@ func (m *Model) appKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m, m.fetchLog(true)
 			}
 		case "s":
-			if len(jobs) > 0 {
-				m.askStopJob(jobs[clampSel(a.PanelSel, len(jobs))])
+			if sel := clampSel(a.PanelSel, len(jobs)); sel < len(activeJobs(m.view)) {
+				m.askStopJob(jobs[sel]) // a finished helper has nothing to stop
 			}
 		case "u":
 			if done := appliedCards(m.view, m.st); len(done) > 0 && m.st.Today != nil {

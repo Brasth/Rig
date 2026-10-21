@@ -238,18 +238,18 @@ func TestChatTextCannotInjectTerminalSequences(t *testing.T) {
 	}
 }
 
-func TestSwitchingParentDoesNotBringTheOldConversationBack(t *testing.T) {
+func TestSwitchingParentKeepsTheConversationForTheNewOne(t *testing.T) {
 	m, src := readyChat(t)
-	stale := m.fetchChat(true) // a read of claude's conversation still on its way
-	m.Update(parentSetMsg{name: "codex"})
-	if m.chatID != "" || appParent(m.st) != "codex" {
-		t.Fatalf("switched: %q %q", m.chatID, appParent(m.st))
-	}
 	src.chatView = transcript("idle", ce("user", "hi"), ce("assistant", "hello"))
-	run(stale, m)
-	m.csLast = time.Time{}
-	run(m.fetchChatStatus(), m) // the server still lists claude's conversation as the newest
-	if m.chatID != "" || m.st.Chat != nil || appParent(m.st) != "codex" {
-		t.Fatalf("claude came back: id %q parent %q", m.chatID, appParent(m.st))
+	run(m.fetchChat(true), m)
+	m.Update(parentSetMsg{name: "codex"})
+	if m.chatID != "c-1a2b3c4d" || m.st.Chat == nil || appParent(m.st) != "codex" {
+		t.Fatalf("the conversation stays: %q %q", m.chatID, appParent(m.st))
+	}
+	if !strings.Contains(m.st.Message, "codex takes this conversation over from claude") {
+		t.Fatalf("says who takes over: %q", m.st.Message)
+	}
+	if m.parentName != "codex" {
+		t.Fatalf("the next message goes to codex, in the same conversation: %q", m.parentName)
 	}
 }

@@ -27,6 +27,7 @@ type Source interface {
 	JobEvidence(id string, timeout time.Duration) (*view.Evidence, error)
 	Recover(confirmID string, timeout time.Duration) (string, error)
 	Log(id string, lines int, timeout time.Duration) (*view.LogReply, error)
+	JobThread(id string, timeout time.Duration) (*view.JobThread, error)
 	Shell(id string, timeout time.Duration) (*view.ShellPlan, error)
 	Parent(name string, timeout time.Duration) (*view.ShellPlan, error)
 	ChatStatus(timeout time.Duration) (*view.ChatStatus, error)
@@ -92,9 +93,10 @@ type evidenceMsg struct {
 }
 
 type logMsg struct {
-	log *view.LogReply
-	err error
-	at  time.Time
+	log    *view.LogReply
+	thread *view.JobThread // a helper's thread, when the server has job.thread
+	err    error
+	at     time.Time
 }
 
 // Pane is a program running on an emulated terminal. *term.Pane is the real one; tests use a fake.
@@ -677,6 +679,12 @@ func (m *Model) fetchLog(force bool) tea.Cmd {
 		id, rows = m.st.App.Thread, 500 // the most log.follow gives: a thread scrolls back through it
 	}
 	return func() tea.Msg {
+		if thread {
+			// the thread as a conversation; an older server without job.thread shows the helper's log instead
+			if t, err := src.JobThread(id, callTimeout); err == nil && t != nil {
+				return logMsg{thread: t, log: &view.LogReply{}, at: time.Now()}
+			}
+		}
 		l, err := src.Log(id, rows, callTimeout)
 		return logMsg{log: l, err: err, at: time.Now()}
 	}
@@ -972,15 +980,10 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.openPicker()
 			}
 		}
-		// When rig shell opens, pick up the newest conversation with the parent in use. Only then: after a switch of
-		// parent or a new conversation, an old one must not come back.
-		if m.chatID == "" && !m.chatAdopted {
-			for _, s := range msg.status.Sessions {
-				if s.Parent == m.st.ChatParent {
-					m.chatID, m.chatAdopted = s.ID, true
-					break
-				}
-			}
+		// When rig shell opens, pick up the newest conversation, whichever parent had it last: the parent in use takes it
+		// over with the next message. Only then: after a new conversation, an old one must not come back.
+		if m.chatID == "" && !m.chatAdopted && len(msg.status.Sessions) > 0 {
+			m.chatID, m.chatAdopted = msg.status.Sessions[0].ID, true
 		}
 		if m.appOn() && m.st.ChatParent != "" && m.st.ChatParent != m.cmdsFor {
 			return m, m.fetchParentCommands(m.st.ChatParent) // the / menu offers this parent's skills and commands
@@ -1142,10 +1145,12 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.chatStat != nil {
 			m.chatStat.Configured = msg.name
 		}
-		if was != msg.name || (m.st.Chat != nil && m.st.Chat.Parent != msg.name) {
-			m.chatID, m.st.Chat, m.st.ChatUp, m.chatAdopted = "", nil, 0, true // another CLI cannot resume this one's session
-		}
 		m.st.Message = "parent: " + msg.name + " (saved in .rig/harness.toml)"
+		if m.chatID != "" && m.st.Chat != nil && m.st.Chat.Parent != msg.name {
+			// the conversation goes on: the new parent is told what was said with your next message
+			m.st.Message = msg.name + " takes this conversation over from " + m.st.Chat.Parent + " with your next message"
+		}
+		_ = was
 	case chatSentMsg:
 		if msg.err == nil && msg.started == nil {
 			msg.err = errors.New("the server sent no session")
@@ -1204,7 +1209,7 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.st.LogE = msg.err.Error()
 			return m, nil
 		}
-		m.st.Log, m.st.LogE = msg.log, ""
+		m.st.Log, m.st.LogE, m.st.ThreadView = msg.log, "", msg.thread
 	case shellPlanMsg:
 		switch {
 		case msg.err != nil:

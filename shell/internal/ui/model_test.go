@@ -60,6 +60,7 @@ type fakeSource struct {
 	chatSent        [][2]string
 	parentCmds      *view.ParentCommands
 	parentModels    *view.ParentModels
+	thread          *view.JobThread
 	modelAsks       int
 	chatParents     []string
 	chatAnswers     [][3]string
@@ -97,6 +98,12 @@ func (f *fakeSource) Recover(id string, _ time.Duration) (string, error) {
 func (f *fakeSource) Log(id string, lines int, _ time.Duration) (*view.LogReply, error) {
 	f.logIDs = append(f.logIDs, id)
 	return f.logReply, f.logErr
+}
+func (f *fakeSource) JobThread(id string, _ time.Duration) (*view.JobThread, error) {
+	if f.thread == nil {
+		return nil, errors.New("no job.thread here")
+	}
+	return f.thread, nil
 }
 func (f *fakeSource) Shell(id string, _ time.Duration) (*view.ShellPlan, error) {
 	f.shellIDs = append(f.shellIDs, id)

@@ -896,3 +896,60 @@ func TestAJobThatEditedInPlaceShowsItsChange(t *testing.T) {
 		t.Fatalf("no diff to show says why:\n%s", out)
 	}
 }
+
+func TestAFinishedHelpersThreadStaysInThePanel(t *testing.T) {
+	m, src := appModel(t)
+	withConversation(t, m, src)
+	m.view.Jobs = append(m.view.Jobs, view.Row{ID: "job-done", Title: "Sessions store", Label: "Unverified", Worker: "opencode"})
+	press(m, "tab")
+	out := appScreen(m)
+	for _, want := range []string{"Finished", "⏎ its thread", "opencode", "finished · not accepted yet"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("missing %q:\n%s", want, out)
+		}
+	}
+	src.thread = &view.JobThread{JobID: "job-done", Worker: "opencode", Parent: "claude", Title: "Sessions store", Ending: "finished"}
+	_ = json.Unmarshal([]byte(`{"entries": [{"who": "claude", "kind": "brief", "text": "Move sessions to the store."},
+		{"who": "opencode", "kind": "activity", "text": "edit src/store.ts"}, {"who": "opencode", "kind": "activity", "text": "run tests"},
+		{"who": "opencode", "kind": "result", "text": "Sessions live in the store; tests pass."}]}`), src.thread)
+	jobs := panelJobs(m.view)
+	m.st.App.PanelSel = len(jobs) - 1
+	run(press(m, "enter"), m)
+	if m.st.App.Thread != "job-done" {
+		t.Fatalf("⏎ opens a finished helper's thread: %q", m.st.App.Thread)
+	}
+	out = appScreen(m)
+	for _, want := range []string{"claude  → opencode · the task", "Move sessions to the store.", "opencode  working", "· edit src/store.ts",
+		"· run tests", "opencode  → claude · reported", "Sessions live in the store; tests pass.", "── finished"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("the thread reads as a conversation, missing %q:\n%s", want, out)
+		}
+	}
+	press(m, "tab")
+	press(m, "s")
+	if m.st.Mode == ModeConfirm {
+		t.Fatal("a finished helper has nothing to stop")
+	}
+}
+
+func TestAConversationHandedToAnotherParentSaysWhoSaidWhat(t *testing.T) {
+	m, src := appModel(t)
+	withConversation(t, m, src)
+	src.chatView = transcript("idle", ce("user", "what is in a.txt?"), view.ChatEntry{Role: "assistant", Text: "It says one.", Parent: "claude"},
+		view.ChatEntry{Role: "switch", Text: "claude → codex", Parent: "codex"}, ce("user", "rename it"),
+		view.ChatEntry{Role: "assistant", Text: "Renamed to b.txt.", Parent: "codex"})
+	src.chatView.Parent = "codex"
+	m.chBusy = false
+	run(m.fetchChat(true), m)
+	m.st.ChatParent = "codex"
+	out := appScreen(m)
+	for _, want := range []string{"claude", "It says one.", "── codex takes over from claude ──", "codex", "Renamed to b.txt."} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("missing %q:\n%s", want, out)
+		}
+	}
+	m.st.ChatParent = "grok"
+	if out := appScreen(m); !strings.Contains(out, "── grok takes over from codex with your next message ──") {
+		t.Fatalf("a switch not sent yet says what happens next:\n%s", out)
+	}
+}

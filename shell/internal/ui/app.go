@@ -277,11 +277,11 @@ func appProject(v *view.View, a *AppState) string {
 }
 
 func appParent(st State) string {
+	if st.ChatParent != "" {
+		return st.ChatParent // the parent chosen; a conversation another one had is handed to it
+	}
 	if st.Chat != nil && st.Chat.Parent != "" {
 		return st.Chat.Parent
-	}
-	if st.ChatParent != "" {
-		return st.ChatParent
 	}
 	return "parent"
 }
@@ -295,6 +295,33 @@ func activeJobs(v *view.View) []view.Row {
 		}
 	}
 	return out
+}
+
+// panelJobs are the panel's helpers: the ones at work, then the last few that finished, so a finished helper's
+// thread is still one ⏎ away.
+func panelJobs(v *view.View) []view.Row {
+	out := activeJobs(v)
+	finished := 0
+	for _, r := range v.Rows("Jobs") {
+		if r.Label != "" && strings.Contains(finishedLabels, r.Label) && finished < 5 {
+			out = append(out, r)
+			finished++
+		}
+	}
+	return out
+}
+
+// finishedWord is how the panel says a finished helper ended.
+func finishedWord(st State, r view.Row) string {
+	switch r.Label {
+	case "Verified":
+		return st.paint(colGreen, "finished · accepted")
+	case "Unverified":
+		return st.paint(colAmber, "finished · not accepted yet")
+	case "Failed":
+		return st.paint(colRed, "failed")
+	}
+	return st.faint("stopped")
 }
 
 func doneJobs(v *view.View) []view.Row {
@@ -597,6 +624,10 @@ func conversationBody(v *view.View, st State, w, h int) ([]string, [][2]string) 
 	if st.Chat.State == "running" && strings.TrimSpace(st.Chat.Partial) != "" {
 		lines = append(lines, entryLines(st, []view.ChatEntry{{Role: "assistant", Text: st.Chat.Partial}}, cw)...)
 	}
+	if st.Chat.Parent != "" && parent != st.Chat.Parent && st.Chat.State != "running" {
+		// switched, not yet sent: the next message hands the conversation over
+		lines = append(lines, center(st.faint("── "+parent+" takes over from "+st.Chat.Parent+" with your next message ──"), cw), "")
+	}
 	for _, r := range appliedCards(v, st) {
 		lines = append(lines, changeCard(st, r, cw)...)
 		lines = append(lines, "")
@@ -631,8 +662,25 @@ func conversationBody(v *view.View, st State, w, h int) ([]string, [][2]string) 
 // entryLines is the conversation's entries as lines: your messages as bubbles, the parent's answers, tool calls and errors.
 func entryLines(st State, entries []view.ChatEntry, cw int) []string {
 	var lines []string
+	several := false // more than one parent in this conversation: each answer says whose it is
 	for _, e := range entries {
+		several = several || e.Role == "switch"
+	}
+	last := ""
+	for _, e := range entries {
+		role := e.Role
+		if role == "tool" {
+			role = last // a tool call does not end the parent's answer
+		}
+		if e.Role == "assistant" && several && last != "assistant" && e.Parent != "" {
+			lines = append(lines, st.tile(e.Parent)+"  "+st.faint(e.Parent))
+		}
+		last = role
 		switch e.Role {
+		case "switch":
+			from, to, _ := strings.Cut(e.Text, " → ")
+			lines = append(lines, center(st.faint("── "+to+" takes over from "+from+" ──"), cw), "")
+			continue
 		case "user":
 			lines = append(lines, bubble(st, e.Text, cw)...)
 		case "assistant":
@@ -891,9 +939,9 @@ func agentsPanel(v *view.View, st State, pw, h int, float bool) []string {
 		parentRow = tint(fit(parentRow, iw), colSelBg)
 	}
 	lines = append(lines, parentRow)
-	jobs := activeJobs(v)
+	jobs, working := panelJobs(v), len(activeJobs(v))
 	sel := clampSel(st.App.PanelSel, len(jobs))
-	for i, r := range jobs {
+	job := func(i int, r view.Row) {
 		worker := r.Worker
 		if worker == "" {
 			worker = "helper"
@@ -908,6 +956,9 @@ func agentsPanel(v *view.View, st State, pw, h int, float bool) []string {
 		if r.Ask {
 			activity = "      " + st.paint(colAmber, fit("asks: "+strings.TrimPrefix(clean(r.Second), "permission: "), iw-10))
 		}
+		if i >= working {
+			activity = "      " + finishedWord(st, r)
+		}
 		group := []string{top, activity}
 		if i == sel {
 			group = roundBox(st, group, iw, true)
@@ -916,7 +967,10 @@ func agentsPanel(v *view.View, st State, pw, h int, float bool) []string {
 			lines = append(lines, st.zone(fmt.Sprintf("row:panel:%d", i), fit(l, iw)))
 		}
 	}
-	if len(jobs) == 0 {
+	for i, r := range jobs[:working] {
+		job(i, r)
+	}
+	if working == 0 {
 		lines = append(lines, st.faint("  no helpers at work"))
 	}
 	queue := v.Rows("Queue")
@@ -930,6 +984,13 @@ func agentsPanel(v *view.View, st State, pw, h int, float bool) []string {
 	}
 	if len(queue) == 0 {
 		lines = append(lines, st.faint("  empty"))
+	}
+	if len(jobs) > working {
+		// the helpers that finished: their threads stay one ⏎ away
+		lines = append(lines, "", head("Finished", "⏎ its thread"))
+		for i := working; i < len(jobs); i++ {
+			job(i, jobs[i])
+		}
 	}
 	var foot []string
 	if commands > 0 {
@@ -1213,6 +1274,33 @@ func helpBox(st State, hw int) []string {
 func threadBody(st State, w, h int) ([]string, [][2]string) {
 	cw := min(100, w-8)
 	lines := []string{"", st.bold("Thread · " + st.App.Thread), ""}
+	if t := st.ThreadView; t != nil && t.JobID == st.App.Thread {
+		lines = []string{"", " " + st.tile(t.Worker) + "  " + st.bold(t.Worker) + "  " + st.faint(fit(clean(t.Title), max(4, cw-lipgloss.Width(t.Worker)-6)))}
+		if t.Running {
+			lines = append(lines, "      "+st.paint(colAccent, "working · started by "+t.Parent))
+		} else {
+			lines = append(lines, "      "+st.faint(t.Ending+" · started by "+t.Parent))
+		}
+		lines = append(lines, "")
+		a := st.App
+		if key := fmt.Sprintf("%p|%d|%s|%v", t, cw, colText, st.Styled); a.logKey != key {
+			a.logKey, a.logLines = key, threadLines(st, t, cw)
+		}
+		all := a.logLines
+		a.LogMax = max(0, len(all)-(h-len(lines)))
+		lines = append(lines, lastLines(all, st.LogUp, cw, h-len(lines))...)
+		for len(lines) < h {
+			lines = append(lines, "")
+		}
+		keys := [][2]string{{"esc", "back"}, {"⇥", "agents"}}
+		if t.Running {
+			keys = [][2]string{{"esc", "back"}, {"s", "stop"}, {"⇥", "agents"}}
+		}
+		if st.LogUp > 0 {
+			keys = append([][2]string{{"G", "newest"}}, keys...)
+		}
+		return indentAll(lines[:h], (w-cw)/2, w), keys
+	}
 	switch {
 	case st.Log == nil && st.LogE != "":
 		lines = append(lines, st.paint(colAmber, "unavailable: "+clean(st.LogE)))
@@ -1241,6 +1329,55 @@ func threadBody(st State, w, h int) ([]string, [][2]string) {
 		keys = append([][2]string{{"G", "newest"}}, keys...)
 	}
 	return indentAll(lines[:h], (w-cw)/2, w), keys
+}
+
+// threadLines is a helper's thread as a conversation: who said what to whom, its work in between, wrapped to cw.
+func threadLines(st State, t *view.JobThread, cw int) []string {
+	var out []string
+	wrap := func(text string, paint func(string) string, lead string) {
+		for _, l := range strings.Split(strings.TrimRight(text, "\n"), "\n") {
+			for _, part := range strings.Split(ansi.Wrap(sanitize(l), cw-6, " "), "\n") {
+				out = append(out, lead+paint(part))
+			}
+		}
+	}
+	plain := func(s string) string { return s }
+	who := func(name, about string) {
+		if len(out) > 0 {
+			out = append(out, "")
+		}
+		out = append(out, " "+st.tile(name)+"  "+st.bold(name)+"  "+st.faint(about))
+	}
+	last := ""
+	for _, e := range t.Entries {
+		switch e.Kind {
+		case "brief":
+			who(e.Who, "→ "+t.Worker+" · the task")
+			wrap(e.Text, plain, "      ")
+		case "message":
+			who(e.Who, "→ "+t.Worker+" · not read yet")
+			wrap(e.Text, plain, "      ")
+		case "ask":
+			who(e.Who, "asks "+t.Parent)
+			wrap(e.Text, func(s string) string { return st.paint(colAmber, s) }, "      ")
+		case "result":
+			who(e.Who, "→ "+t.Parent+" · reported")
+			wrap(e.Text, plain, "      ")
+		default:
+			if last != "activity" {
+				who(e.Who, "working")
+			}
+			wrap(e.Text, st.dim, "      · ")
+		}
+		last = e.Kind
+	}
+	if t.Ending != "" {
+		out = append(out, "", "      "+st.faint("── "+t.Ending))
+	}
+	if len(out) == 0 {
+		out = append(out, st.faint("      nothing yet"))
+	}
+	return out
 }
 
 // appliedCards are what was applied today, as rows for the change cards and the panel: from applies.today when the

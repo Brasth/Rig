@@ -274,6 +274,29 @@ def new_session(repo, parent: str) -> dict:
     return meta
 
 
+def _count(repo, session) -> int:
+    path = chat_dir(repo) / f"{session}.jsonl"
+    try:
+        with path.open("rb") as stream:
+            return sum(1 for _ in stream)
+    except OSError:
+        return 0
+
+
+def hand_over(repo, meta: dict, parent: str) -> dict:
+    """The conversation goes on with another parent: each parent keeps its own native session, and the one taking over
+    is told on its next message what was said since it last took part (since the start, for a newcomer)."""
+    old = meta["parent"]
+    natives, seen = dict(meta.get("natives") or {}), dict(meta.get("seen") or {})
+    natives[old], seen[old] = meta.get("native", ""), _count(repo, meta["id"])
+    append(repo, meta["id"], "switch", f"{old} → {parent}")
+    meta.setdefault("first_parent", old)
+    meta.update(parent=parent, native=natives.get(parent, ""), natives=natives, seen=seen,
+                context_from=seen.get(parent, 0), handed_by=old, model="")
+    meta.pop("asks", None)
+    return meta
+
+
 def append(repo, session, role: str, text: str) -> None:
     path = chat_dir(repo) / f"{session}.jsonl"
     with path.open("a") as stream:
@@ -293,6 +316,21 @@ def transcript(repo, session, tail: int = 200) -> dict:
                 continue
             if isinstance(row, dict) and isinstance(row.get("text"), str):
                 rows.append({"role": str(row.get("role", "")), "text": row["text"], "at": str(row.get("at", ""))})
+    # who said each thing: the parent at the time, from the switches in between
+    who = meta.get("first_parent") or meta["parent"]
+    if path.is_file() and rows:
+        skipped = max(0, _count(repo, session) - len(rows))
+        if skipped:
+            for line in path.read_text(errors="replace").splitlines()[:skipped]:
+                if '"switch"' in line:
+                    try:
+                        who = json.loads(line)["text"].split(" → ", 1)[1]
+                    except (ValueError, KeyError, IndexError):
+                        pass
+    for row in rows:
+        if row["role"] == "switch" and " → " in row["text"]:
+            who = row["text"].split(" → ", 1)[1]
+        row["parent"] = who
     return {"session": meta["id"], "parent": meta["parent"], "state": meta["state"], "turns": meta.get("turns", 0),
             "note": meta.get("note", ""), "entries": rows, "ask": pending_ask(repo, meta["id"]),
             "partial": _partial(repo, meta) if meta["state"] == "running" else "",
@@ -430,6 +468,8 @@ def send(repo, message: str, session: str = "", parent: str = "") -> dict:
     meta = read_meta(repo, session) if session else new_session(repo, choose_parent(repo, parent))
     if meta["state"] == "running":
         raise ChatError(f"session {meta['id']} is still answering; wait for it or cancel it")
+    if session and parent and parent != meta["parent"]:
+        meta = hand_over(repo, meta, choose_parent(repo, parent))
     choose_parent(repo, meta["parent"])
     append(repo, meta["id"], "user", _clean(message))
     meta.update(state="running", turns=meta.get("turns", 0) + 1, note="")
@@ -468,13 +508,57 @@ def turn_dir(repo, session) -> Path:
     return folder
 
 
+def _said(rows, parent: str) -> list[str]:
+    """The conversation's lines, each with who said it: the user, this parent ("you"), or another parent by name."""
+    out = []
+    for row in rows:
+        if row["role"] == "user":
+            out.append("user: " + row["text"][:1500])
+        elif row["role"] == "assistant":
+            name = row.get("parent") or parent
+            out.append(("you" if name == parent else name) + ": " + row["text"][:1500])
+    return out
+
+
 def _with_context(repo, session, message: str) -> str:
     """A parent that cannot resume its own session gets the recent conversation with each message, so it can follow."""
+    meta = read_meta(repo, session)
     rows = [row for row in transcript(repo, session, tail=40)["entries"] if row["role"] in ("user", "assistant")][:-1][-8:]
     if not rows:
         return message
-    lines = [("user: " if row["role"] == "user" else "you: ") + row["text"][:1500] for row in rows]
-    return "Earlier in this conversation:\n" + "\n".join(lines) + "\n\nNow: " + message
+    return "Earlier in this conversation:\n" + "\n".join(_said(rows, meta["parent"])) + "\n\nNow: " + message
+
+
+HANDOFF_TURNS = 12
+
+
+def _handoff(repo, session, meta: dict, message: str) -> str:
+    """A parent taking the conversation over: what was said since it last took part, once, before the message."""
+    path = chat_dir(repo) / f"{session}.jsonl"
+    rows = []
+    try:
+        lines = path.read_text(errors="replace").splitlines()
+    except OSError:
+        lines = []
+    who = meta.get("first_parent") or meta["parent"]
+    for i, line in enumerate(lines):
+        try:
+            row = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(row, dict) or not isinstance(row.get("text"), str):
+            continue
+        if row.get("role") == "switch" and " → " in row["text"]:
+            who = row["text"].split(" → ", 1)[1]
+        if i >= int(meta.get("context_from") or 0):
+            rows.append({"role": row.get("role", ""), "text": row["text"], "parent": who})
+    rows = [row for row in rows if row["role"] in ("user", "assistant")][:-1][-HANDOFF_TURNS:]  # not the message itself
+    if not rows:
+        return message
+    by = meta.get("handed_by") or "another agent"
+    return (f"You are taking this conversation over from {by}. What was said since you last took part:\n"
+            + "\n".join(_said(rows, meta["parent"]))
+            + "\n\nHelpers started earlier keep their work; Rig's job tools list them.\n\nNow: " + message)
 
 
 def _ask_server(folder: Path) -> str:
@@ -705,6 +789,11 @@ def run_turn(repo, session: str) -> int:
     message = parent_commands.expand(repo, parent, message)  # /name: the parent's own skill or command
     if parent not in RESUMES:
         message = _with_context(repo, session, message)
+    elif meta.get("context_from") is not None:
+        message = _handoff(repo, session, meta, message)
+    if meta.get("context_from") is not None:
+        meta["context_from"] = None  # told once; from here its own session carries the conversation
+        _write_json(_meta_path(repo, session), meta)
     (folder / "message.txt").write_text(message)
     import ui_settings
     turn = {"repo": str(repo), "message_file": str(folder / "message.txt"), "new_id": str(uuid.uuid4()),

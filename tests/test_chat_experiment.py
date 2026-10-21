@@ -609,6 +609,40 @@ class OtherParents(Base):
         self.assertIn("you: noted", second["argv"][-1])
         self.assertTrue(second["argv"][-1].endswith("Now: which port?"))
 
+    def test_another_parent_takes_the_conversation_over_and_each_keeps_its_own_session(self):
+        stand_in(self.bin, "claude", CLAUDE_STREAM)
+        stand_in(self.bin, "grok", [{"type": "text", "data": "grok here"}, {"type": "result", "result": "grok here"}])
+        started = rig_chat.send(self.repo, "what is in a.txt?")
+        session = started["session"]
+        self.wait_idle(session)
+        prompt = lambda call: Path(call["argv"][call["argv"].index("--prompt-file") + 1]).read_text()
+        moved = rig_chat.send(self.repo, "now rename it", session, parent="grok")
+        self.assertEqual((moved["session"], moved["parent"]), (session, "grok"), "the same conversation goes on")
+        self.wait_idle(session)
+        handed = prompt(self.calls()[-1])
+        rig_chat.send(self.repo, "thanks", session, parent="grok")
+        self.wait_idle(session)
+        thanked = prompt(self.calls()[-1])
+        back = rig_chat.send(self.repo, "check it", session, parent="claude")
+        view = self.wait_idle(session)
+        first, taken, again, returned = self.calls()
+        self.assertTrue(handed.startswith("You are taking this conversation over from claude."), handed)
+        self.assertIn("user: what is in a.txt?", handed)
+        self.assertIn("claude: It says one.", handed)
+        self.assertTrue(handed.endswith("Now: now rename it"))
+        self.assertEqual(thanked, "thanks", "told once: then its own session carries it")
+        self.assertIn("-r", again["argv"])
+        self.assertEqual(returned["argv"][returned["argv"].index("--resume") + 1], "native-claude-1", "claude resumes its own session")
+        told = returned["argv"][-1]
+        self.assertIn("user: now rename it", told)
+        self.assertIn("grok: grok here", told)
+        self.assertNotIn("what is in a.txt?", told, "only what was said since it last took part")
+        self.assertEqual(back["parent"], "claude")
+        rows = [(e["role"], e.get("parent")) for e in view["entries"] if e["role"] in ("assistant", "switch")]
+        self.assertEqual(rows[:3], [("assistant", "claude"), ("assistant", "claude"), ("switch", "grok")])
+        self.assertIn(("assistant", "grok"), rows)
+        self.assertEqual(rows[-1], ("assistant", "claude"))
+
     def test_an_unknown_stream_is_read_like_that_clis_job_log(self):
         stand_in(self.bin, "agy", [{"response": "All done."}])
         started = rig_chat.send(self.repo, "go", parent="agy")

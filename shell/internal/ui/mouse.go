@@ -600,7 +600,7 @@ func (m *Model) clickRow(list, at string) (tea.Model, tea.Cmd) {
 		return m.appKey(enter)
 	case "panel":
 		// a helper in the panel, floating or docked: its thread
-		if jobs := activeJobs(m.view); i < len(jobs) {
+		if jobs := panelJobs(m.view); i < len(jobs) {
 			a.PanelSel = i
 			a.Thread, a.Panel, m.st.LogUp = jobs[i].ID, false, 0
 			m.st.Log, m.st.LogE, m.lgLast = nil, "", time.Time{}

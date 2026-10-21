@@ -171,6 +171,15 @@ func (c *Client) Recover(confirmID string, timeout time.Duration) (string, error
 }
 
 // Log fetches the tail of a job's log. An empty id lets the server pick the job worth watching.
+// JobThread fetches a helper's thread with the parent.
+func (c *Client) JobThread(id string, timeout time.Duration) (*view.JobThread, error) {
+	var out view.JobThread
+	if err := c.Call("job.thread", map[string]any{"id": id}, timeout, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 func (c *Client) Log(id string, lines int, timeout time.Duration) (*view.LogReply, error) {
 	var out view.LogReply
 	if err := c.Call("log.follow", map[string]any{"id": id, "lines": lines}, timeout, &out); err != nil {

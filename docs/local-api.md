@@ -52,6 +52,7 @@ repository. Owner tokens are never returned, and workers may not serve the API.
 | `fleet.status` | no | none | Fleet panel: workspace containers on the engine with observed CPU and memory, ready to render |
 | `job.diff` | no | none | What one job changed, as a unified diff with per-file counts (params: id) |
 | `job.evidence` | no | none | Evidence drawer for one job: where it ran, change, contract, checks, ports (params: id) |
+| `job.thread` | no | none | A helper's thread with the parent: its brief, what it did, messages, its question and result (params: id) |
 | `log.follow` | no | none | Tail of a job's log as plain text; without an id, the job worth watching (params: id, lines) |
 | `settings.app` | no | none | The board's Settings screen: the values it can change and where each is kept |
 | `settings.set` | yes | none | Change one of the board's settings (params: key, value, scope all|repo) |

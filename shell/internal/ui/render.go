@@ -64,6 +64,7 @@ type State struct {
 	ChatUp         int    // lines scrolled back from the newest
 	InputLabel     string // what the input line is for; empty means enqueue
 	Log            *view.LogReply
+	ThreadView     *view.JobThread // the helper's thread with the parent, when the server gives it
 	LogE           string
 	LogUp          int // lines scrolled back from the newest; 0 follows the tail
 	Evidence       *view.Evidence
