@@ -144,6 +144,7 @@ type chatSentMsg struct {
 	started *view.ChatStarted
 	err     error
 	sent    string
+	quiet   bool // a command that starts no turn and leaves the box alone (the mode key)
 }
 
 type chatCancelMsg struct{ err error }
@@ -1315,6 +1316,10 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.st.Prompt = msg.sent
 			m.st.Message = "Chat send failed: " + msg.err.Error() + "; draft retained"
 			return m, nil
+		}
+		if msg.quiet {
+			m.chatID, m.st.Message, m.chLast = msg.started.Session, "", time.Time{}
+			return m, m.fetchChat(true)
 		}
 		m.chatID, m.st.Prompt, m.st.ChatUp = msg.started.Session, "", 0
 		m.st.Message = ""

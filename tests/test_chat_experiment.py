@@ -528,6 +528,35 @@ class Turns(Base):
         with self.assertRaisesRegex(rig_chat.ChatError, "nothing to fork"):
             rig_chat.fork(self.repo, rig_chat.send(self.repo, "/cost")["session"])
 
+    def test_mode_sets_how_much_the_parent_may_do_without_asking(self):
+        stand_in(self.bin, "claude", CLAUDE_STREAM)
+        started = rig_chat.send(self.repo, "/mode")
+        session = started["session"]
+        self.assertEqual(started["mode"], "ask")
+        self.assertEqual(rig_chat.transcript(self.repo, session)["mode"], "ask")
+        seen = [rig_chat.send(self.repo, "/mode next", session)["mode"] for _ in range(4)]
+        self.assertEqual(seen, ["edits", "plan", "ask", "edits"], "ask, edits, plan and round again")
+        self.assertEqual(rig_chat.transcript(self.repo, session)["entries"][-1]["text"],
+                         "mode edits: claude edits files without asking and still asks about commands")
+        rig_chat.send(self.repo, "change it", session)
+        self.wait_idle(session)
+        argv = self.calls()[0]["argv"]
+        self.assertEqual(argv[argv.index("--permission-mode") + 1], "acceptEdits")
+        rig_chat.send(self.repo, "/plan on", session)
+        self.assertEqual(rig_chat.transcript(self.repo, session)["mode"], "plan", "plan wins while it is on")
+        rig_chat.send(self.repo, "/plan off", session)
+        self.assertEqual(rig_chat.transcript(self.repo, session)["mode"], "edits", "and edits comes back after it")
+        with self.assertRaisesRegex(rig_chat.ChatError, "ask, edits or plan"):
+            rig_chat.send(self.repo, "/mode yolo", session)
+        rig_chat.send(self.repo, "/mode ask", session)
+        rig_chat.send(self.repo, "once more", session)
+        self.wait_idle(session)
+        self.assertNotIn("--permission-mode", self.calls()[1]["argv"])
+        self.assertEqual(len(self.calls()), 2, "the commands start no turn")
+        stand_in(self.bin, "grok", CLAUDE_STREAM)
+        other = rig_chat.send(self.repo, "/mode edits", parent="grok")
+        self.assertIn("grok's headless mode does not ask for permission", rig_chat.transcript(self.repo, other["session"])["entries"][-1]["text"])
+
     def test_a_long_patch_and_many_files_are_cut_short(self):
         files = rig_chat.turn_changes(self.repo, "", "x")
         self.assertEqual(files, [], "no trees, no changes")

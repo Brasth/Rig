@@ -3,6 +3,7 @@ package ui
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -74,4 +75,19 @@ func queuedRows(st State, w int) []string {
 		out = append(out, st.zone(fmt.Sprintf("row:queued:%d", i), line))
 	}
 	return append(out, st.faint("    ↑ takes the last one back to edit"))
+}
+
+// cycleMode is the permission-mode key: ask, then auto-edit (the parent edits files without asking and still asks about
+// commands), then plan, then ask again. It changes between turns; the status line names the mode.
+func (m *Model) cycleMode() tea.Cmd {
+	if m.working() {
+		m.st.Message = "the mode changes between turns: wait for the answer"
+		return nil
+	}
+	m.st.Message = "changing the mode…"
+	src, session, parent := m.src, m.chatID, m.parentName
+	return func() tea.Msg { // not through the box: a draft stays as it is
+		started, err := src.ChatSend("/mode next", session, parent, 10*time.Second)
+		return chatSentMsg{started: started, err: err, sent: "/mode next", quiet: true}
+	}
 }

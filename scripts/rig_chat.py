@@ -73,9 +73,20 @@ PLAN_PREFIX = ("[Plan mode] Change nothing: do not edit files, run commands that
                "change and how you would check it. Wait for me to say go.\n\n")
 
 
+def _mode(meta: dict) -> str:
+    """How much the parent may do without asking: ask (it asks before it changes anything), edits (it edits files without
+    asking and still asks about commands) or plan (it changes nothing). Plan wins while it is on."""
+    return "plan" if meta.get("plan") else ("edits" if meta.get("edits") else "ask")
+
+
+MODE_COMMAND = re.compile(r"/mode(?:\s+(\S+))?\s*")
+MODE_WORDS = {"ask": "asks before it changes anything", "edits": "edits files without asking and still asks about commands",
+              "plan": "plans and changes nothing"}
+
+
 def _plan(turn: dict, parent: str) -> list[str]:
     if not turn.get("plan"):
-        return []
+        return ["--permission-mode", "acceptEdits"] if turn.get("edits") and parent == "claude" else []
     return {"claude": ["--permission-mode", "plan"], "opencode": ["--agent", "plan"], "codex": ["-s", "read-only"]}.get(parent, [])
 
 
@@ -442,7 +453,7 @@ def transcript(repo, session, tail: int = 200) -> dict:
             who = row["text"].split(" → ", 1)[1]
         row["parent"] = who
     return {"session": meta["id"], "parent": meta["parent"], "state": meta["state"], "turns": meta.get("turns", 0),
-            "note": meta.get("note", ""), "plan": bool(meta.get("plan")), "native": str(meta.get("native") or ""),
+            "note": meta.get("note", ""), "plan": bool(meta.get("plan")), "mode": _mode(meta), "native": str(meta.get("native") or ""),
             "successor": str(meta.get("successor") or ""), "context_pct": context_percent(meta),
             "marks": [{"turn": m.get("turn", 0), "at": m.get("at", ""), "title": m.get("title", ""), "files": m.get("files", [])}
                       for m in (meta.get("marks") or []) if isinstance(m, dict)],
@@ -623,7 +634,7 @@ def _finish_compaction(repo, fresh: dict, error: bool) -> None:
         append(repo, fresh["id"], "system", "compact failed: the parent wrote no summary; nothing changed")
         return
     new = new_session(repo, fresh["parent"])
-    new.update(summary=summary[:12000], plan=bool(fresh.get("plan")), compacted_from=fresh["id"])
+    new.update(summary=summary[:12000], plan=bool(fresh.get("plan")), edits=bool(fresh.get("edits")), compacted_from=fresh["id"])
     _write_json(_meta_path(repo, new["id"]), new)
     append(repo, new["id"], "system", f"continuing from {fresh['id']}: the summary below goes with your next message")
     append(repo, new["id"], "summary", _clean(summary, 6000))
@@ -711,6 +722,23 @@ def send(repo, message: str, session: str = "", parent: str = "") -> dict:
     if info:
         append(repo, meta["id"], "system", _info(repo, meta, info.group(1)))
         return {"session": meta["id"], "parent": meta["parent"], "state": meta["state"], "turn": meta.get("turns", 0)}
+    moded = MODE_COMMAND.fullmatch(message)
+    if moded:
+        # /mode shows how much the parent may do without asking; /mode ask|edits|plan sets it; /mode next goes round
+        word = (moded.group(1) or "").lower()
+        if word == "next":
+            word = {"ask": "edits", "edits": "plan", "plan": "ask"}[_mode(meta)]
+        if word:
+            if word not in MODE_WORDS:
+                raise ChatError("a mode is ask, edits or plan (or next)")
+            meta["plan"], meta["edits"] = word == "plan", word == "edits"
+            _write_json(_meta_path(repo, meta["id"]), meta)
+        now = _mode(meta)
+        note = f"mode {now}: {meta['parent']} {MODE_WORDS[now]}"
+        if now == "edits" and meta["parent"] not in ("claude", "codex"):
+            note += " (" + meta["parent"] + "'s headless mode does not ask for permission at all)"
+        append(repo, meta["id"], "system", note)
+        return {"session": meta["id"], "parent": meta["parent"], "state": meta["state"], "turn": meta.get("turns", 0), "mode": now}
     forked = FORK_COMMAND.fullmatch(message)
     if forked:
         if meta["state"] == "running":
@@ -888,7 +916,7 @@ def fork(repo, session: str, turn: int = 0) -> dict:
     new_path = chat_dir(repo) / f"{fresh['id']}.jsonl"
     new_path.write_text("\n".join(kept) + "\n")
     told = [r for r in rows if r.get("role") in ("user", "assistant")][-FORK_ROWS:]
-    fresh.update(turns=cut, plan=bool(meta.get("plan")), fork_of=meta["id"],
+    fresh.update(turns=cut, plan=bool(meta.get("plan")), edits=bool(meta.get("edits")), fork_of=meta["id"],
                  marks=[m for m in (meta.get("marks") or []) if isinstance(m, dict) and int(m.get("turn", 0)) <= cut],
                  notes=["[This conversation is a fork of an earlier one, at turn " + str(cut) + ". What was said:\n"
                         + "\n".join(_said([{**r, "parent": meta["parent"]} for r in told], meta["parent"])) + "]"])
@@ -1087,9 +1115,12 @@ def run_codex_server(repo: Path, session: str, message: str, meta: dict, folder:
             elif msg.get("method") == "elicitation/create" and "id" in msg:
                 params = msg.get("params") if isinstance(msg.get("params"), dict) else {}
                 tool, inp, preview_text = _codex_approval_preview(params)
-                ask.write_ask(folder, tool, inp, str(params.get("codex_call_id") or ""), preview_text)
-                reply = ask.wait_reply(folder)
-                ask.consume_ask(folder)
+                if tool == "Edit" and meta.get("edits") and not meta.get("plan"):
+                    reply = {"behavior": "allow"}  # the edits mode: file changes go through, commands still ask
+                else:
+                    ask.write_ask(folder, tool, inp, str(params.get("codex_call_id") or ""), preview_text)
+                    reply = ask.wait_reply(folder)
+                    ask.consume_ask(folder)
                 send({"jsonrpc": "2.0", "id": msg["id"],
                       "result": {"decision": "approved" if reply.get("behavior") == "allow" else "denied"}})
             elif "method" in msg and "id" in msg:  # a request this client does not serve: say so, never leave it hanging
@@ -1387,6 +1418,7 @@ def run_turn(repo, session: str) -> int:
     import ui_settings
     plan = bool(meta.get("plan"))
     turn = {"repo": str(repo), "message_file": str(folder / "message.txt"), "new_id": str(uuid.uuid4()), "plan": plan,
+            "edits": bool(meta.get("edits")),
             "model": ui_settings.chosen_model(repo, parent)[0], "effort": ui_settings.chosen_effort(repo, parent)[0]}
     meta["model"], meta["effort"] = turn["model"], turn["effort"]
     if parent in ASKS:

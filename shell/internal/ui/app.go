@@ -682,6 +682,8 @@ func conversationBody(v *view.View, st State, w, h int) ([]string, [][2]string) 
 	lines = append(lines, st.tile(parent)+"  "+st.bold(fit(title, cw-5)))
 	if st.Chat.Plan {
 		state = st.paint(colAccent, "plan mode") + st.faint(" · "+state)
+	} else if st.Chat.Mode == "edits" {
+		state = st.paint(colAmber, "auto-edit") + st.faint(" · "+state)
 	}
 	if pct := st.Chat.ContextPct; pct != nil && *pct >= 0 {
 		note := fmt.Sprintf("context %d%%", *pct)

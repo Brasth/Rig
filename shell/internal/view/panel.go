@@ -192,7 +192,7 @@ type AppSettings struct {
 	Ship              string            `json:"ship"`           // what ship offers first: pr or push
 	TabSize           int               `json:"tab_size"`       // the code view's tab width
 	FormatOnSave      bool              `json:"format_on_save"` // ⌃s runs the file's formatter first
-	Keys              map[string]string `json:"keys"`           // the editor's keys that can be moved: next_occurrence, find_in_chat, terminal, rename, definition, references
+	Keys              map[string]string `json:"keys"`           // the editor's keys that can be moved: next_occurrence, find_in_chat, terminal, rename, definition, references, permission_mode
 	NotifyNeeds       bool              `json:"notify_needs"`
 	NotifyDone        bool              `json:"notify_done"` // a long turn ended or failed
 	NotifyApplied     bool              `json:"notify_applied"`
@@ -304,6 +304,7 @@ type ChatTranscript struct {
 	// Marks are the turns that changed files, which /rewind can put back; CanUndo says a rewind can be taken back.
 	Marks   []ChatMark `json:"marks"`
 	CanUndo bool       `json:"can_undo"`
+	Mode    string     `json:"mode"` // ask, edits or plan: how much the parent may do without asking
 }
 
 // ChatMark is one turn that changed files: its number, when, the message that asked for it and the files it touched.

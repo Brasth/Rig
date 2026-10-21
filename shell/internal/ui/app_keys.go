@@ -292,6 +292,9 @@ func (m *Model) appKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		a.ChatFind = &chatFind{}
 		return m, nil
 	}
+	if isKey(k, bound(m.st, "permission_mode", "shift+tab")) && a.Tab == 1 && a.Thread == "" && a.Palette == nil && a.Settings == nil && !a.Help {
+		return m, m.cycleMode()
+	}
 	if a.Splash > 0 {
 		a.Splash = 0 // a key goes straight to the screen
 		if k.Type == tea.KeyCtrlC {
