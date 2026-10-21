@@ -62,6 +62,8 @@ type fakeSource struct {
 	chatAnswers     [][3]string
 	chatAnswerErr   error
 	chatCancelled   []string
+	parentSet       []string
+	parentSetErr    error
 }
 
 func (f *fakeSource) Workspace(bool, time.Duration) (*view.Workspace, error) {
@@ -105,6 +107,10 @@ func (f *fakeSource) ChatSend(message, session, parent string, _ time.Duration) 
 func (f *fakeSource) ChatAnswer(session, askID, decision string, _ time.Duration) error {
 	f.chatAnswers = append(f.chatAnswers, [3]string{session, askID, decision})
 	return f.chatAnswerErr
+}
+func (f *fakeSource) ChatSetParent(name string, _ time.Duration) error {
+	f.parentSet = append(f.parentSet, name)
+	return f.parentSetErr
 }
 func (f *fakeSource) ChatCancel(session string, _ time.Duration) error {
 	f.chatCancelled = append(f.chatCancelled, session)

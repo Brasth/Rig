@@ -130,6 +130,10 @@ func (e *ensuringSource) ChatCancel(session string, timeout time.Duration) error
 	return e.client.ChatCancel(session, timeout)
 }
 
+func (e *ensuringSource) ChatSetParent(name string, timeout time.Duration) error {
+	return e.client.ChatSetParent(name, timeout)
+}
+
 func (e *ensuringSource) ChatAnswer(session, askID, decision string, timeout time.Duration) error {
 	return e.client.ChatAnswer(session, askID, decision, timeout)
 }

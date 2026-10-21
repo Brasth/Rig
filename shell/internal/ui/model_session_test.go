@@ -63,8 +63,8 @@ func TestTheParentRunsInTheMiddleColumnAndFollowsResizes(t *testing.T) {
 		t.Fatalf("pane %dx%d, want the 52x26 middle column", c.cols, c.rows)
 	}
 	m.Update(tea.WindowSizeMsg{Width: 140, Height: 40})
-	if got := (*panes)[0].resizes; len(got) != 1 || got[0] != [2]int{52, 26} {
-		t.Fatalf("resizes %v: a 140x40 terminal draws the mockup's 120x36 board, so the middle column stays 52x26", got)
+	if got := (*panes)[0].resizes; len(got) != 1 || got[0] != [2]int{62, 30} {
+		t.Fatalf("resizes %v: a 140x40 terminal is filled, so the middle column grows to 62x30", got)
 	}
 	m.Update(tea.WindowSizeMsg{Width: 100, Height: 36})
 	if got := (*panes)[0].resizes; got[len(got)-1] != [2]int{100, 31} {
@@ -262,7 +262,7 @@ func TestTheMiddleColumnIsTheConversationAsInTheMockup(t *testing.T) {
 	}
 	out := m.View()
 	for _, want := range []string{"Parent · claude", "you › Fix the failing auth tests", "parent › Two writers, then a verify node.",
-		"rig_job_launch claude job-7f2", "› Ask the parent, or /queue to park a task", "Enter ask the parent"} {
+		"rig_job_launch claude job-7f2", "Ask the parent anything · / for commands", "Enter send", "/ commands"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q:\n%s", want, Render(m.view, m.st, 120, 36))
 		}
@@ -306,7 +306,7 @@ func TestEnterAsksTheParentAndQueueParksATask(t *testing.T) {
 
 func TestPSwapsInTheParentsOwnScreenAndClosingItGivesTheConversationBack(t *testing.T) {
 	m, _, _ := chatSession(t)
-	runAll(m, press(m, "p"))
+	runAll(m, press(m, "esc", "p")) // Esc hands the keyboard from the ask box to the board's keys
 	m.Update(tea.KeyMsg{Type: tea.KeyCtrlCloseBracket})
 	if out := m.View(); !strings.Contains(out, "$ ready") || strings.Contains(out, "you › Fix") {
 		t.Fatalf("while its own screen runs, the middle column is that screen:\n%s", Render(m.view, m.st, 120, 36))
@@ -355,39 +355,44 @@ func TestAParentThatCannotAskSaysSoOnce(t *testing.T) {
 	}
 }
 
-func TestABigTerminalGetsExactlyTheMockupsBoardFramedAndCentred(t *testing.T) {
-	for _, c := range []struct{ w, h, bw, bh int }{{250, 57, 120, 36}, {122, 38, 120, 36}, {121, 38, 121, 38}, {100, 30, 100, 30}} {
-		if bw, bh := BoardSize(c.w, c.h); bw != c.bw || bh != c.bh {
-			t.Errorf("%dx%d draws %dx%d, want %dx%d", c.w, c.h, bw, bh, c.bw, c.bh)
-		}
-	}
+func TestABigTerminalIsFilledWithTheSideColumnsKeptAndTheChatGrown(t *testing.T) {
 	m, _, _, _ := sessionModel(t, 250, 57)
 	out := strings.Split(m.View(), "\n")
 	if len(out) != 57 {
 		t.Fatalf("%d lines", len(out))
 	}
-	top, left := (57-38)/2, (250-122)/2
 	for i, line := range out {
 		if w := lipgloss.Width(line); w != 250 {
 			t.Fatalf("line %d is %d wide", i, w)
 		}
 	}
 	plain := func(s string) string { return sgrSeq.ReplaceAllString(s, "") }
-	if got := []rune(plain(out[top])); string(got[left]) != "┌" || string(got[left+121]) != "┐" {
-		t.Fatalf("no top border at row %d col %d: %q", top, left, plain(out[top]))
+	if !strings.HasPrefix(plain(out[0]), " Rig · my-repo") && !strings.HasPrefix(plain(out[0]), "Rig · my-repo") {
+		t.Fatalf("the header starts the first row, with no frame around the board: %q", plain(out[0]))
 	}
-	if got := []rune(plain(out[top+37])); string(got[left]) != "└" {
-		t.Fatalf("no bottom border: %q", plain(out[top+37]))
+	g := sessionGeometry(250, 57)
+	if g.left != sessLeftMax || g.right != sessRightMx || g.mid != 250-sessLeftMax-sessRightMx-2 {
+		t.Fatalf("the side columns stop at their caps and the chat takes the rest: %+v", g)
 	}
-	if !strings.Contains(plain(out[top+1]), "│ Rig · my-repo") {
-		t.Fatalf("the board's header sits just inside the border: %q", plain(out[top+1]))
+}
+
+func TestThePanelsAreTintedAndTheAskBoxIsRaised(t *testing.T) {
+	m, _, _ := chatSession(t)
+	out := strings.Split(m.View(), "\n")
+	row := out[5]
+	if !strings.Contains(row, "48;5;"+colPanel+"m") || !strings.Contains(row, "48;5;"+colGround+"m") {
+		t.Fatalf("the side columns are on the panel colour and the chat on the ground: %q", row)
+	}
+	g := sessionGeometry(120, 36)
+	box := out[2+g.grid-2]
+	if !strings.Contains(box, "48;5;"+colRaised+"m") || !strings.Contains(sgrSeq.ReplaceAllString(box, ""), "│ › ▏") {
+		t.Fatalf("the ask box is a raised card with the cursor in it: %q", sgrSeq.ReplaceAllString(box, ""))
 	}
 }
 
 func TestAFailedSendShowsWhyInsteadOfTheHint(t *testing.T) {
 	m, src, _ := chatSession(t)
 	src.chatSendErr = errors.New("no parent CLI is installed here")
-	press(m, "enter")
 	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("hi")})
 	run(press(m, "enter"), m)
 	out := Render(m.view, m.st, 120, 36)
@@ -412,7 +417,7 @@ func TestTheParentWhoWillAnswerIsNamedBeforeTheFirstMessage(t *testing.T) {
 	src.chatStatus.Parent = ""
 	m.csLast = time.Time{}
 	run(m.fetchChatStatus(), m)
-	if out := Render(m.view, m.st, 120, 36); !strings.Contains(out, "is installed here, so install claude or cod") {
+	if out := Render(m.view, m.st, 120, 36); !strings.Contains(out, "none is installed here, so install claude or") {
 		t.Fatalf("no installed parent must be said:\n%s", out)
 	}
 }

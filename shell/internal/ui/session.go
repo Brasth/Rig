@@ -65,27 +65,45 @@ func sessionFrame(v *view.View, st State, w, h int) []string {
 	mid := midColumn(st, g.mid, g.grid)
 	right := rightColumn(v, st, g.right, g.grid)
 	lines := []string{headerLine(v, st, w), tabLine(v, st, w)}
+	panel := func(s string) string { // the side columns and the dock sit on the lighter panel
+		if st.Styled {
+			return tint(s, colPanel)
+		}
+		return s
+	}
 	for i := 0; i < g.grid; i++ {
-		lines = append(lines, left[i]+bar(st)+mid[i]+bar(st)+right[i])
+		lines = append(lines, panel(left[i])+bar(st)+mid[i]+bar(st)+panel(right[i]))
 	}
 	var row *view.Row
 	if len(rows) > 0 {
 		row = &rows[sel]
 	}
-	lines = append(lines, ruleS(st, dockTitle(st, row), w))
-	lines = append(lines, dockLines(st, row, w, dockRows)...)
+	lines = append(lines, panel(ruleS(st, dockTitle(st, row), w)))
+	for _, l := range dockLines(st, row, w, dockRows) {
+		lines = append(lines, panel(l))
+	}
 	msg := messageLine(st, w)
-	if st.Mode == ModeInput && st.InputLabel == "chat" { // the box shows the draft; this line says why a send failed, or what Enter does
-		if st.Message != "" {
-			msg = fit(" "+clean(st.Message), w)
+	if typingChat(st) { // the box shows the draft; this line says what happened, or what the parent waits for
+		switch {
+		case st.Chat != nil && st.Chat.Ask != nil && st.Prompt == "":
+			msg = fit(" the parent needs input: a allows, d denies.", w)
 			if st.Styled {
 				msg = tone("attention").Render(msg)
 			}
-		} else {
-			msg = fit(" Enter sends to the parent · /queue TEXT parks it in the queue · Esc discards", w)
-			if st.Styled {
+		case st.Message != "":
+			msg = fit(" "+clean(st.Message), w)
+			if st.Styled && problem(st.Message) {
+				msg = tone("attention").Render(msg)
+			} else if st.Styled {
 				msg = muted(msg)
 			}
+		case row != nil && row.Ask:
+			msg = fit(" "+clean(row.ID)+" needs input: Esc, then a allows or d denies.", w)
+			if st.Styled {
+				msg = tone("attention").Render(msg)
+			}
+		default:
+			msg = fit("", w)
 		}
 	} else if strings.TrimSpace(msg) == "" && st.Chat != nil && st.Chat.Ask != nil && !st.PaneRunning {
 		msg = fit(" the parent needs input: a allows, d denies.", w)
@@ -112,8 +130,16 @@ func sessionKeys(st State, row *view.Row) []string {
 	}
 	keys := []string{"Tab pane", enter, "p parent", "e enqueue", "v evidence", "w workspace", "? help", "q quit"}
 	switch {
-	case st.Mode == ModeInput && st.InputLabel == "chat":
-		return []string{"Enter send", "Esc discard"}
+	case st.Picker != nil:
+		return []string{"↑↓ choose", "Enter save", "Esc close"}
+	case typingChat(st) && len(slashMatches(st.Prompt)) > 0:
+		return []string{"↑↓ choose", "Tab complete", "Enter run", "Esc clear"}
+	case typingChat(st) && st.Chat != nil && st.Chat.Ask != nil && st.Prompt == "":
+		return []string{"a allow", "d deny", "Esc board keys", "Ctrl-C quit"}
+	case typingChat(st) && st.Prompt != "":
+		return []string{"Enter send", "Esc clear", "↑↓ jobs", "PgUp/PgDn scroll", "Ctrl-C clear"}
+	case typingChat(st):
+		return []string{"Enter send", "/ commands", "↑↓ jobs", "PgUp/PgDn scroll", "Tab pane", "Esc board keys", "Ctrl-C quit"}
 	case st.Mode == ModeInput:
 		return []string{"Enter queue it", "Esc discard"}
 	case st.Mode == ModeConfirm:
@@ -163,8 +189,8 @@ func leftColumn(st State, w, h int) []string {
 	return out
 }
 
-// chatPlaceholder is the mockup's input line while nothing is typed.
-const chatPlaceholder = " › Ask the parent, or /queue to park a task"
+// chatPlaceholder is the ask box while nothing is typed.
+const chatPlaceholder = "Ask the parent anything · / for commands"
 
 // midColumn is the parent: its own terminal while one runs (p), else the conversation, as the mockup shows it.
 func midColumn(st State, w, h int) []string {
@@ -251,57 +277,165 @@ func rightColumn(v *view.View, st State, w, h int) []string {
 	return out[:h]
 }
 
-// chatColumn is the conversation: the transcript, a rule, and the "› Ask the parent" box.
+// chatColumn is the conversation: the transcript, then the ask box, a raised card that is always ready for typing.
+// Typing / lists the commands above the box; /parent (or a project with no parent yet) shows the parent picker.
 func chatColumn(st State, w, h int) []string {
 	title := "Parent"
 	if st.ChatParent != "" {
 		title += " · " + clean(st.ChatParent)
 	}
 	if st.Chat != nil {
-		title = "Parent"
-		title += " · " + clean(st.Chat.Parent)
+		title = "Parent · " + clean(st.Chat.Parent)
 		if st.Chat.State == "running" {
 			title += " · working"
 		}
 	}
 	out := []string{heavy(st, title, w)}
-	body := h - 3
+	body := h - 1 - askBoxRows
 	var lines []string
-	if st.Chat == nil && st.ChatE == "" {
+	switch {
+	case st.Picker != nil:
+		lines = pickerLines(st, w)
+	case st.Chat == nil && st.ChatE == "":
 		who := "the parent (" + clean(st.ChatParent) + ")"
 		if st.ChatParent == "" {
 			who = "the parent; none is installed here, so install claude or codex, or start with rig shell --parent NAME"
 		}
 		lines = []string{"", " No conversation yet.", ""}
-		for _, l := range wrap("Press Enter and type to talk to "+who+". The answer appears here.", max(8, w-2), " ") {
+		for _, l := range wrap("Type below and press Enter to talk to "+who+". The answer appears here as it is written.", max(8, w-2), "") {
 			lines = append(lines, " "+l)
 		}
-		lines = append(lines, " /queue TEXT parks a task instead; p opens the parent's own screen.")
+		lines = append(lines, "")
+		for _, l := range wrap("/parent changes the parent · /queue TEXT parks a task · /help lists every key", max(8, w-2), "") {
+			lines = append(lines, " "+l)
+		}
 		if st.Styled {
 			for i := range lines {
 				lines[i] = muted(lines[i])
 			}
 		}
-	} else {
+	default:
 		lines = append(chatAll(st, w), askLines(st, w)...)
 	}
-	out = append(out, lastLines(lines, st.ChatUp, w, body)...)
-	sep := " " + strings.Repeat("─", max(0, w-2)) + " "
-	if st.Styled {
-		sep = border(sep)
+	view := lastLines(lines, st.ChatUp, w, body)
+	if menu := slashMenu(st, w); typingChat(st) && len(menu) > 0 && st.Picker == nil {
+		n := min(len(menu), body)
+		copy(view[body-n:], menu[len(menu)-n:])
 	}
-	input := chatPlaceholder
-	if st.Mode == ModeInput && st.InputLabel == "chat" {
-		input = " › " + st.Prompt + "▏"
-		if lipgloss.Width(input) > w { // keep the cursor end in view while typing a long message
+	out = append(out, view...)
+	return append(out, askBox(st, w)...)[:h]
+}
+
+// askBoxRows is the height of the ask box: a rounded card around one line.
+const askBoxRows = 3
+
+// askBox is the ask box. While it has the keyboard it shows the draft and a cursor; on board keys it is dimmed.
+func askBox(st State, w int) []string {
+	inner := max(4, w-4)
+	text := " › "
+	switch {
+	case typingChat(st) && st.Prompt != "":
+		text += st.Prompt + "▏"
+		if lipgloss.Width(text) > inner { // keep the cursor end in view while typing a long message
 			r := []rune(st.Prompt)
-			input = " › …" + string(r[max(0, len(r)-(w-5)):]) + "▏"
+			text = " › …" + string(r[max(0, len(r)-(inner-6)):]) + "▏"
 		}
-	} else if st.Styled {
-		input = muted(fit(input, w))
+		text = fit(text, inner)
+	case typingChat(st):
+		text = fit(text+"▏"+chatPlaceholder, inner)
+		if st.Styled {
+			text = " › ▏" + muted(fit(chatPlaceholder, inner-4))
+		}
+	case st.Picker != nil:
+		text = fit(" › choose the parent above", inner)
+		if st.Styled {
+			text = muted(text)
+		}
+	default:
+		text = fit(" › Enter or i to type", inner)
+		if st.Styled {
+			text = muted(text)
+		}
 	}
-	out = append(out, fit(sep, w), fit(input, w))
-	return out[:h]
+	top := " ╭" + strings.Repeat("─", inner) + "╮ "
+	mid := " │" + text + "│ "
+	bot := " ╰" + strings.Repeat("─", inner) + "╯ "
+	if !st.Styled {
+		return []string{fit(top, w), fit(mid, w), fit(bot, w)}
+	}
+	edge := colBorder
+	if typingChat(st) {
+		edge = colAccent // the box with the keyboard is lit
+	}
+	paint := func(s string) string { return lipgloss.NewStyle().Foreground(lipgloss.Color(edge)).Render(s) }
+	card := func(s string) string { return " " + tint(s, colRaised) + " " }
+	return []string{
+		fit(card(paint("╭"+strings.Repeat("─", inner)+"╮")), w),
+		fit(card(paint("│")+text+paint("│")), w),
+		fit(card(paint("╰"+strings.Repeat("─", inner)+"╯")), w),
+	}
+}
+
+// pickerLines is the parent picker: the parent CLIs this machine has, the one in use marked, ↑↓ Enter to choose.
+func pickerLines(st State, w int) []string {
+	pk := st.Picker
+	lines := []string{""}
+	for _, l := range wrap("Choose the parent: the CLI you talk to here. It plans the work and launches the jobs.", max(8, w-2), "") {
+		if st.Styled {
+			l = lipgloss.NewStyle().Foreground(lipgloss.Color(colText)).Bold(true).Render(l)
+		}
+		lines = append(lines, " "+l)
+	}
+	lines = append(lines, "")
+	for i, item := range pk.Items {
+		note := "installed"
+		if !item.Installed {
+			note = "not installed"
+		}
+		if item.Name == pk.Current {
+			note += " · in use"
+		}
+		mark := "   "
+		if i == pk.Sel {
+			mark = " › "
+		}
+		line := " " + fit(fmt.Sprintf("%s%-10s %s", mark, item.Name, note), w-2) + " "
+		switch {
+		case !st.Styled:
+		case i == pk.Sel:
+			line = " " + tint(lipgloss.NewStyle().Foreground(lipgloss.Color(colAccent)).Bold(true).Render(fit(fmt.Sprintf("%s%-10s %s", mark, item.Name, note), w-2)), colRaised) + " "
+		case !item.Installed:
+			line = muted(line)
+		}
+		lines = append(lines, line)
+	}
+	lines = append(lines, "")
+	for _, l := range wrap("↑↓ choose · Enter saves it to .rig/harness.toml · Esc keeps the current one", max(8, w-2), "") {
+		if st.Styled {
+			l = muted(l)
+		}
+		lines = append(lines, " "+l)
+	}
+	return lines
+}
+
+// slashMenu is the command list above the box while a / command is being typed, the chosen one raised.
+func slashMenu(st State, w int) []string {
+	matches := slashMatches(st.Prompt)
+	out := make([]string, 0, len(matches))
+	sel := clampSel(st.SlashSel, len(matches))
+	for i, c := range matches {
+		line := fit(fmt.Sprintf("   %-12s %s", c.Name+c.Args, c.Help), w-2)
+		if st.Styled {
+			style := lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted))
+			if i == sel {
+				style = lipgloss.NewStyle().Foreground(lipgloss.Color(colAccent)).Bold(true)
+			}
+			line = tint(style.Render(line), colRaised)
+		}
+		out = append(out, " "+line+" ")
+	}
+	return out
 }
 
 // askLines is the mockup's request block: what the parent wants to run, in amber, and the keys that answer it. A

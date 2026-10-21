@@ -24,9 +24,9 @@
                           │                                                    │                                        
                           │                                                    │                                        
                           │                                                    │                                        
-                          │                                                    │                                        
-                          │ ────────────────────────────────────────────────── │                                        
- w the full env view      │ › Ask the parent, or /queue to park a task         │                                        
+                          │ ╭────────────────────────────────────────────────╮ │                                        
+                          │ │ › Enter or i to type                           │ │                                        
+ w the full env view      │ ╰────────────────────────────────────────────────╯ │                                        
 ─ Evidence · job-7f2 · Add supertest dev dep ───────────────────────────────────────────────────────────────────────────
  Loading evidence…                                                                                                      
                                                                                                                         

@@ -156,8 +156,19 @@ func Paint(frame []string) []string {
 
 // fixSGR re-applies the ground colours a sequence leaves at the terminal's defaults.
 func fixSGR(seq string) string {
+	fgDefault, bgDefault := sgrDefaults(seq)
+	if fgDefault {
+		seq += "\x1b[38;5;" + colText + "m"
+	}
+	if bgDefault {
+		seq += "\x1b[48;5;" + colGround + "m"
+	}
+	return seq
+}
+
+// sgrDefaults says whether an SGR sequence leaves the foreground or the background at the terminal's default.
+func sgrDefaults(seq string) (fgDefault, bgDefault bool) {
 	params := strings.Split(seq[2:len(seq)-1], ";")
-	fgDefault, bgDefault := false, false
 	for i := 0; i < len(params); i++ {
 		switch p := params[i]; {
 		case p == "" || p == "0":
@@ -183,48 +194,24 @@ func fixSGR(seq string) string {
 			bgDefault = false
 		}
 	}
-	if fgDefault {
-		seq += "\x1b[38;5;" + colText + "m"
-	}
-	if bgDefault {
-		seq += "\x1b[48;5;" + colGround + "m"
-	}
-	return seq
+	return fgDefault, bgDefault
 }
 
-// The mockup is one 120x36 board inside a thin border. A terminal with room for that border gets exactly it,
-// centred on the mockup's ground; a smaller one gets the board filling the window, as before.
+// Tinted panels, as codex and grok draw theirs: the side columns and the dock sit on a slightly lighter panel, the
+// conversation on the darkest ground, and the ask box, its menus and the selected row on a raised surface.
 const (
-	DesignW = 120
-	DesignH = 36
+	colPanel  = "234" // #1c1c1c
+	colRaised = colSelBg
 )
 
-// BoardSize is the size the board is drawn at in a terminal of w by h.
-func BoardSize(w, h int) (int, int) {
-	if w >= DesignW+2 && h >= DesignH+2 {
-		return DesignW, DesignH
-	}
-	return w, h
-}
-
-// Frame puts a bw by bh board inside the mockup's border, centred in a ww by wh terminal.
-func Frame(board []string, bw, bh, ww, wh int) []string {
-	left := max(0, (ww-bw-2)/2)
-	top := max(0, (wh-bh-2)/2)
-	pad := strings.Repeat(" ", left)
-	tail := strings.Repeat(" ", max(0, ww-left-bw-2))
-	blank := strings.Repeat(" ", ww)
-	out := make([]string, 0, wh)
-	for len(out) < top {
-		out = append(out, blank)
-	}
-	out = append(out, pad+border("┌"+strings.Repeat("─", bw)+"┐")+tail)
-	for _, line := range board {
-		out = append(out, pad+border("│")+line+border("│")+tail)
-	}
-	out = append(out, pad+border("└"+strings.Repeat("─", bw)+"┘")+tail)
-	for len(out) < wh {
-		out = append(out, blank)
-	}
-	return out[:wh]
+// tint lays a background under a styled segment: every escape that drops the background to the default puts the
+// tint back. It ends on the default background, which Paint turns into the ground. It never changes a width.
+func tint(s, bg string) string {
+	on := "\x1b[48;5;" + bg + "m"
+	return on + sgrSeq.ReplaceAllStringFunc(s, func(seq string) string {
+		if _, bgDefault := sgrDefaults(seq); bgDefault {
+			return seq + on
+		}
+		return seq
+	}) + "\x1b[49m"
 }

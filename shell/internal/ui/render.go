@@ -3,6 +3,7 @@ package ui
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/lipgloss"
 
@@ -66,7 +67,102 @@ type State struct {
 	DockEvidence *view.Evidence // the selected job's evidence in the Session screen's dock
 	DockID       string
 	DockE        string
-	Styled       bool // apply colour and reverse video to list rows; golden tests leave it off
+	Styled       bool      // apply colour and reverse video to list rows; golden tests leave it off
+	Picker       *Picker   // the parent picker, while it is open
+	SlashSel     int       // the chosen line of the / command list
+	Now          time.Time // the clock, for the working spinner and its elapsed time; zero in golden tests
+}
+
+// Picker is the parent picker: every parent the chat can run, the installed ones first.
+type Picker struct {
+	Items   []PickItem
+	Sel     int
+	Current string // the parent in use
+}
+
+// PickItem is one parent CLI in the picker.
+type PickItem struct {
+	Name      string
+	Installed bool
+}
+
+// SlashCommand is one of the ask box's / commands.
+type SlashCommand struct {
+	Name, Args, Help string
+}
+
+// SlashCommands are what the ask box understands besides a message for the parent.
+var SlashCommands = []SlashCommand{
+	{"/parent", "", "choose the parent CLI"},
+	{"/queue", " TEXT", "park a task in the queue instead"},
+	{"/new", "", "start a new conversation"},
+	{"/stop", "", "stop the parent's running turn"},
+	{"/jobs", "", "the Jobs tab"},
+	{"/env", "", "the container, ports and worktrees"},
+	{"/help", "", "every key"},
+	{"/quit", "", "leave rig shell"},
+}
+
+// slashMatches is the commands a draft that starts with / could be, until it has a space.
+func slashMatches(prompt string) []SlashCommand {
+	if !strings.HasPrefix(prompt, "/") || strings.Contains(prompt, " ") {
+		return nil
+	}
+	var out []SlashCommand
+	for _, c := range SlashCommands {
+		if strings.HasPrefix(c.Name, prompt) {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// typingChat: the ask box has the keyboard.
+func typingChat(st State) bool { return st.Mode == ModeInput && st.InputLabel == "chat" }
+
+// problem: a message reports something that went wrong, so it is shown in amber.
+func problem(msg string) bool {
+	low := strings.ToLower(msg)
+	for _, w := range []string{"fail", "cannot", "could not", "unavailable", "error", "no parent", "not on path", "unknown"} {
+		if strings.Contains(low, w) {
+			return true
+		}
+	}
+	return false
+}
+
+var spinFrames = []rune("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏")
+
+// workingLine is the spinner under a running turn, with how long the parent has been at it.
+func workingLine(st State) string {
+	frame := spinFrames[0]
+	line := "working…"
+	if !st.Now.IsZero() {
+		frame = spinFrames[(st.Now.UnixMilli()/100)%int64(len(spinFrames))]
+		for i := len(st.Chat.Entries) - 1; i >= 0; i-- {
+			e := st.Chat.Entries[i]
+			if e.Role != "user" {
+				continue
+			}
+			if at, err := time.Parse(time.RFC3339, e.At); err == nil && !st.Now.Before(at) {
+				line += " " + elapsed(st.Now.Sub(at))
+			}
+			break
+		}
+	}
+	line = " " + string(frame) + " " + line + " · /stop stops it"
+	if st.Styled {
+		return lipgloss.NewStyle().Foreground(lipgloss.Color(colAccent)).Render(line)
+	}
+	return line
+}
+
+func elapsed(d time.Duration) string {
+	sec := int(d.Seconds())
+	if sec < 60 {
+		return fmt.Sprintf("%ds", sec)
+	}
+	return fmt.Sprintf("%dm %02ds", sec/60, sec%60)
 }
 
 // NewState returns a state on the first tab.
@@ -565,6 +661,10 @@ func messageLine(st State, w int) string {
 
 // helpKeys is every key, grouped, for the ? screen; the footer shows only the few a row of text has room for.
 var helpKeys = [][2]string{
+	{"type, Enter", "session: ask the parent (the box always has the keyboard)"},
+	{"/", "session: commands: /parent /queue /new /stop /jobs /env /help /quit"},
+	{"Esc", "session: clear the box, then board keys (Enter or i types again)"},
+	{"PgUp, PgDn", "session: scroll the conversation"},
 	{"Tab, Shift-Tab", "next or previous tab"},
 	{"j, k", "move (scroll on panels, logs and the evidence drawer)"},
 	{"Enter, Esc", "open or close details"},
@@ -687,6 +787,9 @@ func chatTitle(st State) string {
 
 // chatBody renders the transcript: you, the parent, and its tool calls, wrapped, newest at the bottom.
 func chatBody(st State, w, h int) []string {
+	if st.Picker != nil {
+		return lastLines(pickerLines(st, w), 0, w, h)
+	}
 	return lastLines(append(chatAll(st, w), askLines(st, w)...), st.ChatUp, w, h)
 }
 
@@ -735,7 +838,11 @@ func chatAll(st State, w int) []string {
 		if st.WideSession && st.Tab == SessionTab {
 			parent = "parent" // the mockup's word; the column's title names the CLI
 		}
-		for _, e := range st.Chat.Entries {
+		entries := st.Chat.Entries
+		if st.Chat.State == "running" && strings.TrimSpace(st.Chat.Partial) != "" {
+			entries = append(append([]view.ChatEntry(nil), entries...), view.ChatEntry{Role: "assistant", Text: st.Chat.Partial})
+		}
+		for _, e := range entries {
 			prefix := parent + " › "
 			switch e.Role {
 			case "user":
@@ -766,6 +873,9 @@ func chatAll(st State, w int) []string {
 		}
 		if len(st.Chat.Entries) == 0 {
 			all = []string{" (empty session)"}
+		}
+		if st.Chat.State == "running" && st.Chat.Ask == nil {
+			all = append(all, workingLine(st))
 		}
 		if st.ChatE != "" {
 			all = append(all, ruleS(st, "stale", w))

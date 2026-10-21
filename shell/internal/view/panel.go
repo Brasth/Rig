@@ -76,7 +76,10 @@ type ChatStatus struct {
 	Enabled   bool     `json:"enabled"`
 	Available []string `json:"available"`
 	Parent    string   `json:"parent"` // who answers a new conversation; empty when no parent CLI is installed
-	Sessions  []struct {
+	// Configured is the project's own parent (.rig/harness.toml); empty means none was chosen, so the board offers its picker.
+	Configured string   `json:"configured"`
+	Parents    []string `json:"parents"` // every parent the chat can run
+	Sessions   []struct {
 		ID     string `json:"id"`
 		Parent string `json:"parent"`
 		State  string `json:"state"`
@@ -99,8 +102,9 @@ type ChatTranscript struct {
 	Turns   int         `json:"turns"`
 	Note    string      `json:"note"`
 	Entries []ChatEntry `json:"entries"`
-	Ask     *ChatAsk    `json:"ask"`  // the parent's permission request waiting for the owner, if any
-	Asks    bool        `json:"asks"` // this parent's headless mode can ask for permission at all
+	Ask     *ChatAsk    `json:"ask"`     // the parent's permission request waiting for the owner, if any
+	Asks    bool        `json:"asks"`    // this parent's headless mode can ask for permission at all
+	Partial string      `json:"partial"` // the answer streaming in, before it joins the entries
 }
 
 // ChatAsk is a permission request the parent is blocked on; chat.answer allows or denies it by ID.

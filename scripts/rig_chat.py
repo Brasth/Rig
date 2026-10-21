@@ -47,7 +47,7 @@ class ChatError(ValueError):
 # a file holding the message, and the claude permission server. ``resumes``: the CLI continues its own session.
 def argv_claude(message: str, native: str, turn: dict) -> list[str]:
     asks = ["--mcp-config", turn["ask_mcp"], "--permission-prompt-tool", "mcp__rig-ask__permission_prompt"] if turn.get("ask_mcp") else []
-    return ["claude", "-p", "--output-format", "stream-json", "--verbose", *asks, *(["--resume", native] if native else []), "--", message]
+    return ["claude", "-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", *asks, *(["--resume", native] if native else []), "--", message]
 
 
 def argv_codex(message: str, native: str, turn: dict) -> list[str]:
@@ -170,6 +170,11 @@ def decode_event(parent: str, event) -> dict:
         kind = event.get("type")
         if kind == "system" and event.get("subtype") == "init":
             out["native"] = str(event.get("session_id") or "")
+        elif kind == "stream_event":  # --include-partial-messages: the answer's text as it is written
+            inner = event.get("event") if isinstance(event.get("event"), dict) else {}
+            delta = inner.get("delta") if isinstance(inner.get("delta"), dict) else {}
+            if inner.get("type") == "content_block_delta" and delta.get("type") == "text_delta" and isinstance(delta.get("text"), str):
+                out["entries"].append({"role": "chunk", "text": delta["text"]})
         elif kind == "assistant":
             content = (event.get("message") or {}).get("content")
             for block in content if isinstance(content, list) else []:
@@ -284,13 +289,39 @@ def transcript(repo, session, tail: int = 200) -> dict:
                 rows.append({"role": str(row.get("role", "")), "text": row["text"], "at": str(row.get("at", ""))})
     return {"session": meta["id"], "parent": meta["parent"], "state": meta["state"], "turns": meta.get("turns", 0),
             "note": meta.get("note", ""), "entries": rows, "ask": pending_ask(repo, meta["id"]),
+            "partial": _partial(repo, meta) if meta["state"] == "running" else "",
             "asks": bool(meta.get("asks", meta["parent"] in ASKS))}
+
+
+def _partial_path(repo, session) -> Path:
+    return chat_dir(repo) / session / "partial.txt"
+
+
+def _partial(repo, meta) -> str:
+    try:
+        return _clean(_partial_path(repo, meta["id"]).read_text(errors="replace"))
+    except OSError:
+        return ""
+
+
+def write_partial(repo, session, text: str) -> None:
+    """The answer as it streams in, until the runner writes it to the transcript; empty text clears it."""
+    path = _partial_path(repo, session)
+    if not text:
+        path.unlink(missing_ok=True)
+        return
+    temporary = path.with_suffix(".tmp")
+    temporary.write_text(text)
+    os.replace(temporary, path)
 
 
 def status(repo) -> dict:
     on = enabled(repo)
     available = [name for name in HEADLESS if shutil.which(name)]
-    result = {"enabled": on, "parents": sorted(HEADLESS), "available": available, "sessions": [], "parent": default_parent(repo)}
+    import harness
+    configured = harness.parse_harness(harness.harness_path(Path(repo)))["parent"]
+    result = {"enabled": on, "parents": sorted(HEADLESS), "available": available, "sessions": [], "parent": default_parent(repo),
+              "configured": configured}
     if on:
         result["sessions"] = [{"id": s["id"], "parent": s["parent"], "state": s["state"], "turns": s.get("turns", 0)} for s in sessions(repo)[:20]]
     return result
@@ -319,6 +350,43 @@ def choose_parent(repo, parent: str = "") -> str:
     if not shutil.which(parent):
         raise ChatError(f"{parent} is not on PATH")
     return parent
+
+
+_TOP_PARENT = re.compile(r"\s*parent\s*=")
+
+
+def set_parent(repo, name: str) -> dict:
+    """Name the project's parent in .rig/harness.toml (top-level ``parent``), as `rig use` does; the board's picker."""
+    import harness
+    name = str(name or "").strip()
+    if name not in HEADLESS:
+        raise ChatError(f"the parent is one of {', '.join(PREFERRED)}, not {name or 'none'}")
+    if not shutil.which(name):
+        raise ChatError(f"{name} is not on PATH")
+    path = harness.harness_path(Path(repo).resolve())
+    if not path.is_file():  # never create the harness here: a new one would turn Rig on for the project
+        raise ChatError("this project has no .rig/harness.toml; run rig init first")
+    lines = path.read_text().splitlines()
+    out, placed, top = [], False, True
+    for line in lines:
+        stripped = line.strip()
+        if top and stripped.startswith("[") and not placed:
+            out.append(f'parent = "{name}"')  # a top-level key must come before the first table
+            placed = True
+        if stripped.startswith("["):
+            top = False
+        if top and _TOP_PARENT.match(line) and not stripped.startswith("#"):
+            if not placed:
+                out.append(f'parent = "{name}"')
+                placed = True
+            continue
+        out.append(line)
+    if not placed:
+        out.append(f'parent = "{name}"')
+    temporary = path.with_name(path.name + ".tmp")
+    temporary.write_text("\n".join(out) + "\n")
+    os.replace(temporary, path)
+    return {"parent": name, "path": str(path)}
 
 
 def send(repo, message: str, session: str = "", parent: str = "") -> dict:
@@ -446,6 +514,8 @@ def _codex_event(msg: dict) -> tuple[list[dict], str, bool]:
     kind = msg.get("type")
     if kind == "session_configured":
         return [], str(msg.get("session_id") or ""), False
+    if kind == "agent_message_delta" and isinstance(msg.get("delta"), str):
+        return [{"role": "chunk", "text": msg["delta"]}], "", False
     if kind == "agent_message" and str(msg.get("message") or "").strip():
         return [{"role": "assistant", "text": _clean(msg["message"])}], "", False
     if kind == "exec_command_begin":
@@ -525,6 +595,7 @@ def run_codex_server(repo: Path, session: str, message: str, meta: dict, folder:
             call = {"name": "codex", "arguments": {"prompt": message, "cwd": str(repo)}}
         send({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": call})
         written, error = 0, False
+        streamed = ""
         while True:
             line = lines.get()
             if line is None:
@@ -544,6 +615,13 @@ def run_codex_server(repo: Path, session: str, message: str, meta: dict, folder:
                 if sid:
                     meta["native"] = sid
                 for entry in entries:
+                    if entry["role"] == "chunk":
+                        streamed += entry["text"]
+                        write_partial(repo, session, streamed)
+                        continue
+                    if entry["role"] == "assistant":
+                        streamed = ""
+                        write_partial(repo, session, "")
                     if written < MAX_ENTRIES:
                         append(repo, session, entry["role"], entry["text"])
                         written += 1
@@ -578,6 +656,7 @@ def run_codex_server(repo: Path, session: str, message: str, meta: dict, folder:
                 break
         return True, error, written
     finally:
+        write_partial(repo, session, "")
         stop()
 
 
@@ -636,6 +715,7 @@ def run_turn(repo, session: str) -> int:
         if "".join(chunks).strip():
             write("assistant", _clean("".join(chunks).strip()))
         chunks.clear()
+        write_partial(repo, session, "")
 
     for line in proc.stdout:
         raw.append(line)
@@ -648,7 +728,10 @@ def run_turn(repo, session: str) -> int:
         for entry in decoded["entries"]:
             if entry["role"] == "chunk":
                 chunks.append(entry["text"])
+                write_partial(repo, session, "".join(chunks))
                 continue
+            if entry["role"] == "assistant" and entry["text"].strip().startswith("".join(chunks).strip()):
+                chunks.clear()  # the whole message, after its streamed pieces: keep it once
             flush()
             if entry["role"] == "final":
                 if not said:  # a closing summary repeats the answer when the text was already streamed

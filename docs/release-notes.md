@@ -1,5 +1,9 @@
 # Release Notes
 
+## Full screen, tinted panels, and an ask box that always has the keyboard (2026-10-21)
+
+The board fills the window again instead of drawing a 120x36 frame: the side columns keep their widths and the conversation grows. The side columns and the dock sit on a lighter panel, the conversation on the darkest ground, and the ask box, its menus and the selected job on a raised card. On the Session screen the ask box always has the keyboard, as in codex and grok: type and press Enter; `Esc` hands the keyboard to the board's keys. `/` lists the commands (`/parent`, `/queue`, `/new`, `/stop`, `/jobs`, `/env`, `/help`, `/quit`). A project with no parent opens a parent picker the first time, which saves the choice in `.rig/harness.toml` (new API method `chat.parent`). While the parent works, a spinner shows the elapsed time and the answer streams in as it is written (`chat.transcript` returns it as `partial`).
+
 ## Every parent in the conversation, and approvals answered there (2026-10-21)
 
 The Session screen's conversation now runs all seven parents (claude, codex, grok, opencode, omp, pi, agy) in their headless modes. claude's and codex's approval requests wait in the conversation as the mockup's `parent › asks to run:` block and are answered with `a`/`d` (new API method `chat.answer`); codex runs as `codex mcp-server` for this and falls back to `codex exec` when that mode is unavailable. Parents that cannot ask headless say so. Built against the CLIs' documented formats and tested with stand-ins; no real parent CLI was run.
