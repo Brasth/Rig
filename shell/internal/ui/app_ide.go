@@ -624,6 +624,10 @@ change:
 		return m, m.goToDefinition()
 	case isKey(k, bound(m.st, "references", "f7")):
 		return m, m.findReferences()
+	case key == "f9":
+		return m, m.runTestAtCursor()
+	case key == "alt+F":
+		return m, m.formatDocument(false)
 	case key == "ctrl+t":
 		return m, m.jumpBackCmd()
 	case isKey(k, bound(m.st, "next_occurrence", "ctrl+d")):
@@ -644,8 +648,7 @@ change:
 	}
 	switch key {
 	case "ctrl+s":
-		m.saveFile()
-		return m, m.afterSave()
+		return m, m.saveMaybeFormatted()
 	case "esc":
 		if a.EdSel || len(a.Extra) > 0 {
 			a.EdSel, a.Extra = false, nil

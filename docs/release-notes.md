@@ -3,6 +3,10 @@
 
 
 
+## Run tasks and tests, format, commit diffs and file history (2026-10-21)
+
+`⌃k` › run a task lists the repository's `package.json` scripts, make and just targets and test suites, and runs the chosen one in the terminal split; `F9` runs the test the cursor is in (go, pytest, jest, vitest, cargo). `⌥⇧f` formats the file with the formatter its language has here (gofmt, prettier, ruff, black, rustfmt, shfmt), and Settings › Editor › Format on save makes `⌃s` format first. In the git view `⏎` on a recent commit shows what it changed; `l` on the open file lists its history and `⏎` shows a commit's change to it.
+
 ## Completion, references, repository symbols, recent files, wrap (2026-10-21)
 
 While editing, the words of the file complete the one being typed (`⇥` `⏎` take one, `esc` dismisses). `F7` lists the references of the name at the cursor in the search tab, and so does `F12` on the definition itself. `#name` in `⌃k` lists the symbols of the whole repository. `⌃p` lists the files opened lately first. Long lines scroll across while editing, and `⌥z` wraps them while reading. Settings › Keys has the references key (`[keys]` `references`).

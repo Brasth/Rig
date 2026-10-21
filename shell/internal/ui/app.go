@@ -96,11 +96,14 @@ type AppState struct {
 	Complete             *completion // the words that complete the one being typed
 	noComplete           pos         // the word esc dismissed the list for: where it starts, and what was typed of it
 	noCompleteWord       string
-	ColOff               int       // cells scrolled off the left while editing, so the cursor stays in view
-	Wrap                 bool      // ⌥z: long lines wrap while reading
-	Recent               []string  // the files opened lately, newest first, for ⌃p
-	SymIndex             *symIndex // every symbol of the repository, for # in the palette
-	Branches             []string  // the branch list: local branches, newest first
+	ColOff               int         // cells scrolled off the left while editing, so the cursor stays in view
+	Wrap                 bool        // ⌥z: long lines wrap while reading
+	Recent               []string    // the files opened lately, newest first, for ⌃p
+	SymIndex             *symIndex   // every symbol of the repository, for # in the palette
+	Tasks                []taskItem  // the repository's scripts and targets, for ⌃k › run a task
+	FileLog              []gitCommit // the commits that touched the open file, for l
+	FileLogFor           string
+	Branches             []string // the branch list: local branches, newest first
 	RemoteBranches       []string
 	reloadFiles          bool          // after a switch of branch the explorer reads the files again
 	findAt               pos           // where find last stopped, while not editing
@@ -133,6 +136,8 @@ type Palette struct {
 	Symbols  bool // ⌃o in the code tab: the open file's functions and types, to go to
 	Branch   bool // b in the git view: a branch to switch to, or a new one
 	Problems bool // m in the code tab: what the helpers' checks found, each to go to
+	Tasks    bool // ⌃k › run a task: the repository's scripts and targets, each to run in the terminal
+	Log      bool // l in the code tab: the commits that touched the open file, each to show
 }
 
 // paletteItem is one row of the palette.
@@ -1105,6 +1110,12 @@ func paletteItems(st State) []paletteItem {
 	if st.App.Palette.Problems {
 		return problemItems(st, q)
 	}
+	if st.App.Palette.Tasks {
+		return taskPaletteItems(st, q)
+	}
+	if st.App.Palette.Log {
+		return logItems(st, q)
+	}
 	if strings.HasPrefix(q, "#") {
 		return workspaceSymbolItems(st, q[1:]) // the repository's symbols
 	}
@@ -1205,6 +1216,10 @@ var PaletteCommands = [][3]string{
 	{"change model", "the model the parent talks with", "model"},
 	{"search the code", "text in every file (⌃f)", "search"},
 	{"find references", "every use of the name at the cursor (F7)", "references"},
+	{"run a task", "a script, make or just target, or the tests, in the terminal", "tasks"},
+	{"run the test at the cursor", "go, pytest, jest, vitest or cargo (F9)", "test"},
+	{"format document", "gofmt, prettier, ruff, black, rustfmt or shfmt (⌥⇧f)", "format"},
+	{"file history", "the commits that changed the open file (l)", "history"},
 	{"done today", "what was applied, undo and redo", "today"},
 	{"settings", "theme, agents, routing, sandbox, toml", "settings"},
 	{"start the sandbox", "rig env up", "env-up"},
@@ -1233,6 +1248,12 @@ func paletteBox(v *view.View, st State, pw int) []string {
 		}
 		if st.App.Palette.Problems {
 			text = "  " + st.faint("✕") + " ▏" + st.faint("a problem a helper's check found, to go to")
+		}
+		if st.App.Palette.Tasks {
+			text = "  " + st.faint("$") + " ▏" + st.faint("a task to run in the terminal, or type a command")
+		}
+		if st.App.Palette.Log {
+			text = "  " + st.faint("⎇") + " ▏" + st.faint("a commit that changed "+filepath.Base(st.App.File)+", to see its change")
 		}
 	}
 	lines := []string{text, ""}
@@ -1326,6 +1347,7 @@ func helpBox(st State, hw int) []string {
 		{"⌃k", "commands, files, # a symbol of the repository, or ask the parent"},
 		{"F12 F7", "in the code tab: go to a definition, find references"},
 		{"⌥z", "in the code tab: wrap long lines"},
+		{"F9 ⌥⇧f l", "in the code tab: run the test at the cursor, format the file, its history"},
 		{"1 2 3", "conversation, changes, code (with the box empty)"},
 		{"/", "commands: /parent /queue /new /stop /theme /quit"},
 		{"1 2", "allow or deny a request the conversation shows"},

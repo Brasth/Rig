@@ -55,6 +55,9 @@ type gitDiffView struct {
 	off    int
 	raw    string // the diff as git wrote it: a hunk of it is staged or unstaged on its own
 	hunk   int    // the chosen hunk (from 0)
+	commit string // a commit's diff instead: its hash, what it is, and each file it changed
+	meta   gitCommit
+	files  []DiffFile
 }
 
 // hunks splits a file's raw diff into its header and each hunk's text, as git apply takes them.
@@ -572,7 +575,7 @@ func (m *Model) gitKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	switch k.String() {
 	case "]", "[":
-		if d := a.GitDiff; d != nil {
+		if d := a.GitDiff; d != nil && d.commit == "" {
 			_, parts := hunks(d.raw)
 			if k.String() == "]" {
 				d.hunk = min(d.hunk+1, max(0, len(parts)-1))
@@ -582,7 +585,7 @@ func (m *Model) gitKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			d.off = hunkRow(d) // the chosen hunk in view
 		}
 	case "h":
-		if d := a.GitDiff; d != nil {
+		if d := a.GitDiff; d != nil && d.commit == "" {
 			return m, m.stageHunk(d)
 		}
 	case "pgdown":
@@ -604,6 +607,9 @@ func (m *Model) gitKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "a":
 		return m, m.gitAct("staged every change", func(repo string) error { _, err := gitOut(repo, "add", "-A"); return err })
 	case "enter", "d":
+		if r != nil && r.kind == "commit" {
+			return m, m.fetchCommitDiff(r.c.hash, "") // what the commit changed
+		}
 		if r != nil && r.kind != "commit" {
 			if r.file.code == 'U' {
 				a.TreeFocus = false
@@ -901,6 +907,9 @@ func gitDiffRows(st State, w, room int) []string {
 	}
 	out := []string{"  " + st.bold(d.path) + "  " + st.faint(what) + "   " + st.paint(colGreen, fmt.Sprintf("+%d", d.file.Added)) + " " +
 		st.paint(colRed, fmt.Sprintf("−%d", d.file.Deleted)), ""}
+	if d.commit != "" {
+		return commitDiffRows(st, w, room)
+	}
 	if len(d.file.Lines) == 0 {
 		return append(out, "  "+st.faint("no changes"))
 	}
@@ -946,4 +955,45 @@ func gitDiffRows(st State, w, room int) []string {
 	off := max(0, min(d.off, len(body)-(room-len(out))))
 	body = body[off:]
 	return append(out, body...)
+}
+
+// commitDiffRows draws a commit's diff in place of the file: what the commit is, then each file it changed.
+func commitDiffRows(st State, w, room int) []string {
+	d := st.App.GitDiff
+	head := "  " + st.bold(d.meta.hash) + "  " + fit(clean(d.meta.subject), max(10, w-40)) + "   " + st.faint(d.meta.author+", "+ago(st.Now, d.meta.at))
+	if d.path != "" {
+		head += "   " + st.faint("· "+d.path)
+	}
+	out := []string{head, ""}
+	if len(d.files) == 0 {
+		return append(out, "  "+st.faint("no changes in this commit"))
+	}
+	add, del := tints()
+	var body []string
+	for _, f := range d.files {
+		body = append(body, "  "+st.bold(f.Path)+"   "+st.paint(colGreen, fmt.Sprintf("+%d", f.Added))+" "+st.paint(colRed, fmt.Sprintf("−%d", f.Deleted)))
+		for _, l := range f.Lines {
+			if l.Kind == '@' {
+				body = append(body, st.faint("   ⋯"))
+				continue
+			}
+			mark, colour, bg := " ", colText, ""
+			switch l.Kind {
+			case '+':
+				mark, colour, bg = "+", colGreen, add
+			case '-':
+				mark, colour, bg = "−", colRed, del
+			}
+			text := fit(fmt.Sprintf("%4d %s %s", l.Num, mark, sanitize(l.Text)), w-2)
+			if st.Styled && bg != "" {
+				text = tint(st.paint(colour, text), bg)
+			} else if st.Styled {
+				text = st.dim(text)
+			}
+			body = append(body, "  "+text)
+		}
+		body = append(body, "")
+	}
+	off := max(0, min(d.off, len(body)-(room-len(out))))
+	return append(out, body[off:]...)
 }

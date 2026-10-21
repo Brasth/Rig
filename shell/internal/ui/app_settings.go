@@ -164,6 +164,7 @@ func settingRows(st State, section string) []setRow {
 		}
 		return []setRow{
 			{Label: "Tab size", Key: "ui.tab_size", Options: []string{"2", "4", "8"}, Value: size},
+			toggle("Format on save", "ui.format_on_save", s.FormatOnSave, "⌃s runs gofmt, prettier, ruff, black, rustfmt or shfmt first, when it is here"),
 			{Label: "Terminal shell", Right: lastWord(strings.ReplaceAll(s.Shell, "/", " "))},
 			{Label: "e opens in", Right: "$EDITOR" + st.faint(" · "+editor), Group: true, Note: "in the terminal, e hands the file to your own editor"},
 		}

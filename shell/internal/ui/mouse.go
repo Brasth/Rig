@@ -809,7 +809,7 @@ func (m *Model) clickRow(list, at string) (tea.Model, tea.Cmd) {
 		again := a.TreeFocus && a.GitView && a.GitSel == i
 		a.GitView, a.TreeFocus, a.GitSel = true, true, i
 		if rows[i].kind == "commit" {
-			return m, nil
+			return m, m.fetchCommitDiff(rows[i].c.hash, "")
 		}
 		if rows[i].file.code == 'U' {
 			a.TreeFocus = false

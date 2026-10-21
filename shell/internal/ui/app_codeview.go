@@ -642,6 +642,9 @@ func codeScreen(v *view.View, st State, w, h int) ([]string, [][2]string) {
 	keys := [][2]string{{"⌃b", "tree"}, {"g", "git"}, {"b", "blame"}, {"/", "find"}, {"v", "select"}, {"e", "edit"}, {"E", "$EDITOR"}}
 	if a.GitDiff != nil {
 		keys = [][2]string{{"] [", "hunk"}, {"h", "stage hunk"}, {"g", "git"}, {"esc", "close diff"}}
+		if a.GitDiff.commit != "" {
+			keys = [][2]string{{"PgUp PgDn", "scroll"}, {"g", "git"}, {"esc", "close"}}
+		}
 	}
 	if a.Conflict != nil && !a.TreeFocus {
 		keys = [][2]string{{"] [", "conflict"}, {"o", "ours"}, {"t", "theirs"}, {"b", "both"}, {"e", "edit"}, {"esc", "file"}}

@@ -637,6 +637,15 @@ func (m *Model) appTabKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, m.findReferences()
 	}
 	switch key {
+	case "f9":
+		return m, m.runTestAtCursor()
+	case "alt+F":
+		if a.File != "" && a.FileLines != nil {
+			m.startEdit()
+			return m, m.formatDocument(false)
+		}
+	case "l":
+		return m, m.openLog()
 	case "up", "k":
 		if a.Selecting {
 			a.SelTo = max(0, a.SelTo-1)
@@ -1185,6 +1194,21 @@ func (m *Model) runPalette(it paletteItem, query string) tea.Cmd {
 		return m.openProblem(strings.TrimPrefix(it.Action, "problem:"))
 	case strings.HasPrefix(it.Action, "at:"):
 		return m.openRef(strings.TrimPrefix(it.Action, "at:"))
+	case strings.HasPrefix(it.Action, "run:"):
+		return m.runInTerminal(strings.TrimPrefix(it.Action, "run:"))
+	case strings.HasPrefix(it.Action, "commit:"):
+		return m.openCommit(strings.TrimPrefix(it.Action, "commit:"))
+	case it.Action == "tasks":
+		return m.openTasks()
+	case it.Action == "test":
+		return m.runTestAtCursor()
+	case it.Action == "format":
+		if !a.Editing && a.File != "" {
+			m.startEdit()
+		}
+		return m.formatDocument(false)
+	case it.Action == "history":
+		return m.openLog()
 	case it.Action == "references":
 		return m.findReferences()
 	case it.Action == "problems":
