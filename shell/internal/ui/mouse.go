@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
@@ -393,7 +394,7 @@ func (m *Model) openTab(n int) tea.Cmd {
 	if n == 1 {
 		return nil
 	}
-	return tea.Batch(m.fetchDock(true), m.fetchDiff(true), m.fetchChanged())
+	return tea.Batch(m.fetchDock(true), m.fetchDiff(true), m.fetchChanged(), m.loadFiles())
 }
 
 // clickRow picks a list's row as its arrows would, and opens it as ⏎ would.
@@ -411,9 +412,12 @@ func (m *Model) clickRow(list, at string) (tea.Model, tea.Cmd) {
 		m.st.SlashSel = i
 		return m.appKey(enter)
 	case "panel":
-		if a.Panel {
+		// a helper in the panel, floating or docked: its thread
+		if jobs := activeJobs(m.view); i < len(jobs) {
 			a.PanelSel = i
-			return m.appKey(enter)
+			a.Thread, a.Panel, m.st.LogUp = jobs[i].ID, false, 0
+			m.st.Log, m.st.LogE, m.lgLast = nil, "", time.Time{}
+			return m, m.fetchLog(true)
 		}
 	case "welcome":
 		a.WelcomeSel = i
@@ -496,8 +500,15 @@ func (m *Model) clickRow(list, at string) (tea.Model, tea.Cmd) {
 			sc.Row, sc.Pick = i, ""
 			return m.appKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'i'}})
 		}
-	case "file":
+	case "file", "tabfile":
 		return m, m.runPalette(paletteItem{Action: "file:" + at}, "")
+	case "tree":
+		for _, r := range treeRows(a) {
+			if r.path == at {
+				a.TreeFocus = false
+				return m, m.openTree(r.path, r.dir)
+			}
+		}
 	}
 	return m, nil
 }

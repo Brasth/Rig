@@ -24,11 +24,13 @@ import (
 type filesMsg struct{ files []string }
 
 type fileMsg struct {
-	path  string
-	lines []string
-	err   error
-	image []byte // a picture as PNG, for terminals that show images
-	w, h  int    // its size in pixels
+	path      string
+	lines     []string
+	crlf      bool // its lines end in CRLF
+	truncated bool // only its first lines were read
+	err       error
+	image     []byte // a picture as PNG, for terminals that show images
+	w, h      int    // its size in pixels
 }
 
 // SetApp opens the board as the app (the design's ADE screens) for the repository at repo.
@@ -134,11 +136,13 @@ func (m *Model) openFile(rel string) tea.Cmd {
 		if err != nil {
 			return fileMsg{path: rel, err: err}
 		}
+		crlf := strings.Contains(string(data), "\r\n")
 		lines := strings.Split(strings.ReplaceAll(string(data), "\r\n", "\n"), "\n")
-		if len(lines) > 5000 {
+		truncated := len(lines) > 5000
+		if truncated {
 			lines = lines[:5000]
 		}
-		return fileMsg{path: rel, lines: lines}
+		return fileMsg{path: rel, lines: lines, crlf: crlf, truncated: truncated}
 	}
 }
 
@@ -219,6 +223,9 @@ func (m *Model) appKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.st.Mode == ModeConfirm {
 		return m.confirmKey(k)
 	}
+	if k.Type == tea.KeyCtrlC && a.Editing && a.Dirty {
+		return m.editFileKey(tea.KeyMsg{Type: tea.KeyEsc}) // never quits over changes not saved: as esc, asks first
+	}
 	if k.Type == tea.KeyCtrlC {
 		if m.st.Prompt != "" {
 			m.st.Prompt, m.st.SlashSel = "", 0
@@ -292,6 +299,9 @@ func (m *Model) appKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	}
+	if a.Tab == 3 && a.Thread == "" && (a.Editing || a.TreeFocus) {
+		return m.appTabKey(k) // editing a file, or in the explorer: every key is theirs
+	}
 	if k.Type == tea.KeyRunes && (k.Paste || len(k.Runes) > 1) {
 		// files dropped on the window arrive as a paste of their paths: they go in the box as @ references
 		if files := droppedFiles(string(k.Runes)); files != nil {
@@ -322,6 +332,10 @@ func (m *Model) appKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
+		if m.winW >= 160 {
+			a.PanelHidden = !a.PanelHidden // wide enough to dock: ⇥ hides the panel, or brings it back
+			return m, nil
+		}
 		a.Panel = true
 		return m, nil
 	case "esc":
@@ -337,11 +351,15 @@ func (m *Model) appKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			a.Tab = 1
 		}
 		return m, nil
-	case "pgup":
-		m.scrollBy(8)
-		return m, nil
-	case "pgdown":
-		m.scrollBy(-8)
+	case "pgup", "pgdown":
+		if a.Tab != 1 && a.Thread == "" {
+			return m.appTabKey(k)
+		}
+		if key == "pgup" {
+			m.scrollBy(8)
+		} else {
+			m.scrollBy(-8)
+		}
 		return m, nil
 	}
 	if a.Thread != "" && key == "G" {
@@ -421,7 +439,7 @@ func (m *Model) appKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m.answer(r == '1')
 			case r == '2' || r == '3':
 				a.Tab = int(r - '0')
-				return m, tea.Batch(m.fetchDock(true), m.fetchDiff(true), m.fetchChanged())
+				return m, tea.Batch(m.fetchDock(true), m.fetchDiff(true), m.fetchChanged(), m.loadFiles())
 			case r == '?':
 				a.Help = true
 				return m, nil
@@ -445,7 +463,7 @@ func (m *Model) appTabKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch key {
 	case "1", "2", "3":
 		a.Tab, a.Selecting = int(key[0]-'0'), false
-		return m, tea.Batch(m.fetchDock(true), m.fetchDiff(true), m.fetchChanged())
+		return m, tea.Batch(m.fetchDock(true), m.fetchDiff(true), m.fetchChanged(), m.loadFiles())
 	case "q":
 		return m, tea.Quit
 	case "?":
@@ -510,6 +528,12 @@ func (m *Model) appTabKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	// the code tab
+	switch {
+	case a.Editing:
+		return m.editFileKey(k)
+	case a.TreeFocus:
+		return m.treeKey(k)
+	}
 	if (key == "u" || key == "h") && !a.Selecting && m.quickApply(key, false) {
 		return m, nil
 	}
@@ -559,7 +583,20 @@ func (m *Model) appTabKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if previewKind(a.File) != "" && previewKind(a.File) != "binary" {
 			a.Preview, a.FileOff = !a.Preview, 0
 		}
+	case "ctrl+b":
+		m.focusTree()
+		return m, m.loadFiles()
+	case "ctrl+w":
+		return m, m.closeTab()
 	case "e":
+		m.startEdit()
+	case "x":
+		if a.Selecting {
+			ref := fmt.Sprintf("%s:%d-%d", a.File, lo()+1, hi()+1)
+			a.Selecting, a.Tab = false, 1
+			return m, m.appSend("Explain " + ref + ": what it does and why.")
+		}
+	case "E":
 		if a.File != "" {
 			editor := os.Getenv("EDITOR")
 			if editor == "" {
@@ -653,7 +690,11 @@ type diffMsg struct {
 	id   string
 }
 
-type changedMsg struct{ files map[string]string }
+type changedMsg struct {
+	files map[string]string
+	added map[string]bool
+	lines map[string]map[int]bool
+}
 
 type searchMsg struct {
 	query string
@@ -691,15 +732,16 @@ func (m *Model) fetchChanged() tea.Cmd {
 	}
 	src := m.src
 	return func() tea.Msg {
-		files := map[string]string{}
+		msg := changedMsg{files: map[string]string{}, added: map[string]bool{}, lines: map[string]map[int]bool{}}
 		for i, id := range ids {
 			if d, err := src.JobDiff(id, 10*time.Second); err == nil && d != nil {
 				for _, f := range d.Files {
-					files[f.Path] = workers[i]
+					msg.files[f.Path] = workers[i]
 				}
+				touchedLines(d.Diff, msg.added, msg.lines)
 			}
 		}
-		return changedMsg{files: files}
+		return msg
 	}
 }
 
@@ -993,6 +1035,11 @@ func (m *Model) runPalette(it paletteItem, query string) tea.Cmd {
 		return nil
 	case strings.HasPrefix(it.Action, "file:"):
 		rel := strings.TrimPrefix(it.Action, "file:")
+		if a.Dirty && rel != a.File {
+			m.st.Message = filepath.Base(a.File) + " has unsaved changes: ⌃s saves them, esc in it discards them"
+			return nil
+		}
+		a.Tabs, a.Editing, a.Dirty, a.TreeFocus = addTab(a.Tabs, rel), false, false, false
 		a.Tab, a.File, a.FileLines, a.FileErr, a.FileOff, a.Selecting, a.Find = 3, rel, nil, "", 0, false, ""
 		a.Preview = previewKind(rel) != ""
 		return tea.Batch(m.openFile(rel), m.fetchChanged())

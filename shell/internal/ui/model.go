@@ -1053,7 +1053,7 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case changedMsg:
 		if m.appOn() {
-			m.st.App.Changed = msg.files
+			m.st.App.Changed, m.st.App.Added, m.st.App.ChangedLines = msg.files, msg.added, msg.lines
 		}
 	case searchMsg:
 		if m.appOn() && m.st.App.Search != nil && m.st.App.Search.key() == msg.query {
@@ -1071,6 +1071,7 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.appOn() && msg.path == m.st.App.File {
 			a := m.st.App
 			a.FileLines, a.FileErr, a.ImageCols, a.ImageRows = msg.lines, "", 0, 0
+			a.FileCRLF, a.FileTruncated, a.Dirty = msg.crlf, msg.truncated, false
 			if msg.err != nil {
 				a.FileErr = msg.err.Error()
 			}

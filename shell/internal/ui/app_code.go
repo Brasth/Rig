@@ -99,11 +99,10 @@ func splitHints(st State, left, right [][2]string, w int) string {
 
 // changesScreen is the design's review of one helper's changes: its files, the diff with numbered lines, your comments,
 // and how it was checked.
-func changesScreen(v *view.View, st State, w, h int) ([]string, string) {
+func changesScreen(v *view.View, st State, w, h int) ([]string, [][2]string) {
 	a := st.App
 	rows := v.Rows("Jobs")
-	foot := splitHints(st, [][2]string{{"]", "next file"}, {"c", "comment"}, {"esc", "back"}},
-		AppRightKeys, w)
+	foot := [][2]string{{"]", "next file"}, {"c", "comment"}, {"esc", "back"}}
 	if len(rows) == 0 {
 		lines := []string{"", center(st.dim("No changes yet. When a helper finishes, what it changed shows here."), w)}
 		for len(lines) < h {
@@ -319,88 +318,6 @@ func highlight(st State, line string) string {
 	return b.String()
 }
 
-// codeScreen is the design's code view: a tree of the files that matter on the left, the file on the right with line
-// numbers and colours, which agent is changing it, and a selection to ask the parent about.
-func codeScreen(st State, w, h int) ([]string, string) {
-	a := st.App
-	foot := splitHints(st, [][2]string{{"/", "find"}, {"v", "select"}, {"e", "open in $EDITOR"}, {"esc", "back"}},
-		AppRightKeys, w)
-	if a.File == "" {
-		lines := []string{fit("", w), center(st.dim("Open a file with ⌃k: type part of its name."), w)}
-		for len(lines) < h {
-			lines = append(lines, fit("", w))
-		}
-		return lines[:h], foot
-	}
-	dir, name := filepath.Dir(a.File)+"/", filepath.Base(a.File)
-	if dir == "./" {
-		dir = ""
-	}
-	right := ""
-	if who := a.Changed[a.File]; who != "" {
-		right = st.paint(agentColor(who), "● "+who+" is changing this in its copy") + "   "
-	}
-	lines := []string{spread("   "+st.faint(dir)+st.bold(name), "", right, w)}
-	treeW := min(28, w/4)
-	codeW := w - treeW - 2
-	tree := codeTree(st, treeW, h-1)
-	var code []string
-	switch {
-	case a.Preview && a.FileErr == "":
-		code = previewLines(st, a, codeW, h-1)
-	case a.FileErr != "":
-		code = []string{"", st.paint(colAmber, "cannot open: "+clean(a.FileErr))}
-	case a.FileLines == nil:
-		code = []string{"", st.faint("loading…")}
-	default:
-		room := h - 1 - 2
-		off := min(a.FileOff, max(0, len(a.FileLines)-room))
-		lo, hi := a.SelFrom, a.SelTo
-		if lo > hi {
-			lo, hi = hi, lo
-		}
-		code = append(code, "")
-		for i := off; i < len(a.FileLines) && len(code) < room+1; i++ {
-			text := sanitize(strings.ReplaceAll(a.FileLines[i], "\t", strings.Repeat(" ", tabSize(st))))
-			if a.Find != "" {
-				text = mark(st, text, a.Find)
-			} else {
-				text = highlight(st, text)
-			}
-			row := st.paint("#c3c5ce", fmt.Sprintf("%4d  ", i+1)) + text
-			row = fit(row, codeW)
-			if a.Selecting && i >= lo && i <= hi && st.Styled {
-				row = tint(row, colSelBg)
-			} else if a.Selecting && i >= lo && i <= hi {
-				row = ">" + row[1:]
-			}
-			code = append(code, row)
-		}
-		for len(code) < room+1 {
-			code = append(code, "")
-		}
-		switch {
-		case a.Finding:
-			code = append(code, "  "+st.dim("/")+" "+a.Find+"▏")
-		case a.Selecting:
-			code = append(code, "  "+st.dim(fmt.Sprintf("lines %d–%d selected", lo+1, hi+1))+"    "+st.dim("a")+" "+st.faint("ask "+appParent(st))+"   "+st.dim("@")+" "+st.faint("add to chat")+"   "+st.dim("esc")+" "+st.faint("cancel"))
-		default:
-			code = append(code, "")
-		}
-	}
-	for i := 0; i < h-1; i++ {
-		t, c := "", ""
-		if i < len(tree) {
-			t = tree[i]
-		}
-		if i < len(code) {
-			c = code[i]
-		}
-		lines = append(lines, fit(t, treeW)+"  "+fit(c, codeW))
-	}
-	return lines[:h], foot
-}
-
 func agentColor(name string) string {
 	if c, ok := agentColors[name]; ok {
 		return c
@@ -428,75 +345,6 @@ func mark(st State, line, term string) string {
 		hit = "[" + hit + "]"
 	}
 	return line[:i] + hit + mark(st, line[i+len(term):], term)
-}
-
-// codeTree is the left column: the open file's folder and the folders of the files agents are changing.
-func codeTree(st State, w, h int) []string {
-	a := st.App
-	dirs := map[string][]string{}
-	var order []string
-	addFile := func(path string) {
-		d := filepath.Dir(path)
-		if _, ok := dirs[d]; !ok {
-			order = append(order, d)
-		}
-		for _, f := range dirs[d] {
-			if f == path {
-				return
-			}
-		}
-		dirs[d] = append(dirs[d], path)
-	}
-	openDir := filepath.Dir(a.File)
-	for _, f := range a.Files {
-		if filepath.Dir(f) == openDir {
-			addFile(f)
-		}
-	}
-	if len(dirs) == 0 && a.File != "" {
-		addFile(a.File)
-	}
-	for f := range a.Changed {
-		addFile(f)
-	}
-	lines := []string{""}
-	for _, d := range order {
-		if len(lines) >= h-2 {
-			break
-		}
-		label := d
-		if label == "." {
-			label = "(top)"
-		}
-		lines = append(lines, "   "+st.faint(fit(label, w-3)))
-		for i, f := range dirs[d] {
-			if i == 8 {
-				lines = append(lines, "     "+st.faint(fmt.Sprintf("+%d more", len(dirs[d])-8)))
-				break
-			}
-			mark := ""
-			if who := a.Changed[f]; who != "" {
-				mark = " " + st.paint(agentColor(who), "●")
-			}
-			row := "     " + fit(filepath.Base(f), w-8) + mark
-			if f == a.File {
-				row = "   " + st.bold("› "+fit(filepath.Base(f), w-8)) + mark
-				if st.Styled {
-					row = lipgloss.NewStyle().Background(lipgloss.Color(colSelBg)).Render(fit(row, w))
-				}
-			} else {
-				row = st.dim(row)
-			}
-			lines = append(lines, st.zone("row:file:"+f, fit(row, w)))
-		}
-	}
-	for len(lines) < h-2 {
-		lines = append(lines, "")
-	}
-	if len(a.Changed) > 0 {
-		lines = append(lines, "   "+st.faint("● an agent is on it"))
-	}
-	return lines
 }
 
 // previewKind is how a file is previewed instead of shown as source: markdown rendered, csv as a table, and files a

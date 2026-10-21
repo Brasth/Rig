@@ -3,6 +3,10 @@
 
 
 
+## The panel docks in a wide terminal, and the code tab is an editor (2026-10-21)
+
+Following the design's updated shell spec, the agents panel stays docked beside the main view in a terminal 160 columns wide or more (`⇥` hides it) and floats as a card over the faded screen in a narrower one. The code tab follows the new Code board: an explorer of the whole repository with folders that open and close, a filter, and the helpers' `A`/`M` marks; open files as tabs (`⌃w` closes); a breadcrumb to the code around the cursor; marks on the lines a helper's change touches; `x` to have the parent explain the selected lines; a status bar; and `e` to edit the file in place (`⌃s` saves), with `E` for `$EDITOR`.
+
 ## The box edits as codex's and grok's do (2026-10-21)
 
 Every screen of the app and the launcher keeps a row of room above its top bar and below its footer. `⌥⏎` (or `⌃j`) starts a new line in the reply box, which grows with the message and wraps long lines; `↑` `↓` move between its lines and Home and End go to a line's ends. The cursor is a block on the character under it, as in codex and grok, so moving it no longer opens a gap in the text. `←` `→` move the cursor in the reply box and typing goes in where it is, with word moves (`⌥←` `⌥→`), `⌃a` `⌃e`, Home and End, Delete, `⌃w`, `⌥⌫`, `⌥d` and `⌃u`; `↑` `↓` bring back the messages you sent, the conversation's own included, and `↓` past the newest restores your draft.

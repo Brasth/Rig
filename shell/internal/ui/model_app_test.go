@@ -156,7 +156,7 @@ func TestCtrlKFindsFilesCommandsAndAsksTheParent(t *testing.T) {
 	if m.st.App.Tab != 3 || m.st.App.File != "src/limit.ts" || len(m.st.App.FileLines) == 0 {
 		t.Fatalf("a file opens in the code tab: %+v", m.st.App)
 	}
-	if out := appScreen(m); !strings.Contains(out, "src/limit.ts") || !strings.Contains(out, "1  export const rateLimit = 1") {
+	if out := appScreen(m); !strings.Contains(out, "src › limit.ts") || !strings.Contains(out, "1  export const rateLimit = 1") {
 		t.Fatalf("the code tab:\n%s", out)
 	}
 	press(m, "esc")
@@ -301,14 +301,14 @@ func TestTheCodeTabSelectsLinesToAskAboutAndFindsText(t *testing.T) {
 	}
 	run(m.runPalette(paletteItem{Action: "file:login.ts"}, ""), m)
 	out := appScreen(m)
-	for _, want := range []string{"login.ts", "   1  import { Router } from 'express'", "/ find", "v select", "e open in $EDITOR"} {
+	for _, want := range []string{"login.ts", "  1  import { Router } from 'express'", "⌃b tree", "/ find", "v select", "e edit", "E $EDITOR"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q:\n%s", want, out)
 		}
 	}
 	press(m, "v")
 	press(m, "down", "down")
-	if out := appScreen(m); !strings.Contains(out, "lines 1–3 selected") {
+	if out := appScreen(m); !strings.Contains(out, "Ln 3, Col 1 (3 selected)") || !strings.Contains(out, "[a  ask claude]   @ add to chat   x explain") {
 		t.Fatalf("v then ↓ selects lines:\n%s", out)
 	}
 	press(m, "a")
