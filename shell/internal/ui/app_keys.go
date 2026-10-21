@@ -195,7 +195,7 @@ func (m *Model) appSend(text string) tea.Cmd {
 		a := m.st.App
 		a.Outbox = append(a.Outbox, text)
 		m.st.Prompt, m.st.SlashSel = "", 0
-		m.st.Message = "queued: " + appParent(m.st) + " gets it when this turn ends (↑ takes it back)"
+		m.st.Message = "queued: " + appParent(m.st) + " gets it when this turn ends (↑ takes it back · /steer sends it now)"
 		return nil
 	}
 	m.st.Prompt, m.st.SlashSel, m.st.Message = "", 0, "sending…"

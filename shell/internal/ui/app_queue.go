@@ -91,3 +91,29 @@ func (m *Model) cycleMode() tea.Cmd {
 		return chatSentMsg{started: started, err: err, sent: "/mode next", quiet: true}
 	}
 }
+
+// steer is /steer TEXT: the parent gets TEXT now, in the middle of its turn, which stops where it is; what it changed
+// so far is kept and shown, and the parent goes on from TEXT, told it was interrupted. With no text, the first queued
+// message goes now instead. When nothing runs it is a plain send.
+func (m *Model) steer(text string) tea.Cmd {
+	a := m.st.App
+	text = strings.TrimSpace(text)
+	if text == "" && len(a.Outbox) > 0 {
+		text, a.Outbox = a.Outbox[0], a.Outbox[1:]
+	}
+	if text == "" {
+		m.st.Message = "/steer TEXT interrupts the turn with TEXT; with a message queued, /steer sends it now"
+		return nil
+	}
+	if !m.working() || m.chatID == "" {
+		return m.appSend(text)
+	}
+	m.rememberSent(text)
+	m.st.Prompt, m.st.SlashSel, m.st.Message = "", 0, "interrupting "+appParent(m.st)+"…"
+	a.Sending = true
+	src, id := m.src, m.chatID
+	return func() tea.Msg {
+		started, err := src.ChatSteer(id, text, 20*time.Second)
+		return chatSentMsg{started: started, err: err, sent: text}
+	}
+}

@@ -763,6 +763,35 @@ class Turns(Base):
         self.assertEqual(rig_chat.transcript(self.repo, started["session"])["entries"][-1]["text"], "cancelled")
         self.assertFalse(rig_chat.cancel(self.repo, started["session"])["cancelled"])
 
+    def test_steer_stops_the_turn_notes_what_it_changed_and_goes_on_from_the_message(self):
+        if shutil.which("git") is None:
+            self.skipTest("no git here")
+        subprocess.run(["git", "init", "-q", str(self.repo)], check=True)
+        (self.repo / ".gitignore").write_text(".rig/\n")
+        self._editing_parent("open('half.py', 'w').write('half\\n')\n")
+        script = self.bin / "claude"
+        script.write_text(script.read_text().replace("sys.exit(0)", "sys.exit(0)").replace("time.sleep(0)", "time.sleep(300)"))
+        started = rig_chat.send(self.repo, "long job")
+        session = started["session"]
+        time.sleep(0.6)
+        self.assertEqual(rig_chat.transcript(self.repo, session)["state"], "running")
+        stand_in(self.bin, "claude", CLAUDE_STREAM)  # the next turn's parent answers at once
+        result = rig_chat.steer(self.repo, session, "stop, do it the other way")
+        self.assertEqual((result["session"], result["state"], result["turn"]), (session, "running", 2))
+        view = self.wait_idle(session)
+        texts = [(e["role"], e["text"].split("\n", 1)[0]) for e in view["entries"]]
+        self.assertIn(("system", "interrupted"), texts)
+        self.assertIn(("diff", "half.py +1 −0"), texts, "what the stopped turn changed is noted: " + str(texts))
+        self.assertNotIn("error", [r for r, _ in texts], "a stopped turn is not a failure")
+        self.assertEqual([m["turn"] for m in view["marks"]], [1], "and can be rewound")
+        sent = self.calls()[-1]["argv"][-1]
+        self.assertTrue(sent.startswith("[Note from Rig: the user interrupted") and sent.endswith("stop, do it the other way"), sent)
+        self.assertEqual(view["state"], "idle")
+        # on an idle session it is a plain send
+        rig_chat.steer(self.repo, session, "and now?")
+        self.wait_idle(session)
+        self.assertNotIn("interrupted", self.calls()[-1]["argv"][-1])
+
     def test_a_dead_runner_is_reported_failed_not_running_forever(self):
         stand_in(self.bin, "claude", CLAUDE_STREAM, sleep=300)
         started = rig_chat.send(self.repo, "x")

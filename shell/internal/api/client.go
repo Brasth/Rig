@@ -298,6 +298,15 @@ func (c *Client) ChatFork(session string, turn int, timeout time.Duration) (*vie
 	return &out, nil
 }
 
+// ChatSteer interrupts a session's running turn with a message the parent goes on from (a plain send when idle).
+func (c *Client) ChatSteer(session, message string, timeout time.Duration) (*view.ChatStarted, error) {
+	var out view.ChatStarted
+	if err := c.Call("chat.steer", map[string]any{"session": session, "message": message}, timeout, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 // ChatSearch finds the conversations with a message that contains the words of query.
 func (c *Client) ChatSearch(query string, timeout time.Duration) ([]view.ChatHit, error) {
 	var out struct {

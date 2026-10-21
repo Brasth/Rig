@@ -145,6 +145,9 @@ func (e *ensuringSource) ChatSend(message, session, parent string, timeout time.
 	return e.client.ChatSend(message, session, parent, timeout)
 }
 
+func (e *ensuringSource) ChatSteer(session, message string, timeout time.Duration) (*view.ChatStarted, error) {
+	return e.client.ChatSteer(session, message, timeout)
+}
 func (e *ensuringSource) ChatSearch(query string, timeout time.Duration) ([]view.ChatHit, error) {
 	return e.client.ChatSearch(query, timeout)
 }
