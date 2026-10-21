@@ -393,6 +393,80 @@ class Turns(Base):
         # the index of the repository is left as it was
         self.assertEqual(subprocess.run(["git", "-C", str(self.repo), "diff", "--cached", "--name-only"], capture_output=True, text=True).stdout, "")
 
+    def _editing_parent(self, body: str):
+        stand_in(self.bin, "claude", CLAUDE_STREAM)
+        script = self.bin / "claude"
+        script.write_text(script.read_text().replace("import json, os, subprocess, sys, time\n", "import json, os, subprocess, sys, time\n" + body, 1))
+
+    def test_rewind_puts_a_turn_back_and_undo_takes_it_back(self):
+        if shutil.which("git") is None:
+            self.skipTest("no git here")
+        subprocess.run(["git", "init", "-q", str(self.repo)], check=True)
+        (self.repo / "a.py").write_text("one\n")
+        (self.repo / ".gitignore").write_text(".rig/\n")
+        self._editing_parent("open('a.py', 'w').write('two\\n')\nopen('new.txt', 'w').write('x\\n')\n")
+        first = rig_chat.send(self.repo, "first change")
+        session = first["session"]
+        self.wait_idle(session)
+        self._editing_parent("open('a.py', 'w').write('three\\n')\nopen('b.txt', 'w').write('b\\n')\n")
+        rig_chat.send(self.repo, "second change", session)
+        view = self.wait_idle(session)
+        self.assertEqual([(m["turn"], [f["path"] for f in m["files"]], m["title"]) for m in view["marks"]],
+                         [(1, ["a.py", "new.txt"], "first change"), (2, ["a.py", "b.txt"], "second change")])
+        dry = rig_chat.rewind(self.repo, session, 2, dry=True)
+        self.assertEqual((dry["paths"], dry["edited"]), (["a.py", "b.txt"], []))
+        self.assertEqual((self.repo / "a.py").read_text(), "three\n", "a dry run changes nothing")
+        # one file, put back as before turn 2
+        rig_chat.rewind(self.repo, session, 2, path="a.py")
+        self.assertEqual((self.repo / "a.py").read_text(), "two\n")
+        self.assertTrue((self.repo / "b.txt").exists())
+        self.assertEqual(len(rig_chat.transcript(self.repo, session)["marks"]), 2, "a single file keeps the turns")
+        rig_chat.rewind(self.repo, session, 0, undo=True)
+        self.assertEqual((self.repo / "a.py").read_text(), "three\n")
+        # the whole of turn 1 and after: files it made are removed, the others are as they were
+        (self.repo / "a.py").write_text("mine\n")  # edited since
+        dry = rig_chat.rewind(self.repo, session, 1, dry=True)
+        self.assertEqual(dry["edited"], ["a.py"], "what was edited since is named")
+        rig_chat.rewind(self.repo, session, 1)
+        self.assertEqual((self.repo / "a.py").read_text(), "one\n")
+        self.assertFalse((self.repo / "new.txt").exists() or (self.repo / "b.txt").exists())
+        view = rig_chat.transcript(self.repo, session)
+        self.assertEqual((view["marks"], view["can_undo"]), ([], True))
+        self.assertIn("rewound to before turn 1: 3 files put back", view["entries"][-1]["text"])
+        rig_chat.rewind(self.repo, session, 0, undo=True)
+        self.assertEqual(((self.repo / "a.py").read_text(), (self.repo / "b.txt").read_text()), ("mine\n", "b\n"), "undo brings back even the later edit")
+        self.assertEqual(len(rig_chat.transcript(self.repo, session)["marks"]), 2)
+        with self.assertRaisesRegex(rig_chat.ChatError, "nothing to undo"):
+            rig_chat.rewind(self.repo, session, 0, undo=True)
+        with self.assertRaisesRegex(rig_chat.ChatError, "no turn 9"):
+            rig_chat.rewind(self.repo, session, 9)
+
+    def test_rewind_tells_the_parent_once_and_works_as_a_command(self):
+        if shutil.which("git") is None:
+            self.skipTest("no git here")
+        subprocess.run(["git", "init", "-q", str(self.repo)], check=True)
+        (self.repo / ".gitignore").write_text(".rig/\n")
+        self._editing_parent("open('a.py', 'w').write('two\\n')\n")
+        session = rig_chat.send(self.repo, "edit")["session"]
+        self.wait_idle(session)
+        rig_chat.send(self.repo, "/rewind", session)
+        listing = rig_chat.transcript(self.repo, session)["entries"][-1]["text"]
+        self.assertTrue(listing.startswith("turns that changed files") and "turn 1: a.py · edit" in listing, listing)
+        rig_chat.send(self.repo, "/rewind 1", session)
+        self.assertFalse((self.repo / "a.py").exists())
+        self.assertEqual(len(self.calls()), 1, "the commands start no turn")
+        rig_chat.send(self.repo, "go on", session)
+        self.wait_idle(session)
+        rig_chat.send(self.repo, "and more", session)
+        self.wait_idle(session)
+        first, second = self.calls()[1]["argv"][-1], self.calls()[2]["argv"][-1]
+        self.assertIn("the user rewound the working tree: a.py", first)
+        self.assertNotIn("rewound", second, "told once")
+        # a running turn is refused, and a project that is not a repository says so
+        with self.assertRaisesRegex(rig_chat.ChatError, "git repository"):
+            with mock.patch.object(rig_chat, "_tree", return_value=""):
+                rig_chat.rewind(self.repo, session, 1)
+
     def test_a_long_patch_and_many_files_are_cut_short(self):
         files = rig_chat.turn_changes(self.repo, "", "x")
         self.assertEqual(files, [], "no trees, no changes")

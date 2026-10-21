@@ -137,17 +137,21 @@ type AppState struct {
 
 // Palette is Ctrl-K: ask the parent, open a file, or run a command.
 type Palette struct {
-	Query    string
-	Sel      int
-	Attach   bool // @: the chosen file goes into your message instead of opening
-	Model    bool // /model: the parent's models, or the name typed
-	Effort   bool // /effort, or the reasoning row of /model: the parent's reasoning levels
-	Resume   bool // /resume: the conversations of this repository, to open one again
-	Symbols  bool // ⌃o in the code tab: the open file's functions and types, to go to
-	Branch   bool // b in the git view: a branch to switch to, or a new one
-	Problems bool // m in the code tab: what the helpers' checks found, each to go to
-	Tasks    bool // ⌃k › run a task: the repository's scripts and targets, each to run in the terminal
-	Log      bool // l in the code tab: the commits that touched the open file, each to show
+	Query  string
+	Sel    int
+	Attach bool // @: the chosen file goes into your message instead of opening
+	Model  bool // /model: the parent's models, or the name typed
+	Effort bool // /effort, or the reasoning row of /model: the parent's reasoning levels
+	Resume bool // /resume: the conversations of this repository, to open one again
+	Rewind bool // /rewind: the turns that changed files, each to put back (RewindTurn: the one chosen, whose files are listed)
+	// RewindTurn and RewindPlan are the second step: the chosen turn and what putting it back would change.
+	RewindTurn int
+	RewindPlan *view.ChatRewound
+	Symbols    bool // ⌃o in the code tab: the open file's functions and types, to go to
+	Branch     bool // b in the git view: a branch to switch to, or a new one
+	Problems   bool // m in the code tab: what the helpers' checks found, each to go to
+	Tasks      bool // ⌃k › run a task: the repository's scripts and targets, each to run in the terminal
+	Log        bool // l in the code tab: the commits that touched the open file, each to show
 }
 
 // paletteItem is one row of the palette.
@@ -1203,6 +1207,9 @@ func paletteItems(st State) []paletteItem {
 	if st.App.Palette.Resume {
 		return resumeItems(st, q)
 	}
+	if st.App.Palette.Rewind {
+		return rewindItems(st, q)
+	}
 	if st.App.Palette.Symbols {
 		return symbolItems(st, q)
 	}
@@ -1317,6 +1324,7 @@ var PaletteCommands = [][3]string{
 	{"change theme", "rig, light, dark, material, dracula", "theme"},
 	{"change model", "the model the parent talks with", "model"},
 	{"resume a conversation", "open an earlier one again (/resume)", "resume"},
+	{"rewind files", "put files back as they were before a turn (/rewind)", "rewind"},
 	{"search the code", "text in every file (⌃f)", "search"},
 	{"find references", "every use of the name at the cursor (F7)", "references"},
 	{"run a task", "a script, make or just target, or the tests, in the terminal", "tasks"},
@@ -1345,6 +1353,9 @@ func paletteBox(v *view.View, st State, pw int) []string {
 		}
 		if st.App.Palette.Effort {
 			text = "  " + st.faint("›") + " ▏" + st.faint("how much "+appParent(st)+" reasons: low, medium, high…")
+		}
+		if st.App.Palette.Rewind {
+			text = "  " + st.faint("↶") + " ▏" + st.faint("a turn to put back: its files return to how they were before it")
 		}
 		if st.App.Palette.Resume {
 			text = "  " + st.faint("⟲") + " ▏" + st.faint("an earlier conversation to open again: type to search")

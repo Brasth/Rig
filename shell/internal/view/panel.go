@@ -301,6 +301,33 @@ type ChatTranscript struct {
 	// is after its last turn (nil from a server that does not say, -1 when it is not known).
 	Successor  string `json:"successor"`
 	ContextPct *int   `json:"context_pct"`
+	// Marks are the turns that changed files, which /rewind can put back; CanUndo says a rewind can be taken back.
+	Marks   []ChatMark `json:"marks"`
+	CanUndo bool       `json:"can_undo"`
+}
+
+// ChatMark is one turn that changed files: its number, when, the message that asked for it and the files it touched.
+type ChatMark struct {
+	Turn  int        `json:"turn"`
+	At    string     `json:"at"`
+	Title string     `json:"title"`
+	Files []ChatFile `json:"files"`
+}
+
+// ChatFile is one file a turn changed.
+type ChatFile struct {
+	Path    string `json:"path"`
+	Added   int    `json:"added"`
+	Deleted int    `json:"deleted"`
+}
+
+// ChatRewound is the chat.rewind result: the files a rewind changes (or, for a dry run, would change), and the ones
+// among them that were edited after the turn.
+type ChatRewound struct {
+	Turn   int      `json:"turn"`
+	Paths  []string `json:"paths"`
+	Edited []string `json:"edited"`
+	Dry    bool     `json:"dry"`
 }
 
 // ChatAsk is a permission request the parent is blocked on; chat.answer allows or denies it by ID.

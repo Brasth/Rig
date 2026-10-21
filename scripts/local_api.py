@@ -64,6 +64,7 @@ LOCAL_METHODS = {
     "chat.status": (False, "EXPERIMENT: whether the headless-parent chat is on, which parents can run, and recent sessions"),
     "chat.transcript": (False, "EXPERIMENT: a chat session's transcript (params: session, tail)"),
     "chat.send": (True, "EXPERIMENT: send one message to the headless parent; the answer arrives in the transcript (params: message, session, parent)"),
+    "chat.rewind": (True, "EXPERIMENT: put the working tree back as it was before a chat turn (params: session, turn, path, dry, undo)"),
     "chat.cancel": (True, "EXPERIMENT: stop a chat session's running turn (params: session)"),
     "chat.commands": (False, "The parent's own skills and slash commands, for the shell's / menu (params: parent)"),
     "chat.models": (False, "Every model the parent CLI lists or Rig knows for it, for the shell's /model (params: parent)"),
@@ -192,7 +193,7 @@ class Api:
         if method == "workspace.status":
             return self._workspace(request_id, params)
         if method in ("job.evidence", "job.diff", "job.thread", "job.pause", "job.problems", "fleet.status", "settings.view", "env.recovery", "env.recover", "log.follow", "env.shell", "shell.parent",
-                      "chat.status", "chat.transcript", "chat.send", "chat.cancel", "chat.answer", "chat.commands", "chat.models", "chat.parent", "ui.theme", "ui.set_theme", "settings.app", "settings.set",
+                      "chat.status", "chat.transcript", "chat.send", "chat.cancel", "chat.rewind", "chat.answer", "chat.commands", "chat.models", "chat.parent", "ui.theme", "ui.set_theme", "settings.app", "settings.set",
                       "applies.today", "applies.undo", "applies.redo", "applies.hold", "ship.status", "ship.run"):
             return self._environment(request_id, method, params)
         if method in ("ui.request", "events.list", "events.ack"):
@@ -373,6 +374,11 @@ def _environment(self, request_id, method, params):
                 result = rig_chat.status(self.repo)
             elif method == "chat.transcript":
                 result = rig_chat.transcript(self.repo, session, tail)
+            elif method == "chat.rewind":
+                turn, path = params.get("turn", 0), params.get("path", "")
+                if isinstance(turn, bool) or not isinstance(turn, int) or not isinstance(path, str):
+                    return _reply(request_id, error=_error(INVALID_PARAMS, "turn must be an integer and path a string"))
+                result = rig_chat.rewind(self.repo, session, turn, path, bool(params.get("dry")), bool(params.get("undo")))
             elif method == "chat.cancel":
                 result = rig_chat.cancel(self.repo, session)
             elif method == "chat.commands":

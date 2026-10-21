@@ -1265,6 +1265,20 @@ func (m *Model) runPalette(it paletteItem, query string) tea.Cmd {
 		return m.resumeSession(strings.TrimPrefix(it.Action, "resume:"))
 	case it.Action == "resume":
 		return m.openResume()
+	case it.Action == "rewind":
+		return m.openRewind()
+	case strings.HasPrefix(it.Action, "rewind-turn:"):
+		n, _ := strconv.Atoi(strings.TrimPrefix(it.Action, "rewind-turn:"))
+		return m.planRewind(n)
+	case strings.HasPrefix(it.Action, "rewind-do:"):
+		n, _ := strconv.Atoi(strings.TrimPrefix(it.Action, "rewind-do:"))
+		return m.doRewind(n, "", false)
+	case strings.HasPrefix(it.Action, "rewind-file:"):
+		n, path, _ := strings.Cut(strings.TrimPrefix(it.Action, "rewind-file:"), ":")
+		turn, _ := strconv.Atoi(n)
+		return m.doRewind(turn, path, false)
+	case it.Action == "rewind-undo":
+		return m.doRewind(0, "", true)
 	case it.Action == "effort-menu":
 		a.Palette = &Palette{Effort: true}
 		return nil

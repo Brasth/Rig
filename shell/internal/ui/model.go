@@ -37,6 +37,7 @@ type Source interface {
 	ChatTranscript(session string, tail int, timeout time.Duration) (*view.ChatTranscript, error)
 	ChatSend(message, session, parent string, timeout time.Duration) (*view.ChatStarted, error)
 	ChatCancel(session string, timeout time.Duration) error
+	ChatRewind(session string, turn int, path string, dry, undo bool, timeout time.Duration) (*view.ChatRewound, error)
 	ChatAnswer(session, askID, decision string, timeout time.Duration) error
 	ChatSetParent(name string, timeout time.Duration) error
 	Theme(timeout time.Duration) (*view.ThemeReply, error)
@@ -535,6 +536,14 @@ func (m *Model) runSlash(text string) (tea.Cmd, bool) {
 		}
 		m.st.Mode, m.st.InputLabel, m.inputFor = ModeNormal, "", ""
 		return m.act("queue.add", map[string]any{"text": rest, "idempotency_key": m.draftKey}, true), true
+	case "/rewind":
+		clear()
+		m.st.Mode, m.st.InputLabel, m.inputFor = ModeNormal, "", ""
+		if !m.appOn() {
+			m.st.Message = "/rewind is in the app: rig shell"
+			return nil, true
+		}
+		return m.openRewind(), true
 	case "/resume":
 		clear()
 		m.st.Mode, m.st.InputLabel, m.inputFor = ModeNormal, "", ""
@@ -1310,6 +1319,10 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.chLast = time.Time{}
 		return m, m.fetchChat(true)
+	case rewindPlanMsg:
+		return m, m.onRewindPlan(msg)
+	case rewoundMsg:
+		return m, m.onRewound(msg)
 	case chatCancelMsg:
 		if msg.err != nil {
 			m.st.Message = "Stop failed: " + msg.err.Error()

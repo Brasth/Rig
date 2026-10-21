@@ -444,6 +444,9 @@ def transcript(repo, session, tail: int = 200) -> dict:
     return {"session": meta["id"], "parent": meta["parent"], "state": meta["state"], "turns": meta.get("turns", 0),
             "note": meta.get("note", ""), "plan": bool(meta.get("plan")), "native": str(meta.get("native") or ""),
             "successor": str(meta.get("successor") or ""), "context_pct": context_percent(meta),
+            "marks": [{"turn": m.get("turn", 0), "at": m.get("at", ""), "title": m.get("title", ""), "files": m.get("files", [])}
+                      for m in (meta.get("marks") or []) if isinstance(m, dict)],
+            "can_undo": isinstance(meta.get("rewind_backup"), dict),
             "entries": rows, "ask": pending_ask(repo, meta["id"]),
             "partial": _partial(repo, meta) if meta["state"] == "running" else "",
             "asks": bool(meta.get("asks", meta["parent"] in ASKS))}
@@ -574,6 +577,7 @@ def set_parent(repo, name: str) -> dict:
 
 
 PLAN_COMMAND = re.compile(r"/plan(?:\s+(.*))?", re.S)
+REWIND_COMMAND = re.compile(r"/rewind(?:\s+(\S+))?\s*")
 COMPACT_COMMAND = re.compile(r"/compact(?:\s+(.*))?", re.S)
 # /compact asks the parent, which still has the whole conversation, for a summary; the next conversation starts from it
 COMPACT_PROMPT = ("[Compact] Write a summary of this conversation so that I can continue it in a fresh one without losing anything "
@@ -705,6 +709,19 @@ def send(repo, message: str, session: str = "", parent: str = "") -> dict:
     info = INFO_COMMAND.fullmatch(message)  # these answer without a turn, so the parent CLI need not be installed
     if info:
         append(repo, meta["id"], "system", _info(repo, meta, info.group(1)))
+        return {"session": meta["id"], "parent": meta["parent"], "state": meta["state"], "turn": meta.get("turns", 0)}
+    rewound = REWIND_COMMAND.fullmatch(message)
+    if rewound:
+        # /rewind lists the turns that changed files; /rewind N puts them back as before turn N; /rewind undo takes it back
+        arg = (rewound.group(1) or "").strip()
+        marks = [m for m in (meta.get("marks") or []) if isinstance(m, dict)]
+        if arg == "undo" or arg.isdigit():
+            result = rewind(repo, meta["id"], int(arg) if arg.isdigit() else 0, undo=arg == "undo")
+            return {"session": meta["id"], "parent": meta["parent"], "state": meta["state"], "turn": meta.get("turns", 0),
+                    "rewound": result["paths"]}
+        rows = [f"turn {m['turn']}: " + ", ".join(f["path"] for f in m.get("files", [])[:4]) + f" · {m.get('title', '')}" for m in marks[-10:]]
+        append(repo, meta["id"], "system", ("turns that changed files (/rewind N puts them back as before turn N):\n" + "\n".join(rows))
+               if rows else "no turn has changed files in this conversation yet")
         return {"session": meta["id"], "parent": meta["parent"], "state": meta["state"], "turn": meta.get("turns", 0)}
     planned = PLAN_COMMAND.fullmatch(message)
     if planned:
@@ -1121,15 +1138,134 @@ def turn_changes(repo, before: str, after: str) -> list[dict]:
     return files
 
 
+MARKS = 40  # turns kept to rewind to
+
+
 def _record_changes(repo, session: str, before: str) -> None:
     """After a turn: one entry for each file it changed, with what changed, for any parent."""
     after = _tree(repo)
     files = turn_changes(repo, before, after)
+    if files:
+        try:  # the two trees stay in git's object store, so /rewind can put the files back as they were
+            meta = read_meta(repo, session)
+            marks = [m for m in (meta.get("marks") or []) if isinstance(m, dict)]
+            marks.append({"turn": meta.get("turns", 0), "before": before, "after": after, "title": _last_user(repo, session),
+                          "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                          "files": [{"path": f["path"], "added": f["added"], "deleted": f["deleted"]} for f in files[:200]]})
+            meta["marks"] = marks[-MARKS:]
+            _write_json(_meta_path(repo, session), meta)
+        except ChatError:
+            pass
     for entry in files[:DIFF_FILES]:
         append(repo, session, "diff", _clean(f"{entry['path']} +{entry['added']} −{entry['deleted']}\n{entry['text']}", 6000))
     if len(files) > DIFF_FILES:
         rest = files[DIFF_FILES:]
         append(repo, session, "system", f"and {len(rest)} more files changed: " + ", ".join(e["path"] for e in rest[:6]) + (" …" if len(rest) > 6 else ""))
+
+
+def _last_user(repo, session: str) -> str:
+    """What the last message said, on one line, to name a turn by."""
+    try:
+        lines = (chat_dir(repo) / f"{session}.jsonl").read_text(errors="replace").splitlines()
+    except OSError:
+        return ""
+    for line in reversed(lines):
+        try:
+            row = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(row, dict) and row.get("role") == "user":
+            return _clean(str(row.get("text", "")).split("\n", 1)[0])[:80]
+    return ""
+
+
+def _git(repo, *args: str) -> subprocess.CompletedProcess:
+    return subprocess.run(["git", "-C", str(repo), *args], capture_output=True, timeout=DIFF_SECONDS)
+
+
+def _blob(repo, tree: str, path: str) -> str:
+    """The id of a file in a tree; empty when the tree has no such file."""
+    out = _git(repo, "rev-parse", "--verify", "-q", f"{tree}:{path}")
+    return out.stdout.decode().strip() if out.returncode == 0 else ""
+
+
+def _restore(repo, tree: str, paths: list[str]) -> None:
+    """Put these files back as they are in the tree: the ones it has are written, the ones it lacks are deleted."""
+    root = Path(repo).resolve()
+    for path in paths:
+        target = (root / path).resolve()
+        if root not in target.parents or path.split("/")[0] in (".git", ".rig"):
+            raise ChatError(f"{path} is outside the project")
+        listing = _git(repo, "ls-tree", tree, "--", path).stdout.decode().split("\t", 1)[0].split()
+        if not listing:
+            target.unlink(missing_ok=True)
+            continue
+        mode = listing[0]
+        data = _git(repo, "cat-file", "blob", f"{tree}:{path}").stdout
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if mode == "120000":
+            target.unlink(missing_ok=True)
+            os.symlink(data.decode(errors="replace"), target)
+            continue
+        if target.is_symlink():
+            target.unlink()
+        target.write_bytes(data)
+        target.chmod(0o755 if mode == "100755" else 0o644)
+
+
+def rewind(repo, session: str, turn: int = 0, path: str = "", dry: bool = False, undo: bool = False) -> dict:
+    """Put the working tree back as it was before a turn: every file that turn and the later ones changed, or one file.
+    What was there is kept first, so undo=True puts it back. dry=True only says what would change."""
+    repo = Path(repo).resolve()
+    require_enabled(repo)
+    meta = read_meta(repo, session)
+    if meta["state"] == "running":
+        raise ChatError(f"session {meta['id']} is still answering; wait for it or cancel it")
+    now = _tree(repo)
+    if not now:
+        raise ChatError("rewind needs a git repository")
+    backup = meta.get("rewind_backup") if isinstance(meta.get("rewind_backup"), dict) else None
+    if undo:
+        if not backup:
+            raise ChatError("nothing to undo: no rewind has been made in this conversation")
+        target, paths, last_after, turn = backup["tree"], list(backup["paths"]), "", int(backup.get("turn", 0))
+    else:
+        marks = [m for m in (meta.get("marks") or []) if isinstance(m, dict) and int(m.get("turn", 0)) >= int(turn)]
+        if not marks:
+            raise ChatError(f"no turn {turn} that changed files")
+        first, last = marks[0], marks[-1]
+        target, last_after = first["before"], last["after"]
+        turn = int(first["turn"])
+        out = _git(repo, "diff", "--name-only", "-z", "--no-ext-diff", target, last_after)
+        paths = [p for p in out.stdout.decode(errors="replace").split("\0") if p]
+        if path:
+            if path not in paths:
+                raise ChatError(f"{path} was not changed by turn {turn} or after")
+            paths = [path]
+    # files that differ now from how the last of those turns left them were edited since: they are named, not hidden
+    edited = [p for p in paths if last_after and _blob(repo, now, p) != _blob(repo, last_after, p)]
+    result = {"session": meta["id"], "turn": turn, "paths": paths, "edited": edited, "dry": bool(dry)}
+    if dry:
+        return result
+    _restore(repo, target, paths)
+    if undo:
+        meta["marks"] = (backup.get("marks") or []) + [m for m in (meta.get("marks") or []) if m not in (backup.get("marks") or [])]
+        meta.pop("rewind_backup", None)
+        what = f"undid the rewind: {len(paths)} file{'s' if len(paths) != 1 else ''} are back as they were before it"
+        note = "[Note from Rig: the user undid a rewind, so " + ", ".join(paths[:8]) + " are as they were before it.]"
+    else:
+        dropped = [m for m in (meta.get("marks") or []) if int(m.get("turn", 0)) >= turn] if not path else []
+        meta["rewind_backup"] = {"tree": now, "paths": paths, "turn": turn, "marks": dropped}
+        if not path:
+            meta["marks"] = [m for m in (meta.get("marks") or []) if int(m.get("turn", 0)) < turn]
+        what = (f"rewound {path} to before turn {turn}" if path else
+                f"rewound to before turn {turn}: {len(paths)} file{'s' if len(paths) != 1 else ''} put back")
+        note = ("[Note from Rig: the user rewound the working tree: " + ", ".join(paths[:8]) + (" …" if len(paths) > 8 else "") +
+                f" are as they were before turn {turn}. Your later edits to them are gone; do not assume they are still there.]")
+    meta["notes"] = list(meta.get("notes") or []) + [note]
+    append(repo, meta["id"], "system", what + ("; /rewind undo puts it back" if not undo else ""))
+    _write_json(_meta_path(repo, meta["id"]), meta)
+    return result
 
 
 def run_turn(repo, session: str) -> int:
@@ -1151,6 +1287,10 @@ def run_turn(repo, session: str) -> int:
     if meta.get("summary"):
         message = "[Summary of our earlier conversation, which was compacted]\n" + meta["summary"] + "\n\n[Now]\n" + message
         meta["summary"] = ""  # told once; from here its own session carries the conversation
+        _write_json(_meta_path(repo, session), meta)
+    if meta.get("notes"):
+        message = "\n".join(meta["notes"]) + "\n\n" + message
+        meta["notes"] = []  # told once
         _write_json(_meta_path(repo, session), meta)
     if meta.get("plan") and parent != "claude":
         message = PLAN_PREFIX + message  # claude has a flag for plan mode; the others are told in the message

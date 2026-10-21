@@ -2,6 +2,7 @@ package ui
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -67,6 +68,9 @@ type fakeSource struct {
 	chatAnswers     [][3]string
 	chatAnswerErr   error
 	chatCancelled   []string
+	rewinds         []string
+	rewound         *view.ChatRewound
+	rewindErr       error
 	parentSet       []string
 	parentSetErr    error
 	theme           *view.ThemeReply
@@ -192,6 +196,13 @@ func (f *fakeSource) ChatSetParent(name string, _ time.Duration) error {
 func (f *fakeSource) ChatCancel(session string, _ time.Duration) error {
 	f.chatCancelled = append(f.chatCancelled, session)
 	return nil
+}
+func (f *fakeSource) ChatRewind(session string, turn int, path string, dry, undo bool, _ time.Duration) (*view.ChatRewound, error) {
+	f.rewinds = append(f.rewinds, fmt.Sprintf("%s %d %q dry=%v undo=%v", session, turn, path, dry, undo))
+	if f.rewindErr != nil {
+		return nil, f.rewindErr
+	}
+	return f.rewound, nil
 }
 func (f *fakeSource) Parent(name string, _ time.Duration) (*view.ShellPlan, error) {
 	f.parentCalls++

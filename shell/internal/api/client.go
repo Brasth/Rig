@@ -278,6 +278,17 @@ func (c *Client) ChatCancel(session string, timeout time.Duration) error {
 	return c.Call("chat.cancel", map[string]any{"session": session}, timeout, nil)
 }
 
+// ChatRewind puts the working tree back as it was before a turn: every file that turn and the later ones changed, or
+// just path. dry only reports what would change; undo takes the last rewind back.
+func (c *Client) ChatRewind(session string, turn int, path string, dry, undo bool, timeout time.Duration) (*view.ChatRewound, error) {
+	var out view.ChatRewound
+	params := map[string]any{"session": session, "turn": turn, "path": path, "dry": dry, "undo": undo}
+	if err := c.Call("chat.rewind", params, timeout, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 // JobDiff is what one job changed (job.diff).
 func (c *Client) JobDiff(id string, timeout time.Duration) (*view.JobDiff, error) {
 	var out view.JobDiff
