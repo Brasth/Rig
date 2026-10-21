@@ -216,7 +216,9 @@ type Model struct {
 	dfLast      time.Time
 	lastAsk     string // the request the bell last rang for
 	tdLast      time.Time
-	ringer      func() // rings the terminal bell; tests replace it
+	ringer      func()                   // rings the terminal bell; tests replace it
+	notifier    func(title, text string) // a desktop notice through the terminal (OSC 9 and 777); tests replace it
+	seenApplied map[string]bool          // the applied work done today already known, so only new applies notify
 	seenJobs    map[string]bool
 	themeFixed  bool // rig shell --theme chose the theme for this board; the saved one is not loaded
 	messaging   bool // m was pressed under a request: a and d type again until the message is sent
@@ -923,6 +925,7 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.tdLast = m.now()
 		if msg.err == nil {
 			m.st.Today = msg.t
+			return m, m.notifyApplied(msg.t)
 		}
 	case shipMsg:
 		m.st.Ship, m.st.ShipE = msg.s, ""
@@ -1590,6 +1593,10 @@ func (m *Model) confirmKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		if method == "settings.set" {
 			return m, m.saveConfirmed(id)
+		}
+		if method == "env.down" {
+			m.st.Message = "stopping the container (rig env down)"
+			return m, m.exec([]string{"rig", "env", "down"}, func(err error) tea.Msg { return shellDoneMsg{err: err} })
 		}
 		if method == "env.up" {
 			m.st.Message = "starting the container (rig env up)"

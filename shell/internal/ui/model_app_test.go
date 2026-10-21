@@ -368,7 +368,7 @@ func TestMarkdownAndTablesArePreviewed(t *testing.T) {
 }
 
 func sampleSettings() *view.AppSettings {
-	return &view.AppSettings{Theme: "light", ThemeScope: "default", Themes: ThemeNames(), BellScope: "default", Parent: "claude",
+	return &view.AppSettings{Theme: "light", ThemeScope: "default", Themes: ThemeNames(), BellScope: "default", Parent: "claude", Start: "last", Ship: "pr", TabSize: 4,
 		Enabled: true, Workers: map[string]bool{"claude": true, "codex": true, "grok": false}, Installed: []string{"claude", "codex"},
 		MaxRunning: 3, Objective: "balanced", RoutingMode: "smart", Sandbox: "host", Worktrees: "off", WorktreeContainer: "shared",
 		Harness: ".rig/harness.toml", HarnessText: "parent = \"claude\"\n\n[project]\nenabled = true\n", Global: "~/.rig/config.toml"}
@@ -379,8 +379,9 @@ func TestSettingsChangeRealSettingsWhereTheyAreKept(t *testing.T) {
 	src.appSettings = sampleSettings()
 	run(m.runPalette(paletteItem{Action: "settings"}, ""), m)
 	out := appScreen(m)
-	for _, want := range []string{"←  Settings   [all repos]", "[general]", "agents", "routing", "toml", "› Theme", "[light]", "dracula",
-		"Default parent", "Rig in this repo", "off keeps history and memory", "←→ change    ⇥ section    g all repos / this repo"} {
+	for _, want := range []string{"←  Settings   [all repos]", "[general]", "agents", "routing", "toml", "Theme", "› [light]", "dracula", "all repos",
+		"Default parent", "[c] claude · auto", "When rig starts", "[last project]", "Rig in this repo", "on", "off keeps history and memory", "Updates",
+		"←→ change    ⇥ section    g all repos / this repo"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q:\n%s", want, out)
 		}
@@ -406,7 +407,7 @@ func TestSettingsChangeRealSettingsWhereTheyAreKept(t *testing.T) {
 		t.Fatalf("← fewer at the same time: %v", src.settingsSaved)
 	}
 	press(m, "shift+tab") // back to general
-	press(m, "down", "down")
+	press(m, "down", "down", "down")
 	run(press(m, "right"), m)
 	if m.st.Mode != ModeConfirm || !strings.Contains(m.st.Prompt, "Turn Rig off") {
 		t.Fatalf("turning Rig off asks first: %q", m.st.Prompt)
@@ -416,7 +417,7 @@ func TestSettingsChangeRealSettingsWhereTheyAreKept(t *testing.T) {
 		t.Fatalf("saved %v", src.settingsSaved)
 	}
 	m.st.App.Settings.Section = len(SettingsSections) - 1
-	if out := appScreen(m); !strings.Contains(out, "[toml]") || !strings.Contains(out, "  1  parent = \"claude\"") || !strings.Contains(out, "✓ valid") {
+	if out := appScreen(m); !strings.Contains(out, "[toml]") || !strings.Contains(out, "parent = \"claude\"") || !strings.Contains(out, "✓ valid") {
 		t.Fatalf("the toml section:\n%s", out)
 	}
 	press(m, "esc")
@@ -430,7 +431,7 @@ func TestTheBellRingsOnceForANewRequest(t *testing.T) {
 	rings := 0
 	m.ringer = func() { rings++ }
 	src.appSettings = sampleSettings()
-	src.appSettings.Bell = true
+	src.appSettings.Bell, src.appSettings.NotifyNeeds = true, true
 	run(m.fetchAppSettings(), m)
 	run(m.bell(), m)
 	run(m.bell(), m)
@@ -778,5 +779,31 @@ func TestSearchOptionsAndReplaceAskFirst(t *testing.T) {
 	}
 	if data, _ := os.ReadFile(path); string(data) != "const limitRate = 1\nuse(limitRate)\nrateLimiter()\n" {
 		t.Fatalf("only the matches, whole words: %q", data)
+	}
+}
+
+func TestNotificationsGoWhereSettingsSay(t *testing.T) {
+	m, src := appModel(t)
+	rings := 0
+	var notices []string
+	m.ringer = func() { rings++ }
+	m.notifier = func(title, text string) { notices = append(notices, text) }
+	src.appSettings = sampleSettings()
+	src.appSettings.NotifyNeeds, src.appSettings.Desktop = true, true
+	run(m.fetchAppSettings(), m)
+	run(m.bell(), m)
+	if rings != 0 || len(notices) != 1 || !strings.Contains(notices[0], "claude needs you") {
+		t.Fatalf("a desktop notice, no bell: %d %v", rings, notices)
+	}
+	src.today = sampleToday()
+	run(m.fetchToday(), m) // what is already applied does not notify
+	m.st.AppSettings.NotifyApplied = true
+	today := sampleToday()
+	today.Rows[1].JobID, today.Rows[1].State = "job-new", "applied"
+	src.today = today
+	_, cmd := m.Update(todayMsg{t: today})
+	run(cmd, m)
+	if len(notices) != 2 || notices[1] != "claude applied Add index to session store" {
+		t.Fatalf("a new apply notifies: %v", notices)
 	}
 }

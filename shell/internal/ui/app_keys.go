@@ -45,6 +45,13 @@ func (m *Model) SetApp(repo string) {
 	if m.ringer == nil {
 		m.ringer = func() { _, _ = os.Stdout.WriteString("\a") }
 	}
+	if m.notifier == nil {
+		// OSC 777 (Ghostty, kitty, WezTerm, foot) and OSC 9 (iTerm2, Windows Terminal); a terminal ignores the one it lacks
+		m.notifier = func(title, text string) {
+			text = strings.NewReplacer("\x1b", "", "\a", "", ";", ",").Replace(text)
+			_, _ = os.Stdout.WriteString("\x1b]777;notify;" + title + ";" + text + "\a\x1b]9;" + text + "\a")
+		}
+	}
 }
 
 func (m *Model) appOn() bool { return m.st.App != nil }
@@ -965,7 +972,7 @@ func (m *Model) runPalette(it paletteItem, query string) tea.Cmd {
 		a.History = &HistoryState{}
 		return m.fetchToday()
 	case "ship":
-		a.ShipScreen = &ShipState{}
+		a.ShipScreen = &ShipState{Push: m.st.AppSettings != nil && m.st.AppSettings.Ship == "push"} // Settings › Git: what you ship by
 		m.st.Ship, m.st.ShipE = nil, ""
 		return tea.Batch(m.fetchShip(), m.fetchToday())
 	case "search":

@@ -361,7 +361,7 @@ func codeScreen(st State, w, h int) ([]string, string) {
 		}
 		code = append(code, "")
 		for i := off; i < len(a.FileLines) && len(code) < room+1; i++ {
-			text := sanitize(a.FileLines[i])
+			text := sanitize(strings.ReplaceAll(a.FileLines[i], "\t", strings.Repeat(" ", tabSize(st))))
 			if a.Find != "" {
 				text = mark(st, text, a.Find)
 			} else {
@@ -756,4 +756,12 @@ func checkWord(st State, text string) string {
 		return st.paint(colAccent, "● "+m[1]+" running")
 	}
 	return st.paint(colRed, "● "+m[1]+" failed")
+}
+
+// tabSize is the code view's tab width from Settings › Editor; 4 until it is known.
+func tabSize(st State) int {
+	if st.AppSettings != nil && st.AppSettings.TabSize > 0 {
+		return st.AppSettings.TabSize
+	}
+	return 4
 }

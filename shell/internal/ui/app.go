@@ -306,10 +306,7 @@ func AppFrame(v *view.View, st State, w, h int) []string {
 	}
 	if a.Settings != nil {
 		lines := settingsScreenLines(v, st, w, h-1)
-		keys := [][2]string{{"←→", "change"}, {"⇥", "section"}, {"g", "all repos / this repo"}, {"esc", "back"}}
-		if SettingsSections[a.Settings.Section] == "toml" {
-			keys = [][2]string{{"E", "edit in $EDITOR"}, {"⇥", "section"}, {"esc", "back"}}
-		}
+		keys := settingsKeys(SettingsSections[a.Settings.Section])
 		switch {
 		case st.Mode == ModeConfirm:
 			lines = append(lines, confirmLine(st, w))

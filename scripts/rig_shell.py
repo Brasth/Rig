@@ -349,6 +349,27 @@ def remember(repo: Path, keep: int = 20) -> None:
         pass
 
 
+def start_setting() -> str:
+    """Settings › General › When rig starts ([ui] start in ~/.rig/config.toml): "last" or "picker"."""
+    import ui_settings
+    import ui_theme
+    return ui_settings._read_key(ui_theme.global_path(), "ui", "start") or "picker"
+
+
+def last_project() -> Path | None:
+    """The newest recent project that is still set up, or None."""
+    import json
+    try:
+        rows = json.loads(recent_path().read_text())
+    except (OSError, ValueError):
+        return None
+    for row in rows if isinstance(rows, list) else []:
+        path = Path(str(row.get("path", ""))) if isinstance(row, dict) else None
+        if path and harness.harness_path(path).is_file():
+            return path
+    return None
+
+
 def launcher(start: Path) -> int:
     """The design's "Open a project", where there is no Rig project to open: rig-shell picks one, then reopens rig shell."""
     command = [shell_binary(), "--launcher", "--repo", str(start)]
@@ -381,7 +402,10 @@ def main(argv=None) -> int:
             print("killed" if kill(repo) else "no rig shell session for this repository")
             return 0
         if args.command == "start" and args.layout == "app" and not harness.harness_path(repo).is_file():
-            return launcher(repo)  # nothing set up here: open a project instead of failing
+            last = last_project() if start_setting() == "last" and not args.repo else None
+            if last is None:
+                return launcher(repo)  # nothing set up here: open a project instead of failing
+            repo = last  # Settings › General › When rig starts: the last project
         if args.command == "start":
             remember(repo)
         if args.no_tmux and args.command in ("start", "print"):
