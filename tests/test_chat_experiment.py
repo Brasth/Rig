@@ -83,8 +83,10 @@ class Base(unittest.TestCase):
         self.env.stop()
         self.td.cleanup()
 
-    def calls(self):
-        return [json.loads(line) for line in self.record.read_text().splitlines()] if self.record.exists() else []
+    def calls(self, *, server_attempts=False):
+        """The recorded parent calls; a codex stand-in that only knows exec is first tried as `codex mcp-server`."""
+        rows = [json.loads(line) for line in self.record.read_text().splitlines()] if self.record.exists() else []
+        return rows if server_attempts else [row for row in rows if row["argv"] != ["mcp-server"]]
 
     def wait_idle(self, session, timeout=20):
         deadline = time.monotonic() + timeout
@@ -171,7 +173,7 @@ class Decoding(unittest.TestCase):
     def test_every_parent_rig_shell_can_run_has_a_headless_mode(self):
         import rig_shell
         self.assertEqual(sorted(rig_chat.HEADLESS), sorted(rig_shell.PANE_PARENTS))
-        self.assertEqual(rig_chat.ASKS, {"claude"})
+        self.assertEqual(rig_chat.ASKS, {"claude", "codex"})
 
     def test_the_other_parents_streams_read_like_their_job_logs(self):
         grok = [{"type": "text", "data": "Two writers, "}, {"type": "text", "data": "then a verify node."},
@@ -364,11 +366,98 @@ class Asking(Base):
             rig_chat.answer(self.repo, started["session"], ask["id"], "allow")
 
     def test_parents_that_cannot_ask_say_so(self):
-        stand_in(self.bin, "codex", CODEX_STREAM)
-        started = rig_chat.send(self.repo, "go", parent="codex")
+        stand_in(self.bin, "grok", [{"type": "result", "result": "ok"}])
+        started = rig_chat.send(self.repo, "go", parent="grok")
         view = self.wait_idle(started["session"])
         self.assertFalse(view["asks"])
         self.assertIsNone(view["ask"])
+
+    def test_a_codex_without_the_server_mode_falls_back_to_exec_and_says_it_cannot_ask(self):
+        stand_in(self.bin, "codex", CODEX_STREAM)
+        started = rig_chat.send(self.repo, "go", parent="codex")
+        view = self.wait_idle(started["session"])
+        self.assertEqual([c["argv"] for c in self.calls(server_attempts=True)], [["mcp-server"], ["exec", "--json", "go"]])
+        self.assertIn(("assistant", "It says one."), [(e["role"], e["text"]) for e in view["entries"]])
+        self.assertFalse(view["asks"])
+
+
+CODEX_SERVER = r'''#!PYTHON
+import json, os, sys
+record = os.environ["STANDIN_RECORD"]
+with open(record, "a") as stream:
+    stream.write(json.dumps({"argv": sys.argv[1:], "cwd": os.getcwd()}) + "\n")
+if sys.argv[1:] != ["mcp-server"]:
+    sys.exit(2)
+def send(obj):
+    print(json.dumps(obj), flush=True)
+def read():
+    line = sys.stdin.readline()
+    return json.loads(line) if line else None
+while True:
+    msg = read()
+    if msg is None:
+        break
+    if msg.get("method") == "initialize":
+        send({"jsonrpc": "2.0", "id": msg["id"], "result": {"protocolVersion": "2025-06-18", "capabilities": {"tools": {}}}})
+    elif msg.get("method") == "tools/call":
+        name, arguments = msg["params"]["name"], msg["params"]["arguments"]
+        with open(record + ".calls", "a") as stream:
+            stream.write(json.dumps({"name": name, "arguments": arguments}) + "\n")
+        send({"jsonrpc": "2.0", "method": "codex/event", "params": {"msg": {"type": "session_configured", "session_id": "conv-1"}}})
+        send({"jsonrpc": "2.0", "method": "codex/event", "params": {"msg": {"type": "exec_command_begin", "command": ["cat", "a.txt"]}}})
+        decision = "none"
+        if "needs approval" in arguments["prompt"]:
+            send({"jsonrpc": "2.0", "id": "e1", "method": "elicitation/create", "params": {
+                "message": "Allow codex to run npm i -D supertest?", "codex_elicitation": "exec-approval",
+                "codex_command": ["npm", "i", "-D", "supertest"], "codex_call_id": "call-1", "requestedSchema": {}}})
+            answer = read()
+            decision = answer["result"]["decision"]
+        send({"jsonrpc": "2.0", "method": "codex/event", "params": {"msg": {"type": "agent_message", "message": "decision was " + decision}}})
+        send({"jsonrpc": "2.0", "method": "codex/event", "params": {"msg": {"type": "task_complete"}}})
+        send({"jsonrpc": "2.0", "id": msg["id"], "result": {"content": [{"type": "text", "text": "decision was " + decision}],
+                                                            "structuredContent": {"threadId": "conv-1"}}})
+'''
+
+
+class CodexServer(Base):
+    def standin(self):
+        self.bin.mkdir(parents=True, exist_ok=True)
+        path = self.bin / "codex"
+        path.write_text(CODEX_SERVER.replace("#!PYTHON", "#!" + sys.executable))
+        path.chmod(0o755)
+
+    def tool_calls(self):
+        path = Path(str(self.record) + ".calls")
+        return [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
+
+    def test_codex_runs_as_its_mcp_server_and_a_second_turn_continues_the_session(self):
+        self.standin()
+        started = rig_chat.send(self.repo, "what is in a.txt?", parent="codex")
+        view = self.wait_idle(started["session"])
+        self.assertEqual([(e["role"], e["text"]) for e in view["entries"]],
+                         [("user", "what is in a.txt?"), ("tool", "ran cat a.txt"), ("assistant", "decision was none")])
+        self.assertTrue(view["asks"])
+        rig_chat.send(self.repo, "and again", started["session"])
+        self.wait_idle(started["session"])
+        first, second = self.tool_calls()
+        self.assertEqual((first["name"], first["arguments"]), ("codex", {"prompt": "what is in a.txt?", "cwd": str(self.repo)}))
+        self.assertEqual((second["name"], second["arguments"]["conversationId"], second["arguments"]["prompt"]),
+                         ("codex-reply", "conv-1", "and again"))
+
+    def test_codexs_approval_request_waits_in_the_chat_and_the_answer_reaches_codex(self):
+        self.standin()
+        started = rig_chat.send(self.repo, "this needs approval", parent="codex")
+        deadline = time.monotonic() + 20
+        view = rig_chat.transcript(self.repo, started["session"])
+        while not view["ask"] and time.monotonic() < deadline:
+            time.sleep(0.05)
+            view = rig_chat.transcript(self.repo, started["session"])
+        self.assertEqual((view["ask"]["tool"], view["ask"]["preview"]), ("Exec", "npm i -D supertest"))
+        rig_chat.answer(self.repo, started["session"], view["ask"]["id"], "deny")
+        done = self.wait_idle(started["session"])
+        texts = [(e["role"], e["text"]) for e in done["entries"]]
+        self.assertIn(("system", "denied: npm i -D supertest"), texts)
+        self.assertIn(("assistant", "decision was denied"), texts)
 
 
 class OtherParents(Base):

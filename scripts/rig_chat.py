@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
-"""EXPERIMENT: a headless parent CLI with a Rig-rendered chat (design: docs/journals/261020-phase-4-design.md).
+"""The conversation with the parent: a headless parent CLI with a Rig-rendered chat (the Session screen's middle column).
 
-Off unless RIG_EXPERIMENT_CHAT=1 or ``[experiments] chat = true``. Each message runs the parent CLI once in its
-headless mode (``claude -p --output-format stream-json`` or ``codex exec --json``), a detached runner decodes the
-event stream into a transcript under ``.rig/chat/<session>.jsonl``, and the board shows that transcript. Later
-messages resume the parent's own session. Rig adds no permission flags: the parent runs with the user's own
-configuration, and in these modes a tool the user has not allowed is refused rather than asked about.
+Off unless RIG_EXPERIMENT_CHAT=1 (set by `rig shell` for its board) or ``[experiments] chat = true``. Each message runs
+the parent once in its headless mode, a detached runner decodes what it says into a transcript under
+``.rig/chat/<session>.jsonl``, and the board shows it. Every parent `rig shell` can host has a headless mode here;
+claude, codex, grok and opencode resume their own session, the others get the recent conversation with each message.
+Rig adds no permission flags: the parent runs with the user's own settings. claude (through Rig's rig-ask server) and
+codex (through `codex mcp-server`) ask for permission, and the board answers in the conversation (chat.answer); the
+other headless modes cannot ask, so they follow their own settings.
 
-The event formats are the ones run-worker.sh already relies on for these CLIs. They have not been checked against a
-real parent CLI here (none is available), so the decoder is tested against recorded-shape fixtures and a stand-in.
+The event formats are the ones Rig already reads for these CLIs. No real parent CLI is available here, so the decoders
+and the codex server protocol are tested against recorded-shape fixtures and stand-ins.
 """
 from __future__ import annotations
 
@@ -77,7 +79,10 @@ def argv_agy(message: str, native: str, turn: dict) -> list[str]:
 HEADLESS = {"claude": argv_claude, "codex": argv_codex, "grok": argv_grok, "opencode": argv_opencode,
             "omp": argv_omp, "pi": argv_pi, "agy": argv_agy}
 RESUMES = frozenset({"claude", "codex", "grok", "opencode"})
-ASKS = frozenset({"claude"})  # a headless mode that can ask the user for permission (through Rig's rig-ask server)
+# A headless mode that can ask the user for permission: claude through Rig's rig-ask server, codex through its own
+# MCP server mode (`codex mcp-server`), whose approval requests Rig answers from the board.
+ASKS = frozenset({"claude", "codex"})
+CODEX_START_SECONDS = 15
 
 
 def enabled(repo) -> bool:
@@ -279,7 +284,7 @@ def transcript(repo, session, tail: int = 200) -> dict:
                 rows.append({"role": str(row.get("role", "")), "text": row["text"], "at": str(row.get("at", ""))})
     return {"session": meta["id"], "parent": meta["parent"], "state": meta["state"], "turns": meta.get("turns", 0),
             "note": meta.get("note", ""), "entries": rows, "ask": pending_ask(repo, meta["id"]),
-            "asks": meta["parent"] in ASKS}
+            "asks": bool(meta.get("asks", meta["parent"] in ASKS))}
 
 
 def status(repo) -> dict:
@@ -395,6 +400,173 @@ def answer(repo, session: str, ask_id: str, decision: str) -> dict:
     return {"session": meta["id"], "answered": decision}
 
 
+# -- codex through `codex mcp-server` ------------------------------------------------------------------------
+# Codex documents this mode as an MCP server: tools/call "codex" starts a session and "codex-reply" continues one,
+# progress arrives as "codex/event" notifications, and an exec or patch approval is an "elicitation/create" request
+# that waits for {"decision": "approved" | "denied"}. No real codex is available here, so this follows the
+# documented shapes, is tested with a stand-in, and falls back to `codex exec` when the mode does not start.
+class _Lines:
+    """A process's stdout lines on a thread, so the start can time out without blocking the runner."""
+
+    def __init__(self, stream):
+        import queue
+        import threading
+        self.queue = queue.Queue()
+        threading.Thread(target=self._pump, args=(stream,), daemon=True).start()
+
+    def _pump(self, stream):
+        for line in stream:
+            self.queue.put(line)
+        self.queue.put(None)
+
+    def get(self, timeout=None):
+        import queue
+        try:
+            return self.queue.get(timeout=timeout)
+        except queue.Empty:
+            return ""
+
+
+def _codex_event(msg: dict) -> tuple[list[dict], str, bool]:
+    """(entries, native session id, done) for one codex/event message."""
+    kind = msg.get("type")
+    if kind == "session_configured":
+        return [], str(msg.get("session_id") or ""), False
+    if kind == "agent_message" and str(msg.get("message") or "").strip():
+        return [{"role": "assistant", "text": _clean(msg["message"])}], "", False
+    if kind == "exec_command_begin":
+        command = msg.get("command")
+        text = " ".join(map(str, command)) if isinstance(command, list) else str(command or "")
+        return [{"role": "tool", "text": _clean("ran " + text, 200)}], "", False
+    if kind == "patch_apply_begin":
+        changes = msg.get("changes") if isinstance(msg.get("changes"), dict) else {}
+        return [{"role": "tool", "text": _clean("edited " + ", ".join(sorted(changes)) if changes else "edited files", 200)}], "", False
+    if kind in ("error", "stream_error"):
+        return [{"role": "error", "text": _clean(msg.get("message") or "the parent reported an error")}], "", False
+    if kind == "task_complete":
+        return [], "", True
+    return [], "", False
+
+
+def _codex_approval_preview(params: dict) -> tuple[str, dict, str]:
+    kind = str(params.get("codex_elicitation") or "")
+    if kind == "patch-approval":
+        changes = params.get("codex_changes") if isinstance(params.get("codex_changes"), dict) else {}
+        return "Edit", {"path": ", ".join(sorted(changes))}, "edit " + (", ".join(sorted(changes)) or "files")
+    command = params.get("codex_command")
+    text = " ".join(map(str, command)) if isinstance(command, list) else str(command or params.get("message") or "")
+    return "Exec", {"command": text}, text
+
+
+def run_codex_server(repo: Path, session: str, message: str, meta: dict, folder: Path) -> tuple[bool, bool, int]:
+    """One turn through `codex mcp-server`. Returns (started, error, entries written); not started means use exec."""
+    import ask
+    binary = shutil.which("codex")
+    try:
+        proc = subprocess.Popen([binary, "mcp-server"], cwd=str(repo), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                stderr=subprocess.DEVNULL, text=True, errors="replace",
+                                env={**os.environ, "RIG_PARENT": "codex", "RIG_OWNER_SESSION": session})
+    except OSError:
+        return False, False, 0
+    lines = _Lines(proc.stdout)
+
+    def send(obj):
+        proc.stdin.write(json.dumps(obj) + "\n")
+        proc.stdin.flush()
+
+    def stop():
+        try:
+            proc.stdin.close()
+        except OSError:
+            pass
+        try:
+            proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+
+    try:
+        send({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18",
+              "capabilities": {"elicitation": {}}, "clientInfo": {"name": "rig-chat", "version": "1"}}})
+        started = False
+        deadline = time.monotonic() + CODEX_START_SECONDS
+        while time.monotonic() < deadline:
+            line = lines.get(timeout=max(0.1, deadline - time.monotonic()))
+            if line is None:
+                break
+            try:
+                reply = json.loads(line) if line else {}
+            except ValueError:
+                continue
+            if reply.get("id") == 1:
+                started = "result" in reply
+                break
+        if not started:
+            stop()
+            return False, False, 0
+        send({"jsonrpc": "2.0", "method": "notifications/initialized"})
+        native = meta.get("native", "")
+        if native:
+            call = {"name": "codex-reply", "arguments": {"conversationId": native, "threadId": native, "prompt": message}}
+        else:
+            call = {"name": "codex", "arguments": {"prompt": message, "cwd": str(repo)}}
+        send({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": call})
+        written, error = 0, False
+        while True:
+            line = lines.get()
+            if line is None:
+                error = True
+                append(repo, session, "error", "codex mcp-server stopped before the turn finished")
+                written += 1
+                break
+            try:
+                msg = json.loads(line)
+            except ValueError:
+                continue
+            if not isinstance(msg, dict):
+                continue
+            if msg.get("method") == "codex/event":
+                event = (msg.get("params") or {}).get("msg") if isinstance(msg.get("params"), dict) else None
+                entries, sid, _ = _codex_event(event if isinstance(event, dict) else {})
+                if sid:
+                    meta["native"] = sid
+                for entry in entries:
+                    if written < MAX_ENTRIES:
+                        append(repo, session, entry["role"], entry["text"])
+                        written += 1
+                    error = error or entry["role"] == "error"
+            elif msg.get("method") == "elicitation/create" and "id" in msg:
+                params = msg.get("params") if isinstance(msg.get("params"), dict) else {}
+                tool, inp, preview_text = _codex_approval_preview(params)
+                ask.write_ask(folder, tool, inp, str(params.get("codex_call_id") or ""), preview_text)
+                reply = ask.wait_reply(folder)
+                ask.consume_ask(folder)
+                send({"jsonrpc": "2.0", "id": msg["id"],
+                      "result": {"decision": "approved" if reply.get("behavior") == "allow" else "denied"}})
+            elif "method" in msg and "id" in msg:  # a request this client does not serve: say so, never leave it hanging
+                send({"jsonrpc": "2.0", "id": msg["id"], "error": {"code": -32601, "message": "not supported by rig chat"}})
+            elif "method" not in msg and msg.get("id") == 2:
+                result = msg.get("result") if isinstance(msg.get("result"), dict) else {}
+                structured = result.get("structuredContent") if isinstance(result.get("structuredContent"), dict) else {}
+                sid = structured.get("threadId") or structured.get("conversationId")
+                if isinstance(sid, str) and sid:
+                    meta["native"] = sid
+                if "error" in msg or result.get("isError"):
+                    error = True
+                    detail = (msg.get("error") or {}).get("message") if isinstance(msg.get("error"), dict) else ""
+                    text = detail or " ".join(str(c.get("text", "")) for c in result.get("content", []) if isinstance(c, dict))
+                    append(repo, session, "error", _clean(text or "codex reported an error"))
+                    written += 1
+                elif not written:
+                    text = " ".join(str(c.get("text", "")) for c in result.get("content", []) if isinstance(c, dict)).strip()
+                    if text:
+                        append(repo, session, "assistant", _clean(text))
+                        written += 1
+                break
+        return True, error, written
+    finally:
+        stop()
+
+
 def run_turn(repo, session: str) -> int:
     """The detached runner: spawn the parent in its headless mode and write what it says to the transcript."""
     repo = Path(repo).resolve()
@@ -412,6 +584,18 @@ def run_turn(repo, session: str) -> int:
     native = meta.get("native", "")
     if parent == "grok" and not native:
         meta["native"] = turn["new_id"]  # grok takes the id we give it, and later turns resume it
+    if parent == "codex" and shutil.which("codex"):
+        started, error, _ = run_codex_server(repo, session, message, meta, folder)
+        if started:
+            _write_json(folder / "meta.json", {"status": "idle"})
+            fresh = read_meta(repo, session) if _meta_path(repo, session).exists() else meta
+            fresh.update(native=meta.get("native", ""), state="failed" if error else "idle", runner_pid=0,
+                         note="see the transcript" if error else "", asks=True)
+            if fresh.get("note") == "cancelled":
+                fresh["state"] = "idle"
+            _write_json(_meta_path(repo, session), fresh)
+            return 1 if error else 0
+        # this codex has no MCP server mode, or it did not start: the plain headless mode, which cannot ask
     argv = HEADLESS[parent](message, native, turn)
     binary = shutil.which(argv[0])
     if not binary:
@@ -473,7 +657,8 @@ def run_turn(repo, session: str) -> int:
         append(repo, session, "error", _clean(f"the parent exited with status {code}" + (": " + " | ".join(tail) if tail else "")))
         error = True
     fresh = read_meta(repo, session) if _meta_path(repo, session).exists() else meta
-    fresh.update(native=meta.get("native", ""), state="failed" if error else "idle", runner_pid=0, note="" if not error else "see the transcript")
+    fresh.update(native=meta.get("native", ""), state="failed" if error else "idle", runner_pid=0, note="" if not error else "see the transcript",
+                 asks=parent == "claude")  # codex reaches this plain headless mode only when its server mode did not start
     if fresh.get("note") == "cancelled":
         fresh["state"] = "idle"
     _write_json(_meta_path(repo, session), fresh)
