@@ -422,6 +422,9 @@ func (m *Model) askKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch k.Type {
 	case tea.KeyEsc:
 		a.CodeAsk = nil
+		if q.kind == "rename-word" {
+			a.Extra = nil
+		}
 		if q.kind == "find" || q.kind == "replace" {
 			a.Find = ""
 		}
@@ -472,6 +475,10 @@ func (m *Model) askKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "commit":
 			a.CodeAsk = nil
 			return m, m.commit(q.text)
+		case "rename-word":
+			a.CodeAsk = nil
+			m.renameTo(q.text)
+			m.keepCursorShown()
 		case "new", "rename":
 			a.CodeAsk = nil
 			return m, m.fileOp(q.kind, q.text)
@@ -549,6 +556,12 @@ func (m *Model) editFileKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	cur := a.cursor()
 	shift := strings.HasPrefix(key, "shift+") || strings.HasPrefix(key, "ctrl+shift+") || strings.HasPrefix(key, "alt+shift+")
 	bare := strings.NewReplacer("ctrl+shift+", "ctrl+", "alt+shift+", "alt+", "shift+", "").Replace(key)
+	if !strings.HasPrefix(key, "shift+tab") && !strings.HasPrefix(key, "shift+") && len(a.Extra) > 0 {
+		switch bare {
+		case "up", "down", "left", "right", "home", "end", "pgup", "pgdown", "ctrl+home", "ctrl+end":
+			a.Extra = nil
+		}
+	}
 	if !strings.HasPrefix(key, "shift+tab") {
 		switch bare {
 		case "up":
@@ -599,6 +612,18 @@ change:
 		return m, m.goToDefinition()
 	case "ctrl+t":
 		return m, m.jumpBackCmd()
+	case "ctrl+d":
+		if _, _, ok := a.selRange(); ok || len(a.Extra) > 0 || wordAt(line2(a), a.CurCol) != "" {
+			m.addNextOccurrence()
+			return m, nil
+		}
+	case "f2":
+		m.rename()
+		return m, nil
+	}
+	if m.multiKey(k) {
+		m.keepCursorShown()
+		return m, nil
 	}
 	if m.ideKey(k) {
 		return m, nil
@@ -608,8 +633,8 @@ change:
 		m.saveFile()
 		return m, m.afterSave()
 	case "esc":
-		if a.EdSel {
-			a.EdSel = false
+		if a.EdSel || len(a.Extra) > 0 {
+			a.EdSel, a.Extra = false, nil
 			return m, nil
 		}
 		// editing stops; changes not saved stay, marked in the tab, until ⌃s saves them or ⌃w throws them away
@@ -719,6 +744,13 @@ change:
 	}
 	m.keepCursorShown()
 	return m, nil
+}
+
+func line2(a *AppState) string {
+	if a.CurLine < len(a.FileLines) {
+		return a.FileLines[a.CurLine]
+	}
+	return ""
 }
 
 // editKeys is the footer while editing.

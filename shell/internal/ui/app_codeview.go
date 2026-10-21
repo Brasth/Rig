@@ -515,6 +515,9 @@ func codeRows(st State, w, room int) []string {
 				}
 			}
 		}
+		if a.Editing && len(a.Extra) > 0 {
+			text = extraSelected(st, text, i)
+		}
 		if from, to, ok := a.selRange(); ok && a.Editing && i >= from.l && i <= to.l {
 			// the selection: from its start on its first line, to its end on its last, a cell past a line it runs on from
 			d0, d1 := 0, ansi.StringWidth(text)+1

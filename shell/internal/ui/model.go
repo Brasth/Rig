@@ -930,7 +930,11 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.st.WideSession = sessionGeometry(m.w, m.h).ok
 		if m.pane != nil {
-			m.pane.Resize(m.paneSize())
+			if m.appOn() && m.st.App.Term {
+				m.pane.Resize(m.termSize())
+			} else {
+				m.pane.Resize(m.paneSize())
+			}
 		}
 	case panePlanMsg:
 		switch {

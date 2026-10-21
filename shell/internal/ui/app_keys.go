@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Brasth/Rig/shell/internal/term"
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/Brasth/Rig/shell/internal/view"
@@ -240,6 +241,19 @@ func (m *Model) appKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		m.st.Mode, m.pendingX, a.ConfirmLead = ModeNormal, "", ""
 		return m, m.quit()
+	}
+	if key == "ctrl+`" || key == "ctrl+@" {
+		return m, m.toggleTerm()
+	}
+	if a.Term && a.TermFocus && m.pane != nil {
+		// the shell has the keys; ⌃] gives them back without closing it
+		if k.Type == tea.KeyCtrlCloseBracket {
+			a.TermFocus = false
+			m.st.Message = "back in rig shell · ⌃` returns to the terminal"
+			return m, nil
+		}
+		m.pane.Write(term.KeyBytes(k, m.pane.AppCursor()))
+		return m, nil
 	}
 	if a.Splash > 0 {
 		a.Splash = 0 // a key goes straight to the screen
@@ -1144,7 +1158,7 @@ func (m *Model) runPalette(it paletteItem, query string) tea.Cmd {
 			m.stashBuffer() // its unsaved changes wait in its tab
 		}
 		a.Tabs, a.Editing, a.Dirty, a.TreeFocus, a.CodeAsk, a.EdSel = addTab(a.Tabs, rel), false, false, false, nil, false
-		a.GitDiff = nil
+		a.GitDiff, a.Extra = nil, nil
 		if a.Conflict != nil && a.Conflict.path != rel {
 			a.Conflict = nil
 		}

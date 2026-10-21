@@ -30,6 +30,7 @@ func appModel(t *testing.T) (*Model, *fakeSource) {
 }
 
 func appScreen(m *Model) string {
+	m.syncPane() // the terminal split shows the pane's screen, as View does
 	st := m.st
 	st.Styled = false
 	return strings.Join(AppFrame(m.view, st, 120, 36), "\n")

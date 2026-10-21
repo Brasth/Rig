@@ -74,6 +74,9 @@ type AppState struct {
 	Git                  *gitState
 	GitDiff              *gitDiffView  // a file's diff, shown in place of the file
 	Conflict             *conflictView // a conflicted file's conflicts, each with its two sides, in place of the file
+	Extra                []span        // more selections than the cursor's: ⌃d add next occurrence, F2 rename
+	Term                 bool          // ⌃`: a shell in a split at the foot of the screen
+	TermFocus            bool          // its keys go to the shell
 	Blame                bool          // b: who last changed each line
 	BlameFor             string
 	BlameLines           []blameLine
@@ -363,6 +366,12 @@ func AppFrame(v *view.View, st State, w, h int) []string {
 		return splashScreen(v, st, w, h)
 	}
 	// a row of room above the top bar and below the footer, so neither sits on the window's edge
+	if st.App.Term {
+		// the terminal split: the screen above, the shell below a rule, a third of the height
+		th := termRows(h)
+		body := appBody(v, st, w, h-2-th-1)
+		return append(append(append([]string{fit("", w)}, body...), termSplit(st, w, th)...), fit("", w))
+	}
 	return append(append([]string{fit("", w)}, appBody(v, st, w, h-2)...), fit("", w))
 }
 

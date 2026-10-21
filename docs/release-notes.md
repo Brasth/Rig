@@ -3,6 +3,10 @@
 
 
 
+## Add next occurrence, rename, and a terminal in rig shell (2026-10-21)
+
+In the code editor `⌃d` adds the next occurrence of the selected text (or the word at the cursor) as another selection, and typing, `⏎`, `⌫` or Delete then change every selection at once; `F2` renames every whole-word occurrence in the file. `` ⌃` `` opens your shell in a split at the foot of the screen; `⌃]` gives the keys back, `` ⌃` `` hides and shows the split.
+
 ## Conflicts resolved side by side; a search result opens on the match (2026-10-21)
 
 A conflicted file (after a pull or a merge that did not go through) opens from the git view as its conflicts side by side: ours and theirs for each block, `o` keeps ours, `t` theirs, `b` both, `e` edits by hand, `]` `[` move between them. Each choice writes the file; once none is left the file is marked resolved. A file with conflict markers opened from the explorer gets the same view. `⏎` on a search result now puts the cursor on the match.
