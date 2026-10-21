@@ -3,6 +3,10 @@
 
 
 
+## Select and copy, $ skills, and a thread that scrolls (2026-10-21)
+
+Dragging over the conversation, a thread or any screen selects text and letting go copies it (OSC 52, also through tmux), as in opencode and grok; a click now happens as the button comes up, so a drag never clicks. `$` in the box lists the parent's skills, as in codex (with codex's bundled `.system` skills), completes the word in place, and the parent is told where each named skill is kept. A helper's thread wraps its lines and scrolls with the wheel and PgUp/PgDn (`G` follows the newest again), and both it and the conversation stop at their first line. A long conversation draws in about 1.5 ms instead of 35 ms, so scrolling keeps up with the wheel.
+
 ## The mouse, the parent's skills, and files dropped in (2026-10-21)
 
 `rig shell` works with the mouse as codex and grok do: a click on a tab, a footer key, an answer chip, a palette or `/` menu row, a helper in the agents panel, a Settings value or any other row does what its key would; a click outside an overlay closes it; the wheel scrolls the conversation, the diff and the code; what the pointer is over is underlined. `RIG_MOUSE=0` turns it off. `/` also lists the parent's own skills and slash commands (new API method `chat.commands`), and for a parent whose headless mode cannot run them Rig sends the command's prompt or an instruction to use the skill. Files dragged onto the window go in the box as `@` references. Fixed: the first settings load while the server was still starting said "Could not save the setting".

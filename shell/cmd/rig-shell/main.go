@@ -261,6 +261,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		// the design's agent logos, drawn by a terminal with kitty's image placeholders (Ghostty, kitty)
 		model.SetLogos(true)
 		opts = append(opts, tea.WithOutput(ui.NewLogoWriter(os.Stdout, os.Getenv("TMUX") != "")))
+	} else if *layout == "app" {
+		opts = append(opts, tea.WithOutput(ui.NewTermWriter(os.Stdout, os.Getenv("TMUX") != ""))) // for Copy
 	}
 	if *layout == "app" && os.Getenv("RIG_MOUSE") != "0" {
 		// clicks, the wheel and hover, as in codex and grok; Shift-drag still selects text in most terminals

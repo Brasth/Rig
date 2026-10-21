@@ -33,6 +33,11 @@ type AppState struct {
 	AnswerDeny           bool     // the answer chip chosen with ← →: deny, else allow
 	ConfirmLead          string   // a question u or h asked: confirmed with ⏎; the letter typed into the reply box, or "\x00"
 	Splash               int      // the splash's frame while rig shell opens; 0 once it is gone
+	ChatMax, LogMax      int      // how far the conversation and a thread can scroll up, as last drawn
+	chatKey              string   // what chatLines were made for
+	chatLines            []string // the transcript's lines, kept between frames
+	logKey               string   // and a thread's
+	logLines             []string
 	Thread               string   // the job whose thread (its log) is open, from the panel
 	Files                []string // the repository's tracked files, for Ctrl-K
 	File                 string   // the file the code tab shows
@@ -403,6 +408,8 @@ func AppFrame(v *view.View, st State, w, h int) []string {
 		lines = append(lines, confirmLine(st, w))
 	case st.Message != "" && problem(st.Message):
 		lines = append(lines, center(st.paint(colAmber, clean(st.Message)), w))
+	case strings.HasPrefix(st.Message, "copied "):
+		lines = append(lines, center(st.paint(colGreen, "✓ "+st.Message), w))
 	case footer != "" && !a.Panel && a.Palette == nil && a.NewJob == nil && !a.Help:
 		lines = append(lines, footer)
 	default:
@@ -525,32 +532,15 @@ func conversationBody(v *view.View, st State, w, h int) ([]string, [][2]string) 
 	lines = append(lines, st.tile(parent)+"  "+st.bold(fit(title, cw-5)))
 	lines = append(lines, "     "+st.faint(parent+" · "+state))
 	lines = append(lines, "", "")
-	entries := st.Chat.Entries
-	if st.Chat.State == "running" && strings.TrimSpace(st.Chat.Partial) != "" {
-		entries = append(append([]view.ChatEntry(nil), entries...), view.ChatEntry{Role: "assistant", Text: st.Chat.Partial})
+	// the transcript's lines are made once for each transcript, width and theme: a long conversation scrolls at once
+	a := st.App
+	key := fmt.Sprintf("%p|%d|%d|%s|%s|%v|%v", st.Chat, len(st.Chat.Entries), cw, colText, colGround, st.Styled, st.Logos)
+	if a.chatKey != key {
+		a.chatKey, a.chatLines = key, entryLines(st, st.Chat.Entries, cw)
 	}
-	for _, e := range entries {
-		switch e.Role {
-		case "user":
-			lines = append(lines, bubble(st, e.Text, cw)...)
-		case "assistant":
-			for _, raw := range strings.Split(strings.TrimRight(e.Text, "\n"), "\n") {
-				for _, l := range wrap(plainMarkdown(sanitize(raw)), cw, "") {
-					lines = append(lines, st.dim(l))
-				}
-			}
-		case "tool":
-			lines = append(lines, st.faint("  · "+fit(clean(e.Text), cw-4)))
-			continue
-		case "error":
-			for _, l := range wrap(e.Text, cw-2, "") {
-				lines = append(lines, st.paint(colAmber, "! "+l))
-			}
-		default:
-			lines = append(lines, st.faint("  "+fit(clean(e.Text), cw-2)))
-			continue
-		}
-		lines = append(lines, "")
+	lines = append(lines, a.chatLines...)
+	if st.Chat.State == "running" && strings.TrimSpace(st.Chat.Partial) != "" {
+		lines = append(lines, entryLines(st, []view.ChatEntry{{Role: "assistant", Text: st.Chat.Partial}}, cw)...)
 	}
 	for _, r := range appliedCards(v, st) {
 		lines = append(lines, changeCard(st, r, cw)...)
@@ -577,9 +567,39 @@ func conversationBody(v *view.View, st State, w, h int) ([]string, [][2]string) 
 		keys = [][2]string{{"↑↓", "choose"}, {"⇥", "complete"}, {"⏎", "run"}, {"esc", "clear"}}
 	}
 	room := h - len(box) - 1
+	st.App.ChatMax = max(0, len(lines)-room)
 	shown := lastLines(lines, st.ChatUp, cw, room)
 	out := indentAll(append(append(shown, box...), ""), x, w)
 	return out[:h], keys
+}
+
+// entryLines is the conversation's entries as lines: your messages as bubbles, the parent's answers, tool calls and errors.
+func entryLines(st State, entries []view.ChatEntry, cw int) []string {
+	var lines []string
+	for _, e := range entries {
+		switch e.Role {
+		case "user":
+			lines = append(lines, bubble(st, e.Text, cw)...)
+		case "assistant":
+			for _, raw := range strings.Split(strings.TrimRight(e.Text, "\n"), "\n") {
+				for _, l := range wrap(plainMarkdown(sanitize(raw)), cw, "") {
+					lines = append(lines, st.dim(l))
+				}
+			}
+		case "tool":
+			lines = append(lines, st.faint("  · "+fit(clean(e.Text), cw-4)))
+			continue
+		case "error":
+			for _, l := range wrap(e.Text, cw-2, "") {
+				lines = append(lines, st.paint(colAmber, "! "+l))
+			}
+		default:
+			lines = append(lines, st.faint("  "+fit(clean(e.Text), cw-2)))
+			continue
+		}
+		lines = append(lines, "")
+	}
+	return lines
 }
 
 // bubble is one of your messages: right-aligned on the raised surface, as the design draws it.
@@ -1088,6 +1108,7 @@ func helpBox(st State, hw int) []string {
 		{"1 2", "allow or deny a request the conversation shows"},
 		{"PgUp PgDn", "scroll the conversation"},
 		{"click", "does what its key would; the wheel scrolls"},
+		{"drag", "selects text; letting go copies it"},
 		{"esc", "close, or clear the box"},
 		{"⌃c", "clear the box, or quit"},
 	}
@@ -1108,19 +1129,28 @@ func threadBody(st State, w, h int) ([]string, [][2]string) {
 	case st.Log == nil:
 		lines = append(lines, st.faint("loading…"))
 	default:
-		room := h - len(lines)
-		all := strings.Split(strings.TrimRight(st.Log.Text, "\n"), "\n")
-		if len(all) > room {
-			all = all[len(all)-room:]
+		// the whole log, wrapped, with the newest at the foot; the wheel and PgUp/PgDn scroll it (LogUp lines up)
+		a := st.App
+		if key := fmt.Sprintf("%p|%d|%s|%v", st.Log, cw, colText, st.Styled); a.logKey != key {
+			a.logKey, a.logLines = key, nil
+			for _, l := range strings.Split(strings.TrimRight(st.Log.Text, "\n"), "\n") {
+				for _, part := range strings.Split(ansi.Wrap(sanitize(l), cw, " "), "\n") {
+					a.logLines = append(a.logLines, st.dim(part))
+				}
+			}
 		}
-		for _, l := range all {
-			lines = append(lines, st.dim(fit(sanitize(l), cw)))
-		}
+		all := a.logLines
+		st.App.LogMax = max(0, len(all)-(h-len(lines)))
+		lines = append(lines, lastLines(all, st.LogUp, cw, h-len(lines))...)
 	}
 	for len(lines) < h {
 		lines = append(lines, "")
 	}
-	return indentAll(lines[:h], (w-cw)/2, w), [][2]string{{"esc", "back"}, {"s", "stop"}, {"⇥", "agents"}}
+	keys := [][2]string{{"esc", "back"}, {"s", "stop"}, {"⇥", "agents"}}
+	if st.LogUp > 0 {
+		keys = append([][2]string{{"G", "newest"}}, keys...)
+	}
+	return indentAll(lines[:h], (w-cw)/2, w), keys
 }
 
 // appliedCards are what was applied today, as rows for the change cards and the panel: from applies.today when the

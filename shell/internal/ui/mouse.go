@@ -2,6 +2,7 @@ package ui
 
 import (
 	"encoding/hex"
+	"fmt"
 	"strconv"
 	"strings"
 
@@ -11,6 +12,9 @@ import (
 
 // The mouse, as in codex and grok: the screens mark what can be clicked with zero-width zones, the frame takes the
 // marks out, draws the zone under the pointer underlined, and a click on a zone does what its key or row would.
+
+// wheelStep is the lines a wheel event scrolls; a trackpad sends many small ones, so it stays small.
+const wheelStep = 2
 
 const (
 	zoneOpen  = "\x1b_rz=" // an APC string: no width, kept whole by the ansi helpers, never reaches the terminal
@@ -184,10 +188,107 @@ func (m *Model) mouse(e tea.MouseMsg) (tea.Model, tea.Cmd) {
 		m.hoverX, m.hoverY = e.X, e.Y
 		return m, nil
 	case e.Action == tea.MouseActionPress && e.Button == tea.MouseButtonLeft:
-		m.hoverX, m.hoverY = e.X, e.Y
-		return m.click(e.X, e.Y)
+		// a press only marks where: lifting the button there clicks, dragging away selects text
+		m.press, m.sel = &textSel{ax: e.X, ay: e.Y, bx: e.X, by: e.Y}, nil
+		if strings.HasPrefix(m.st.Message, "copied ") {
+			m.st.Message = ""
+		}
+		return m, nil
+	case e.Action == tea.MouseActionMotion && e.Button == tea.MouseButtonLeft:
+		if m.press != nil && (e.X != m.press.ax || e.Y != m.press.ay || m.sel != nil) {
+			m.press.bx, m.press.by = e.X, e.Y
+			m.sel, m.hoverX, m.hoverY = m.press, -1, -1
+		}
+		return m, nil
+	case e.Action == tea.MouseActionRelease:
+		press := m.press
+		m.press = nil
+		switch {
+		case press == nil:
+		case m.sel != nil:
+			// as in opencode and grok: what was dragged over is copied as the button comes up
+			text := selectedText(m.plain, *m.sel)
+			m.sel = nil // the footer says what was copied; the new frame carries the copy to the terminal
+			if text != "" && Copy(text) {
+				m.st.Message = fmt.Sprintf("copied %d characters", len([]rune(text)))
+			}
+		default:
+			m.hoverX, m.hoverY = press.ax, press.ay
+			return m.click(press.ax, press.ay)
+		}
 	}
 	return m, nil
+}
+
+// textSel is a stretch of the screen dragged over, from where the button went down (a) to where it is (b).
+type textSel struct{ ax, ay, bx, by int }
+
+// span is the selection as reading order: its first cell and its last, inclusive.
+func (s textSel) span() (x0, y0, x1, y1 int) {
+	if s.ay < s.by || (s.ay == s.by && s.ax <= s.bx) {
+		return s.ax, s.ay, s.bx, s.by
+	}
+	return s.bx, s.by, s.ax, s.ay
+}
+
+// cols is the cells of row y the selection covers, as [from, to).
+func (s textSel) cols(y, w int) (int, int, bool) {
+	x0, y0, x1, y1 := s.span()
+	if y < y0 || y > y1 {
+		return 0, 0, false
+	}
+	from, to := 0, w
+	if y == y0 {
+		from = x0
+	}
+	if y == y1 {
+		to = x1 + 1
+	}
+	return from, min(to, w), from < to
+}
+
+// selectedText is the selection's text from the frame as drawn: each row's cells, without the spaces that pad it.
+func selectedText(plain []string, s textSel) string {
+	var rows []string
+	for y, line := range plain {
+		from, to, ok := s.cols(y, ansi.StringWidth(line))
+		if !ok {
+			continue
+		}
+		rows = append(rows, strings.TrimRight(ansi.Cut(line, from, to), " "))
+	}
+	// the conversation sits in the middle of the window: the margin all its rows share is not part of the text
+	// (a first row begun mid-line has no margin: the rest share theirs)
+	first := 0
+	if x0, _, _, _ := s.span(); x0 > 0 && len(rows) > 1 {
+		first = 1
+	}
+	indent := -1
+	for _, r := range rows[first:] {
+		if strings.TrimSpace(r) != "" {
+			if n := len(r) - len(strings.TrimLeft(r, " ")); indent < 0 || n < indent {
+				indent = n
+			}
+		}
+	}
+	for i := first; i < len(rows); i++ {
+		if indent > 0 && len(rows[i]) >= indent {
+			rows[i] = rows[i][indent:]
+		}
+	}
+	return strings.Trim(strings.Join(rows, "\n"), "\n")
+}
+
+// paintSelection draws the selection in reverse video, through the colours inside it.
+func paintSelection(lines []string, s textSel, w int) {
+	for y, line := range lines {
+		from, to, ok := s.cols(y, w)
+		if !ok {
+			continue
+		}
+		inner := sgrSeq.ReplaceAllStringFunc(ansi.Cut(line, from, to), func(q string) string { return q + "\x1b[7m" })
+		lines[y] = ansi.Truncate(line, from, "") + "\x1b[7m" + inner + "\x1b[27m" + ansi.TruncateLeft(line, to, "")
+	}
 }
 
 // wheel scrolls what the screen shows: the conversation, the diff and code, or the selection of a list.
@@ -196,13 +297,14 @@ func (m *Model) wheel(up bool) (tea.Model, tea.Cmd) {
 	if a.Splash > 0 || m.st.Mode == ModeConfirm {
 		return m, nil
 	}
+	m.sel = nil // the text under a selection moves away
 	list := a.Help || a.Welcome || a.Onboard != nil || a.Settings != nil || a.History != nil || a.Palette != nil ||
 		a.Panel || a.Search != nil || problemScreen(m.st) != "" || a.NewJob != nil
-	if !list && a.Tab == 1 {
+	if !list && (a.Tab == 1 || a.Thread != "") {
 		if up {
-			m.st.ChatUp += 3
+			m.scrollBy(wheelStep)
 		} else {
-			m.st.ChatUp = max(0, m.st.ChatUp-3)
+			m.scrollBy(-wheelStep)
 		}
 		return m, nil
 	}

@@ -65,6 +65,20 @@ class ParentCommands(unittest.TestCase):
         self.assertEqual(parent_commands.expand(self.repo, "claude", "/review x"), "/review x", "claude runs its own")
         self.assertEqual(parent_commands.expand(self.repo, "codex", "hello"), "hello")
 
+    def test_dollar_mentions_and_bundled_skills(self):
+        self.write(self.home / ".codex/skills/.system/skill-creator/SKILL.md", "---\ndescription: Make a skill\n---\n")
+        self.write(self.home / ".agents/skills/ak/SKILL.md", "---\ndescription: The ak helper\n---\n")
+        names = [r["name"] for r in parent_commands.commands(self.repo, "codex")]
+        self.assertEqual(sorted(names), ["ak", "skill-creator"], "codex's .system skills are listed")
+        sent = parent_commands.expand(self.repo, "codex", "use $ak on login, and $ak again, not $nope or a$ak")
+        self.assertTrue(sent.startswith("use $ak on login, and $ak again, not $nope or a$ak\n\n"))
+        self.assertEqual(sent.count("Use your ak skill"), 1)
+        self.assertIn(str(self.home / ".agents/skills/ak/SKILL.md"), sent)
+        self.write(self.repo / ".claude/skills/deploy/SKILL.md", "---\ndescription: Deploy\n---\n")
+        self.assertIn("Use your deploy skill", parent_commands.expand(self.repo, "claude", "$deploy please"),
+                      "claude has no $ mentions of its own: it is told too")
+        self.assertEqual(parent_commands.expand(self.repo, "codex", "costs $5"), "costs $5")
+
     def test_over_the_api(self):
         self.write(self.home / ".codex/skills/review/SKILL.md", "---\ndescription: Review\n---\n")
         api = local_api.Api(self.repo, "t" * 64)
