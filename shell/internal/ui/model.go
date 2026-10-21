@@ -585,6 +585,14 @@ func (m *Model) runSlash(text string) (tea.Cmd, bool) {
 			return nil, true
 		}
 		return m.openNotes(), true
+	case "/running":
+		clear()
+		m.st.Mode, m.st.InputLabel, m.inputFor = ModeNormal, "", ""
+		if !m.appOn() {
+			m.st.Message = "/running is in the app: rig shell"
+			return nil, true
+		}
+		return m.openRunning(), true
 	case "/steer", "/now":
 		clear()
 		m.st.Mode, m.st.InputLabel, m.inputFor = ModeNormal, "", ""
