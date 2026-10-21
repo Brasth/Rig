@@ -339,3 +339,17 @@ func TestASelectionOverSeveralRowsLosesTheMargin(t *testing.T) {
 		t.Fatalf("dragged upwards: %q", got)
 	}
 }
+
+func TestAWholeListRowIsNotUnderlinedOnHover(t *testing.T) {
+	st := State{Mouse: true}
+	row := st.zone("row:panel:0", " (c)  claude  Cwd /Users/someone/project…   ›            ")
+	button := st.zone("row:open:settings", "settings")
+	out, _ := zonesOf([]string{row + " " + button}, 5, 0)
+	if strings.Contains(out[0], "\x1b[4m") {
+		t.Fatalf("a hovered list row gets no line under it: %q", out[0])
+	}
+	out, _ = zonesOf([]string{row + " " + button}, ansi.StringWidth(ansi.Strip(row))+3, 0)
+	if !strings.Contains(out[0], "\x1b[4msettings\x1b[24m") {
+		t.Fatalf("a hovered button still is: %q", out[0])
+	}
+}
