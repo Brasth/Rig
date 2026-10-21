@@ -220,12 +220,16 @@ func (c *Client) ChatTranscript(session string, tail int, timeout time.Duration)
 	return &out, nil
 }
 
-// ChatSend starts one turn; an empty session starts a new one. The answer arrives in the transcript.
-func (c *Client) ChatSend(message, session string, timeout time.Duration) (*view.ChatStarted, error) {
+// ChatSend starts one turn; an empty session starts a new one, with parent (a name the server checks) or the
+// project's own parent. The answer arrives in the transcript.
+func (c *Client) ChatSend(message, session, parent string, timeout time.Duration) (*view.ChatStarted, error) {
 	var out view.ChatStarted
 	params := map[string]any{"message": message}
 	if session != "" {
 		params["session"] = session
+	}
+	if parent != "" {
+		params["parent"] = parent
 	}
 	if err := c.Call("chat.send", params, timeout, &out); err != nil {
 		return nil, err

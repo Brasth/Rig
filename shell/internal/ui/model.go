@@ -30,7 +30,7 @@ type Source interface {
 	Parent(name string, timeout time.Duration) (*view.ShellPlan, error)
 	ChatStatus(timeout time.Duration) (*view.ChatStatus, error)
 	ChatTranscript(session string, tail int, timeout time.Duration) (*view.ChatTranscript, error)
-	ChatSend(message, session string, timeout time.Duration) (*view.ChatStarted, error)
+	ChatSend(message, session, parent string, timeout time.Duration) (*view.ChatStarted, error)
 	ChatCancel(session string, timeout time.Duration) error
 }
 
@@ -187,6 +187,7 @@ type Model struct {
 func NewModel(src Source, ascii bool) *Model {
 	st := NewState()
 	st.Loading, st.ASCII, st.Styled = true, ascii, true
+	st.WideSession = sessionGeometry(120, 36).ok
 	return &Model{src: src, st: st, w: 120, h: 36, now: time.Now, newKey: randomKey, selID: map[string]string{}, exec: execProcess, spawn: spawnPane}
 }
 
@@ -248,6 +249,23 @@ func (m *Model) fetchFleet(force bool) tea.Cmd {
 // composite is true while the Session tab shows the mockup's three columns and dock.
 func (m *Model) composite() bool {
 	return m.st.Tab == SessionTab && sessionGeometry(m.w, m.h).ok
+}
+
+// paneLive: a program is running in the Session pane (one that exited gives the middle column back to the chat).
+func (m *Model) paneLive() bool {
+	if m.pane == nil {
+		return false
+	}
+	done, _ := m.pane.Exited()
+	return !done
+}
+
+// chatInSession: the Session screen's middle column is the conversation with the parent, as in the mockup.
+func (m *Model) chatInSession() bool { return m.composite() && m.st.ChatOn && !m.paneLive() }
+
+// startChatInput opens the mockup's "› Ask the parent" box.
+func (m *Model) startChatInput() {
+	m.st.Mode, m.st.InputLabel, m.inputFor, m.st.Message = ModeInput, "chat", "chat", ""
 }
 
 // showsWorkspace: the workspace panel is on screen (the Env tab, or the Session screen's left column).
@@ -342,7 +360,7 @@ func (m *Model) fetchChatStatus() tea.Cmd {
 }
 
 func (m *Model) fetchChat(force bool) tea.Cmd {
-	if m.st.Tab != ChatTab || m.chBusy || m.chatID == "" || (!force && m.now().Sub(m.chLast) < chatEvery) {
+	if !(m.st.Tab == ChatTab || m.chatInSession()) || m.chBusy || m.chatID == "" || (!force && m.now().Sub(m.chLast) < chatEvery) {
 		return nil
 	}
 	m.chBusy = true
@@ -509,6 +527,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.w, m.h = msg.Width, msg.Height
+		m.st.WideSession = sessionGeometry(m.w, m.h).ok
 		if m.pane != nil {
 			m.pane.Resize(m.paneSize())
 		}
@@ -558,6 +577,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.st.Chat, m.st.ChatE = msg.chat, ""
 	case chatSentMsg:
+		if msg.err == nil && msg.started == nil {
+			msg.err = errors.New("the server sent no session")
+		}
 		if msg.err != nil {
 			m.st.InputLabel, m.inputFor = "chat", "chat"
 			m.st.Mode = ModeInput // keep the draft, as a failed enqueue does
@@ -731,17 +753,18 @@ func (m *Model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "s":
 			return m, m.askPane(false)
 		case "enter":
-			if m.pane != nil {
-				if done, _ := m.pane.Exited(); !done {
-					m.paneFocus = true
-					m.st.Message = ""
-				}
+			switch {
+			case m.paneLive():
+				m.paneFocus = true
+				m.st.Message = ""
+			case m.chatInSession():
+				m.startChatInput()
 			}
 			return m, nil
 		}
 	}
-	if k.String() == "c" && m.st.Tab == ChatTab {
-		m.st.Mode, m.st.InputLabel, m.inputFor, m.st.Message = ModeInput, "chat", "chat", ""
+	if k.String() == "c" && (m.st.Tab == ChatTab || m.chatInSession()) {
+		m.startChatInput()
 		return m, nil
 	}
 	if m.st.HelpOpen {
@@ -782,7 +805,7 @@ func (m *Model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m, m.goTab(tabs[(i+step)%len(tabs)])
 			}
 		}
-		return m, nil
+		return m, m.goTab(SessionTab) // on a tab the strip no longer lists (Chat, once the window is wide)
 	case "l":
 		if m.st.Tab != "Jobs" {
 			return m, nil
@@ -833,7 +856,7 @@ func (m *Model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "G":
 		m.st.LogUp, m.st.ChatUp = 0, 0
 	case "N":
-		if m.st.Tab == ChatTab {
+		if m.st.Tab == ChatTab || m.chatInSession() {
 			m.chatID, m.st.Chat, m.st.ChatUp = "", nil, 0
 			m.st.Message = "next message starts a new session"
 		}
@@ -1034,9 +1057,16 @@ func (m *Model) inputKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.st.Mode = ModeNormal
 		if m.inputFor == "chat" {
 			m.st.InputLabel, m.inputFor = "", ""
-			src, session := m.src, m.chatID
+			if rest, ok := strings.CutPrefix(text, "/queue "); ok && strings.TrimSpace(rest) != "" {
+				// the mockup's "/queue to park a task": the same queue.add as e, never sent to the parent
+				if m.draftKey == "" {
+					m.draftKey = m.newKey()
+				}
+				return m, m.act("queue.add", map[string]any{"text": strings.TrimSpace(rest), "idempotency_key": m.draftKey}, true)
+			}
+			src, session, parent := m.src, m.chatID, m.parentName
 			return m, func() tea.Msg {
-				started, err := src.ChatSend(text, session, 10*time.Second)
+				started, err := src.ChatSend(text, session, parent, 10*time.Second)
 				return chatSentMsg{started: started, err: err}
 			}
 		}

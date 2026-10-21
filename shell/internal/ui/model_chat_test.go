@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	tea "github.com/charmbracelet/bubbletea"
+
 	"github.com/Brasth/Rig/shell/internal/view"
 )
 
@@ -54,10 +56,14 @@ func TestTheChatTabExistsOnlyWhileTheExperimentIsOn(t *testing.T) {
 	m.csLast = time.Time{}
 	src.chatStatus = chatOn()
 	run(m.fetchChatStatus(), m)
-	if !m.st.ChatOn || TabList(m.st)[len(TabList(m.st))-1] != ChatTab {
-		t.Fatal("Chat is the last tab when on")
+	if !m.st.ChatOn || TabList(m.st)[len(TabList(m.st))-1] == ChatTab {
+		t.Fatal("on a window that fits the Session screen the chat is its middle column, not a tab")
 	}
-	if !strings.Contains(Render(m.view, m.st, 120, 20), "Chat") {
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	if TabList(m.st)[len(TabList(m.st))-1] != ChatTab {
+		t.Fatal("Chat is the last tab when on and the window is too small for the Session screen")
+	}
+	if !strings.Contains(Render(m.view, m.st, 100, 20), "Chat") {
 		t.Fatal("the tab bar shows it")
 	}
 }

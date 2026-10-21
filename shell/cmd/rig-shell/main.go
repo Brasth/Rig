@@ -122,8 +122,8 @@ func (e *ensuringSource) ChatTranscript(session string, tail int, timeout time.D
 	return e.client.ChatTranscript(session, tail, timeout)
 }
 
-func (e *ensuringSource) ChatSend(message, session string, timeout time.Duration) (*view.ChatStarted, error) {
-	return e.client.ChatSend(message, session, timeout)
+func (e *ensuringSource) ChatSend(message, session, parent string, timeout time.Duration) (*view.ChatStarted, error) {
+	return e.client.ChatSend(message, session, parent, timeout)
 }
 
 func (e *ensuringSource) ChatCancel(session string, timeout time.Duration) error {

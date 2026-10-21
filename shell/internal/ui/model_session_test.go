@@ -237,3 +237,79 @@ func TestTheAPIStartingUpIsLoadingNotAFailure(t *testing.T) {
 		t.Fatal("after the board has run, a lost server is a failure to show")
 	}
 }
+
+// chatSession is the Session screen with the chat on and one conversation.
+func chatSession(t *testing.T) (*Model, *fakeSource, *[]*fakePane) {
+	t.Helper()
+	m, src, _, panes := sessionModel(t, 120, 36)
+	src.chatStatus = chatOn("c-1a2b3c4d")
+	m.csLast = time.Time{}
+	run(m.fetchChatStatus(), m)
+	src.chatView = transcript("idle", ce("user", "Fix the failing auth tests"), ce("assistant", "Two writers, then a verify node."),
+		ce("tool", "rig_job_launch claude job-7f2"))
+	m.chBusy = false
+	run(m.fetchChat(true), m)
+	return m, src, panes
+}
+
+func TestTheMiddleColumnIsTheConversationAsInTheMockup(t *testing.T) {
+	m, src, _ := chatSession(t)
+	if len(src.chatReads) == 0 {
+		t.Fatal("the transcript is read while the Session screen shows it")
+	}
+	out := m.View()
+	for _, want := range []string{"Parent · claude", "you › Fix the failing auth tests", "parent › Two writers, then a verify node.",
+		"rig_job_launch claude job-7f2", "› Ask the parent, or /queue to park a task", "Enter ask the parent"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q:\n%s", want, Render(m.view, m.st, 120, 36))
+		}
+	}
+	if strings.Contains(strings.Split(out, "\n")[1], "Chat") {
+		t.Error("no separate Chat tab while the Session screen carries the conversation")
+	}
+}
+
+func TestEnterAsksTheParentAndQueueParksATask(t *testing.T) {
+	m, src, _ := chatSession(t)
+	m.SetParent("claude")
+	src.chatStarted = &view.ChatStarted{Session: "c-1a2b3c4d", Parent: "claude"}
+	press(m, "enter")
+	if m.st.Mode != ModeInput || m.st.InputLabel != "chat" {
+		t.Fatalf("Enter opens the ask box: %+v", m.st)
+	}
+	for _, r := range "why" {
+		m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+	if !strings.Contains(Render(m.view, m.st, 120, 36), " › why▏") {
+		t.Fatal("what is typed shows in the middle column's box")
+	}
+	run(press(m, "enter"), m)
+	if len(src.chatSent) != 1 || src.chatSent[0] != [2]string{"why", "c-1a2b3c4d"} || src.chatParents[0] != "claude" {
+		t.Fatalf("sent %v to %v", src.chatSent, src.chatParents)
+	}
+	press(m, "enter")
+	for _, r := range "/queue Docs for rate limit" {
+		m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+	run(press(m, "enter"), m)
+	if len(src.chatSent) != 1 {
+		t.Fatal("/queue is never sent to the parent")
+	}
+	last := src.calls[len(src.calls)-1]
+	if last.method != "queue.add" || last.params["text"] != "Docs for rate limit" {
+		t.Fatalf("/queue parks the task: %v", src.calls)
+	}
+}
+
+func TestPSwapsInTheParentsOwnScreenAndClosingItGivesTheConversationBack(t *testing.T) {
+	m, _, _ := chatSession(t)
+	runAll(m, press(m, "p"))
+	m.Update(tea.KeyMsg{Type: tea.KeyCtrlCloseBracket})
+	if out := m.View(); !strings.Contains(out, "$ ready") || strings.Contains(out, "you › Fix") {
+		t.Fatalf("while its own screen runs, the middle column is that screen:\n%s", Render(m.view, m.st, 120, 36))
+	}
+	press(m, "X", "y")
+	if out := m.View(); !strings.Contains(out, "you › Fix the failing auth tests") {
+		t.Fatalf("closing it brings the conversation back:\n%s", Render(m.view, m.st, 120, 36))
+	}
+}

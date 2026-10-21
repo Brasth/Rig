@@ -75,7 +75,12 @@ func sessionFrame(v *view.View, st State, w, h int) []string {
 	lines = append(lines, ruleS(st, dockTitle(st, row), w))
 	lines = append(lines, dockLines(st, row, w, dockRows)...)
 	msg := messageLine(st, w)
-	if strings.TrimSpace(msg) == "" && row != nil && row.Ask {
+	if st.Mode == ModeInput && st.InputLabel == "chat" { // the box is in the middle column; say what Enter does
+		msg = fit(" Enter sends to the parent · /queue TEXT parks it in the queue · Esc discards", w)
+		if st.Styled {
+			msg = muted(msg)
+		}
+	} else if strings.TrimSpace(msg) == "" && row != nil && row.Ask {
 		msg = fit(" "+clean(row.ID)+" needs input: a allows, d denies.", w)
 		if st.Styled {
 			msg = tone("attention").Render(msg)
@@ -89,8 +94,14 @@ func sessionKeys(st State, row *view.Row) []string {
 	if st.PaneFocus {
 		return []string{"Ctrl-] back to the board (every other key goes to the program)"}
 	}
-	keys := []string{"Tab pane", "Enter type", "p parent", "e enqueue", "v evidence", "w workspace", "? help", "q quit"}
+	enter := "Enter type"
+	if st.ChatOn && !st.PaneRunning {
+		enter = "Enter ask the parent"
+	}
+	keys := []string{"Tab pane", enter, "p parent", "e enqueue", "v evidence", "w workspace", "? help", "q quit"}
 	switch {
+	case st.Mode == ModeInput && st.InputLabel == "chat":
+		return []string{"Enter send", "Esc discard"}
 	case st.Mode == ModeInput:
 		return []string{"Enter queue it", "Esc discard"}
 	case st.Mode == ModeConfirm:
@@ -140,8 +151,14 @@ func leftColumn(st State, w, h int) []string {
 	return out
 }
 
-// midColumn is the parent's terminal when one runs, else how to start it.
+// chatPlaceholder is the mockup's input line while nothing is typed.
+const chatPlaceholder = " › Ask the parent, or /queue to park a task"
+
+// midColumn is the parent: its own terminal while one runs (p), else the conversation, as the mockup shows it.
 func midColumn(st State, w, h int) []string {
+	if st.ChatOn && !st.PaneRunning {
+		return chatColumn(st, w, h)
+	}
 	out := make([]string, 0, h)
 	out = append(out, heavy(st, parentTitle(st), w))
 	if len(st.PaneLines) == 0 {
@@ -219,6 +236,48 @@ func rightColumn(v *view.View, st State, w, h int) []string {
 	for len(out) < h {
 		out = append(out, fit("", w))
 	}
+	return out[:h]
+}
+
+// chatColumn is the conversation: the transcript, a rule, and the "› Ask the parent" box.
+func chatColumn(st State, w, h int) []string {
+	title := "Parent"
+	if st.Chat != nil {
+		title += " · " + clean(st.Chat.Parent)
+		if st.Chat.State == "running" {
+			title += " · working"
+		}
+	}
+	out := []string{heavy(st, title, w)}
+	body := h - 3
+	var lines []string
+	if st.Chat == nil && st.ChatE == "" {
+		lines = []string{"", " No conversation yet.", "", " Enter writes to the parent; the answer appears here.",
+			" /queue TEXT parks a task instead; p opens the parent's own screen."}
+		if st.Styled {
+			for i := range lines {
+				lines[i] = muted(lines[i])
+			}
+		}
+	} else {
+		lines = chatAll(st, w)
+	}
+	out = append(out, lastLines(lines, st.ChatUp, w, body)...)
+	sep := " " + strings.Repeat("─", max(0, w-2)) + " "
+	if st.Styled {
+		sep = border(sep)
+	}
+	input := chatPlaceholder
+	if st.Mode == ModeInput && st.InputLabel == "chat" {
+		input = " › " + st.Prompt + "▏"
+		if lipgloss.Width(input) > w { // keep the cursor end in view while typing a long message
+			r := []rune(st.Prompt)
+			input = " › …" + string(r[max(0, len(r)-(w-5)):]) + "▏"
+		}
+	} else if st.Styled {
+		input = muted(fit(input, w))
+	}
+	out = append(out, fit(sep, w), fit(input, w))
 	return out[:h]
 }
 

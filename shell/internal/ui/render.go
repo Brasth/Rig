@@ -61,6 +61,7 @@ type State struct {
 	EvidenceID   string
 	EvidenceOpen bool           // the evidence drawer replaces the board body
 	HelpOpen     bool           // the key list replaces the board body
+	WideSession  bool           // the window fits the Session screen, whose middle column is the chat: no separate Chat tab
 	DockEvidence *view.Evidence // the selected job's evidence in the Session screen's dock
 	DockID       string
 	DockE        string
@@ -90,7 +91,7 @@ const ChatTab = "Chat"
 
 // TabList is the tabs to show: the board tabs, plus Chat while the experiment is on.
 func TabList(st State) []string {
-	if st.ChatOn {
+	if st.ChatOn && !st.WideSession {
 		return append(append([]string(nil), Tabs...), ChatTab)
 	}
 	return Tabs
@@ -159,6 +160,7 @@ func frame(v *view.View, st State, w, h int) []string {
 		return lines
 	}
 	body := h - 5
+	st.WideSession = sessionGeometry(w, h).ok
 	lines := []string{headerLine(v, st, w), tabLine(v, st, w)}
 	if st.HelpOpen {
 		lines = append(lines, ruleS(st, "Keys", w))
@@ -684,6 +686,41 @@ func chatTitle(st State) string {
 
 // chatBody renders the transcript: you, the parent, and its tool calls, wrapped, newest at the bottom.
 func chatBody(st State, w, h int) []string {
+	return lastLines(chatAll(st, w), st.ChatUp, w, h)
+}
+
+// lastLines is the h lines ending up lines before the newest, padded to w.
+func lastLines(all []string, up, w, h int) []string {
+	end := len(all) - min(up, max(0, len(all)-h))
+	start := max(0, end-h)
+	out := make([]string, 0, h)
+	for _, line := range all[start:end] {
+		out = append(out, fit(line, w))
+	}
+	for len(out) < h {
+		out = append(out, fit("", w))
+	}
+	return out
+}
+
+// chatTone is how the mockup colours a transcript line: who spoke is muted, tool calls are blue, failures amber.
+func chatTone(role, prefix, text string, styled bool) string {
+	if !styled {
+		return prefix + text
+	}
+	switch role {
+	case "tool":
+		return lipgloss.NewStyle().Foreground(lipgloss.Color(colAccent)).Render(prefix + text)
+	case "error":
+		return tone("attention").Render(prefix + text)
+	case "system":
+		return muted(prefix + text)
+	}
+	return muted(prefix) + text
+}
+
+// chatAll is every transcript line, wrapped to w.
+func chatAll(st State, w int) []string {
 	var all []string
 	switch {
 	case st.Chat == nil && st.ChatE != "":
@@ -694,6 +731,9 @@ func chatBody(st State, w, h int) []string {
 		all = []string{" No chat session yet. Press c to write the first message; it starts a headless parent turn."}
 	default:
 		parent := sanitize(st.Chat.Parent)
+		if st.WideSession && st.Tab == SessionTab {
+			parent = "parent" // the mockup's word; the column's title names the CLI
+		}
 		for _, e := range st.Chat.Entries {
 			prefix := parent + " › "
 			switch e.Role {
@@ -716,8 +756,11 @@ func chatBody(st State, w, h int) []string {
 					if j > 0 {
 						lead = strings.Repeat(" ", lipgloss.Width(prefix))
 					}
-					all = append(all, " "+lead+l)
+					all = append(all, " "+chatTone(e.Role, lead, l, st.Styled))
 				}
+			}
+			if st.WideSession && st.Tab == SessionTab {
+				all = append(all, "") // the mockup leaves a line between turns
 			}
 		}
 		if len(st.Chat.Entries) == 0 {
@@ -730,16 +773,7 @@ func chatBody(st State, w, h int) []string {
 			}
 		}
 	}
-	end := len(all) - min(st.ChatUp, max(0, len(all)-h))
-	start := max(0, end-h)
-	out := make([]string, 0, h)
-	for _, line := range all[start:end] {
-		out = append(out, fit(line, w))
-	}
-	for len(out) < h {
-		out = append(out, fit("", w))
-	}
-	return out
+	return all
 }
 
 func logTitle(st State) string {
