@@ -96,10 +96,12 @@ type AppState struct {
 	Complete             *completion // the words that complete the one being typed
 	noComplete           pos         // the word esc dismissed the list for: where it starts, and what was typed of it
 	noCompleteWord       string
-	ColOff               int         // cells scrolled off the left while editing, so the cursor stays in view
-	Wrap                 bool        // ⌥z: long lines wrap while reading
-	Recent               []string    // the files opened lately, newest first, for ⌃p
-	SymIndex             *symIndex   // every symbol of the repository, for # in the palette
+	ColOff               int            // cells scrolled off the left while editing, so the cursor stays in view
+	Wrap                 bool           // ⌥z: long lines wrap while reading
+	Recent               []string       // the files opened lately, newest first, for ⌃p
+	SymIndex             *symIndex      // every symbol of the repository, for # in the palette
+	Found                []view.ChatHit // /resume: the conversations with a message that matches what was typed (FoundQ)
+	FoundQ               string
 	Tasks                []taskItem  // the repository's scripts and targets, for ⌃k › run a task
 	FileLog              []gitCommit // the commits that touched the open file, for l
 	FileLogFor           string
@@ -135,19 +137,27 @@ type AppState struct {
 	ShipScreen           *ShipState
 }
 
+// lineSpan is the end of "@file:10-40" and "@file:25": the lines of a file to add.
+var lineSpan = regexp.MustCompile(`^\d+(-\d+)?$`)
+
 // Palette is Ctrl-K: ask the parent, open a file, or run a command.
 type Palette struct {
-	Query    string
-	Sel      int
-	Attach   bool // @: the chosen file goes into your message instead of opening
-	Model    bool // /model: the parent's models, or the name typed
-	Effort   bool // /effort, or the reasoning row of /model: the parent's reasoning levels
-	Resume   bool // /resume: the conversations of this repository, to open one again
-	Symbols  bool // ⌃o in the code tab: the open file's functions and types, to go to
-	Branch   bool // b in the git view: a branch to switch to, or a new one
-	Problems bool // m in the code tab: what the helpers' checks found, each to go to
-	Tasks    bool // ⌃k › run a task: the repository's scripts and targets, each to run in the terminal
-	Log      bool // l in the code tab: the commits that touched the open file, each to show
+	Query  string
+	Sel    int
+	Attach bool // @: the chosen file goes into your message instead of opening
+	Model  bool // /model: the parent's models, or the name typed
+	Effort bool // /effort, or the reasoning row of /model: the parent's reasoning levels
+	Resume bool // /resume: the conversations of this repository, to open one again
+	Fork   bool // /fork: the turns of this conversation, each to branch from
+	Rewind bool // /rewind: the turns that changed files, each to put back (RewindTurn: the one chosen, whose files are listed)
+	// RewindTurn and RewindPlan are the second step: the chosen turn and what putting it back would change.
+	RewindTurn int
+	RewindPlan *view.ChatRewound
+	Symbols    bool // ⌃o in the code tab: the open file's functions and types, to go to
+	Branch     bool // b in the git view: a branch to switch to, or a new one
+	Problems   bool // m in the code tab: what the helpers' checks found, each to go to
+	Tasks      bool // ⌃k › run a task: the repository's scripts and targets, each to run in the terminal
+	Log        bool // l in the code tab: the commits that touched the open file, each to show
 }
 
 // paletteItem is one row of the palette.
@@ -674,6 +684,8 @@ func conversationBody(v *view.View, st State, w, h int) ([]string, [][2]string) 
 	lines = append(lines, st.tile(parent)+"  "+st.bold(fit(title, cw-5)))
 	if st.Chat.Plan {
 		state = st.paint(colAccent, "plan mode") + st.faint(" · "+state)
+	} else if st.Chat.Mode == "edits" {
+		state = st.paint(colAmber, "auto-edit") + st.faint(" · "+state)
 	}
 	if pct := st.Chat.ContextPct; pct != nil && *pct >= 0 {
 		note := fmt.Sprintf("context %d%%", *pct)
@@ -1203,6 +1215,12 @@ func paletteItems(st State) []paletteItem {
 	if st.App.Palette.Resume {
 		return resumeItems(st, q)
 	}
+	if st.App.Palette.Rewind {
+		return rewindItems(st, q)
+	}
+	if st.App.Palette.Fork {
+		return forkItems(st, q)
+	}
 	if st.App.Palette.Symbols {
 		return symbolItems(st, q)
 	}
@@ -1225,13 +1243,20 @@ func paletteItems(st State) []paletteItem {
 		out = append(out, recentItems(st, st.App.Palette.Attach)...) // the files opened lately first
 	}
 	if st.App.Palette.Attach {
+		find, span := q, ""
+		if name, rng, ok := strings.Cut(q, ":"); ok && lineSpan.MatchString(rng) {
+			find, span = name, ":"+rng // "auth.py:10-40": just those lines
+		}
 		for _, f := range st.App.Files {
-			if q == "" || strings.Contains(strings.ToLower(f), q) {
+			if find == "" || strings.Contains(strings.ToLower(f), find) {
 				dir, name := "", f
 				if i := strings.LastIndex(f, "/"); i >= 0 {
 					dir, name = f[:i], f[i+1:]
 				}
-				if out = append(out, paletteItem{"add a file", name, dir, "attach:" + f}); len(out) >= 10 {
+				if span != "" {
+					dir = strings.TrimPrefix(dir+" · lines "+span[1:], " · ")
+				}
+				if out = append(out, paletteItem{"add a file", name + span, dir, "attach:" + f + span}); len(out) >= 10 {
 					break
 				}
 			}
@@ -1317,6 +1342,8 @@ var PaletteCommands = [][3]string{
 	{"change theme", "rig, light, dark, material, dracula", "theme"},
 	{"change model", "the model the parent talks with", "model"},
 	{"resume a conversation", "open an earlier one again (/resume)", "resume"},
+	{"fork the conversation", "branch from a turn into a new conversation (/fork)", "fork"},
+	{"rewind files", "put files back as they were before a turn (/rewind)", "rewind"},
 	{"search the code", "text in every file (⌃f)", "search"},
 	{"find references", "every use of the name at the cursor (F7)", "references"},
 	{"run a task", "a script, make or just target, or the tests, in the terminal", "tasks"},
@@ -1345,6 +1372,12 @@ func paletteBox(v *view.View, st State, pw int) []string {
 		}
 		if st.App.Palette.Effort {
 			text = "  " + st.faint("›") + " ▏" + st.faint("how much "+appParent(st)+" reasons: low, medium, high…")
+		}
+		if st.App.Palette.Fork {
+			text = "  " + st.faint("⑂") + " ▏" + st.faint("a turn to branch from: the new conversation starts as a copy up to it")
+		}
+		if st.App.Palette.Rewind {
+			text = "  " + st.faint("↶") + " ▏" + st.faint("a turn to put back: its files return to how they were before it")
 		}
 		if st.App.Palette.Resume {
 			text = "  " + st.faint("⟲") + " ▏" + st.faint("an earlier conversation to open again: type to search")

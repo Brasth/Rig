@@ -117,6 +117,16 @@ type ChatSession struct {
 	Updated float64 `json:"updated"` // when it was last used, as unix seconds
 }
 
+// ChatHit is a conversation with a message that matches a search (chat.search): who said it and the words around it.
+type ChatHit struct {
+	Session string  `json:"session"`
+	Parent  string  `json:"parent"`
+	Title   string  `json:"title"`
+	Updated float64 `json:"updated"`
+	Where   string  `json:"where"` // "you", or the parent's name
+	Snippet string  `json:"snippet"`
+}
+
 // JobProblems is job.problems: what a job's failed checks found, as an IDE's Problems view lists them.
 type JobProblems struct {
 	JobID    string       `json:"job_id"`
@@ -192,7 +202,7 @@ type AppSettings struct {
 	Ship              string            `json:"ship"`           // what ship offers first: pr or push
 	TabSize           int               `json:"tab_size"`       // the code view's tab width
 	FormatOnSave      bool              `json:"format_on_save"` // ⌃s runs the file's formatter first
-	Keys              map[string]string `json:"keys"`           // the editor's keys that can be moved: next_occurrence, find_in_chat, terminal, rename, definition, references
+	Keys              map[string]string `json:"keys"`           // the editor's keys that can be moved: next_occurrence, find_in_chat, terminal, rename, definition, references, permission_mode
 	NotifyNeeds       bool              `json:"notify_needs"`
 	NotifyDone        bool              `json:"notify_done"` // a long turn ended or failed
 	NotifyApplied     bool              `json:"notify_applied"`
@@ -301,6 +311,34 @@ type ChatTranscript struct {
 	// is after its last turn (nil from a server that does not say, -1 when it is not known).
 	Successor  string `json:"successor"`
 	ContextPct *int   `json:"context_pct"`
+	// Marks are the turns that changed files, which /rewind can put back; CanUndo says a rewind can be taken back.
+	Marks   []ChatMark `json:"marks"`
+	CanUndo bool       `json:"can_undo"`
+	Mode    string     `json:"mode"` // ask, edits or plan: how much the parent may do without asking
+}
+
+// ChatMark is one turn that changed files: its number, when, the message that asked for it and the files it touched.
+type ChatMark struct {
+	Turn  int        `json:"turn"`
+	At    string     `json:"at"`
+	Title string     `json:"title"`
+	Files []ChatFile `json:"files"`
+}
+
+// ChatFile is one file a turn changed.
+type ChatFile struct {
+	Path    string `json:"path"`
+	Added   int    `json:"added"`
+	Deleted int    `json:"deleted"`
+}
+
+// ChatRewound is the chat.rewind result: the files a rewind changes (or, for a dry run, would change), and the ones
+// among them that were edited after the turn.
+type ChatRewound struct {
+	Turn   int      `json:"turn"`
+	Paths  []string `json:"paths"`
+	Edited []string `json:"edited"`
+	Dry    bool     `json:"dry"`
 }
 
 // ChatAsk is a permission request the parent is blocked on; chat.answer allows or denies it by ID.
@@ -308,6 +346,14 @@ type ChatAsk struct {
 	ID      string `json:"id"`
 	Tool    string `json:"tool"`
 	Preview string `json:"preview"`
+}
+
+// ChatForked is the chat.fork result: the new conversation, which begins as a copy of the one it was made from.
+type ChatForked struct {
+	Session    string `json:"session"`
+	Parent     string `json:"parent"`
+	Turn       int    `json:"turn"`
+	ForkedFrom string `json:"forked_from"`
 }
 
 // ChatStarted is the chat.send result.

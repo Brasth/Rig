@@ -292,6 +292,9 @@ func (m *Model) appKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		a.ChatFind = &chatFind{}
 		return m, nil
 	}
+	if isKey(k, bound(m.st, "permission_mode", "shift+tab")) && a.Tab == 1 && a.Thread == "" && a.Palette == nil && a.Settings == nil && !a.Help {
+		return m, m.cycleMode()
+	}
 	if a.Splash > 0 {
 		a.Splash = 0 // a key goes straight to the screen
 		if k.Type == tea.KeyCtrlC {
@@ -542,9 +545,19 @@ func (m *Model) appKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 		}
+		if !k.Paste && k.Type == tea.KeyRunes && len(k.Runes) == 1 && k.Runes[0] == '@' && m.atWordStart() {
+			a.Palette = &Palette{Attach: true} // an @ that starts a word, anywhere in the message, names a file
+			return m, m.loadFiles()
+		}
 		m.insert(string(k.Runes))
 	}
 	return m, nil
+}
+
+// atWordStart is whether the cursor is at the start of the box or just after a space or a new line.
+func (m *Model) atWordStart() bool {
+	r, c := []rune(m.st.Prompt), m.st.caret()
+	return c == 0 || (c <= len(r) && (r[c-1] == ' ' || r[c-1] == '\n' || r[c-1] == '\t'))
 }
 
 // appTabKey is the changes and code tabs' keys.
@@ -1188,11 +1201,17 @@ func (m *Model) paletteKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			p.Query = string(r[:len(r)-1])
 		}
 		p.Sel = 0
+		if p.Resume {
+			return m, m.searchChats(p.Query)
+		}
 	case tea.KeyRunes, tea.KeySpace:
 		p.Query += string(k.Runes)
 		p.Sel = 0
 		if strings.HasPrefix(p.Query, "#") {
 			return m, m.indexCmd()
+		}
+		if p.Resume {
+			return m, m.searchChats(p.Query)
 		}
 	case tea.KeyTab:
 		if p.Problems && len(items) > 0 {
@@ -1218,10 +1237,7 @@ func (m *Model) runPalette(it paletteItem, query string) tea.Cmd {
 	case it.Action == "ask":
 		return m.appSend(query)
 	case strings.HasPrefix(it.Action, "attach:"):
-		if m.st.Prompt != "" && !strings.HasSuffix(m.st.Prompt, " ") {
-			m.st.Prompt += " "
-		}
-		m.st.Prompt += "@" + strings.TrimPrefix(it.Action, "attach:") + " "
+		m.insert("@" + strings.TrimPrefix(it.Action, "attach:") + " ") // at the cursor, where the @ was typed
 		return nil
 	case strings.HasPrefix(it.Action, "problem:"):
 		return m.openProblem(strings.TrimPrefix(it.Action, "problem:"))
@@ -1265,6 +1281,25 @@ func (m *Model) runPalette(it paletteItem, query string) tea.Cmd {
 		return m.resumeSession(strings.TrimPrefix(it.Action, "resume:"))
 	case it.Action == "resume":
 		return m.openResume()
+	case it.Action == "rewind":
+		return m.openRewind()
+	case it.Action == "fork":
+		return m.openFork()
+	case strings.HasPrefix(it.Action, "fork:"):
+		n, _ := strconv.Atoi(strings.TrimPrefix(it.Action, "fork:"))
+		return m.doFork(n)
+	case strings.HasPrefix(it.Action, "rewind-turn:"):
+		n, _ := strconv.Atoi(strings.TrimPrefix(it.Action, "rewind-turn:"))
+		return m.planRewind(n)
+	case strings.HasPrefix(it.Action, "rewind-do:"):
+		n, _ := strconv.Atoi(strings.TrimPrefix(it.Action, "rewind-do:"))
+		return m.doRewind(n, "", false)
+	case strings.HasPrefix(it.Action, "rewind-file:"):
+		n, path, _ := strings.Cut(strings.TrimPrefix(it.Action, "rewind-file:"), ":")
+		turn, _ := strconv.Atoi(n)
+		return m.doRewind(turn, path, false)
+	case it.Action == "rewind-undo":
+		return m.doRewind(0, "", true)
 	case it.Action == "effort-menu":
 		a.Palette = &Palette{Effort: true}
 		return nil

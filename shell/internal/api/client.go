@@ -278,6 +278,37 @@ func (c *Client) ChatCancel(session string, timeout time.Duration) error {
 	return c.Call("chat.cancel", map[string]any{"session": session}, timeout, nil)
 }
 
+// ChatRewind puts the working tree back as it was before a turn: every file that turn and the later ones changed, or
+// just path. dry only reports what would change; undo takes the last rewind back.
+func (c *Client) ChatRewind(session string, turn int, path string, dry, undo bool, timeout time.Duration) (*view.ChatRewound, error) {
+	var out view.ChatRewound
+	params := map[string]any{"session": session, "turn": turn, "path": path, "dry": dry, "undo": undo}
+	if err := c.Call("chat.rewind", params, timeout, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// ChatFork starts a conversation that begins as a copy of this one up to turn (all of it when 0).
+func (c *Client) ChatFork(session string, turn int, timeout time.Duration) (*view.ChatForked, error) {
+	var out view.ChatForked
+	if err := c.Call("chat.fork", map[string]any{"session": session, "turn": turn}, timeout, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// ChatSearch finds the conversations with a message that contains the words of query.
+func (c *Client) ChatSearch(query string, timeout time.Duration) ([]view.ChatHit, error) {
+	var out struct {
+		Rows []view.ChatHit `json:"rows"`
+	}
+	if err := c.Call("chat.search", map[string]any{"query": query}, timeout, &out); err != nil {
+		return nil, err
+	}
+	return out.Rows, nil
+}
+
 // JobDiff is what one job changed (job.diff).
 func (c *Client) JobDiff(id string, timeout time.Duration) (*view.JobDiff, error) {
 	var out view.JobDiff
