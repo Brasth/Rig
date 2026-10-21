@@ -335,12 +335,8 @@ func statusBar(v *view.View, st State, w int) string {
 	if a.File != "" && a.FileLines != nil {
 		// blame on: who last changed the cursor's line, as an IDE's status bar says
 		line, _ := cursorLine(a)
-		if b := blameAt(a, line); b != nil {
-			who := b.author + ", " + ago(st.Now, b.at) + " · " + b.summary
-			if strings.Trim(b.hash, "0") == "" {
-				who = "not committed yet"
-			}
-			left += fit(clean(who), max(10, w/3)) + "   "
+		if b := blameAt(a, line); b != nil && a.Blame {
+			left += fit(clean(blameText(st, b)), max(10, w/3)) + "   "
 		}
 	}
 	if n := len(activeJobs(v)); n > 0 {
@@ -547,6 +543,9 @@ func codeRows(st State, w, room int) []string {
 		if cell := blameCell(st, i); cell != "" {
 			gutter += cell
 		}
+		if blame := inlineBlame(st, i, w-8-lipgloss.Width(gutter)-ansi.StringWidth(text)); blame != "" {
+			text += blame
+		}
 		if a.Editing || canEdit(a) {
 			// a click in the text puts the cursor there, and starts editing
 			text = st.zone(fmt.Sprintf("text:code:%d", i), text+strings.Repeat(" ", max(0, w-6-lipgloss.Width(gutter)+1-ansi.StringWidth(text))))
@@ -624,7 +623,7 @@ func codeScreen(v *view.View, st State, w, h int) ([]string, [][2]string) {
 	case a.CodeAsk != nil || a.Editing:
 		keys = editKeys(a)
 	case a.TreeFocus && a.GitView:
-		keys = [][2]string{{"↑↓", "move"}, {"space", "stage"}, {"⏎", "diff"}, {"o", "open"}, {"u", "discard"}, {"c", "commit"}, {"p", "push"}, {"g", "files"}, {"esc", "back"}}
+		keys = [][2]string{{"space", "stage"}, {"⏎", "diff"}, {"u", "discard"}, {"c", "commit"}, {"P", "pull"}, {"p", "push"}, {"b", "branch"}, {"g", "files"}, {"esc", "back"}}
 	case a.TreeFocus:
 		keys = [][2]string{{"↑↓", "move"}, {"⏎", "open"}, {"←→", "fold"}, {"/", "filter"}, {"n", "new"}, {"r", "rename"}, {"d", "delete"}, {"g", "git"}, {"esc", "back"}}
 	}

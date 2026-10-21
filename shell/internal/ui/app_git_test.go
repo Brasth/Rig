@@ -150,3 +150,82 @@ func TestTheGitViewStagesDiffsAndCommits(t *testing.T) {
 		t.Fatal("esc closes the diff, then leaves the view")
 	}
 }
+
+func TestTheCursorLineShowsItsBlameInline(t *testing.T) {
+	m := gitRepo(t)
+	a := m.st.App
+	follow(m, m.openFile("src/routes/login.ts"), 0) // as saved: blame lines up with the file
+	press(m, "e")
+	a.setCursor(pos{0, 0})
+	if out := appScreen(m); !strings.Contains(out, "Huy, ") || !strings.Contains(out, "· first") {
+		t.Fatalf("the cursor line ends with who changed it, when and why:\n%s", out)
+	}
+	a.setCursor(pos{4, 0})
+	if out := appScreen(m); !strings.Contains(out, "You · not committed yet") {
+		t.Fatalf("a line not committed says so:\n%s", out)
+	}
+	typeText(m, "x")
+	if out := appScreen(m); strings.Contains(out, "not committed yet") || strings.Contains(out, "· first") {
+		t.Fatalf("with edits not saved the lines move: no blame until saved:\n%s", out)
+	}
+}
+
+func TestTheGitViewSwitchesBranchesAndPulls(t *testing.T) {
+	m := gitRepo(t)
+	a := m.st.App
+	repo := a.Repo
+	follow(m, press(m, "g"), 0)
+	out := appScreen(m)
+	for _, want := range []string{"⎇ main ▾", "Message (c to commit)", "✓ Commit", "↓ Pull", "↑ Push"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("missing %q:\n%s", want, out)
+		}
+	}
+	m.SetMouse(true)
+	x, y := findOnScreen(t, m, "Message (c to commit)")
+	follow(m, func() tea.Msg { return nil }, 0)
+	clickAt(m, x, y)
+	if a.CodeAsk == nil && !strings.Contains(m.st.Message, "nothing staged") {
+		t.Fatalf("a click on the message box commits (or says nothing is staged): %q", m.st.Message)
+	}
+	a.CodeAsk = nil
+	follow(m, press(m, "b"), 0)
+	if a.Palette == nil || !a.Palette.Branch || len(a.Branches) != 1 {
+		t.Fatalf("b lists the branches: %v", a.Branches)
+	}
+	typeText(m, "feature")
+	follow(m, press(m, "enter"), 0)
+	if b, _ := gitOut(repo, "branch", "--show-current"); strings.TrimSpace(b) != "feature" || a.Git.branch != "feature" {
+		t.Fatalf("a new name makes the branch and switches to it: %q %q", b, m.st.Message)
+	}
+	follow(m, m.openBranches(), 0)
+	a.Palette.Query = "main"
+	follow(m, press(m, "enter"), 0)
+	if b, _ := gitOut(repo, "branch", "--show-current"); strings.TrimSpace(b) != "main" {
+		t.Fatalf("choosing a branch switches to it: %q %q", b, m.st.Message)
+	}
+	// a remote with one more commit: P pulls it
+	upstream := t.TempDir()
+	for _, args := range [][]string{{"clone", "-q", "--bare", repo, upstream}} {
+		if out, err := exec.Command("git", args...).CombinedOutput(); err != nil {
+			t.Fatalf("%v %s", err, out)
+		}
+	}
+	other := t.TempDir()
+	for _, args := range [][]string{{"clone", "-q", upstream, other}, {"-C", other, "-c", "user.email=t@example.com", "-c", "user.name=Ana",
+		"commit", "-q", "--allow-empty", "-m", "from Ana"}, {"-C", other, "push", "-q"}, {"-C", repo, "remote", "add", "origin", upstream},
+		{"-C", repo, "fetch", "-q", "origin"}, {"-C", repo, "branch", "-q", "--set-upstream-to=origin/main"}, {"-C", repo, "stash", "-q", "-u"}} {
+		if out, err := exec.Command("git", args...).CombinedOutput(); err != nil {
+			t.Fatalf("%v %s", err, out)
+		}
+	}
+	follow(m, m.fetchGit(), 0)
+	if !strings.Contains(appScreen(m), "↓1") {
+		t.Fatalf("one commit to pull:\n%s", appScreen(m))
+	}
+	follow(m, press(m, "P"), 0)
+	log, _ := gitOut(repo, "log", "-1", "--format=%s")
+	if strings.TrimSpace(log) != "from Ana" || m.st.Message != "pulled" {
+		t.Fatalf("P pulls: %q %q", log, m.st.Message)
+	}
+}

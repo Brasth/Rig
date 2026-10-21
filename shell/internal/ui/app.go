@@ -78,7 +78,10 @@ type AppState struct {
 	BlameLines           []blameLine
 	Gutter               map[int]byte // the open file's lines changed since the last commit
 	GutterFor            string
-	pendingAt            *jumpTo       // where the cursor goes once the file being opened is read
+	pendingAt            *jumpTo  // where the cursor goes once the file being opened is read
+	Branches             []string // the branch list: local branches, newest first
+	RemoteBranches       []string
+	reloadFiles          bool          // after a switch of branch the explorer reads the files again
 	findAt               pos           // where find last stopped, while not editing
 	renameFrom           string        // the file or folder the rename question is about
 	CurLine, CurCol      int           // the editing cursor, in runes
@@ -107,6 +110,7 @@ type Palette struct {
 	Attach  bool // @: the chosen file goes into your message instead of opening
 	Model   bool // /model: the parent's models, or the name typed
 	Symbols bool // ⌃o in the code tab: the open file's functions and types, to go to
+	Branch  bool // b in the git view: a branch to switch to, or a new one
 }
 
 // paletteItem is one row of the palette.
@@ -1057,6 +1061,9 @@ func paletteItems(st State) []paletteItem {
 	if st.App.Palette.Symbols {
 		return symbolItems(st, q)
 	}
+	if st.App.Palette.Branch {
+		return branchItems(st, q)
+	}
 	if st.App.Palette.Attach {
 		for _, f := range st.App.Files {
 			if q == "" || strings.Contains(strings.ToLower(f), q) {
@@ -1172,6 +1179,9 @@ func paletteBox(v *view.View, st State, pw int) []string {
 		}
 		if st.App.Palette.Symbols {
 			text = "  " + st.faint("›") + " ▏" + st.faint("a function or type in "+filepath.Base(st.App.File))
+		}
+		if st.App.Palette.Branch {
+			text = "  " + st.faint("⎇") + " ▏" + st.faint("a branch to switch to, or a new branch's name")
 		}
 	}
 	lines := []string{text, ""}

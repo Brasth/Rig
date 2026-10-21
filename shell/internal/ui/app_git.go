@@ -77,10 +77,15 @@ type gitDiffMsg struct{ view *gitDiffView }
 
 // gitOut runs git in the repository, never asking for a password, with a time limit.
 func gitOut(repo string, args ...string) (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	return gitOutFor(20*time.Second, repo, args...)
+}
+
+// gitOutFor is gitOut with its own time limit: a pull over the network takes longer than a status.
+func gitOutFor(limit time.Duration, repo string, args ...string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), limit)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", repo}, args...)...)
-	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "GIT_OPTIONAL_LOCKS=0")
+	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "GIT_OPTIONAL_LOCKS=0", "GIT_EDITOR=true", "GIT_MERGE_AUTOEDIT=no")
 	out, err := cmd.Output()
 	if ee, ok := err.(*exec.ExitError); ok && len(ee.Stderr) > 0 {
 		return string(out), fmt.Errorf("%s", strings.TrimSpace(string(ee.Stderr)))
@@ -281,15 +286,16 @@ func (m *Model) afterGit(msg gitDoneMsg) tea.Cmd {
 	} else {
 		m.st.Message = msg.note
 	}
-	cmds := []tea.Cmd{m.fetchGit(), m.fetchGutter()}
-	if a.Blame {
-		cmds = append(cmds, m.fetchBlame())
-	}
+	cmds := []tea.Cmd{m.fetchGit(), m.fetchGutter(), m.fetchBlame()}
 	if a.GitDiff != nil {
 		cmds = append(cmds, m.fetchGitDiff(a.GitDiff.path, a.GitDiff.staged))
 	}
 	if a.File != "" && !a.Dirty {
-		cmds = append(cmds, m.openFile(a.File)) // a discard changes the file under the editor
+		cmds = append(cmds, m.openFile(a.File)) // a discard, a pull or a switch changes the file under the editor
+	}
+	if a.reloadFiles || strings.HasPrefix(msg.note, "pulled") {
+		a.reloadFiles, a.Files = false, nil // another branch, or pulled work: the explorer reads the files again
+		cmds = append(cmds, m.loadFiles())
 	}
 	return tea.Batch(cmds...)
 }
@@ -321,10 +327,7 @@ func (m *Model) afterSave() tea.Cmd {
 	if a.Dirty {
 		return nil // not saved
 	}
-	cmds := []tea.Cmd{m.fetchGutter()}
-	if a.Blame {
-		cmds = append(cmds, m.fetchBlame())
-	}
+	cmds := []tea.Cmd{m.fetchGutter(), m.fetchBlame()}
 	if a.Git != nil {
 		cmds = append(cmds, m.fetchGit())
 	}
@@ -382,14 +385,20 @@ func gitPane(st State, w, h int) []string {
 	case g.err != "":
 		lines = append(lines, "", " "+st.paint(colAmber, fit(clean(g.err), w-2)))
 	default:
-		branch := " ⎇ " + st.bold(g.branch)
+		// the branch, a click switches it; the message box, a click commits; the buttons
+		branch := " ⎇ " + st.bold(g.branch) + st.faint(" ▾")
 		if g.ahead > 0 {
 			branch += st.faint(fmt.Sprintf("  ↑%d", g.ahead))
 		}
 		if g.behind > 0 {
 			branch += st.faint(fmt.Sprintf("  ↓%d", g.behind))
 		}
-		lines = append(lines, branch, "")
+		box := " " + fit(st.faint("Message (c to commit)"), w-4) + " "
+		if st.Styled {
+			box = tint(box, colRaised)
+		}
+		lines = append(lines, st.zone("row:gitbtn:branch", branch), " "+st.zone("row:gitbtn:commit", box),
+			" "+gitButton(st, "commit", "✓ Commit")+" "+gitButton(st, "pull", "↓ Pull")+" "+gitButton(st, "push", "↑ Push"), "")
 	}
 	rows := gitRows(a)
 	sel := -1
@@ -411,7 +420,7 @@ func gitPane(st State, w, h int) []string {
 			section = r.kind
 			title := map[string]string{"staged": fmt.Sprintf("STAGED %d", staged), "change": fmt.Sprintf("CHANGES %d", changes),
 				"commit": "RECENT"}[r.kind]
-			if len(lines) > 3 {
+			if len(lines) > gitHeadRows {
 				lines = append(lines, "")
 			}
 			lines = append(lines, " "+st.faint(title))
@@ -449,7 +458,8 @@ func gitPane(st State, w, h int) []string {
 		lines = append(lines, st.zone(fmt.Sprintf("row:git:%d", i), row))
 	}
 	if g != nil && g.err == "" && staged+changes == 0 {
-		lines = append(lines[:min(len(lines), 3)], append([]string{" " + st.faint("nothing to commit")}, lines[min(len(lines), 3):]...)...)
+		at := min(len(lines), gitHeadRows)
+		lines = append(lines[:at], append([]string{" " + st.faint("nothing to commit"), ""}, lines[at:]...)...)
 	}
 	if selLine >= h-1 {
 		// a long list: the rows scroll under the heads so the chosen one stays in view
@@ -466,6 +476,20 @@ func gitPane(st State, w, h int) []string {
 		}
 	}
 	return lines
+}
+
+// gitHeadRows is how many rows the git view's head takes: the view's name, the branch, the message box, the buttons.
+const gitHeadRows = 5
+
+// gitButton is one of the git view's buttons: a click does what its key does.
+func gitButton(st State, id, label string) string {
+	text := " " + label + " "
+	if st.Styled {
+		text = tint(text, colRaised)
+	} else {
+		text = "[" + label + "]"
+	}
+	return st.zone("row:gitbtn:"+id, text)
 }
 
 // sideHeads are the side bar's two views, the open one lit: the files and git.
@@ -545,6 +569,10 @@ func (m *Model) gitKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "p":
 		a.TreeFocus = false
 		return m, m.runPalette(paletteItem{Action: "ship"}, "")
+	case "P":
+		return m, m.pull()
+	case "b":
+		return m, m.openBranches()
 	case "r":
 		return m, m.fetchGit()
 	case "esc":
@@ -567,6 +595,85 @@ func (g *gitState) filesOr() []gitFile {
 		return nil
 	}
 	return g.files
+}
+
+// pull brings the branch's upstream in: a fast-forward, or a merge without asking for its message.
+func (m *Model) pull() tea.Cmd {
+	m.st.Message = "pulling…"
+	return m.gitAct("pulled", func(repo string) error {
+		_, err := gitOutFor(2*time.Minute, repo, "pull", "--no-edit")
+		return err
+	})
+}
+
+// openBranches opens the palette on the branches: the local ones, the remote ones without a local branch, or a new one.
+func (m *Model) openBranches() tea.Cmd {
+	a := m.st.App
+	a.Palette = &Palette{Branch: true}
+	repo := a.Repo
+	return func() tea.Msg {
+		out, err := gitOut(repo, "for-each-ref", "--sort=-committerdate", "--format=%(refname)", "refs/heads", "refs/remotes")
+		if err != nil {
+			return branchesMsg{}
+		}
+		var local, remote []string
+		for _, ref := range strings.Fields(out) {
+			switch {
+			case strings.HasPrefix(ref, "refs/heads/"):
+				local = append(local, strings.TrimPrefix(ref, "refs/heads/"))
+			case strings.HasSuffix(ref, "/HEAD"):
+			case strings.HasPrefix(ref, "refs/remotes/"):
+				remote = append(remote, strings.TrimPrefix(ref, "refs/remotes/"))
+			}
+		}
+		return branchesMsg{local: local, remote: remote}
+	}
+}
+
+type branchesMsg struct{ local, remote []string }
+
+// branchItems are the palette in the branch list: what fits the query, and the query as a new branch.
+func branchItems(st State, q string) []paletteItem {
+	a := st.App
+	current := ""
+	if a.Git != nil {
+		current = a.Git.branch
+	}
+	var out []paletteItem
+	have := map[string]bool{}
+	for _, b := range a.Branches {
+		have[b] = true
+		if q == "" || strings.Contains(strings.ToLower(b), q) {
+			detail := ""
+			if b == current {
+				detail = "current"
+			}
+			out = append(out, paletteItem{"branches", b, detail, "branch:" + b})
+		}
+	}
+	for _, r := range a.RemoteBranches {
+		_, name, _ := strings.Cut(r, "/")
+		if have[name] || !(q == "" || strings.Contains(strings.ToLower(r), q)) {
+			continue
+		}
+		out = append(out, paletteItem{"remote", r, "a local branch follows it", "branch:" + name})
+	}
+	if typed := strings.TrimSpace(st.App.Palette.Query); typed != "" && !have[typed] {
+		out = append(out, paletteItem{"new", "create " + typed, "from " + current, "branch-new:" + typed})
+	}
+	if len(out) == 0 {
+		out = append(out, paletteItem{"branches", "type a name", "to create a branch", ""})
+	}
+	return out
+}
+
+// switchBranch moves the checkout to a branch, or makes a new one there; git refuses when changes would be lost.
+func (m *Model) switchBranch(name string, create bool) tea.Cmd {
+	m.st.App.reloadFiles = true
+	if create {
+		return m.gitAct("on the new branch "+name, func(repo string) error { _, err := gitOut(repo, "switch", "-c", name); return err })
+	}
+	return m.gitAct("on "+name, func(repo string) error { _, err := gitOut(repo, "switch", name); return err })
 }
 
 // toggleStage stages a change, or unstages a staged one.
@@ -619,12 +726,33 @@ func (m *Model) openGit() tea.Cmd {
 	return m.fetchGit()
 }
 
-// blameAt is who last changed line i of the open file, when blame is on and the file is as saved.
+// blameAt is who last changed line i of the open file, while the file is as saved (an edit moves the lines).
 func blameAt(a *AppState, i int) *blameLine {
-	if !a.Blame || a.BlameFor != a.File || a.Dirty || i < 0 || i >= len(a.BlameLines) {
+	if a.BlameFor != a.File || a.Dirty || i < 0 || i >= len(a.BlameLines) {
 		return nil
 	}
 	return &a.BlameLines[i]
+}
+
+// blameText is a line's blame in words: "Huy, 3d · Add the role", or that it is not committed yet.
+func blameText(st State, b *blameLine) string {
+	if strings.Trim(b.hash, "0") == "" {
+		return "You · not committed yet"
+	}
+	return b.author + ", " + ago(st.Now, b.at) + " · " + b.summary
+}
+
+// inlineBlame is the cursor line's blame at its end, faint, as GitLens shows it.
+func inlineBlame(st State, i, room int) string {
+	a := st.App
+	if !a.Editing || i != a.CurLine || room < 12 {
+		return ""
+	}
+	b := blameAt(a, i)
+	if b == nil {
+		return ""
+	}
+	return "     " + st.faint(fit(clean(blameText(st, b)), room-5))
 }
 
 const blameWidth = 24
@@ -633,7 +761,7 @@ const blameWidth = 24
 func blameCell(st State, i int) string {
 	a := st.App
 	b := blameAt(a, i)
-	if b == nil {
+	if !a.Blame || b == nil {
 		return ""
 	}
 	if i > 0 && a.BlameLines[i-1].hash == b.hash {

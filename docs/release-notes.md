@@ -3,6 +3,10 @@
 
 
 
+## Pull, switch branch and buttons in the git view; inline blame (2026-10-21)
+
+The git view has a commit message box and `✓ Commit`, `↓ Pull` and `↑ Push` buttons. `P` (or the button) pulls, and a click on the branch (or `b`) lists the branches to switch to, or makes a new one from a typed name. The line the cursor is on ends with its blame, faint, as GitLens shows it: who changed it, when, and the commit.
+
 ## ⌃q quits from anywhere (2026-10-21)
 
 `⌃q` quits `rig shell` from any screen, including while a file is edited (it asks first when edits are not saved; `⌃q` again quits anyway) and in the launcher; the footer shows it. `⌃d` on an empty reply box quits too, as in codex and claude.
