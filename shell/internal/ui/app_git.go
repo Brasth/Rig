@@ -601,6 +601,10 @@ func (m *Model) gitKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, m.gitAct("staged every change", func(repo string) error { _, err := gitOut(repo, "add", "-A"); return err })
 	case "enter", "d":
 		if r != nil && r.kind != "commit" {
+			if r.file.code == 'U' {
+				a.TreeFocus = false
+				return m, m.openConflicts(r.file.path) // a conflict: its sides, not a diff
+			}
 			return m, m.fetchGitDiff(r.file.path, r.kind == "staged")
 		}
 	case "o":

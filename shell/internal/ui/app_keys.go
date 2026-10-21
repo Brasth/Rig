@@ -341,7 +341,7 @@ func (m *Model) appKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	}
-	if a.Tab == 3 && a.Thread == "" && (a.Editing || a.TreeFocus || a.CodeAsk != nil) && key != "ctrl+k" && key != "ctrl+p" {
+	if a.Tab == 3 && a.Thread == "" && (a.Editing || a.TreeFocus || a.CodeAsk != nil || a.Conflict != nil) && key != "ctrl+k" && key != "ctrl+p" {
 		return m.appTabKey(k) // editing a file, or in the explorer: every key is theirs
 	}
 	if k.Type == tea.KeyRunes && (k.Paste || len(k.Runes) > 1) {
@@ -505,6 +505,8 @@ func (m *Model) appTabKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		switch {
 		case a.CodeAsk != nil && !a.Editing && !a.TreeFocus:
 			return m.askKey(k)
+		case a.Conflict != nil && !a.TreeFocus && key != "q":
+			return m.conflictKey(k)
 		case a.Editing:
 			return m.editFileKey(k)
 		case a.TreeFocus:
@@ -949,6 +951,12 @@ func (m *Model) searchKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		hit := s.Results[clampSel(s.Sel, len(s.Results))]
 		a.Search = nil
 		a.Tab, a.File, a.FileLines, a.FileErr, a.FileOff, a.Preview, a.Find = 3, hit.Path, nil, "", max(0, hit.Line-4), false, s.Query
+		a.Tabs = addTab(a.Tabs, hit.Path)
+		col := 0 // the cursor on the match: where the query is in the line (the first match, case aside)
+		if i := strings.Index(strings.ToLower(hit.Text), strings.ToLower(s.Query)); i >= 0 && !s.Regex {
+			col = len([]rune(hit.Text[:i]))
+		}
+		a.pendingAt = &jumpTo{file: hit.Path, at: pos{max(0, hit.Line-1), col}}
 		return m, tea.Batch(m.openFile(hit.Path), m.fetchChanged())
 	case tea.KeyBackspace:
 		if r := []rune(*edit); len(r) > 0 {
@@ -1137,6 +1145,9 @@ func (m *Model) runPalette(it paletteItem, query string) tea.Cmd {
 		}
 		a.Tabs, a.Editing, a.Dirty, a.TreeFocus, a.CodeAsk, a.EdSel = addTab(a.Tabs, rel), false, false, false, nil, false
 		a.GitDiff = nil
+		if a.Conflict != nil && a.Conflict.path != rel {
+			a.Conflict = nil
+		}
 		a.Tab, a.File, a.FileLines, a.FileErr, a.FileOff, a.Selecting, a.Find = 3, rel, nil, "", 0, false, ""
 		a.Preview = previewKind(rel) != ""
 		if m.restoreBuffer(rel) {

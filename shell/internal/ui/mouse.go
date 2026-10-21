@@ -783,6 +783,10 @@ func (m *Model) clickRow(list, at string) (tea.Model, tea.Cmd) {
 		if rows[i].kind == "commit" {
 			return m, nil
 		}
+		if rows[i].file.code == 'U' {
+			a.TreeFocus = false
+			return m, m.openConflicts(rows[i].file.path)
+		}
 		if again {
 			return m, m.toggleStage(rows[i])
 		}

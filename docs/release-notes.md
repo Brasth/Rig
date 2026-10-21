@@ -3,6 +3,10 @@
 
 
 
+## Conflicts resolved side by side; a search result opens on the match (2026-10-21)
+
+A conflicted file (after a pull or a merge that did not go through) opens from the git view as its conflicts side by side: ours and theirs for each block, `o` keeps ours, `t` theirs, `b` both, `e` edits by hand, `]` `[` move between them. Each choice writes the file; once none is left the file is marked resolved. A file with conflict markers opened from the explorer gets the same view. `⏎` on a search result now puts the cursor on the match.
+
 ## Pause a helper, stage one hunk, and the thread keeps every message (2026-10-21)
 
 `p` in the agents panel or a helper's thread pauses the helper (SIGSTOP to its process group; the board shows Paused) and `p` again lets it go on; a stop wakes a paused helper first (new API method `job.pause`). In a file's diff in the git view, `]` `[` choose a hunk and `h` stages it alone (or unstages it from the staged diff). A helper's thread now keeps every message the parent sent it, not only the one still unread (`messages.jsonl` in the job's folder).

@@ -1148,6 +1148,9 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				a.FileErr = msg.err.Error()
 			}
 			cmds := []tea.Cmd{m.fetchGutter(), m.fetchBlame()} // the gutter, and blame for the cursor's line
+			if msg.err == nil && a.Conflict == nil && !a.Editing && len(conflicts(msg.lines)) > 0 {
+				a.Conflict = &conflictView{path: msg.path} // git left conflict markers: resolve them side by side
+			}
 			if to := a.pendingAt; to != nil && to.file == msg.path && msg.err == nil {
 				a.pendingAt = nil
 				m.goTo(to.at) // go to definition: the cursor on the name

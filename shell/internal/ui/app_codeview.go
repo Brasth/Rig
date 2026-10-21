@@ -619,6 +619,9 @@ func codeScreen(v *view.View, st State, w, h int) ([]string, [][2]string) {
 	if a.GitDiff != nil {
 		keys = [][2]string{{"] [", "hunk"}, {"h", "stage hunk"}, {"g", "git"}, {"esc", "close diff"}}
 	}
+	if a.Conflict != nil && !a.TreeFocus {
+		keys = [][2]string{{"] [", "conflict"}, {"o", "ours"}, {"t", "theirs"}, {"b", "both"}, {"e", "edit"}, {"esc", "file"}}
+	}
 	switch {
 	case a.CodeAsk != nil || a.Editing:
 		keys = editKeys(a)
@@ -640,6 +643,9 @@ func codeScreen(v *view.View, st State, w, h int) ([]string, [][2]string) {
 		ed = []string{codeTabs(st, ew), breadcrumb(st, ew), "", "  " + st.paint(colAmber, "cannot open: "+clean(a.FileErr))}
 	case a.FileLines == nil:
 		ed = []string{codeTabs(st, ew), breadcrumb(st, ew), "", "  " + st.faint("loading…")}
+	case a.Conflict != nil && a.Conflict.path == a.File:
+		ed = []string{codeTabs(st, ew)}
+		ed = append(ed, conflictRows(st, ew, h-1-len(ed)-1)...)
 	case a.GitDiff != nil:
 		ed = []string{codeTabs(st, ew)}
 		ed = append(ed, gitDiffRows(st, ew, h-1-len(ed)-1)...)

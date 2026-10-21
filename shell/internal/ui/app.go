@@ -72,8 +72,9 @@ type AppState struct {
 	GitView              bool                // the side bar shows git (g) instead of the files
 	GitSel               int
 	Git                  *gitState
-	GitDiff              *gitDiffView // a file's diff, shown in place of the file
-	Blame                bool         // b: who last changed each line
+	GitDiff              *gitDiffView  // a file's diff, shown in place of the file
+	Conflict             *conflictView // a conflicted file's conflicts, each with its two sides, in place of the file
+	Blame                bool          // b: who last changed each line
 	BlameFor             string
 	BlameLines           []blameLine
 	Gutter               map[int]byte // the open file's lines changed since the last commit
