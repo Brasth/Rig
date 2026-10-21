@@ -144,6 +144,9 @@ func (m *Model) askStopJob(r view.Row) {
 func (m *Model) appKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	a := m.st.App
 	key := k.String()
+	if m.st.Mode == ModeConfirm && a.ConfirmLead != "" {
+		return m.leadConfirmKey(k)
+	}
 	if m.st.Mode == ModeConfirm {
 		return m.confirmKey(k)
 	}
@@ -221,7 +224,7 @@ func (m *Model) appKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	switch key {
-	case "ctrl+k":
+	case "ctrl+k", "ctrl+p":
 		a.Palette = &Palette{}
 		return m, m.loadFiles()
 	case "ctrl+f":
@@ -270,7 +273,13 @@ func (m *Model) appKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.appTabKey(k)
 	}
 	matches := slashMatches(m.st.Prompt)
+	asking := (m.st.Chat != nil && m.st.Chat.Ask != nil) || waitingJob(m.view) != nil
 	switch k.Type {
+	case tea.KeyLeft, tea.KeyRight:
+		if asking && m.st.Prompt == "" {
+			a.AnswerDeny = !a.AnswerDeny // the design's "← → pick answer"
+		}
+		return m, nil
 	case tea.KeyUp, tea.KeyDown:
 		if len(matches) > 0 {
 			step := 1
@@ -289,6 +298,11 @@ func (m *Model) appKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			return m, m.appSend(sel.Name)
 		}
+		if asking && strings.TrimSpace(m.st.Prompt) == "" {
+			deny := a.AnswerDeny
+			a.AnswerDeny = false
+			return m.answer(!deny)
+		}
 		return m, m.appSend(m.st.Prompt)
 	case tea.KeyBackspace:
 		if r := []rune(m.st.Prompt); len(r) > 0 {
@@ -301,9 +315,15 @@ func (m *Model) appKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case tea.KeyRunes, tea.KeySpace:
 		if m.st.Prompt == "" && !k.Paste && k.Type == tea.KeyRunes && len(k.Runes) == 1 {
-			// with the box empty, the design's single keys: the answer chips, the suggestions, the tabs, help
-			asking := (m.st.Chat != nil && m.st.Chat.Ask != nil) || waitingJob(m.view) != nil
+			// with the box empty, the design's single keys: the answer chips, the suggestions, the tabs, help, and
+			// d, u and h when there is a change to see, undo or hold (else the letter is typed)
 			switch r := k.Runes[0]; {
+			case r == 'd' && len(appliedCards(m.view, m.st)) > 0:
+				m.selectJob(appliedCards(m.view, m.st)[0].ID)
+				a.Tab = 2
+				return m, tea.Batch(m.fetchDock(true), m.fetchDiff(true))
+			case (r == 'u' || r == 'h') && m.quickApply(string(r), true):
+				return m, nil
 			case m.st.Chat == nil && r >= '1' && r <= '4':
 				return m, m.appSend(Suggestions[r-'1'])
 			case asking && (r == '1' || r == '2'):
@@ -400,6 +420,9 @@ func (m *Model) appTabKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	// the code tab
+	if (key == "u" || key == "h") && !a.Selecting && m.quickApply(key, false) {
+		return m, nil
+	}
 	lo := func() int { return min(a.SelFrom, a.SelTo) }
 	hi := func() int { return max(a.SelFrom, a.SelTo) }
 	switch key {
@@ -817,4 +840,77 @@ func (m *Model) noticeNewJobs() {
 			m.st.App.NewJob = &r
 		}
 	}
+}
+
+// selectJob makes id the chosen job, as the changes tab shows it.
+func (m *Model) selectJob(id string) {
+	for i, r := range m.view.Rows("Jobs") {
+		if r.ID == id {
+			m.st.Selected["Jobs"] = i
+		}
+	}
+}
+
+// holdTarget is the work h holds from the conversation or the code tab: the newest finished helper waiting on the
+// parent's acceptance, else the newest one at work.
+func holdTarget(v *view.View) *view.Row {
+	for _, r := range v.Rows("Jobs") {
+		if r.Label == "Unverified" {
+			r := r
+			return &r
+		}
+	}
+	if jobs := activeJobs(v); len(jobs) > 0 {
+		return &jobs[0]
+	}
+	return nil
+}
+
+// quickApply is u (undo the newest applied work) and h (hold the newest unapplied work) outside the changes tab. Both
+// ask first and are confirmed with ⏎. From the reply box (lead), any other key cancels and is typed, so a message that
+// starts with u or h is not lost. It reports false when there is nothing to undo or hold.
+func (m *Model) quickApply(key string, lead bool) bool {
+	a := m.st.App
+	switch key {
+	case "u":
+		cards := appliedCards(m.view, m.st)
+		if len(cards) == 0 || m.st.Today == nil {
+			return false
+		}
+		m.askApply("applies.undo", cards[0].ID, "Undo "+clean(cards[0].Title)+"? It reverts its merge.")
+	case "h":
+		r := holdTarget(m.view)
+		if r == nil {
+			return false
+		}
+		m.pendingX, m.pendingI = "applies.hold", r.ID
+		m.st.Mode, m.st.Prompt = ModeConfirm, "Hold "+clean(r.Title)+"? "+appParent(m.st)+" will not apply it until you let it."
+	default:
+		return false
+	}
+	a.ConfirmLead = "\x00"
+	if lead {
+		a.ConfirmLead = key
+	}
+	return true
+}
+
+// leadConfirmKey answers a question quickApply asked: ⏎ yes, esc no; from the reply box any other key is typed.
+func (m *Model) leadConfirmKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
+	a := m.st.App
+	lead := a.ConfirmLead
+	a.ConfirmLead = ""
+	if k.Type == tea.KeyEnter {
+		return m.confirmKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
+	}
+	m.st.Mode, m.st.Prompt, m.pendingX, m.pendingI = ModeNormal, "", "", ""
+	if lead != "\x00" && k.Type != tea.KeyEsc {
+		m.st.Prompt = lead
+		if k.Type == tea.KeyRunes || k.Type == tea.KeySpace {
+			m.st.Prompt += string(k.Runes)
+		} else if k.Type == tea.KeyBackspace {
+			m.st.Prompt = ""
+		}
+	}
+	return m, nil
 }

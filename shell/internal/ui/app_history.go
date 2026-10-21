@@ -162,7 +162,7 @@ func historyScreen(st State, w, h int) []string {
 					title = st.bold(title)
 				}
 			}
-			left := st.faint(when) + "  " + st.dot(r.Worker) + " " + title
+			left := st.faint(when) + "  " + st.tile(r.Worker) + " " + title
 			row := left + strings.Repeat(" ", max(2, cw-2-lipgloss.Width(left)-lipgloss.Width(right))) + right
 			if i == sel {
 				row = st.bold("›") + " " + row
@@ -239,7 +239,7 @@ func shipScreen(st State, w, h int) []string {
 		for i, c := range shown {
 			mark := "  "
 			if whos[i] != "" {
-				mark = st.dot(whos[i]) + " "
+				mark = st.tile(whos[i]) + " "
 			}
 			body = append(body, mark+fit(subjects[i], col)+"   "+st.faint(c.Commit))
 		}

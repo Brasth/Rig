@@ -212,7 +212,7 @@ func settingsScreenLines(v *view.View, st State, w, h int) []string {
 func settingLine(st State, r setRow, selected bool, cw int) string {
 	label := r.Label
 	if strings.HasPrefix(r.Key, "workers.") {
-		label = st.dot(r.Label) + " " + fmt.Sprintf("%-9s", r.Label) + " " + st.faint(r.Note) // the design's "codex  chatgpt plus"
+		label = st.tile(r.Label) + " " + fmt.Sprintf("%-9s", r.Label) + " " + st.faint(r.Note) // the design's "codex  chatgpt plus"
 	}
 	mark := "  "
 	if selected {

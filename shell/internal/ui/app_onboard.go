@@ -81,9 +81,9 @@ func helpersScreen(st State, w, h int) []string {
 		if name == parent {
 			label += "  " + st.faint("second session")
 		}
-		row := "   " + st.dot(name) + "  " + label
+		row := "   " + st.tile(name) + "  " + label
 		if i == o.HelperSel {
-			row = " " + st.bold("›") + " " + st.dot(name) + "  " + st.bold(label)
+			row = " " + st.bold("›") + " " + st.tile(name) + "  " + st.bold(label)
 		}
 		target := cw - 9 // inside the box's border, or one cell further right without it, so the [x] line up
 		if i != o.HelperSel {
@@ -170,9 +170,9 @@ func noAgentsScreen(st State, w, h int) []string {
 	body := []string{"", "", st.bold("Let's get you an agent"), st.dim("no agent found on this computer · looked for claude codex opencode grok pi omp agy"), "", ""}
 	sel := clampSel(st.App.InstallSel, len(installCommands))
 	for i, c := range installCommands {
-		row := fmt.Sprintf("  %d  ", i+1) + st.dot(c.Name) + " " + c.Name + "  " + st.faint(c.Note)
+		row := fmt.Sprintf("  %d  ", i+1) + st.tile(c.Name) + " " + c.Name + "  " + st.faint(c.Note)
 		if i == sel {
-			row = st.bold(fmt.Sprintf("› %d  ", i+1)) + st.dot(c.Name) + " " + st.bold(c.Name) + "  " + st.faint(c.Note)
+			row = st.bold(fmt.Sprintf("› %d  ", i+1)) + st.tile(c.Name) + " " + st.bold(c.Name) + "  " + st.faint(c.Note)
 			if i == 0 {
 				row += "  " + st.paint(colGreen, "recommended")
 			}
@@ -203,7 +203,7 @@ func parentLostScreen(v *view.View, st State, w, h int) []string {
 	body = append(body, st.dim("1")+"  sign in to "+parent+" again  "+st.faint("opens "+parent+" here; sign in, then quit it"), "")
 	n := 2
 	for _, other := range otherParents(st) {
-		body = append(body, st.dim(fmt.Sprint(n))+"  hand over to "+st.dot(other)+" "+other+"  "+st.faint("installed"))
+		body = append(body, st.dim(fmt.Sprint(n))+"  hand over to "+st.tile(other)+" "+other+"  "+st.faint("installed"))
 		n++
 		if n > 4 {
 			break
@@ -213,7 +213,7 @@ func parentLostScreen(v *view.View, st State, w, h int) []string {
 	if jobs := activeJobs(v); len(jobs) > 0 {
 		var parts []string
 		for _, r := range jobs {
-			parts = append(parts, st.dot(r.Worker)+" "+r.Worker+" "+st.faint(strings.ToLower(r.Label)))
+			parts = append(parts, st.tile(r.Worker)+" "+r.Worker+" "+st.faint(strings.ToLower(r.Label)))
 		}
 		body = append(body, "", strings.Join(parts, "   "))
 	}

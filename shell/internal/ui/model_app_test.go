@@ -67,8 +67,8 @@ func TestTheConversationScreenAndTheReplyBox(t *testing.T) {
 	m, src := appModel(t)
 	withConversation(t, m, src)
 	out := appScreen(m)
-	for _, want := range []string{"●  Add rate limiting to POST /login", "claude · ready", "I put a sliding-window limiter",
-		"Settings loader", "claude asks, via claude", "npm i -D supertest", "[1  allow]", "2 deny", "or type", "› ▏Reply to claude"} {
+	for _, want := range []string{"[c]  Add rate limiting to POST /login", "claude · ready", "I put a sliding-window limiter",
+		"Settings loader", "claude asks, via claude", "npm i -D supertest", "[allow]", " deny ", "or type", "› ▏Reply to claude"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q:\n%s", want, out)
 		}
@@ -98,7 +98,7 @@ func TestTabOpensTheAgentsPanel(t *testing.T) {
 	withConversation(t, m, src)
 	press(m, "tab")
 	out := appScreen(m)
-	for _, want := range []string{"Done today", "Settings loader", "Agents", "started by claude", "parent · in the conversation",
+	for _, want := range []string{"Done today", "Settings loader", "Agents", "started by claude", "parent · in the conversati",
 		"codex", "Rate limit POST /login", "Queue", "claude picks next", "1  Add /logout audit", "⏎ watch thread", "⇥ close"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q:\n%s", want, out)
@@ -176,7 +176,7 @@ func TestAProjectWithNoParentIsAskedWhoToTalkTo(t *testing.T) {
 		t.Fatal("the welcome screen opens by itself")
 	}
 	out := appScreen(m)
-	for _, want := range []string{"Who do you want to talk to?", "It plans, hands work to helpers and checks it.", "› ●  claude", "codex",
+	for _, want := range []string{"Who do you want to talk to?", "It plans, hands work to helpers and checks it.", "› [c]  claude", "codex",
 		"not installed", "↑↓ choose    ⏎ continue    esc skip"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q:\n%s", want, out)
@@ -489,7 +489,7 @@ func TestNoAgentShowsHowToInstallOne(t *testing.T) {
 	run(m.fetchAppSettings(), m)
 	m.st.ChatParent = ""
 	out := appScreen(m)
-	for _, want := range []string{"Let's get you an agent", "› 1  ● claude", "npm install -g @anthropic-ai/claude-code", "2  ● codex", "r scan again"} {
+	for _, want := range []string{"Let's get you an agent", "› 1  [c] claude", "npm install -g @anthropic-ai/claude-code", "2  [c] codex", "r scan again"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q:\n%s", want, out)
 		}
@@ -515,7 +515,7 @@ func TestASignedOutParentCanBeReplaced(t *testing.T) {
 	m.openPicker()
 	m.st.Picker.Items = []PickItem{{Name: "claude", Installed: true}, {Name: "codex", Installed: true}}
 	out := appScreen(m)
-	for _, want := range []string{"claude is signed out", "Nothing gets checked or applied until a parent is back", "1  sign in to claude again", "2  hand over to ● codex"} {
+	for _, want := range []string{"claude is signed out", "Nothing gets checked or applied until a parent is back", "1  sign in to claude again", "2  hand over to [c] codex"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q:\n%s", want, out)
 		}
@@ -669,5 +669,63 @@ func TestShipPushesOrOpensAPullRequestAfterAQuestion(t *testing.T) {
 	run(press(m, "y"), m)
 	if last := src.calls[len(src.calls)-1]; last.params["mode"] != "push" {
 		t.Fatalf("push: %v", src.calls)
+	}
+}
+
+func TestTheConversationFooterAndAnswerChipsAreTheDesigns(t *testing.T) {
+	m, src := appModel(t)
+	withConversation(t, m, src)
+	lines := strings.Split(appScreen(m), "\n")
+	foot := lines[len(lines)-1]
+	for _, want := range []string{"d see changes", "← → pick answer", "⏎ send", "u undo   h hold   ⌃p files   ? help"} {
+		if !strings.Contains(foot, want) {
+			t.Errorf("footer missing %q: %q", want, foot)
+		}
+	}
+	if !strings.HasPrefix(lines[len(lines)-2], "────") {
+		t.Errorf("a rule above the footer: %q", lines[len(lines)-2])
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyRight})
+	if !strings.Contains(appScreen(m), " allow    [deny]") {
+		t.Fatalf("→ picks deny:\n%s", appScreen(m))
+	}
+	run(press(m, "enter"), m)
+	if last := src.calls[len(src.calls)-1]; last.method != "job.deny" || last.params["id"] != "job-7f2" {
+		t.Fatalf("⏎ sends the picked answer: %v", src.calls)
+	}
+}
+
+func TestHoldAndUndoFromTheReplyBoxAskFirstAndNeverEatTyping(t *testing.T) {
+	m, src := appModel(t)
+	withConversation(t, m, src)
+	for i := range m.view.Jobs {
+		m.view.Jobs[i].Ask = false
+	}
+	src.today = sampleToday()
+	run(m.fetchToday(), m)
+	press(m, "h")
+	if m.st.Mode != ModeConfirm || !strings.Contains(m.st.Prompt, "Hold ") || !strings.Contains(appScreen(m), "⏎ yes    esc no") {
+		t.Fatalf("h asks first: %q", m.st.Prompt)
+	}
+	press(m, "o")
+	if m.st.Mode == ModeConfirm || m.st.Prompt != "ho" {
+		t.Fatalf("typing on cancels and keeps the letters: %q", m.st.Prompt)
+	}
+	calls := len(src.calls)
+	m.st.Prompt = ""
+	press(m, "h")
+	run(press(m, "enter"), m)
+	if len(src.calls) != calls+1 || src.calls[calls].method != "applies.hold" || src.calls[calls].params["on"] != true {
+		t.Fatalf("⏎ holds: %v", src.calls[calls:])
+	}
+	press(m, "d")
+	if m.st.App.Tab != 2 {
+		t.Fatalf("d sees the changes: tab %d", m.st.App.Tab)
+	}
+}
+
+func TestTheParentsMarkdownMarkersAreNotShownRaw(t *testing.T) {
+	if got := plainMarkdown("on `feature/x` with **care**"); got != "on feature/x with care" {
+		t.Fatalf("%q", got)
 	}
 }

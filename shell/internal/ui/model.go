@@ -1554,6 +1554,8 @@ func (m *Model) confirmKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m, m.applyThenTell(method, map[string]any{"id": id}, "undone "+id, m.undoNote(id))
 			}
 			return m, m.applyAct(method, map[string]any{"id": id}, "applied again "+id)
+		case "applies.hold":
+			return m, m.applyAct("applies.hold", map[string]any{"id": id, "on": true}, "holding "+id)
 		case "ship.push":
 			return m, m.applyAct("ship.run", map[string]any{"mode": "push"}, "pushed")
 		case "ship.pr":

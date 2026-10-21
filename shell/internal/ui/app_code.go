@@ -103,7 +103,7 @@ func changesScreen(v *view.View, st State, w, h int) ([]string, string) {
 	a := st.App
 	rows := v.Rows("Jobs")
 	foot := splitHints(st, [][2]string{{"[ ]", "file"}, {"←→", "job"}, {"c", "comment"}, {"esc", "back"}},
-		[][2]string{{"u", "undo"}, {"h", "hold"}, {"⌃k", "files"}, {"?", "help"}}, w)
+		AppRightKeys, w)
 	if len(rows) == 0 {
 		lines := []string{"", center(st.dim("No changes yet. When a helper finishes, what it changed shows here."), w)}
 		for len(lines) < h {
@@ -136,7 +136,7 @@ func changesScreen(v *view.View, st State, w, h int) ([]string, string) {
 		}
 		names = append(names, name)
 	}
-	left := "   " + st.dot(worker) + "  " + st.bold(clean(r.Title)) + "  " + st.faint(fmt.Sprintf("%s · %d files", worker, len(files)))
+	left := "   " + st.tile(worker) + "  " + st.bold(clean(r.Title)) + "  " + st.faint(fmt.Sprintf("%s · %d files", worker, len(files)))
 	lines := []string{spread(left, "", strings.Join(names, "   ")+"   ", w), fit("", w)}
 	cw := min(100, w-8)
 	x := (w - cw) / 2
@@ -325,7 +325,7 @@ func highlight(st State, line string) string {
 func codeScreen(st State, w, h int) ([]string, string) {
 	a := st.App
 	foot := splitHints(st, [][2]string{{"/", "find"}, {"v", "select"}, {"e", "open in $EDITOR"}, {"esc", "back"}},
-		[][2]string{{"↑↓", "scroll"}, {"⌃k", "files"}, {"?", "help"}}, w)
+		AppRightKeys, w)
 	if a.File == "" {
 		lines := []string{"", center(st.dim("Open a file with ⌃k: type part of its name."), w)}
 		for len(lines) < h {
