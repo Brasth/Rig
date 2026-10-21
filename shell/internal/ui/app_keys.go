@@ -32,8 +32,37 @@ type fileMsg struct {
 }
 
 // SetApp opens the board as the app (the design's ADE screens) for the repository at repo.
+// splashTickMsg moves the splash's pulse on.
+type splashTickMsg struct{}
+
+// SetSplash shows the design's rig mark while rig shell opens (main turns it on; tests leave it off).
+func (m *Model) SetSplash(on bool) {
+	if m.st.App == nil {
+		return
+	}
+	m.st.App.Splash = 0
+	if on {
+		m.st.App.Splash = 1
+		m.splashFrom = m.now()
+	}
+}
+
+func splashTick() tea.Cmd {
+	return tea.Tick(120*time.Millisecond, func(time.Time) tea.Msg { return splashTickMsg{} })
+}
+
+// splashDone is when the splash gives way: once the server answered and it has shown for a moment, or after a few
+// seconds whatever happens, so a slow start shows the screen with its own "starting" state.
+func (m *Model) splashDone() bool {
+	shown := m.now().Sub(m.splashFrom)
+	return (shown > 1200*time.Millisecond && !m.lastOK.IsZero()) || shown > 6*time.Second
+}
+
 // SetLogos draws agents as their logo tiles; main turns it on where the terminal shows images.
 func (m *Model) SetLogos(on bool) { m.st.Logos = on }
+
+// SetMouse marks what can be clicked, for a program that reports the mouse.
+func (m *Model) SetMouse(on bool) { m.st.Mouse = on }
 
 func (m *Model) SetApp(repo string) {
 	m.st.App = &AppState{Repo: repo, Branch: gitBranch(repo), Tab: 1, Facts: repoFacts(repo)}
@@ -166,6 +195,13 @@ func (m *Model) askStopJob(r view.Row) {
 func (m *Model) appKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	a := m.st.App
 	key := k.String()
+	if a.Splash > 0 {
+		a.Splash = 0 // a key goes straight to the screen
+		if k.Type == tea.KeyCtrlC {
+			return m, tea.Quit
+		}
+		return m, nil
+	}
 	if m.st.Mode == ModeConfirm && a.ConfirmLead != "" {
 		return m.leadConfirmKey(k)
 	}
@@ -245,6 +281,14 @@ func (m *Model) appKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	}
+	if k.Type == tea.KeyRunes && (k.Paste || len(k.Runes) > 1) {
+		// files dropped on the window arrive as a paste of their paths: they go in the box as @ references
+		if files := droppedFiles(string(k.Runes)); files != nil {
+			a.Tab, a.Thread, a.Selecting = 1, "", false
+			m.dropFiles(files)
+			return m, nil
+		}
+	}
 	switch key {
 	case "ctrl+k", "ctrl+p":
 		a.Palette = &Palette{}
@@ -259,7 +303,7 @@ func (m *Model) appKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			return m, m.loadFiles()
 		}
-		if matches := slashMatches(m.st.Prompt); len(matches) > 0 {
+		if matches := m.st.slashes(); len(matches) > 0 {
 			sel := clampSel(m.st.SlashSel, len(matches))
 			m.st.Prompt, m.st.SlashSel = matches[sel].Name, 0
 			if matches[sel].Args != "" {
@@ -300,7 +344,7 @@ func (m *Model) appKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if a.Tab != 1 {
 		return m.appTabKey(k)
 	}
-	matches := slashMatches(m.st.Prompt)
+	matches := m.st.slashes()
 	asking := (m.st.Chat != nil && m.st.Chat.Ask != nil) || waitingJob(m.view) != nil
 	switch k.Type {
 	case tea.KeyLeft, tea.KeyRight:
@@ -928,6 +972,9 @@ func (m *Model) runPalette(it paletteItem, query string) tea.Cmd {
 			m.st.Prompt += " "
 		}
 		m.st.Prompt += "@" + strings.TrimPrefix(it.Action, "attach:") + " "
+		return nil
+	case strings.HasPrefix(it.Action, "slash:"):
+		m.st.Prompt, m.st.SlashSel, a.Tab, a.Thread = strings.TrimPrefix(it.Action, "slash:")+" ", 0, 1, ""
 		return nil
 	case strings.HasPrefix(it.Action, "file:"):
 		rel := strings.TrimPrefix(it.Action, "file:")

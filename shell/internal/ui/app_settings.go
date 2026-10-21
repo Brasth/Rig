@@ -20,6 +20,8 @@ var SettingsSections = []string{"general", "agents", "routing", "approvals", "sa
 type SettingsScreen struct {
 	Section int
 	Row     int
+	// Pick is the value ←→ has moved to on the chosen row: shown, but nothing changes until ⏎ applies it
+	Pick string
 }
 
 // setRow is one row of the design's Settings: a bold label on the left and its value on the right, a note under it.
@@ -37,6 +39,8 @@ type setRow struct {
 	Agent   string // an agent's row: its tile and name on the left
 	Install string // the command that installs a missing agent (i)
 	Stacked bool   // the label on its own line and the choices under it, as the design draws the theme
+	Pick    string // the value ←→ has picked and ⏎ would apply
+	At      int    // its place in the section, for the mouse
 }
 
 func settingRows(st State, section string) []setRow {
@@ -106,7 +110,7 @@ func settingRows(st State, section string) []setRow {
 					}
 				}
 				if r.Install != "" {
-					r.Right = st.dim("i") + " " + st.faint("install")
+					r.Right = st.zone(fmt.Sprintf("row:install:%d", len(rows)), st.dim("i")+" "+st.faint("install"))
 				}
 			}
 			rows = append(rows, r)
@@ -256,7 +260,7 @@ func settingsScreenLines(v *view.View, st State, w, h int) []string {
 	if scope == "all repos" {
 		other = repo
 	}
-	head := "   " + st.faint("←") + "  " + st.bold("Settings") + "   " + chipOn(st, scope) + "  " + st.faint(other) + "  " + st.faint(file)
+	head := "   " + st.zone("key:esc", st.faint("←")+"  "+st.bold("Settings")) + "   " + chipOn(st, scope) + "  " + st.faint(other) + "  " + st.faint(file)
 	var tabs []string
 	for i, name := range SettingsSections {
 		if i == sc.Section {
@@ -268,6 +272,7 @@ func settingsScreenLines(v *view.View, st State, w, h int) []string {
 		} else {
 			tabs = append(tabs, st.faint(name))
 		}
+		tabs[len(tabs)-1] = st.zone(fmt.Sprintf("row:section:%d", i), tabs[len(tabs)-1])
 	}
 	lines := []string{spread(head, "", "", w), center(strings.Join(tabs, "   "), w)}
 	cw := min(76, w-8)
@@ -294,7 +299,16 @@ func settingsScreenLines(v *view.View, st State, w, h int) []string {
 			if r.Group && i > 0 {
 				rowsOut = append(rowsOut, "")
 			}
-			rowsOut = append(rowsOut, settingLines(st, r, i == sel, cw, scopeName(st, r))...)
+			if i == sel && sc.Pick != "" {
+				r.Pick = sc.Pick
+			}
+			r.At = i
+			for _, l := range settingLines(st, r, i == sel, cw, scopeName(st, r)) {
+				if strings.HasPrefix(l, "\x00") {
+					l = "\x00" + st.zone(fmt.Sprintf("row:setting:%d", i), l[1:])
+				}
+				rowsOut = append(rowsOut, l)
+			}
 			if r.Note != "" && r.Agent == "" {
 				rowsOut = append(rowsOut, "    "+st.dim(fit(r.Note, cw-4)))
 			}
@@ -411,11 +425,7 @@ func settingLines(st State, r setRow, selected bool, cw int, scope string) []str
 	}
 	var parts []string
 	for _, o := range r.Options {
-		if o == r.Value {
-			parts = append(parts, chipOn(st, o))
-		} else {
-			parts = append(parts, st.faint(" "+o+" "))
-		}
+		parts = append(parts, choiceZone(st, r, o, choice(st, r, o, o)))
 	}
 	if scope != "" {
 		parts = append(parts, st.faint(" "+scope))
@@ -439,9 +449,14 @@ func settingLine(st State, r setRow, selected bool, cw int) string {
 	right := r.Right
 	switch {
 	case len(r.Options) > 0 && r.Toggle:
-		if r.Value == r.Options[0] {
+		switch {
+		case r.Pick != "" && r.Pick == r.Options[0]:
+			right += picked(st, "on") + st.faint(" ⏎")
+		case r.Pick != "":
+			right += picked(st, "off") + st.faint(" ⏎")
+		case r.Value == r.Options[0]:
 			right += st.paint(colGreen, "on")
-		} else {
+		default:
 			right += st.faint("off")
 		}
 	case len(r.Options) > 0:
@@ -451,15 +466,14 @@ func settingLine(st State, r setRow, selected bool, cw int) string {
 			if i < len(r.Names) {
 				name = r.Names[i]
 			}
-			if o == r.Value {
-				parts = append(parts, chipOn(st, name))
-			} else {
-				parts = append(parts, st.faint(" "+name+" "))
-			}
+			parts = append(parts, choiceZone(st, r, o, choice(st, r, o, name)))
 		}
 		if r.Right == "" {
 			right = strings.Join(parts, "  ")
 		}
+	}
+	if len(r.Options) > 0 && r.Toggle {
+		right = choiceZone(st, r, "", right)
 	}
 	left := mark + label
 	return left + strings.Repeat(" ", max(2, cw-lipgloss.Width(left)-lipgloss.Width(right))) + right
@@ -525,6 +539,14 @@ func (m *Model) settingsKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	a := m.st.App
 	sc := a.Settings
 	rows := settingRows(m.st, SettingsSections[sc.Section])
+	if sc.Pick != "" && (k.String() == "esc" || k.String() == "q") {
+		sc.Pick = "" // esc drops the pick first; a second esc leaves
+		return m, nil
+	}
+	switch k.String() {
+	case "up", "down", "k", "j", "tab", "shift+tab":
+		sc.Pick = ""
+	}
 	switch k.String() {
 	case "esc", "q":
 		a.Settings = nil
@@ -536,7 +558,8 @@ func (m *Model) settingsKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		sc.Row = clampSel(sc.Row-1, len(rows))
 	case "down", "j":
 		sc.Row = clampSel(sc.Row+1, len(rows))
-	case "left", "right", "h", "l", " ", "enter":
+	case "left", "right", "h", "l":
+		// ←→ only picks: the theme and every other choice change when ⏎ applies them
 		if len(rows) == 0 {
 			return m, nil
 		}
@@ -544,9 +567,13 @@ func (m *Model) settingsKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if r.Key == "" || r.Key == "approvals" || len(r.Options) < 2 {
 			return m, nil
 		}
+		from := r.Value
+		if sc.Pick != "" {
+			from = sc.Pick
+		}
 		at := 0
 		for i, o := range r.Options {
-			if o == r.Value {
+			if o == from {
 				at = i
 			}
 		}
@@ -554,7 +581,31 @@ func (m *Model) settingsKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if k.String() == "left" || k.String() == "h" {
 			step = -1
 		}
-		return m, m.changeSetting(r, r.Options[(at+step+len(r.Options))%len(r.Options)], "")
+		sc.Pick = r.Options[(at+step+len(r.Options))%len(r.Options)]
+		if sc.Pick == r.Value {
+			sc.Pick = ""
+		}
+	case " ", "enter":
+		if len(rows) == 0 {
+			return m, nil
+		}
+		r := rows[clampSel(sc.Row, len(rows))]
+		if r.Key == "" || r.Key == "approvals" || len(r.Options) < 2 {
+			return m, nil
+		}
+		pick := sc.Pick
+		sc.Pick = ""
+		switch {
+		case pick != "" && pick != r.Value:
+			return m, m.changeSetting(r, pick, "")
+		case pick == "" && r.Toggle:
+			// an on/off row: ⏎ or space turns it over
+			other := r.Options[0]
+			if r.Value == other {
+				other = r.Options[1]
+			}
+			return m, m.changeSetting(r, other, "")
+		}
 	case "g":
 		if len(rows) > 0 {
 			r := rows[clampSel(sc.Row, len(rows))]
@@ -713,17 +764,41 @@ func settingsKeys(section string) [][2]string {
 	case "agents":
 		return [][2]string{{"↑↓", "agent"}, {"space", "on/off"}, {"i", "install"}, {"⇥", "section"}, {"esc", "back"}}
 	case "routing":
-		return [][2]string{{"↑↓", "row"}, {"←→", "change"}, {"⇥", "section"}, {"esc", "back"}}
+		return [][2]string{{"↑↓", "row"}, {"←→", "choose"}, {"⏎", "apply"}, {"⇥", "section"}, {"esc", "back"}}
 	case "approvals":
 		return [][2]string{{"⇥", "section"}, {"E", "edit toml"}, {"esc", "back"}}
 	case "sandbox":
-		return [][2]string{{"←→", "change"}, {"s", "stop"}, {"d", "doctor"}, {"⇥", "section"}, {"esc", "back"}}
+		return [][2]string{{"←→", "choose"}, {"⏎", "apply"}, {"s", "stop"}, {"d", "doctor"}, {"⇥", "section"}, {"esc", "back"}}
 	case "editor", "git":
-		return [][2]string{{"←→", "change"}, {"⇥", "section"}, {"esc", "back"}}
+		return [][2]string{{"←→", "choose"}, {"⏎", "apply"}, {"⇥", "section"}, {"esc", "back"}}
 	case "notify":
 		return [][2]string{{"space", "on/off"}, {"g", "all repos / this repo"}, {"⇥", "section"}, {"esc", "back"}}
 	case "toml":
 		return [][2]string{{"E", "edit in $EDITOR"}, {"⇥", "section"}, {"esc", "back"}}
 	}
-	return [][2]string{{"←→", "change"}, {"⇥", "section"}, {"g", "all repos / this repo"}, {"esc", "back"}}
+	return [][2]string{{"←→", "choose"}, {"⏎", "apply"}, {"⇥", "section"}, {"g", "all repos / this repo"}, {"esc", "back"}}
+}
+
+// choice is one value of a row: the current one on the black chip, the one ←→ has picked outlined until ⏎ applies it.
+func choice(st State, r setRow, value, name string) string {
+	switch {
+	case value == r.Pick:
+		return picked(st, name)
+	case value == r.Value:
+		return chipOn(st, name)
+	}
+	return st.faint(" " + name + " ")
+}
+
+// choiceZone makes a row's value clickable: a click picks it and applies it.
+func choiceZone(st State, r setRow, value, s string) string {
+	return st.zone(fmt.Sprintf("row:choice:%d=%s", r.At, value), s)
+}
+
+// picked is a value ←→ has moved to: bold and underlined, not yet applied.
+func picked(st State, name string) string {
+	if st.Styled {
+		return " " + lipgloss.NewStyle().Foreground(lipgloss.Color(colText)).Bold(true).Underline(true).Render(name) + " "
+	}
+	return "<" + name + ">"
 }

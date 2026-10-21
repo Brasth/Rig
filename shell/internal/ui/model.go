@@ -29,6 +29,7 @@ type Source interface {
 	Shell(id string, timeout time.Duration) (*view.ShellPlan, error)
 	Parent(name string, timeout time.Duration) (*view.ShellPlan, error)
 	ChatStatus(timeout time.Duration) (*view.ChatStatus, error)
+	ChatCommands(parent string, timeout time.Duration) (*view.ParentCommands, error)
 	ChatTranscript(session string, tail int, timeout time.Duration) (*view.ChatTranscript, error)
 	ChatSend(message, session, parent string, timeout time.Duration) (*view.ChatStarted, error)
 	ChatCancel(session string, timeout time.Duration) error
@@ -218,12 +219,17 @@ type Model struct {
 	tdLast      time.Time
 	ringer      func()                   // rings the terminal bell; tests replace it
 	notifier    func(title, text string) // a desktop notice through the terminal (OSC 9 and 777); tests replace it
+	splashFrom  time.Time                // when the splash began
 	seenApplied map[string]bool          // the applied work done today already known, so only new applies notify
 	seenJobs    map[string]bool
 	themeFixed  bool // rig shell --theme chose the theme for this board; the saved one is not loaded
 	messaging   bool // m was pressed under a request: a and d type again until the message is sent
 	spinning    bool // the spinner's tick is scheduled
 	chatStat    *view.ChatStatus
+	cmdsFor     string    // the parent whose skills and commands the / menu has
+	zones       []hitZone // where the last frame's clickable places are (mouse.go)
+	hoverX      int       // the pointer, for the zone drawn underlined
+	hoverY      int
 }
 
 // NewModel returns a model that polls src.
@@ -231,7 +237,8 @@ func NewModel(src Source, ascii bool) *Model {
 	st := NewState()
 	st.Loading, st.ASCII, st.Styled = true, ascii, true
 	st.WideSession = sessionGeometry(120, 36).ok
-	return &Model{src: src, st: st, w: 120, h: 36, now: time.Now, newKey: randomKey, selID: map[string]string{}, exec: execProcess, spawn: spawnPane}
+	return &Model{src: src, st: st, w: 120, h: 36, now: time.Now, newKey: randomKey, selID: map[string]string{}, exec: execProcess, spawn: spawnPane,
+		hoverX: -1, hoverY: -1}
 }
 
 func execProcess(argv []string, done func(error) tea.Msg) tea.Cmd {
@@ -247,7 +254,11 @@ func randomKey() string {
 
 func (m *Model) Init() tea.Cmd {
 	if m.appOn() {
-		return tea.Batch(m.fetch(), tick(), m.fetchTheme(), m.fetchAppSettings())
+		cmds := []tea.Cmd{m.fetch(), tick(), m.fetchTheme(), m.fetchAppSettings()}
+		if m.st.App.Splash > 0 {
+			cmds = append(cmds, splashTick())
+		}
+		return tea.Batch(cmds...)
 	}
 	return tea.Batch(m.fetch(), tick(), m.fetchTheme())
 }
@@ -641,6 +652,36 @@ func (m *Model) fetchLog(force bool) tea.Cmd {
 	}
 }
 
+type parentCmdsMsg struct {
+	parent string
+	list   []SlashCommand
+	err    error
+}
+
+// fetchParentCommands asks for the parent's own skills and commands, once for each parent.
+func (m *Model) fetchParentCommands(parent string) tea.Cmd {
+	m.cmdsFor = parent
+	src := m.src
+	return func() tea.Msg {
+		got, err := src.ChatCommands(parent, callTimeout)
+		if err != nil || got == nil {
+			return parentCmdsMsg{parent: parent, err: err} // an older server has no chat.commands: Rig's own only
+		}
+		taken := map[string]bool{}
+		for _, c := range SlashCommands {
+			taken[c.Name] = true
+		}
+		var list []SlashCommand
+		for _, c := range got.Commands {
+			if name := "/" + c.Name; !taken[name] {
+				taken[name] = true
+				list = append(list, SlashCommand{Name: name, Args: " …", Help: c.Kind + " · " + c.Help, Parent: true})
+			}
+		}
+		return parentCmdsMsg{parent: parent, list: list}
+	}
+}
+
 // fetchChatStatus learns whether the experiment is on (and which session is newest). Cheap, and the only call a
 // board makes for the experiment while its tab is not showing.
 func (m *Model) fetchChatStatus() tea.Cmd {
@@ -907,6 +948,13 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 		}
+		if m.appOn() && m.st.ChatParent != "" && m.st.ChatParent != m.cmdsFor {
+			return m, m.fetchParentCommands(m.st.ChatParent) // the / menu offers this parent's skills and commands
+		}
+	case parentCmdsMsg:
+		if msg.err == nil && msg.parent == m.st.ChatParent {
+			m.st.ParentCommands = msg.list
+		}
 	case chatMsg:
 		m.chBusy, m.chLast = false, m.now()
 		if msg.err != nil {
@@ -921,6 +969,15 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Batch(m.spin(), m.bell())
 		}
 		return m, m.spin()
+	case splashTickMsg:
+		if a := m.st.App; a != nil && a.Splash > 0 {
+			if m.splashDone() {
+				a.Splash = 0
+				return m, nil
+			}
+			a.Splash++
+			return m, splashTick()
+		}
 	case todayMsg:
 		m.tdLast = m.now()
 		if msg.err == nil {
@@ -955,8 +1012,16 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.st.Message = "undone; " + appParent(m.st) + " is handling anything built on it"
 		return m, tea.Batch(m.fetchChat(true), m.spin())
 	case appSettingsMsg:
+		if msg.err != nil && m.st.AppSettings == nil && IsNotRunning(msg.err) {
+			// the first load, while rig shell is still starting the API server: ask again shortly, quietly
+			fetch := m.fetchAppSettings()
+			return m, tea.Tick(time.Second, func(time.Time) tea.Msg { return fetch() })
+		}
 		if msg.err != nil {
 			m.st.Message = "Could not save the setting: " + msg.err.Error()
+			if m.st.AppSettings == nil {
+				m.st.Message = "Could not load the settings: " + msg.err.Error()
+			}
 			return m, nil
 		}
 		m.st.AppSettings = msg.s
@@ -1184,6 +1249,8 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.fetch()
 	case tea.KeyMsg:
 		return m.key(msg)
+	case tea.MouseMsg:
+		return m.mouse(msg)
 	}
 	return m, nil
 }
@@ -1648,7 +1715,7 @@ func (m *Model) inputKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 // board while it has the keyboard (↑↓ the jobs, PgUp/PgDn the conversation, Tab the tabs, a/d the parent's request).
 func (m *Model) chatKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	inSession := m.chatInSession()
-	matches := slashMatches(m.st.Prompt)
+	matches := m.st.slashes()
 	if len(matches) > 0 {
 		sel := clampSel(m.st.SlashSel, len(matches))
 		switch k.Type {
@@ -1784,7 +1851,9 @@ func (m *Model) View() string {
 		if w == 0 {
 			w, h = m.w, m.h
 		}
-		return strings.Join(Paint(AppFrame(m.view, m.st, w, h)), "\n")
+		frame, zones := zonesOf(AppFrame(m.view, m.st, w, h), m.hoverX, m.hoverY)
+		m.zones = zones
+		return strings.Join(Paint(frame), "\n")
 	}
 	lines := Decorate(RenderLines(m.view, m.st, m.w, m.h))
 	if m.framed {

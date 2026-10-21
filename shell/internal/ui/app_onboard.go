@@ -90,10 +90,12 @@ func helpersScreen(st State, w, h int) []string {
 			target = cw - 8
 		}
 		row += strings.Repeat(" ", max(2, target-lipgloss.Width(row))) + box
+		rows := []string{row}
 		if i == o.HelperSel {
-			body = append(body, roundBox(st, []string{row}, cw, true)...)
-		} else {
-			body = append(body, row)
+			rows = roundBox(st, rows, cw, true)
+		}
+		for _, l := range rows {
+			body = append(body, st.zone(fmt.Sprintf("row:helper:%d", i), l))
 		}
 		body = append(body, "")
 	}
@@ -148,9 +150,10 @@ func sandboxScreen(st State, w, h int) []string {
 			rows = append(rows, "   "+n)
 		}
 		if i == o.SandboxSel {
-			body = append(body, roundBox(st, rows, cw, true)...)
-		} else {
-			body = append(body, rows...)
+			rows = roundBox(st, rows, cw, true)
+		}
+		for _, l := range rows {
+			body = append(body, st.zone(fmt.Sprintf("row:sandbox:%d", i), l))
 		}
 		body = append(body, "")
 	}
@@ -180,9 +183,9 @@ func noAgentsScreen(st State, w, h int) []string {
 		if i == sel {
 			name = st.bold(name)
 		}
-		agents = append(agents, st.tile(c.Name)+" "+name+"  "+st.faint(c.Note))
+		agents = append(agents, st.zone(fmt.Sprintf("row:installagent:%d", i), st.tile(c.Name)+" "+name+"  "+st.faint(c.Note)))
 	}
-	body = append(body, head, "     "+strings.Join(agents, "   "), "     "+st.faint("on this computer · $ "+installCommands[sel].Command),
+	body = append(body, st.zone("key:⏎", head), "     "+strings.Join(agents, "   "), "     "+st.faint("on this computer · $ "+installCommands[sel].Command),
 		"", "", st.faint("one agent is enough: it talks to you and hands work to helpers"))
 	return centered(st, rigBar(st, w, 0), body, cw, w, h, [][2]string{{"←→", "agent"}, {"⏎", "install " + installCommands[sel].Name}, {"r", "scan again"}})
 }
@@ -204,10 +207,11 @@ func parentLostScreen(v *view.View, st State, w, h int) []string {
 	cw := min(70, w-8)
 	body := []string{"", "", st.paint(colRed, "● "+parent+" is signed out"),
 		st.bold("Nothing gets checked or applied until a parent is back"), st.dim("helpers keep working in their copies"), "", ""}
-	body = append(body, st.dim("1")+"  "+st.bold("sign in to "+parent+" again"))
+	body = append(body, st.zone("key:1", st.dim("1")+"  "+st.bold("sign in to "+parent+" again")))
 	n := 2
 	for _, other := range otherParents(st) {
-		body = append(body, st.dim(fmt.Sprint(n))+"  hand over to "+st.tile(other)+" "+other+"  "+st.faint("installed · starts a new conversation"))
+		body = append(body, st.zone(fmt.Sprintf("key:%d", n), st.dim(fmt.Sprint(n))+"  hand over to "+st.tile(other)+" "+other+"  "+
+			st.faint("installed · starts a new conversation")))
 		n++
 		if n > 4 {
 			break

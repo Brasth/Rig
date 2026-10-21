@@ -180,7 +180,7 @@ class Manifest:
 def install_paths(root, source, repo=None):
     """Enumerate destinations before the legacy installer can create them."""
     h = Path.home()
-    paths = {h / '.local/bin/rig'}
+    paths = {h / '.local/bin/rig', h / '.local/bin/rig-agent', h / '.local/bin/agent-rig'}
     for folder in ('bin', 'scripts', 'skills', 'adapters', 'templates'):
         for item in (source / folder).rglob('*'):
             if item.is_file():

@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -43,6 +44,39 @@ type Launcher struct {
 	Open string
 	now  func() time.Time
 	run  func(name string, args ...string) ([]byte, error)
+	// the mouse: where the last frame's clickable places are, and the pointer
+	zones          []hitZone
+	hoverX, hoverY int
+}
+
+// SetMouse marks the launcher's rows and keys as clickable, for a program that reports the mouse.
+func (l *Launcher) SetMouse(on bool) { l.st.Mouse, l.hoverX, l.hoverY = on, -1, -1 }
+
+// mouse is the launcher's clicks, wheel and hover: a click on a project opens it, on a key presses it.
+func (l *Launcher) mouse(e tea.MouseMsg) (tea.Model, tea.Cmd) {
+	switch {
+	case e.Button == tea.MouseButtonWheelUp:
+		return l.key(tea.KeyMsg{Type: tea.KeyUp})
+	case e.Button == tea.MouseButtonWheelDown:
+		return l.key(tea.KeyMsg{Type: tea.KeyDown})
+	case e.Action == tea.MouseActionMotion && e.Button == tea.MouseButtonNone:
+		l.hoverX, l.hoverY = e.X, e.Y
+	case e.Action == tea.MouseActionPress && e.Button == tea.MouseButtonLeft:
+		id, _ := hitAt(l.zones, e.X, e.Y)
+		kind, arg, _ := strings.Cut(id, ":")
+		switch kind {
+		case "key":
+			if k, ok := keyFor(arg); ok {
+				return l.key(k)
+			}
+		case "row":
+			if at, ok := strings.CutPrefix(arg, "recent:"); ok {
+				l.sel, _ = strconv.Atoi(at)
+				return l.key(tea.KeyMsg{Type: tea.KeyEnter})
+			}
+		}
+	}
+	return l, nil
 }
 
 type openStep struct {
@@ -108,6 +142,8 @@ func (l *Launcher) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		l.cloning = msg.path
 	case tea.KeyMsg:
 		return l.key(msg)
+	case tea.MouseMsg:
+		return l.mouse(msg)
 	}
 	return l, nil
 }
@@ -367,7 +403,7 @@ func (l *Launcher) View() string {
 			if i == clampSel(l.sel, len(list)) && st.Styled {
 				row = tint(fit(row, cw), colSelBg)
 			}
-			body = append(body, row)
+			body = append(body, st.zone(fmt.Sprintf("row:recent:%d", i), fit(row, cw)))
 		}
 		body = append(body, "", "", st.faint("Paste a URL to clone, e.g. github.com/brasth/api-gateway"), st.faint("It goes into "+tildePath(l.code)+"/<name> and opens with Rig."))
 		keys = [][2]string{{"↑↓", "choose"}, {"⏎", "open"}, {"⌃g", "my GitHub repos"}, {"⌃n", "new project"}, {"esc", "quit"}}
@@ -379,11 +415,12 @@ func (l *Launcher) View() string {
 	foot := keyHints(st, keys, w)
 	switch {
 	case l.confirm != "":
-		foot = center(st.paint(colAmber, l.confirm)+"   "+st.dim("y")+" "+st.faint("yes")+"    "+st.dim("n")+" "+st.faint("no"), w)
+		foot = center(st.paint(colAmber, l.confirm)+"   "+st.hint([2]string{"y", "yes"})+"    "+st.hint([2]string{"n", "no"}), w)
 	case l.message != "":
 		foot = center(st.paint(colAmber, l.message), w)
 	}
 	lines = append(lines[:h-1], foot)
+	lines, l.zones = zonesOf(lines, l.hoverX, l.hoverY)
 	return strings.Join(Paint(lines), "\n")
 }
 

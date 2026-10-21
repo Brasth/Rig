@@ -121,6 +121,10 @@ func (e *ensuringSource) ChatStatus(timeout time.Duration) (*view.ChatStatus, er
 	return e.client.ChatStatus(timeout)
 }
 
+func (e *ensuringSource) ChatCommands(parent string, timeout time.Duration) (*view.ParentCommands, error) {
+	return e.client.ChatCommands(parent, timeout)
+}
+
 func (e *ensuringSource) ChatTranscript(session string, tail int, timeout time.Duration) (*view.ChatTranscript, error) {
 	return e.client.ChatTranscript(session, tail, timeout)
 }
@@ -243,6 +247,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	switch *layout {
 	case "app":
 		model.SetApp(*repo)
+		model.SetSplash(os.Getenv("RIG_SPLASH") != "0") // the design's rig mark while the shell opens
 	case "", "board":
 	default:
 		fmt.Fprintln(stderr, "rig-shell: --layout must be app or board")
@@ -256,6 +261,11 @@ func run(args []string, stdout, stderr io.Writer) int {
 		// the design's agent logos, drawn by a terminal with kitty's image placeholders (Ghostty, kitty)
 		model.SetLogos(true)
 		opts = append(opts, tea.WithOutput(ui.NewLogoWriter(os.Stdout, os.Getenv("TMUX") != "")))
+	}
+	if *layout == "app" && os.Getenv("RIG_MOUSE") != "0" {
+		// clicks, the wheel and hover, as in codex and grok; Shift-drag still selects text in most terminals
+		model.SetMouse(true)
+		opts = append(opts, tea.WithMouseAllMotion())
 	}
 	_, err = tea.NewProgram(model, opts...).Run()
 	model.Close() // a program running in the Term pane ends with the board
@@ -406,7 +416,12 @@ func runLauncher(input, rigBin string, stderr io.Writer) int {
 		input = "" // rig shell passes the folder it ran in; the launcher starts with an empty box then
 	}
 	l := ui.NewLauncher(home, code, input)
-	if _, err := tea.NewProgram(l, tea.WithAltScreen()).Run(); err != nil {
+	opts := []tea.ProgramOption{tea.WithAltScreen()}
+	if os.Getenv("RIG_MOUSE") != "0" {
+		l.SetMouse(true)
+		opts = append(opts, tea.WithMouseAllMotion())
+	}
+	if _, err := tea.NewProgram(l, opts...).Run(); err != nil {
 		fmt.Fprintln(stderr, "rig-shell:", err)
 		return 1
 	}

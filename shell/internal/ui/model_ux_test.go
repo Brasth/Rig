@@ -108,7 +108,7 @@ func TestSlashListsTheCommandsAndRunsTheChosenOne(t *testing.T) {
 		}
 	}
 	typeText(m, "n")
-	if got := slashMatches(m.st.Prompt); len(got) != 1 || got[0].Name != "/new" {
+	if got := m.st.slashes(); len(got) != 1 || got[0].Name != "/new" {
 		t.Fatalf("typing narrows the list: %v", got)
 	}
 	run(press(m, "enter"), m)

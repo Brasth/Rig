@@ -90,7 +90,7 @@ func splitHints(st State, left, right [][2]string, w int) string {
 	part := func(pairs [][2]string) string {
 		var out []string
 		for _, p := range pairs {
-			out = append(out, st.dim(p[0])+" "+st.faint(p[1]))
+			out = append(out, st.hint(p))
 		}
 		return strings.Join(out, "   ")
 	}
@@ -134,7 +134,7 @@ func changesScreen(v *view.View, st State, w, h int) ([]string, string) {
 		} else {
 			name = st.dim(name)
 		}
-		names = append(names, name)
+		names = append(names, st.zone(fmt.Sprintf("row:difffile:%d", i), name))
 	}
 	left := "   " + st.tile(worker) + "  " + st.bold(clean(r.Title)) + "  " + st.faint(fmt.Sprintf("%s · %d files", worker, len(files)))
 	lines := []string{spread(left, "", strings.Join(names, "   ")+"   ", w), fit("", w)}
@@ -326,7 +326,7 @@ func codeScreen(st State, w, h int) ([]string, string) {
 	foot := splitHints(st, [][2]string{{"/", "find"}, {"v", "select"}, {"e", "open in $EDITOR"}, {"esc", "back"}},
 		AppRightKeys, w)
 	if a.File == "" {
-		lines := []string{"", center(st.dim("Open a file with ⌃k: type part of its name."), w)}
+		lines := []string{fit("", w), center(st.dim("Open a file with ⌃k: type part of its name."), w)}
 		for len(lines) < h {
 			lines = append(lines, fit("", w))
 		}
@@ -487,7 +487,7 @@ func codeTree(st State, w, h int) []string {
 			} else {
 				row = st.dim(row)
 			}
-			lines = append(lines, row)
+			lines = append(lines, st.zone("row:file:"+f, fit(row, w)))
 		}
 	}
 	for len(lines) < h-2 {
@@ -719,7 +719,7 @@ func searchScreen(st State, w, h int) ([]string, string) {
 				}
 				head += "  " + st.faint(count)
 			}
-			lines = append(lines, head)
+			lines = append(lines, st.zone(fmt.Sprintf("row:search:%d", i), head))
 			prev = r.Path
 		}
 		if !open[r.Path] {
@@ -733,7 +733,7 @@ func searchScreen(st State, w, h int) ([]string, string) {
 				row = ">" + row[1:]
 			}
 		}
-		lines = append(lines, row)
+		lines = append(lines, st.zone(fmt.Sprintf("row:search:%d", i), row))
 	}
 	for len(lines) < h {
 		lines = append(lines, "")

@@ -65,6 +65,7 @@ LOCAL_METHODS = {
     "chat.transcript": (False, "EXPERIMENT: a chat session's transcript (params: session, tail)"),
     "chat.send": (True, "EXPERIMENT: send one message to the headless parent; the answer arrives in the transcript (params: message, session, parent)"),
     "chat.cancel": (True, "EXPERIMENT: stop a chat session's running turn (params: session)"),
+    "chat.commands": (False, "The parent's own skills and slash commands, for the shell's / menu (params: parent)"),
     "applies.today": (False, "Done today: the helpers' work applied, undone or held, newest first"),
     "applies.undo": (True, "Undo an applied job: revert its merge commit on its base branch (params: id)"),
     "applies.redo": (True, "Apply an undone job again (params: id)"),
@@ -186,7 +187,7 @@ class Api:
         if method == "workspace.status":
             return self._workspace(request_id, params)
         if method in ("job.evidence", "job.diff", "fleet.status", "settings.view", "env.recovery", "env.recover", "log.follow", "env.shell", "shell.parent",
-                      "chat.status", "chat.transcript", "chat.send", "chat.cancel", "chat.answer", "chat.parent", "ui.theme", "ui.set_theme", "settings.app", "settings.set",
+                      "chat.status", "chat.transcript", "chat.send", "chat.cancel", "chat.answer", "chat.commands", "chat.parent", "ui.theme", "ui.set_theme", "settings.app", "settings.set",
                       "applies.today", "applies.undo", "applies.redo", "applies.hold", "ship.status", "ship.run"):
             return self._environment(request_id, method, params)
         if method in ("ui.request", "events.list", "events.ack"):
@@ -351,6 +352,13 @@ def _environment(self, request_id, method, params):
                 result = rig_chat.transcript(self.repo, session, tail)
             elif method == "chat.cancel":
                 result = rig_chat.cancel(self.repo, session)
+            elif method == "chat.commands":
+                import parent_commands
+                parent = params.get("parent", "")
+                if not isinstance(parent, str):
+                    return _reply(request_id, error=_error(INVALID_PARAMS, "parent must be a string"))
+                parent = parent or rig_chat.default_parent(self.repo)
+                result = {"parent": parent, "commands": parent_commands.commands(self.repo, parent)}
             elif method == "chat.parent":
                 name = params.get("name")
                 if not isinstance(name, str):

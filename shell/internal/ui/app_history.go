@@ -198,7 +198,7 @@ func historyScreen(st State, w, h int) []string {
 					row = ">" + row[1:]
 				}
 			}
-			body = append(body, row)
+			body = append(body, st.zone(fmt.Sprintf("row:history:%d", i), row))
 		}
 		r := st.Today.Rows[sel]
 		body = append(body, "", "", st.bold(clean(r.Title)))
@@ -281,7 +281,8 @@ func shipScreen(st State, w, h int) []string {
 			}
 			return st.faint(" " + text + " ")
 		}
-		body = append(body, "", "", st.bold("›")+" "+chip("open pull request", !sh.Push)+"   "+chip("push to "+s.Branch, sh.Push))
+		body = append(body, "", "", st.bold("›")+" "+st.zone("row:ship:pr", chip("open pull request", !sh.Push))+"   "+
+			st.zone("row:ship:push", chip("push to "+s.Branch, sh.Push)))
 		if !sh.Push {
 			title := sh.Title
 			if title == "" {

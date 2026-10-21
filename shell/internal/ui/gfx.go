@@ -79,10 +79,44 @@ func LogosSupported(env func(string) string) bool {
 
 // logoTransmit is the escape sequences that send every tile and give each a virtual placement three cells wide and
 // one high for the placeholders to show; inside tmux each is wrapped to pass through to the terminal.
+// markIDs are the rig mark's images, one per theme (its stem takes the theme's text colour), shown by the splash.
+var markIDs = map[string]int{"rig": 241, "light": 242, "dark": 243, "material": 244, "dracula": 245}
+
+// markCols and markRows are the cells the splash's mark fills: the mark is half again as wide as it is tall.
+const markCols, markRows = 12, 4
+
+// sentImage is one image the board sends, and the cells it fills.
+type sentImage struct {
+	file           string
+	id, cols, rows int
+}
+
+// sentImages is every image the board sends: the agents' tiles and the rig marks.
+func sentImages() []sentImage {
+	var out []sentImage
+	for agent, id := range logoIDs {
+		out = append(out, sentImage{agent, id, 3, 1})
+	}
+	for theme, id := range markIDs {
+		out = append(out, sentImage{"mark-" + theme, id, markCols, markRows})
+	}
+	return out
+}
+
+// markRowsFor is the splash's mark for the theme as placeholder lines; nil when the theme has none.
+func markRowsFor(theme string) []string {
+	id, ok := markIDs[theme]
+	if !ok {
+		return nil
+	}
+	return imageRows(id, markCols, markRows)
+}
+
 func logoTransmit(tmux bool) []byte {
 	var out bytes.Buffer
-	for agent, id := range logoIDs {
-		data, err := logoFiles.ReadFile("logos/" + agent + ".png")
+	for _, img := range sentImages() {
+		id := img.id
+		data, err := logoFiles.ReadFile("logos/" + img.file + ".png")
 		if err != nil {
 			continue
 		}
@@ -95,7 +129,7 @@ func logoTransmit(tmux bool) []byte {
 			}
 			keys := fmt.Sprintf("m=%d", more)
 			if i == 0 {
-				keys = fmt.Sprintf("a=T,U=1,f=100,t=d,i=%d,c=3,r=1,q=2,m=%d", id, more)
+				keys = fmt.Sprintf("a=T,U=1,f=100,t=d,i=%d,c=%d,r=%d,q=2,m=%d", id, img.cols, img.rows, more)
 			}
 			apc := "\x1b_G" + keys + ";" + chunk + "\x1b\\"
 			if tmux {

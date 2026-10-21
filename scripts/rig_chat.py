@@ -693,6 +693,8 @@ def run_turn(repo, session: str) -> int:
     meta = read_meta(repo, session)
     folder = turn_dir(repo, session)
     parent = meta["parent"]
+    import parent_commands
+    message = parent_commands.expand(repo, parent, message)  # /name: the parent's own skill or command
     if parent not in RESUMES:
         message = _with_context(repo, session, message)
     (folder / "message.txt").write_text(message)

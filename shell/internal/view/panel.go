@@ -71,6 +71,17 @@ type ShellPlan struct {
 	Label     string   `json:"label"` // what to call the pane
 }
 
+// ParentCommands is chat.commands: the parent's own skills and slash commands, for the / menu.
+type ParentCommands struct {
+	Parent   string `json:"parent"`
+	Commands []struct {
+		Name string `json:"name"` // without the /
+		Help string `json:"help"`
+		Kind string `json:"kind"` // skill or command
+		Path string `json:"path"`
+	} `json:"commands"`
+}
+
 // ChatStatus is chat.status: whether the headless-parent chat experiment is on, and its recent sessions.
 type ChatStatus struct {
 	Enabled   bool     `json:"enabled"`
