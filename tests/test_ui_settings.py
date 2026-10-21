@@ -113,6 +113,21 @@ class Settings(unittest.TestCase):
         ui_settings.save(self.repo, "parent_model.claude", "default", "all")
         self.assertEqual(ui_settings.chosen_model(self.repo, "claude"), ("", "default"))
 
+    def test_the_parents_reasoning_effort_is_kept_as_a_level_for_all_repos_or_this_one(self):
+        self.assertEqual(ui_settings.read(self.repo)["parent_efforts"]["claude"],
+                         {"effort": "", "scope": "default", "levels": ["low", "medium", "high", "xhigh", "max"]})
+        result = ui_settings.save(self.repo, "parent_effort.claude", "High", "all")
+        self.assertEqual((result["parent_efforts"]["claude"]["effort"], result["parent_efforts"]["claude"]["scope"]), ("high", "all"))
+        self.assertIn('claude = "high"', ui_theme.global_path().read_text())
+        ui_settings.save(self.repo, "parent_effort.codex", "xhigh", "repo")
+        self.assertEqual(ui_settings.chosen_effort(self.repo, "codex"), ("xhigh", "repo"))
+        ui_settings.save(self.repo, "parent_effort.opencode", "max", "all")  # a level of the CLI's own is accepted
+        for bad in ('x"; rm -rf /', "-flag", "a b", "9"):
+            with self.assertRaises(ui_settings.SettingsError):
+                ui_settings.save(self.repo, "parent_effort.claude", bad, "all")
+        ui_settings.save(self.repo, "parent_effort.claude", "default", "all")
+        self.assertEqual(ui_settings.chosen_effort(self.repo, "claude"), ("", "default"))
+
     def test_over_the_api(self):
         api = local_api.Api(self.repo, "t" * 64)
         call = lambda method, params=None: api.dispatch({"jsonrpc": "2.0", "id": 1, "method": method, "params": params or {},

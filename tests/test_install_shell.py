@@ -226,6 +226,32 @@ class Installer(unittest.TestCase):
             self.assertTrue(os.access(folder / name, os.X_OK), name)
         self.assertEqual(len(shell_dist.read_stamp(folder)), 12)
 
+    def test_prebuilt_state_says_when_the_sources_moved_on(self):
+        (self.src / "shell" / "main.go").write_text("package main\n")
+        self.assertEqual(shell_dist.prebuilt_state(self.src)["state"], "none", "nothing prebuilt to compare")
+        self.add_prebuilt()
+        self.assertEqual(shell_dist.prebuilt_state(self.src)["state"], "current")
+        (self.src / "shell" / "main.go").write_text("package main // changed\n")
+        info = shell_dist.prebuilt_state(self.src)
+        self.assertEqual(info["state"], "stale")
+        done = subprocess.run([sys.executable, str(ROOT / "scripts" / "shell_dist.py"), "status", "--src", str(self.src)],
+                              capture_output=True, text=True)
+        self.assertEqual(done.returncode, 1)
+        self.assertIn("shell_dist.py build", done.stdout)
+
+    def test_doctor_flags_stale_prebuilt_shells_in_a_source_tree_only(self):
+        current = doctor.prebuilt_check()
+        self.assertIsNotNone(current, "this tree ships prebuilt shells")
+        self.assertEqual(current["status"], "ready", "the shipped shells match the shipped sources: rebuild them with "
+                         "python3 scripts/shell_dist.py build")
+        with mock.patch.object(doctor, "HERE", self.src / "scripts"):
+            self.assertIsNone(doctor.prebuilt_check(), "an installed runtime has no sources to compare")
+            self.add_prebuilt(stamp="000000000000")
+            (self.src / "shell" / "main.go").write_text("package main\n")
+            stale = doctor.prebuilt_check()
+        self.assertEqual((stale["status"], stale["required"]), ("failed", False))
+        self.assertIn("shell_dist.py build", stale["detail"])
+
     def test_the_stamp_follows_the_shell_sources_and_not_their_tests(self):
         (self.src / "shell" / "main.go").write_text("package main\n")
         before = shell_dist.source_stamp(self.src)

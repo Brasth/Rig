@@ -57,7 +57,7 @@ func ParseDiff(text string) []DiffFile {
 				oldN, _ = strconv.Atoi(m[1])
 				newN, _ = strconv.Atoi(m[2])
 			}
-			cur.Lines = append(cur.Lines, DiffLine{Kind: '@'})
+			cur.Lines = append(cur.Lines, DiffLine{Kind: '@', Num: newN, Text: line})
 		case strings.HasPrefix(line, "+"):
 			cur.Lines = append(cur.Lines, DiffLine{'+', newN, line[1:]})
 			cur.Added++
@@ -102,7 +102,7 @@ func splitHints(st State, left, right [][2]string, w int) string {
 func changesScreen(v *view.View, st State, w, h int) ([]string, [][2]string) {
 	a := st.App
 	rows := v.Rows("Jobs")
-	foot := [][2]string{{"]", "next file"}, {"c", "comment"}, {"esc", "back"}}
+	foot := [][2]string{{"n N", "hunk"}, {"v", "reviewed"}, {"x", "redo"}, {"]", "next file"}, {"c", "comment"}, {"esc", "back"}}
 	if len(rows) == 0 {
 		lines := []string{"", center(st.dim("No changes yet. When a helper finishes, what it changed shows here."), w)}
 		for len(lines) < h {
@@ -135,7 +135,11 @@ func changesScreen(v *view.View, st State, w, h int) ([]string, [][2]string) {
 		}
 		names = append(names, st.zone(fmt.Sprintf("row:difffile:%d", i), name))
 	}
-	left := "   " + st.tile(worker) + "  " + st.bold(clean(r.Title)) + "  " + st.faint(fmt.Sprintf("%s · %d files", worker, len(files)))
+	summary := fmt.Sprintf("%s · %d files", worker, len(files))
+	if done, total := reviewCounts(a, r.ID, files); total > 0 && done > 0 {
+		summary += fmt.Sprintf(" · %d/%d hunks reviewed", done, total)
+	}
+	left := "   " + st.tile(worker) + "  " + st.bold(clean(r.Title)) + "  " + st.faint(summary)
 	lines := []string{spread(left, "", strings.Join(names, "   ")+"   ", w), fit("", w)}
 	cw := min(96, w-8)
 	x := (w - cw) / 2
@@ -164,11 +168,26 @@ func changesScreen(v *view.View, st State, w, h int) ([]string, [][2]string) {
 			body = append(body, st.dim("Rig kept only the names of the files this job changed."), "")
 		}
 		add, del := tints()
-		for i, l := range f.Lines {
+		spans := hunkSpans(f)
+		chosen, hi := clampSel(a.DiffHunk, len(spans)), -1
+		var hunkAt []int
+		for _, l := range f.Lines {
 			if l.Kind == '@' {
-				if i > 0 {
-					body = append(body, st.faint("   ⋯")) // between hunks; the file's first one needs no mark
+				// each hunk's own row: which one it is, the lines it covers, and whether you reviewed it
+				hi++
+				hunkAt = append(hunkAt, len(body))
+				edge := "  "
+				if hi == chosen {
+					edge = st.paint(colAccent, "▎") + " "
 				}
+				row := edge + st.faint(fmt.Sprintf("hunk %d/%d · lines %d–%d", hi+1, len(spans), spans[hi].start, spans[hi].end))
+				switch a.Reviewed[hunkKey(r.ID, f.Path, hi)] {
+				case "ok":
+					row += "  " + st.paint(colGreen, "✓ reviewed")
+				case "redo":
+					row += "  " + st.paint(colAmber, "↺ redo asked")
+				}
+				body = append(body, st.zone(fmt.Sprintf("row:diffhunk:%d", hi), row))
 				continue
 			}
 			mark, colour, bg := " ", colText, ""
@@ -179,7 +198,7 @@ func changesScreen(v *view.View, st State, w, h int) ([]string, [][2]string) {
 				mark, colour, bg = "−", colRed, del
 			}
 			text := fmt.Sprintf("%4d %s %s", l.Num, mark, sanitize(l.Text))
-			text = fit(text, cw)
+			text = fit(text, cw-2)
 			if st.Styled {
 				style := lipgloss.NewStyle().Foreground(lipgloss.Color(colour))
 				if bg != "" {
@@ -191,7 +210,14 @@ func changesScreen(v *view.View, st State, w, h int) ([]string, [][2]string) {
 				}
 				text = num.Render(text[:5]) + style.Render(text[5:])
 			}
-			body = append(body, text)
+			edge := "  "
+			if hi == chosen {
+				edge = st.paint(colAccent, "▎") + " "
+			}
+			body = append(body, edge+text)
+		}
+		if a.DiffFollow && chosen < len(hunkAt) {
+			a.DiffOff, a.DiffFollow = hunkAt[chosen], false // n, N and v bring the chosen hunk to the top
 		}
 		if a.Diff.Truncated {
 			body = append(body, st.faint("   … the diff is longer than this view shows"))
@@ -206,7 +232,11 @@ func changesScreen(v *view.View, st State, w, h int) ([]string, [][2]string) {
 		tail = append(tail, "    "+st.paint(colBorder, "│")+" "+st.faint(fmt.Sprintf("%-7s", worker))+" "+st.paint(colAccent, "● gets it with its next step"))
 	}
 	if a.Commenting {
-		tail = append(tail, "", st.faint("comment to "+worker+" › ")+st.Prompt+"▏")
+		label := "comment to " + worker + " › "
+		if a.RedoHunk != nil {
+			label = fmt.Sprintf("redo %s:%d-%d, why › ", filepath.Base(a.RedoHunk.path), a.RedoHunk.span.start, a.RedoHunk.span.end)
+		}
+		tail = append(tail, "", st.faint(label)+st.Prompt+"▏")
 	}
 	if r.Explanation != "" {
 		tail = append(tail, "", st.dim(fit(clean(r.Explanation), cw)))

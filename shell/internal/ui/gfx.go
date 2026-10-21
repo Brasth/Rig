@@ -222,12 +222,18 @@ var _ io.Writer = (*LogoWriter)(nil)
 // previewImageID is the image id a previewed picture is sent under; each new one replaces the last.
 const previewImageID = 240
 
+// dropImageID is the image id of the picture just dropped on the reply box.
+const dropImageID = 241
+
 // SendImage sends a PNG to the terminal with the next frame, to show in cols × rows cells; false where it cannot.
-func SendImage(png []byte, cols, rows int) bool {
+func SendImage(png []byte, cols, rows int) bool { return SendImageAs(previewImageID, png, cols, rows) }
+
+// SendImageAs is SendImage under an image id of its own.
+func SendImageAs(id int, png []byte, cols, rows int) bool {
 	if logoOut == nil {
 		return false
 	}
-	payload := transmitPNG(png, previewImageID, cols, rows, logoOut.tmux)
+	payload := transmitPNG(png, id, cols, rows, logoOut.tmux)
 	logoOut.mu.Lock()
 	logoOut.extra = append(logoOut.extra, payload)
 	logoOut.mu.Unlock()

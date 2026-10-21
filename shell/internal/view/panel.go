@@ -100,9 +100,11 @@ type ChatStatus struct {
 	Configured string `json:"configured"`
 	Model      string `json:"model"` // the model chosen for the parent, else its CLI's own setting, short ("opus")
 	// ModelChosen: Model was chosen in rig shell (/model), not taken from the CLI's settings.
-	ModelChosen bool     `json:"model_chosen"`
-	Parents     []string `json:"parents"` // every parent the chat can run
-	Sessions    []struct {
+	ModelChosen bool `json:"model_chosen"`
+	// Effort is the reasoning level chosen for the parent (/model, /effort); empty means its CLI's own setting.
+	Effort   string   `json:"effort"`
+	Parents  []string `json:"parents"` // every parent the chat can run
+	Sessions []struct {
 		ID     string `json:"id"`
 		Parent string `json:"parent"`
 		State  string `json:"state"`
@@ -112,17 +114,20 @@ type ChatStatus struct {
 
 // JobProblems is job.problems: what a job's failed checks found, as an IDE's Problems view lists them.
 type JobProblems struct {
-	JobID    string `json:"job_id"`
-	Errors   int    `json:"errors"`
-	Warnings int    `json:"warnings"`
-	Problems []struct {
-		File     string `json:"file"`
-		Line     int    `json:"line"`
-		Col      int    `json:"col"`
-		Severity string `json:"severity"`
-		Message  string `json:"message"`
-		Check    string `json:"check"`
-	} `json:"problems"`
+	JobID    string       `json:"job_id"`
+	Errors   int          `json:"errors"`
+	Warnings int          `json:"warnings"`
+	Problems []JobProblem `json:"problems"`
+}
+
+// JobProblem is one thing a failed check found, where it is and what it said.
+type JobProblem struct {
+	File     string `json:"file"`
+	Line     int    `json:"line"`
+	Col      int    `json:"col"`
+	Severity string `json:"severity"`
+	Message  string `json:"message"`
+	Check    string `json:"check"`
 }
 
 // JobThread is job.thread: a helper's thread with the parent, in order.
@@ -202,6 +207,13 @@ type AppSettings struct {
 		Own     string   `json:"own"`
 		Suggest []string `json:"suggest"`
 	} `json:"parent_models"`
+	// ParentEfforts is how much each parent reasons in the conversation: the level chosen here (for all repos or this
+	// one), and the levels its CLI documents.
+	ParentEfforts map[string]struct {
+		Effort string   `json:"effort"`
+		Scope  string   `json:"scope"`
+		Levels []string `json:"levels"`
+	} `json:"parent_efforts"`
 	RunsToday   int    `json:"runs_today"`
 	RigVersion  string `json:"rig_version"`
 	DCVersion   string `json:"dc_version"`
@@ -277,6 +289,8 @@ type ChatTranscript struct {
 	Ask     *ChatAsk    `json:"ask"`     // the parent's permission request waiting for the owner, if any
 	Asks    bool        `json:"asks"`    // this parent's headless mode can ask for permission at all
 	Partial string      `json:"partial"` // the answer streaming in, before it joins the entries
+	Plan    bool        `json:"plan"`    // /plan: the parent plans and changes nothing
+	Native  string      `json:"native"`  // the parent CLI's own id for this conversation, so /native can resume it
 }
 
 // ChatAsk is a permission request the parent is blocked on; chat.answer allows or denies it by ID.

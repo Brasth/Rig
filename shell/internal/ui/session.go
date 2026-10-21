@@ -309,6 +309,9 @@ func chatColumn(v *view.View, st State, w, h int) []string {
 		if st.ChatModel != "" && parent == st.ChatParent {
 			title += " " + clean(st.ChatModel) // the mockup's "Parent · claude opus"
 		}
+		if st.ChatEffort != "" && parent == st.ChatParent {
+			title += " · " + clean(st.ChatEffort)
+		}
 	}
 	if st.Chat != nil && st.Chat.State == "running" {
 		title += " · working"

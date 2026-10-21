@@ -302,6 +302,20 @@ def shell_check() -> dict:
     return check("rig-shell", "ready", f"rig-shell {info['version'][:12]} {note}", required=False, **evidence)
 
 
+def prebuilt_check() -> dict | None:
+    """Maintainers' check, only in a source tree: the prebuilt shells that ship must match the shell sources, or
+    installs get an older shell than the code says."""
+    import shell_dist
+    info = shell_dist.prebuilt_state(HERE.parent)
+    if info["state"] == "none":
+        return None
+    if info["state"] == "stale":
+        return check("rig-shell prebuilt", "failed", f"prebuilt/ was built from shell sources {info['stamp']} but the sources are now "
+                     f"{info['sources']}; installs get the older shell until you run: python3 scripts/shell_dist.py build",
+                     required=False, **info)
+    return check("rig-shell prebuilt", "ready", f"the prebuilt shells match the shell sources ({info['stamp']})", required=False, **info)
+
+
 def smoke_check() -> dict:
     """Exercise only our Python child server and inbox in a self-owned fixture."""
     with tempfile.TemporaryDirectory(prefix="rig-doctor-") as raw:
@@ -423,6 +437,8 @@ def build_report(repo: Path, *, task: str = "coding", parent: str = "", model: s
     if chat_row:
         checks.append(chat_row)
     checks.append(shell_check())
+    if (prebuilt := prebuilt_check()) is not None:
+        checks.append(prebuilt)
     checks.append(check("scripts", "ready" if script_ready else "missing", "Rig runtime scripts present" if script_ready else "Rig runtime scripts missing"))
     entry = parent_entry(selected, repo)
     configured = child_mcp._stdio_entry_ready(entry)

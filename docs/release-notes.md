@@ -3,6 +3,18 @@
 
 
 
+## What each turn changed, shown under the answer (2026-10-21)
+
+When a parent's turn ends, every file it changed is shown as a diff under its answer: counts, and the changed lines in red and green. It works the same for every parent, because Rig compares the working tree before and after the turn.
+
+## Reasoning level, plan mode, the parent's commands and tools in rig shell (2026-10-21)
+
+`/model` now has a reasoning row and `/effort LEVEL` sets it, passed to each parent's own flag. `/plan` puts the parent in plan mode. `/cost`, `/context`, `/mcp`, `/memory`, `/init`, `/review`, `/security-review`, `/clear` and `!command` work inside rig shell; the parent's own skills and commands still pass through. Every tool the parent calls is shown with what it answered. A long draft scrolls inside the reply box with the wheel, and a dropped picture shows above it. The palette scrolls to the row you choose past the twelfth.
+
+## Problems in the editor, hunk review, stale-prebuilt check (2026-10-21)
+
+A failed check's problems now mark the open file: a red or amber dot in the gutter and the message at the end of the line. `⇥` in the problems list (`m`) asks the parent to fix the chosen problem, with the code around it; its last row asks for all of them. On the changes tab `n` `N` choose a hunk, `v` marks it reviewed and `x` asks the helper to redo it with your reason (sent to its inbox with the file, lines and hunk). `rig doctor` in a source tree, and `python3 scripts/shell_dist.py status`, report when the prebuilt shells are older than the shell sources.
+
 ## rig-shell ships prebuilt: nothing to build on install or update (2026-10-21)
 
 `rig setup`, `install.sh` and `rig update` now put a prebuilt `rig-shell` (Linux and macOS, x86-64 and arm64, checksum-checked) in `~/.rig/bin`, and `rig shell`, `rig-agent` and `agent-rig` set it up themselves the first time they find none, instead of stopping with "rig-shell is not built". Go is only used for a shell newer than the prebuilt one. Where nothing can run the Go shell, `rig shell` opens the Python board (`rig tui`). `rig doctor` reports a prebuilt shell as ready. Maintainers refresh `prebuilt/` with `python3 scripts/shell_dist.py build`.

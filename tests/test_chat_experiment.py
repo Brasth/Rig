@@ -2,6 +2,7 @@
 """EXPERIMENT: headless parent with a Rig-rendered chat. Decoders, sessions, the runner and the API, with stand-in parents."""
 import json
 import os
+import shutil
 import signal
 import stat
 import subprocess
@@ -140,7 +141,7 @@ class Decoding(unittest.TestCase):
     def test_claude_stream(self):
         entries, native, done, error = self.run_stream("claude", CLAUDE_STREAM)
         self.assertEqual([(e["role"], e["text"]) for e in entries],
-                         [("assistant", "Looking at it."), ("tool", "Read /repo/a.txt"), ("assistant", "It says one.")])
+                         [("assistant", "Looking at it."), ("tool", "Read /repo/a.txt"), ("result", "one"), ("assistant", "It says one.")])
         self.assertEqual((native, done, error), ("native-claude-1", True, False))
 
     def test_codex_stream(self):
@@ -200,7 +201,7 @@ class Turns(Base):
         view = self.wait_idle(started["session"])
         self.assertEqual((view["state"], view["turns"]), ("idle", 1))
         self.assertEqual([(e["role"], e["text"]) for e in view["entries"]],
-                         [("user", "what is in a.txt?"), ("assistant", "Looking at it."), ("tool", "Read /repo/a.txt"), ("assistant", "It says one.")])
+                         [("user", "what is in a.txt?"), ("assistant", "Looking at it."), ("tool", "Read /repo/a.txt"), ("result", "one"), ("assistant", "It says one.")])
         rig_chat.send(self.repo, "and b.txt?", started["session"])
         self.wait_idle(started["session"])
         first, second = self.calls()
@@ -259,6 +260,182 @@ class Turns(Base):
                              "the project's parent is claude here")
         self.assertEqual(rig_chat.argv_claude("hi", "", {"model": "sonnet"})[6:8], ["--model", "sonnet"])
         self.assertNotIn("--model", rig_chat.argv_claude("hi", "", {}))
+
+    def test_the_chosen_reasoning_level_goes_to_each_parents_own_flag(self):
+        import ui_settings
+        turn = {"effort": "high", "model": "opus", "repo": "/r", "message_file": "/m", "new_id": "x"}
+        flags = {"claude": ["--effort", "high"], "codex": ["-c", 'model_reasoning_effort="high"'], "grok": ["--effort", "high"],
+                 "opencode": ["--variant", "high"], "omp": ["--thinking", "high"], "pi": ["--thinking", "high"], "agy": ["--effort", "high"]}
+        for parent, want in flags.items():
+            argv = rig_chat.HEADLESS[parent]("hi", "", turn)
+            at = argv.index(want[0])
+            self.assertEqual(argv[at:at + 2], want, parent)
+            self.assertNotIn(want[0], rig_chat.HEADLESS[parent]("hi", "", {**turn, "effort": ""}), parent + " with none chosen")
+        self.assertNotIn("--effort", rig_chat.argv_claude("hi", "", {**turn, "model": "claude-haiku-4-5"}), "haiku's print mode hangs on it")
+        with mock.patch.dict(os.environ, {"RIG_HOME": str(self.base / "rig-home")}):
+            ui_settings.save(self.repo, "parent_effort.codex", "medium", "all")
+            stand_in(self.bin, "codex", CODEX_STREAM)
+            started = rig_chat.send(self.repo, "go", parent="codex")
+            self.wait_idle(started["session"])
+            self.assertEqual(self.calls()[0]["argv"], ["exec", "--json", "-c", 'model_reasoning_effort="medium"', "go"])
+            ui_settings.save(self.repo, "parent_effort.claude", "max", "all")
+            self.assertEqual(rig_chat.status(self.repo)["effort"], "max", "the project's parent is claude here")
+
+    def test_plan_mode_is_a_flag_where_the_parent_has_one_and_a_note_where_it_does_not(self):
+        turn = {"plan": True, "repo": "/r", "message_file": "/m", "new_id": "x"}
+        self.assertEqual(rig_chat.argv_claude("hi", "", turn)[rig_chat.argv_claude("hi", "", turn).index("--permission-mode"):][:2], ["--permission-mode", "plan"])
+        self.assertIn("--agent", rig_chat.argv_opencode("hi", "", turn))
+        self.assertEqual(rig_chat.argv_codex("hi", "native-1", turn)[:5], ["codex", "exec", "--json", "-s", "read-only"])
+        self.assertIn("resume", rig_chat.argv_codex("hi", "native-1", turn), "the sandbox goes before the resume subcommand")
+        self.assertLess(rig_chat.argv_codex("hi", "n", turn).index("-s"), rig_chat.argv_codex("hi", "n", turn).index("resume"))
+        for parent in ("grok", "omp", "pi", "agy"):
+            self.assertNotIn("plan", " ".join(rig_chat.HEADLESS[parent]("hi", "", turn)), parent + " has no plan flag; it is told in the message")
+        for parent, fn in rig_chat.HEADLESS.items():
+            self.assertNotIn("--permission-mode", fn("hi", "", {**turn, "plan": False}))
+
+    def test_slash_plan_switches_plan_mode_for_the_conversation(self):
+        stand_in(self.bin, "claude", CLAUDE_STREAM)
+        first = rig_chat.send(self.repo, "/plan")
+        session = first["session"]
+        self.assertEqual((first["state"], first["plan"]), ("idle", True), "no turn runs for a bare /plan")
+        view = rig_chat.transcript(self.repo, session)
+        self.assertTrue(view["plan"])
+        self.assertEqual(view["entries"][-1]["role"], "system")
+        self.assertIn("plan mode on", view["entries"][-1]["text"])
+        rig_chat.send(self.repo, "/plan add a login throttle", session)
+        self.wait_idle(session)
+        argv = self.calls()[0]["argv"]
+        self.assertIn("plan", argv[argv.index("--permission-mode") + 1], "claude runs with --permission-mode plan")
+        self.assertEqual(argv[-1], "add a login throttle", "what is asked is the text after /plan")
+        users = [e for e in rig_chat.transcript(self.repo, session)["entries"] if e["role"] == "user"]
+        self.assertEqual(users[-1]["text"], "/plan add a login throttle", "the conversation shows what was typed")
+        rig_chat.send(self.repo, "and rate limit it too", session)
+        self.wait_idle(session)
+        self.assertIn("--permission-mode", self.calls()[1]["argv"], "plan mode stays on until it is turned off")
+        rig_chat.send(self.repo, "/plan go", session)
+        self.wait_idle(session)
+        self.assertNotIn("--permission-mode", self.calls()[2]["argv"])
+        self.assertEqual(self.calls()[2]["argv"][-1], "Go ahead with the plan.")
+        self.assertFalse(rig_chat.transcript(self.repo, session)["plan"])
+        off = rig_chat.send(self.repo, "/plan", session)
+        self.assertTrue(off["plan"], "a bare /plan toggles")
+        self.assertFalse(rig_chat.send(self.repo, "/plan off", session)["plan"])
+
+    def test_cost_context_and_mcp_answer_from_what_the_turns_reported(self):
+        done = rig_chat.decode_event("claude", {"type": "result", "subtype": "success", "result": "ok", "session_id": "n1", "total_cost_usd": 0.0421,
+                                                "usage": {"input_tokens": 100, "cache_creation_input_tokens": 900, "cache_read_input_tokens": 37000,
+                                                          "output_tokens": 2100}})
+        self.assertEqual(done["usage"], {"cost": 0.0421, "input": 38000, "output": 2100, "context": 38000})
+        codex = rig_chat.decode_event("codex", {"type": "turn.completed", "usage": {"input_tokens": 5000, "cached_input_tokens": 100, "output_tokens": 70}})
+        self.assertEqual(codex["usage"]["input"], 5000)
+        meta = rig_chat.new_session(self.repo, "claude")
+        first = rig_chat.send(self.repo, "/cost", meta["id"])
+        self.assertEqual(first["state"], "idle", "no turn runs for /cost")
+        self.assertIn("nothing counted yet", rig_chat.transcript(self.repo, meta["id"])["entries"][-1]["text"])
+        meta["usage"] = {"cost": 0.0421, "input": 38000, "output": 2100, "context": 38000, "turns": 3}
+        rig_chat._write_json(rig_chat._meta_path(self.repo, meta["id"]), meta)
+        rig_chat.send(self.repo, "/cost", meta["id"])
+        rig_chat.send(self.repo, "/context", meta["id"])
+        entries = [e["text"] for e in rig_chat.transcript(self.repo, meta["id"])["entries"] if e["role"] == "system"]
+        self.assertEqual(entries[-2], "cost so far: $0.04 · 38.0k tokens in, 2.1k out over 3 turns")
+        self.assertEqual(entries[-1], "context: about 38.0k tokens in the last turn of 200.0k (19%)")
+        home = self.base / "home"
+        home.mkdir(exist_ok=True)
+        (home / ".claude.json").write_text(json.dumps({"mcpServers": {"rig": {}, "github": {}}}))
+        with mock.patch.dict(os.environ, {"HOME": str(home)}), mock.patch.object(Path, "home", return_value=home):
+            rig_chat.send(self.repo, "/mcp", meta["id"])
+        self.assertEqual([e["text"] for e in rig_chat.transcript(self.repo, meta["id"])["entries"]][-1], "MCP servers for claude: github, rig")
+
+    def test_init_review_and_security_review_ask_the_parent_in_words_it_can_run_headless(self):
+        stand_in(self.bin, "claude", CLAUDE_STREAM)
+        started = rig_chat.send(self.repo, "/init")
+        self.wait_idle(started["session"])
+        sent = self.calls()[0]["argv"][-1]
+        self.assertIn("write a CLAUDE.md file", sent)
+        rig_chat.send(self.repo, "/review the login change", started["session"])
+        self.wait_idle(started["session"])
+        sent = self.calls()[1]["argv"][-1]
+        self.assertTrue(sent.startswith("Review the current changes") and sent.endswith("Focus: the login change") and "Do not edit" in sent, sent)
+        rig_chat.send(self.repo, "/security-review", started["session"])
+        self.wait_idle(started["session"])
+        self.assertIn("security problems", self.calls()[2]["argv"][-1])
+        users = [e["text"] for e in rig_chat.transcript(self.repo, started["session"])["entries"] if e["role"] == "user"]
+        self.assertEqual(users, ["/init", "/review the login change", "/security-review"], "the conversation shows what was typed")
+        self.assertIn("AGENTS.md", rig_chat._builtin_prompt("codex", "init", ""))
+
+    def test_the_files_a_turn_changed_are_shown_with_what_changed(self):
+        if shutil.which("git") is None:
+            self.skipTest("no git here")
+        subprocess.run(["git", "init", "-q", str(self.repo)], check=True)
+        (self.repo / "a.py").write_text("one\ntwo\nthree\n")
+        (self.repo / ".gitignore").write_text("ignored.txt\n.rig/\n")
+        stand_in(self.bin, "claude", CLAUDE_STREAM)
+        script = self.bin / "claude"
+        text = script.read_text().replace("import json, os, subprocess, sys, time\n", "import json, os, subprocess, sys, time\n"
+            "open('a.py', 'w').write('one\\nTWO\\nthree\\nfour\\n')\nopen('new.txt', 'w').write('hello\\n')\nopen('ignored.txt', 'w').write('x')\n", 1)
+        script.write_text(text)
+        started = rig_chat.send(self.repo, "change things")
+        self.wait_idle(started["session"])
+        entries = rig_chat.transcript(self.repo, started["session"])["entries"]
+        diffs = [e["text"] for e in entries if e["role"] == "diff"]
+        self.assertEqual([d.splitlines()[0] for d in diffs], ["a.py +2 −1", "new.txt +1 −0"], str([(e["role"], e["text"][:40]) for e in entries]))
+        self.assertIn("-two", diffs[0])
+        self.assertIn("+TWO", diffs[0])
+        self.assertIn("+four", diffs[0])
+        self.assertNotIn("ignored", "".join(diffs), "ignored files and .rig are not part of it")
+        self.assertEqual(entries[-1]["role"], "diff", "after the answer")
+        # nothing changed: nothing shown
+        stand_in(self.bin, "claude", CLAUDE_STREAM)
+        rig_chat.send(self.repo, "just look", started["session"])
+        self.wait_idle(started["session"])
+        later = rig_chat.transcript(self.repo, started["session"])["entries"]
+        self.assertEqual([e["role"] for e in later if e["role"] == "diff"], ["diff", "diff"], "no new ones")
+        # the index of the repository is left as it was
+        self.assertEqual(subprocess.run(["git", "-C", str(self.repo), "diff", "--cached", "--name-only"], capture_output=True, text=True).stdout, "")
+
+    def test_a_long_patch_and_many_files_are_cut_short(self):
+        files = rig_chat.turn_changes(self.repo, "", "x")
+        self.assertEqual(files, [], "no trees, no changes")
+        text = "\n".join(f"+line {i}" for i in range(200))
+        import types
+        fake = types.SimpleNamespace(stdout="", returncode=0)
+        with mock.patch.object(rig_chat.subprocess, "run", side_effect=[
+                types.SimpleNamespace(stdout="200\t0\tbig.py\n", returncode=0),
+                types.SimpleNamespace(stdout="diff --git a/big.py b/big.py\nnew file mode 100644\nindex 0..1\n--- /dev/null\n+++ b/big.py\n@@ -0,0 +1,200 @@\n" + text + "\n", returncode=0)]):
+            files = rig_chat.turn_changes(self.repo, "a" * 40, "b" * 40)
+        self.assertEqual(len(files), 1)
+        shown = files[0]["text"].splitlines()
+        self.assertEqual(len(shown), rig_chat.DIFF_LINES + 1)
+        self.assertTrue(shown[-1].startswith("… ") and shown[-1].endswith("more lines"))
+        self.assertEqual((files[0]["added"], files[0]["deleted"]), (200, 0))
+
+    def test_tools_and_what_they_answered_are_shown(self):
+        claude = lambda event: rig_chat.decode_event("claude", event)["entries"]
+        use = {"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "name": "Bash", "input": {"description": "list", "command": "ls -la\nsecond"}},
+            {"type": "tool_use", "name": "Read", "input": {"limit": 5, "file_path": "src/a.ts"}},
+            {"type": "tool_use", "name": "TodoWrite", "input": {"todos": [{}, {}, {}]}}]}}
+        self.assertEqual([e["text"] for e in claude(use)], ["Bash ls -la", "Read src/a.ts", "TodoWrite 3 items"])
+        answer = {"type": "user", "message": {"content": [
+            {"type": "tool_result", "tool_use_id": "t1", "content": "total 8\nfile-a\nfile-b"},
+            {"type": "tool_result", "tool_use_id": "t2", "is_error": True, "content": [{"type": "text", "text": "ENOENT: no such file"}]},
+            {"type": "tool_result", "tool_use_id": "t3", "content": ""}]}}
+        self.assertEqual(claude(answer), [{"role": "result", "text": "total 8  (+2 lines)"},
+                                          {"role": "result-error", "text": "ENOENT: no such file"},
+                                          {"role": "result", "text": "done"}])
+        codex = lambda event: rig_chat.decode_event("codex", event)["entries"]
+        self.assertEqual(codex({"type": "item.started", "item": {"type": "command_execution", "command": "pytest -q"}}),
+                         [{"role": "tool", "text": "ran pytest -q"}])
+        self.assertEqual(codex({"type": "item.completed", "item": {"type": "command_execution", "command": "pytest", "exit_code": 1,
+                                                                   "aggregated_output": "FAILED a\n1 failed"}}),
+                         [{"role": "result-error", "text": "FAILED a  (+1 lines)"}])
+        self.assertEqual(codex({"type": "item.completed", "item": {"type": "file_change", "changes": [{"path": "a.py", "kind": "update"},
+                                                                                                      {"path": "b.py", "kind": "add"}]}}),
+                         [{"role": "tool", "text": "edited a.py, b.py"}])
+        self.assertEqual(codex({"type": "item.started", "item": {"type": "mcp_tool_call", "server": "rig", "tool": "rig_session"}}),
+                         [{"role": "tool", "text": "rig.rig_session"}])
+        self.assertEqual(codex({"type": "item.started", "item": {"type": "web_search", "query": "go embed"}}),
+                         [{"role": "tool", "text": "search go embed"}])
 
     def test_a_parents_own_command_is_expanded_for_its_headless_mode(self):
         home = self.base / "home"

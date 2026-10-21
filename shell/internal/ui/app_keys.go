@@ -183,6 +183,12 @@ func (m *Model) appSend(text string) tea.Cmd {
 			return cmd
 		}
 	}
+	if cmd, ok := strings.CutPrefix(text, "!"); ok && strings.TrimSpace(cmd) != "" {
+		// !command runs in the terminal split, as the parents' own boxes run a shell command typed after !
+		m.rememberSent(text)
+		m.st.Prompt, m.st.SlashSel = "", 0
+		return m.runInTerminal(cmd)
+	}
 	m.rememberSent(text)
 	m.st.Prompt, m.st.SlashSel, m.st.Message = "", 0, "sending…"
 	m.st.App.Tab, m.st.App.Thread = 1, ""
@@ -580,20 +586,23 @@ func (m *Model) appTabKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			a.DiffOff += 20
 		case "pgup":
 			a.DiffOff = max(0, a.DiffOff-20)
+		case "n", "N", "v", "x":
+			cmd, _ := m.reviewKey(key)
+			return m, cmd
 		case "]":
-			a.DiffFile, a.DiffOff = a.DiffFile+1, 0
+			a.DiffFile, a.DiffOff, a.DiffHunk = a.DiffFile+1, 0, 0
 			if a.Diff != nil {
 				a.DiffFile = min(a.DiffFile, max(0, len(ParseDiff(a.Diff.Diff))-1))
 			}
 		case "[":
-			a.DiffFile, a.DiffOff = max(0, a.DiffFile-1), 0
+			a.DiffFile, a.DiffOff, a.DiffHunk = max(0, a.DiffFile-1), 0, 0
 		case "left", "right": // h is hold here, as in the design
 			step := 1
 			if key == "left" {
 				step = -1
 			}
 			m.move(step)
-			a.DiffFile, a.DiffOff = 0, 0
+			a.DiffFile, a.DiffOff, a.DiffHunk = 0, 0, 0
 			return m, tea.Batch(m.fetchDock(true), m.fetchDiff(true))
 		case "c":
 			if m.selectedJobID() != "" {
@@ -788,8 +797,11 @@ func (m *Model) commentKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	a := m.st.App
 	switch k.Type {
 	case tea.KeyEsc:
-		a.Commenting, m.st.Prompt = false, ""
+		a.Commenting, a.RedoHunk, m.st.Prompt = false, nil, ""
 	case tea.KeyEnter:
+		if a.RedoHunk != nil {
+			return m, m.sendRedo(m.st.Prompt) // a hunk to redo, with your reason
+		}
 		text, id := strings.TrimSpace(m.st.Prompt), m.selectedJobID()
 		a.Commenting, m.st.Prompt = false, ""
 		if text == "" || id == "" {
@@ -1169,6 +1181,14 @@ func (m *Model) paletteKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if strings.HasPrefix(p.Query, "#") {
 			return m, m.indexCmd()
 		}
+	case tea.KeyTab:
+		if p.Problems && len(items) > 0 {
+			it := items[clampSel(p.Sel, len(items))]
+			if it.Action == "fixall" || strings.HasPrefix(it.Action, "problem:") {
+				a.Palette = nil
+				return m, m.askFix(it.Action) // ⇥ asks the parent to fix it instead of opening it
+			}
+		}
 	case tea.KeyEnter:
 		if len(items) == 0 {
 			return m, nil
@@ -1192,6 +1212,8 @@ func (m *Model) runPalette(it paletteItem, query string) tea.Cmd {
 		return nil
 	case strings.HasPrefix(it.Action, "problem:"):
 		return m.openProblem(strings.TrimPrefix(it.Action, "problem:"))
+	case it.Action == "fixall":
+		return m.askFix("fixall")
 	case strings.HasPrefix(it.Action, "at:"):
 		return m.openRef(strings.TrimPrefix(it.Action, "at:"))
 	case strings.HasPrefix(it.Action, "run:"):
@@ -1224,6 +1246,11 @@ func (m *Model) runPalette(it paletteItem, query string) tea.Cmd {
 		return nil
 	case strings.HasPrefix(it.Action, "model:"):
 		return m.setModel(strings.TrimPrefix(it.Action, "model:"))
+	case strings.HasPrefix(it.Action, "effort:"):
+		return m.setEffort(strings.TrimPrefix(it.Action, "effort:"))
+	case it.Action == "effort-menu":
+		a.Palette = &Palette{Effort: true}
+		return nil
 	case strings.HasPrefix(it.Action, "slash:"):
 		m.st.Prompt, m.st.SlashSel, a.Tab, a.Thread = strings.TrimPrefix(it.Action, "slash:")+" ", 0, 1, ""
 		return nil

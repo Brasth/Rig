@@ -552,10 +552,15 @@ func codeRows(st State, w, room int) []string {
 		case a.GutterFor == a.File && a.Gutter[i] == 'D':
 			gutter = st.paint(colRed, "▁") // lines removed after this one
 		}
+		if mark := problemMark(st, i); mark != "" {
+			gutter = mark // a problem a helper's check found on this line
+		}
 		if cell := blameCell(st, i); cell != "" {
 			gutter += cell
 		}
-		if blame := inlineBlame(st, i, w-8-lipgloss.Width(gutter)-ansi.StringWidth(text)); blame != "" {
+		if note := inlineProblem(st, i, w-8-lipgloss.Width(gutter)-ansi.StringWidth(text)); note != "" {
+			text += note
+		} else if blame := inlineBlame(st, i, w-8-lipgloss.Width(gutter)-ansi.StringWidth(text)); blame != "" {
 			text += blame
 		}
 		parts := []string{text}

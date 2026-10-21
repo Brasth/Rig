@@ -50,36 +50,65 @@ def _model(turn: dict, flag: str = "--model") -> list[str]:
     return [flag, turn["model"]] if turn.get("model") else []
 
 
+def _effort(turn: dict, parent: str) -> list[str]:
+    """The reasoning level chosen for the parent (ui_settings parent_effort), as its CLI's own flag; nothing when none is."""
+    level = turn.get("effort")
+    if not level:
+        return []
+    if parent == "claude":
+        return [] if "haiku" in str(turn.get("model", "")).lower() else ["--effort", level]  # haiku's print mode hangs on it
+    if parent == "codex":
+        return ["-c", f'model_reasoning_effort="{level}"']
+    if parent == "opencode":
+        return ["--variant", level]
+    if parent in ("omp", "pi"):
+        return ["--thinking", level]
+    return ["--effort", level]  # grok, agy
+
+
+# Plan mode (/plan): the parent looks around and answers with a plan, changing nothing. claude, opencode and codex have a
+# flag for it; every other parent is told so in the message.
+PLAN_PREFIX = ("[Plan mode] Change nothing: do not edit files, run commands that modify anything, or start helpers. Look around "
+               "read-only if you need to, then reply with a short numbered plan for the request below, naming the files you would "
+               "change and how you would check it. Wait for me to say go.\n\n")
+
+
+def _plan(turn: dict, parent: str) -> list[str]:
+    if not turn.get("plan"):
+        return []
+    return {"claude": ["--permission-mode", "plan"], "opencode": ["--agent", "plan"], "codex": ["-s", "read-only"]}.get(parent, [])
+
+
 def argv_claude(message: str, native: str, turn: dict) -> list[str]:
     asks = ["--mcp-config", turn["ask_mcp"], "--permission-prompt-tool", "mcp__rig-ask__permission_prompt"] if turn.get("ask_mcp") else []
-    return ["claude", "-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", *_model(turn), *asks,
+    return ["claude", "-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", *_model(turn), *_effort(turn, "claude"), *_plan(turn, "claude"), *asks,
             *(["--resume", native] if native else []), "--", message]
 
 
 def argv_codex(message: str, native: str, turn: dict) -> list[str]:
-    return ["codex", "exec", "--json", *_model(turn, "-m"), *(["resume", native] if native else []), message]
+    return ["codex", "exec", "--json", *_model(turn, "-m"), *_effort(turn, "codex"), *_plan(turn, "codex"), *(["resume", native] if native else []), message]
 
 
 def argv_grok(message: str, native: str, turn: dict) -> list[str]:
     session = ["-r", native] if native else ["--session-id", turn["new_id"]]
-    return ["grok", "--no-auto-update", *_model(turn), *session, "--prompt-file", turn["message_file"], "--cwd", turn["repo"],
+    return ["grok", "--no-auto-update", *_model(turn), *_effort(turn, "grok"), *session, "--prompt-file", turn["message_file"], "--cwd", turn["repo"],
             "--output-format", "streaming-json"]
 
 
 def argv_opencode(message: str, native: str, turn: dict) -> list[str]:
-    return ["opencode", "run", "--format", "json", *_model(turn), "--dir", turn["repo"], *(["--session", native] if native else []), message]
+    return ["opencode", "run", "--format", "json", *_model(turn), *_effort(turn, "opencode"), *_plan(turn, "opencode"), "--dir", turn["repo"], *(["--session", native] if native else []), message]
 
 
 def argv_omp(message: str, native: str, turn: dict) -> list[str]:
-    return ["omp", "-p", "--mode", "json", *_model(turn), "--cwd", turn["repo"], message]
+    return ["omp", "-p", "--mode", "json", *_model(turn), *_effort(turn, "omp"), "--cwd", turn["repo"], message]
 
 
 def argv_pi(message: str, native: str, turn: dict) -> list[str]:
-    return ["pi", "-p", "--mode", "json", *_model(turn), message]
+    return ["pi", "-p", "--mode", "json", *_model(turn), *_effort(turn, "pi"), message]
 
 
 def argv_agy(message: str, native: str, turn: dict) -> list[str]:
-    return ["agy", "-p", message, "--output-format", "json"]
+    return ["agy", "-p", message, "--output-format", "json", *_effort(turn, "agy")]
 
 
 HEADLESS = {"claude": argv_claude, "codex": argv_codex, "grok": argv_grok, "opencode": argv_opencode,
@@ -119,14 +148,41 @@ def _clean(text, limit=MAX_ENTRY) -> str:
 
 
 # -- decoding ---------------------------------------------------------------
+# the input that says what a tool is doing, for the tools every parent shares; any other tool shows its first text input
+_TOOL_KEYS = {"Bash": "command", "Read": "file_path", "Edit": "file_path", "MultiEdit": "file_path", "Write": "file_path",
+              "NotebookEdit": "notebook_path", "Grep": "pattern", "Glob": "pattern", "WebFetch": "url", "WebSearch": "query",
+              "Task": "description", "Agent": "description", "Skill": "skill", "LS": "path", "BashOutput": "bash_id"}
+
+
 def _tool_line(name, data) -> str:
     detail = ""
     if isinstance(data, dict):
-        for value in data.values():
-            if isinstance(value, str) and value.strip():
-                detail = value.strip().splitlines()[0]
-                break
+        if name == "TodoWrite" and isinstance(data.get("todos"), list):
+            detail = f"{len(data['todos'])} items"
+        key = _TOOL_KEYS.get(str(name))
+        value = data.get(key) if key else None
+        if not detail and isinstance(value, str) and value.strip():
+            detail = value.strip().splitlines()[0]
+        if not detail:
+            for value in data.values():
+                if isinstance(value, str) and value.strip():
+                    detail = value.strip().splitlines()[0]
+                    break
     return _clean(f"{name} {detail}".strip(), 200)
+
+
+def _result_line(content, error: bool = False) -> dict:
+    """What a tool answered, as one line: its first line, and how many more there were."""
+    if isinstance(content, list):
+        content = "\n".join(str(b.get("text") or "") for b in content if isinstance(b, dict) and b.get("type") == "text")
+    lines = [l for l in str(content or "").splitlines() if l.strip()]
+    if not lines:
+        text = "failed" if error else "done"
+    else:
+        text = lines[0].strip()
+        if len(lines) > 1:
+            text += f"  (+{len(lines) - 1} lines)"
+    return {"role": "result-error" if error else "result", "text": _clean(text, 200)}
 
 
 def _generic_event(event: dict, out: dict) -> dict:
@@ -167,7 +223,7 @@ def _generic_event(event: dict, out: dict) -> dict:
 
 def decode_event(parent: str, event) -> dict:
     """{'entries': [{role, text}], 'native': session id or '', 'done': bool, 'error': bool} for one stream event."""
-    out = {"entries": [], "native": "", "done": False, "error": False}
+    out = {"entries": [], "native": "", "done": False, "error": False, "usage": None}
     if not isinstance(event, dict):
         return out
     if parent not in ("claude", "codex"):
@@ -190,9 +246,18 @@ def decode_event(parent: str, event) -> dict:
                     out["entries"].append({"role": "assistant", "text": _clean(block["text"])})
                 elif block.get("type") == "tool_use":
                     out["entries"].append({"role": "tool", "text": _tool_line(block.get("name") or "tool", block.get("input"))})
+        elif kind == "user":  # what the tools answered
+            content = (event.get("message") or {}).get("content")
+            for block in content if isinstance(content, list) else []:
+                if isinstance(block, dict) and block.get("type") == "tool_result":
+                    out["entries"].append(_result_line(block.get("content"), bool(block.get("is_error"))))
         elif kind == "result":
             out["native"] = str(event.get("session_id") or "")
             out["done"], out["error"] = True, bool(event.get("is_error"))
+            used = event.get("usage") if isinstance(event.get("usage"), dict) else {}
+            seen = sum(int(used.get(k) or 0) for k in ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens"))
+            out["usage"] = {"cost": float(event.get("total_cost_usd") or 0), "input": seen, "output": int(used.get("output_tokens") or 0),
+                            "context": seen}
             if out["error"]:
                 out["entries"].append({"role": "error", "text": _clean(event.get("result") or event.get("subtype") or "the parent reported an error")})
     elif parent == "codex":
@@ -205,8 +270,25 @@ def decode_event(parent: str, event) -> dict:
                 out["entries"].append({"role": "assistant", "text": _clean(item["text"])})
             elif item.get("type") == "command_execution" and kind == "item.started":
                 out["entries"].append({"role": "tool", "text": _clean("ran " + str(item.get("command") or ""), 200)})
+            elif item.get("type") == "command_execution":
+                code = item.get("exit_code")
+                failed = isinstance(code, int) and code != 0
+                if failed or str(item.get("aggregated_output") or "").strip():  # a command that said nothing needs no line
+                    out["entries"].append(_result_line(item.get("aggregated_output"), failed))
+            elif item.get("type") == "file_change" and kind == "item.completed":
+                paths = [str(c.get("path")) for c in item.get("changes", []) if isinstance(c, dict) and c.get("path")]
+                out["entries"].append({"role": "tool", "text": _clean("edited " + (", ".join(paths) if paths else "files"), 200)})
+            elif item.get("type") == "mcp_tool_call" and kind == "item.started":
+                out["entries"].append({"role": "tool", "text": _clean(f"{item.get('server', 'mcp')}.{item.get('tool', 'tool')}", 200)})
+            elif item.get("type") == "web_search" and kind == "item.started":
+                out["entries"].append({"role": "tool", "text": _clean("search " + str(item.get("query") or ""), 200)})
+            elif item.get("type") == "todo_list" and kind == "item.completed":
+                out["entries"].append({"role": "tool", "text": f"plan {len(item.get('items') or [])} steps"})
         elif kind == "turn.completed":
             out["done"] = True
+            used = event.get("usage") if isinstance(event.get("usage"), dict) else {}
+            seen = int(used.get("input_tokens") or 0)
+            out["usage"] = {"cost": 0.0, "input": seen, "output": int(used.get("output_tokens") or 0), "context": seen}
         elif kind in ("turn.failed", "error"):
             out["done"], out["error"] = True, True
             err = event.get("error")
@@ -332,7 +414,8 @@ def transcript(repo, session, tail: int = 200) -> dict:
             who = row["text"].split(" → ", 1)[1]
         row["parent"] = who
     return {"session": meta["id"], "parent": meta["parent"], "state": meta["state"], "turns": meta.get("turns", 0),
-            "note": meta.get("note", ""), "entries": rows, "ask": pending_ask(repo, meta["id"]),
+            "note": meta.get("note", ""), "plan": bool(meta.get("plan")), "native": str(meta.get("native") or ""),
+            "entries": rows, "ask": pending_ask(repo, meta["id"]),
             "partial": _partial(repo, meta) if meta["state"] == "running" else "",
             "asks": bool(meta.get("asks", meta["parent"] in ASKS))}
 
@@ -367,8 +450,9 @@ def status(repo) -> dict:
     parent = default_parent(repo)
     import ui_settings
     chosen, _ = ui_settings.chosen_model(repo, parent)
+    effort, _ = ui_settings.chosen_effort(repo, parent)
     result = {"enabled": on, "parents": sorted(HEADLESS), "available": available, "sessions": [], "parent": parent,
-              "configured": configured, "model": chosen or parent_model(parent), "model_chosen": bool(chosen)}
+              "configured": configured, "model": chosen or parent_model(parent), "model_chosen": bool(chosen), "effort": effort}
     if on:
         result["sessions"] = [{"id": s["id"], "parent": s["parent"], "state": s["state"], "turns": s.get("turns", 0)} for s in sessions(repo)[:20]]
     return result
@@ -458,6 +542,71 @@ def set_parent(repo, name: str) -> dict:
     return {"parent": name, "path": str(path)}
 
 
+PLAN_COMMAND = re.compile(r"/plan(?:\s+(.*))?", re.S)
+INFO_COMMAND = re.compile(r"/(cost|context|mcp)\s*")
+PROMPT_COMMAND = re.compile(r"/(init|review|security-review)(?:\s+(.*))?", re.S)
+
+
+def _builtin_prompt(parent: str, name: str, rest: str) -> str:
+    """What /init, /review and /security-review ask the parent: the prompts those commands stand for in the parents' own
+    screens, written out, so they work in every parent's headless mode."""
+    memory = "CLAUDE.md" if parent == "claude" else "AGENTS.md"
+    if name == "init":
+        return (f"Look through this codebase and write a {memory} file for it (improve the one that is there if there is one): "
+                "how to build, test and lint it, how it is laid out, and the conventions a newcomer must follow. Keep it short and "
+                "specific to this project, and do not repeat what the code makes obvious." + (f" {rest}" if rest else ""))
+    if name == "review":
+        return ("Review the current changes: the staged and unstaged diff and any new files (git status and git diff). Report bugs, risky "
+                "changes and missing tests, most serious first, each with its file and line. Do not edit anything." + (f" Focus: {rest}" if rest else ""))
+    return ("Review the current changes (git status and git diff) for security problems: injection, unsafe file or network access, secrets, "
+            "missing checks on input. Report each with its file and line and how to fix it. Do not edit anything." + (f" Focus: {rest}" if rest else ""))
+
+
+def _tokens(n: int) -> str:
+    return f"{n / 1000:.1f}k" if n >= 1000 else str(n)
+
+
+def _mcp_servers(repo, parent: str) -> list[str]:
+    """The MCP servers the parent has configured, as its own files name them."""
+    names: list[str] = []
+    home = Path.home()
+    try:
+        if parent == "claude":
+            for path in (Path(repo) / ".mcp.json", home / ".claude.json"):
+                try:
+                    data = json.loads(path.read_text())
+                except (OSError, ValueError):
+                    continue
+                names += list((data.get("mcpServers") or {}))
+                names += list(((data.get("projects") or {}).get(str(Path(repo).resolve())) or {}).get("mcpServers") or {})
+        elif parent == "codex":
+            import child_mcp
+            names += list(child_mcp._load_toml(home / ".codex" / "config.toml").get("mcp_servers") or {})
+    except (OSError, ValueError, AttributeError):
+        pass
+    return sorted(dict.fromkeys(names))
+
+
+def _info(repo, meta: dict, what: str) -> str:
+    """What /cost, /context and /mcp say, from what the turns reported and the parent's own config."""
+    parent = meta["parent"]
+    used = meta.get("usage") if isinstance(meta.get("usage"), dict) else {}
+    if what == "cost":
+        if not used:
+            return f"nothing counted yet: {parent} reports what a turn used when it ends" + ("" if parent in ("claude", "codex") else "; this parent does not report it")
+        text = f"{_tokens(used.get('input', 0))} tokens in, {_tokens(used.get('output', 0))} out over {used.get('turns', 0)} turns"
+        return (f"cost so far: ${used['cost']:.2f} · " if used.get("cost") else "usage so far: ") + text
+    if what == "context":
+        if not used:
+            return f"nothing counted yet: {parent} reports its context when a turn ends"
+        window = 1_000_000 if "[1m]" in str(meta.get("model", "")) else 200_000
+        share = f" of {_tokens(window)} ({used['context'] * 100 // window}%)" if parent == "claude" else ""
+        return f"context: about {_tokens(used['context'])} tokens in the last turn{share}"
+    servers = _mcp_servers(repo, parent)
+    return ("MCP servers for " + parent + ": " + ", ".join(servers)) if servers else (
+        f"no MCP servers found in {parent}'s own config" if parent in ("claude", "codex") else f"{parent}'s MCP servers are in its own settings")
+
+
 def send(repo, message: str, session: str = "", parent: str = "") -> dict:
     """Start one turn. Returns at once; the transcript fills as the detached runner decodes the stream."""
     repo = Path(repo).resolve()
@@ -470,8 +619,37 @@ def send(repo, message: str, session: str = "", parent: str = "") -> dict:
         raise ChatError(f"session {meta['id']} is still answering; wait for it or cancel it")
     if session and parent and parent != meta["parent"]:
         meta = hand_over(repo, meta, choose_parent(repo, parent))
+    shown = message
+    info = INFO_COMMAND.fullmatch(message)  # these answer without a turn, so the parent CLI need not be installed
+    if info:
+        append(repo, meta["id"], "system", _info(repo, meta, info.group(1)))
+        return {"session": meta["id"], "parent": meta["parent"], "state": meta["state"], "turn": meta.get("turns", 0)}
+    planned = PLAN_COMMAND.fullmatch(message)
+    if planned:
+        # /plan: plan mode on, off or toggled for this conversation; /plan TEXT asks TEXT in plan mode; /plan go leaves it
+        arg = (planned.group(1) or "").strip()
+        word = arg.lower()
+        if word in ("", "on", "off", "exit", "stop"):
+            on = (not meta.get("plan")) if word == "" else word == "on"
+            meta["plan"] = on
+            append(repo, meta["id"], "system", ("plan mode on: " + meta["parent"] + " plans and changes nothing until /plan off or /plan go")
+                   if on else "plan mode off")
+            _write_json(_meta_path(repo, meta["id"]), meta)
+            return {"session": meta["id"], "parent": meta["parent"], "state": meta["state"], "turn": meta.get("turns", 0), "plan": on}
+        if word == "go":
+            meta["plan"], message = False, "Go ahead with the plan."
+            append(repo, meta["id"], "system", "plan mode off")
+        else:
+            meta["plan"], message = True, arg
+    prompt = PROMPT_COMMAND.fullmatch(message)
+    if prompt:
+        import parent_commands
+        if any(c["name"] == prompt.group(1) for c in parent_commands.commands(repo, meta["parent"])):
+            prompt = None  # the parent has a command of that name of its own: that one runs
+    if prompt:
+        message = _builtin_prompt(meta["parent"], prompt.group(1), (prompt.group(2) or "").strip())
     choose_parent(repo, meta["parent"])
-    append(repo, meta["id"], "user", _clean(message))
+    append(repo, meta["id"], "user", _clean(shown))
     meta.update(state="running", turns=meta.get("turns", 0) + 1, note="")
     runner = subprocess.Popen([sys.executable, str(HERE / "rig_chat.py"), "run-turn", "--repo", str(repo), "--session", meta["id"]],
                               stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True,
@@ -708,9 +886,13 @@ def run_codex_server(repo: Path, session: str, message: str, meta: dict, folder:
         send({"jsonrpc": "2.0", "method": "notifications/initialized"})
         native = meta.get("native", "")
         if native:
-            call = {"name": "codex-reply", "arguments": {"conversationId": native, "threadId": native, "prompt": message}}
+            call = {"name": "codex-reply", "arguments": {"conversationId": native, "threadId": native,
+                                                         "prompt": message}}
         else:
-            call = {"name": "codex", "arguments": {"prompt": message, "cwd": str(repo), **({"model": meta["model"]} if meta.get("model") else {})}}
+            call = {"name": "codex", "arguments": {"prompt": message, "cwd": str(repo),
+                                                   **({"sandbox": "read-only"} if meta.get("plan") else {}),
+                                                   **({"model": meta["model"]} if meta.get("model") else {}),
+                                                   **({"config": {"model_reasoning_effort": meta["effort"]}} if meta.get("effort") else {})}}
         send({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": call})
         written, error = 0, False
         streamed = ""
@@ -778,6 +960,88 @@ def run_codex_server(repo: Path, session: str, message: str, meta: dict, folder:
         stop()
 
 
+# -- what a turn changed -----------------------------------------------------
+DIFF_FILES = 8        # files shown per turn; the rest are counted
+DIFF_LINES = 60       # lines shown per file
+DIFF_SECONDS = 25
+
+
+def _tree(repo) -> str:
+    """A tree naming the working tree as it is now: tracked and new files, not ignored ones, nor .rig. It is made through a
+    copy of the index, so the repository's own index and branch are never touched. Empty when this is not a git repository."""
+    import tempfile
+    repo = str(repo)
+    try:
+        top = subprocess.run(["git", "-C", repo, "rev-parse", "--git-dir"], capture_output=True, text=True, timeout=10)
+        if top.returncode != 0:
+            return ""
+        git_dir = Path(top.stdout.strip())
+        git_dir = git_dir if git_dir.is_absolute() else Path(repo) / git_dir
+        fd, index = tempfile.mkstemp(prefix="rig-index-")
+        os.close(fd)
+        try:
+            try:
+                shutil.copyfile(git_dir / "index", index)  # keeps git's stat cache, so a big repository is not read again
+            except OSError:
+                os.unlink(index)  # no index yet: an empty one
+            env = {**os.environ, "GIT_INDEX_FILE": index}
+            added = subprocess.run(["git", "-C", repo, "add", "-A", "--", "."], capture_output=True, text=True,
+                                   timeout=DIFF_SECONDS, env=env)
+            if added.returncode != 0:
+                return ""
+            # Rig's own files change while a turn runs; an exclude pathspec would fail where .rig is ignored, so they are taken out after
+            subprocess.run(["git", "-C", repo, "rm", "-r", "--cached", "-q", "--ignore-unmatch", "--", ".rig"], capture_output=True,
+                           text=True, timeout=DIFF_SECONDS, env=env)
+            out = subprocess.run(["git", "-C", repo, "write-tree"], capture_output=True, text=True, timeout=10, env=env)
+            return out.stdout.strip() if out.returncode == 0 else ""
+        finally:
+            if os.path.exists(index):
+                os.unlink(index)
+    except (OSError, subprocess.SubprocessError):
+        return ""
+
+
+def turn_changes(repo, before: str, after: str) -> list[dict]:
+    """The files that differ between two trees: {path, added, deleted, text} where text is the patch's hunks, cut short."""
+    if not before or not after or before == after:
+        return []
+    try:
+        stat = subprocess.run(["git", "-C", str(repo), "diff", "--numstat", "--no-color", "--no-ext-diff", before, after],
+                              capture_output=True, text=True, timeout=DIFF_SECONDS)
+        patch = subprocess.run(["git", "-C", str(repo), "diff", "--no-color", "--no-ext-diff", "-U2", before, after],
+                               capture_output=True, text=True, timeout=DIFF_SECONDS, errors="replace")
+    except (OSError, subprocess.SubprocessError):
+        return []
+    counts = {}
+    for row in stat.stdout.splitlines():
+        a, _, rest = row.partition("\t")
+        d, _, path = rest.partition("\t")
+        counts[path] = (int(a) if a.isdigit() else 0, int(d) if d.isdigit() else 0)
+    files = []
+    for chunk in re.split(r"(?m)^diff --git ", patch.stdout)[1:]:
+        head, _, body = chunk.partition("\n")
+        path = head.rsplit(" b/", 1)[-1].strip()
+        lines = [l for l in body.splitlines() if not l.startswith(("index ", "--- ", "+++ ", "new file", "deleted file", "similarity", "rename "))]
+        if any(l.startswith("Binary files") for l in lines):
+            lines = ["binary file"]
+        if len(lines) > DIFF_LINES:
+            lines = lines[:DIFF_LINES] + [f"… {len(lines) - DIFF_LINES} more lines"]
+        added, deleted = counts.get(path, (0, 0))
+        files.append({"path": path, "added": added, "deleted": deleted, "text": "\n".join(lines)})
+    return files
+
+
+def _record_changes(repo, session: str, before: str) -> None:
+    """After a turn: one entry for each file it changed, with what changed, for any parent."""
+    after = _tree(repo)
+    files = turn_changes(repo, before, after)
+    for entry in files[:DIFF_FILES]:
+        append(repo, session, "diff", _clean(f"{entry['path']} +{entry['added']} −{entry['deleted']}\n{entry['text']}", 6000))
+    if len(files) > DIFF_FILES:
+        rest = files[DIFF_FILES:]
+        append(repo, session, "system", f"and {len(rest)} more files changed: " + ", ".join(e["path"] for e in rest[:6]) + (" …" if len(rest) > 6 else ""))
+
+
 def run_turn(repo, session: str) -> int:
     """The detached runner: spawn the parent in its headless mode and write what it says to the transcript."""
     repo = Path(repo).resolve()
@@ -794,20 +1058,25 @@ def run_turn(repo, session: str) -> int:
     if meta.get("context_from") is not None:
         meta["context_from"] = None  # told once; from here its own session carries the conversation
         _write_json(_meta_path(repo, session), meta)
+    if meta.get("plan") and parent != "claude":
+        message = PLAN_PREFIX + message  # claude has a flag for plan mode; the others are told in the message
     (folder / "message.txt").write_text(message)
     import ui_settings
-    turn = {"repo": str(repo), "message_file": str(folder / "message.txt"), "new_id": str(uuid.uuid4()),
-            "model": ui_settings.chosen_model(repo, parent)[0]}
-    meta["model"] = turn["model"]
+    plan = bool(meta.get("plan"))
+    turn = {"repo": str(repo), "message_file": str(folder / "message.txt"), "new_id": str(uuid.uuid4()), "plan": plan,
+            "model": ui_settings.chosen_model(repo, parent)[0], "effort": ui_settings.chosen_effort(repo, parent)[0]}
+    meta["model"], meta["effort"] = turn["model"], turn["effort"]
     if parent in ASKS:
         _write_json(folder / "meta.json", {"status": "running"})
         turn["ask_mcp"] = _ask_server(folder)
     native = meta.get("native", "")
     if parent == "grok" and not native:
         meta["native"] = turn["new_id"]  # grok takes the id we give it, and later turns resume it
+    before = _tree(repo)  # what the working tree is before the parent starts, to show what its turn changed
     if parent == "codex" and shutil.which("codex"):
         started, error, _ = run_codex_server(repo, session, message, meta, folder)
         if started:
+            _record_changes(repo, session, before)
             _write_json(folder / "meta.json", {"status": "idle"})
             fresh = read_meta(repo, session) if _meta_path(repo, session).exists() else meta
             fresh.update(native=meta.get("native", ""), state="failed" if error else "idle", runner_pid=0,
@@ -829,6 +1098,7 @@ def run_turn(repo, session: str) -> int:
     done = error = False
     count = 0
     said = False
+    used = None
     chunks: list[str] = []
     raw: list[str] = []
 
@@ -867,6 +1137,8 @@ def run_turn(repo, session: str) -> int:
                 continue
             write(entry["role"], entry["text"])
         done, error = done or decoded["done"], error or decoded["error"]
+        if decoded.get("usage"):
+            used = decoded["usage"]
     flush()
     if not count and raw:
         import jobs  # a stream this decoder did not recognise: read it the way Rig reads that CLI's job log
@@ -875,6 +1147,7 @@ def run_turn(repo, session: str) -> int:
             write("assistant", _clean("\n".join(lines)))
     stderr = proc.stderr.read()
     code = proc.wait()
+    _record_changes(repo, session, before)
     if parent in ASKS:
         _write_json(folder / "meta.json", {"status": "idle"})  # a late answer to this turn's request is refused
     if code != 0 and not error:
@@ -886,6 +1159,10 @@ def run_turn(repo, session: str) -> int:
                  asks=parent == "claude")  # codex reaches this plain headless mode only when its server mode did not start
     if fresh.get("note") == "cancelled":
         fresh["state"] = "idle"
+    if used:  # what the turn cost and how full the parent's context is, for /cost and /context
+        total = fresh.get("usage") if isinstance(fresh.get("usage"), dict) else {}
+        fresh["usage"] = {"cost": round(float(total.get("cost", 0)) + used["cost"], 6), "input": int(total.get("input", 0)) + used["input"],
+                          "output": int(total.get("output", 0)) + used["output"], "context": used["context"], "turns": int(total.get("turns", 0)) + 1}
     _write_json(_meta_path(repo, session), fresh)
     return 0 if not error else 1
 

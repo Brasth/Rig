@@ -54,6 +54,21 @@ MODEL_PARENTS = ("claude", "codex", "grok", "opencode", "omp", "pi")
 MODEL_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/@+\[\]-]{0,99}$")
 for _name in MODEL_PARENTS:
     SETTINGS[f"parent_model.{_name}"] = ("parent_model", _name, None, ("all", "repo"))
+# how much each parent reasons, passed to its own reasoning flag (claude --effort, codex model_reasoning_effort, grok
+# --effort, opencode --variant, omp and pi --thinking); empty means its own setting. The levels are the ones each CLI
+# documents, offered in /model; any other word of the same shape is accepted, since CLIs add levels (opencode's are
+# the provider's own).
+EFFORT_LEVELS = {
+    "claude": ("low", "medium", "high", "xhigh", "max"),
+    "codex": ("minimal", "low", "medium", "high", "xhigh"),
+    "grok": ("low", "medium", "high"),
+    "opencode": ("minimal", "low", "medium", "high", "max"),
+    "omp": ("off", "minimal", "low", "medium", "high", "xhigh"),
+    "pi": ("off", "minimal", "low", "medium", "high", "xhigh"),
+}
+EFFORT_NAME = re.compile(r"^[a-z][a-z0-9_-]{0,19}$")
+for _name in MODEL_PARENTS:
+    SETTINGS[f"parent_effort.{_name}"] = ("parent_effort", _name, None, ("all", "repo"))
 
 
 class SettingsError(ValueError):
@@ -112,7 +127,7 @@ def write_key(path: Path, section: str, key: str, raw: str) -> None:
 
 
 def _raw(section: str, value: str) -> str:
-    if section == "parent_model":
+    if section in ("parent_model", "parent_effort"):
         return json.dumps(value)  # always a string, quoted and escaped
     if value in _BOOL or value.isdigit():
         return value
@@ -156,6 +171,7 @@ def read(repo) -> dict:
         "routing_table": _routing_table(parsed, installed, parsed["parent"] or "claude"),
         "models": {name: (route_model(name) or "auto") for name in harness.WORKERS},
         "parent_models": {name: parent_model_info(repo, name) for name in MODEL_PARENTS},
+        "parent_efforts": {name: parent_effort_info(repo, name) for name in MODEL_PARENTS},
         "runs_today": _runs_today(repo),
         **_facts(repo),
     }
@@ -168,6 +184,20 @@ def chosen_model(repo, parent: str) -> tuple[str, str]:
         return here, "repo"
     everywhere = _read_key(ui_theme.global_path(), "parent_model", parent, keep_case=True)
     return (everywhere, "all") if everywhere else ("", "default")
+
+
+def chosen_effort(repo, parent: str) -> tuple[str, str]:
+    """The reasoning level chosen for the parent in the conversation, and where: this repo's, else all repos'."""
+    here = _read_key(harness.harness_path(Path(repo)), "parent_effort", parent)
+    if here:
+        return here, "repo"
+    everywhere = _read_key(ui_theme.global_path(), "parent_effort", parent)
+    return (everywhere, "all") if everywhere else ("", "default")
+
+
+def parent_effort_info(repo, parent: str) -> dict:
+    effort, scope = chosen_effort(repo, parent)
+    return {"effort": effort, "scope": scope, "levels": list(EFFORT_LEVELS.get(parent, ()))}
 
 
 def own_model(parent: str) -> str:
@@ -310,7 +340,12 @@ def save(repo, key: str, value, scope: str = "repo") -> dict:
     if key not in SETTINGS:
         raise SettingsError(f"{key or 'that'} is not a setting the board changes")
     section, name, allowed, scopes = SETTINGS[key]
-    if allowed is None:
+    if allowed is None and section == "parent_effort":
+        # a reasoning level, as the parent CLI writes it; empty or "default" goes back to its own setting
+        value = "" if str(value).strip().lower() in ("", "default") else str(value).strip().lower()
+        if value and not EFFORT_NAME.match(value):
+            raise SettingsError(f"{value!r} is not a reasoning level")
+    elif allowed is None:
         # a model's name, as the parent CLI writes it: kept as typed; empty or "default" goes back to its own setting
         value = "" if str(value).strip().lower() in ("", "default") else str(value).strip()
         if value and not MODEL_NAME.match(value):

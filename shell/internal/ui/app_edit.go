@@ -31,11 +31,10 @@ type draftRow struct {
 // draftRows is the box's text as rows of at most room cells: its lines, wrapped, with the cursor drawn in its row and
 // the selection lit. With colour the cursor is a block on the character under it, as codex and grok draw theirs, so
 // the text keeps its place; without, a bar. A draft taller than most rows shows the rows around the cursor.
-func (st State) draftRows(room, most int) []draftRow {
+func (st State) draftRows(room, most int) (rows []draftRow, above, below int) {
 	room = max(2, room-1) // a cell for the cursor after a full row
 	r, c := []rune(st.Prompt), st.caret()
 	s0, s1 := st.selection()
-	var rows []draftRow
 	at := 0 // the row the cursor is on
 	for line := 0; line <= len(r); {
 		end := line
@@ -55,11 +54,18 @@ func (st State) draftRows(room, most int) []draftRow {
 		}
 		line = end + 1
 	}
+	total, from := len(rows), 0
 	if len(rows) > most {
-		from := max(0, min(at-most/2, len(rows)-most))
+		from = max(0, min(at-most/2, len(rows)-most))
+		if st.PromptScrolled && st.PromptTopAt == st.caret() {
+			from = max(0, min(st.PromptTop, len(rows)-most)) // the wheel put the view here; typing or moving follows the cursor again
+		}
 		rows = rows[from : from+most]
 	}
-	return rows
+	if st.App != nil {
+		st.App.BoxTop, st.App.BoxTotal = from, total
+	}
+	return rows, from, total - from - len(rows)
 }
 
 // selection is the box's selected runes, [s0, s1); empty when nothing is selected.
@@ -104,6 +110,9 @@ func drawRow(st State, row []rune, col, s0, s1 int) string {
 	return b.String()
 }
 
+// boxMostRows is how many rows of a long draft the box shows; the wheel over it scrolls the rest.
+const boxMostRows = 8
+
 // boxRows is the reply box's content: the › and the draft's rows under it, or the placeholder. Each row's text is a
 // zone a click places the cursor in.
 func boxRows(st State, w int, placeholder string) []string {
@@ -111,10 +120,16 @@ func boxRows(st State, w int, placeholder string) []string {
 		return []string{" " + st.faint("›") + " " + st.zone("text:box:0:0", "▏"+st.faint(placeholder))}
 	}
 	var out []string
-	for i, r := range st.draftRows(w-7, 8) {
+	rows, above, below := st.draftRows(w-7, boxMostRows)
+	for i, r := range rows {
 		lead := "   "
-		if i == 0 {
+		switch {
+		case i == 0 && above > 0:
+			lead = " " + st.faint("↑") + " " // the draft goes on above: the wheel scrolls to it
+		case i == 0:
 			lead = " " + st.faint("›") + " "
+		case i == len(rows)-1 && below > 0:
+			lead = " " + st.faint("↓") + " "
 		}
 		out = append(out, lead+st.zone(fmt.Sprintf("text:box:%d:%d", r.start, r.end), r.text+" "))
 	}

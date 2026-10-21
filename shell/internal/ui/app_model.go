@@ -40,6 +40,7 @@ func modelItems(st State, q string) []paletteItem {
 		ownDetail += " · in use"
 	}
 	add("default", ownDetail, "model:default")
+	out = append(out, reasoningRow(st, parent, q)...) // the level is one row below the default model, so it is seen at once
 	seen := map[string]bool{"default": true}
 	about := map[string]string{}
 	names := append([]string{current}, suggest...)
@@ -66,8 +67,95 @@ func modelItems(st State, q string) []paletteItem {
 	if st.ModelsFor == "loading:"+parent && q == "" {
 		out = append(out, paletteItem{section, "…", "asking " + parent + " for its models", "model"})
 	}
-	if typed := strings.TrimSpace(st.App.Palette.Query); typed != "" && !seen[typed] {
+	// a typed name is offered as a model, unless it is one of the reasoning levels: then it means the level
+	typed := strings.TrimSpace(st.App.Palette.Query)
+	if typed != "" && !seen[typed] && !isEffortLevel(st, parent, typed) {
 		out = append(out, paletteItem{section, "use " + typed, "as " + parent + " writes it", "model:" + typed})
+	}
+	return out
+}
+
+// reasoningRow is /model's row for the reasoning level: the one in use, and ⏎ opens the levels. A typed word that is
+// one of the levels sets it directly.
+func reasoningRow(st State, parent, q string) []paletteItem {
+	current, scope := st.ChatEffort, "default"
+	var levels []string
+	if s := st.AppSettings; s != nil {
+		if pe, ok := s.ParentEfforts[parent]; ok {
+			current, scope, levels = pe.Effort, pe.Scope, pe.Levels
+		}
+	}
+	if len(levels) == 0 {
+		return nil // a parent with no reasoning flag
+	}
+	section := "models for " + parent
+	if typed := strings.TrimSpace(st.App.Palette.Query); typed != "" && isEffortLevel(st, parent, typed) {
+		return []paletteItem{{section, "reasoning " + strings.ToLower(typed), "set how much " + parent + " reasons", "effort:" + strings.ToLower(typed)}}
+	}
+	if q != "" && !strings.Contains("reasoning effort thinking", q) {
+		return nil
+	}
+	detail := "its own setting"
+	if current != "" {
+		detail = current
+		if scope == "repo" {
+			detail += " · this repo"
+		}
+	}
+	return []paletteItem{{section, "reasoning effort ▸", detail, "effort-menu"}}
+}
+
+// isEffortLevel is whether a word is one of the reasoning levels the parent's CLI documents.
+func isEffortLevel(st State, parent, word string) bool {
+	if s := st.AppSettings; s != nil {
+		for _, l := range s.ParentEfforts[parent].Levels {
+			if strings.EqualFold(l, word) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// effortItems are the palette in /effort (and the reasoning row of /model): the CLI's own setting and each level it
+// documents, the one in use marked, and a typed word as a level of its own.
+func effortItems(st State, parent, q string) []paletteItem {
+	current, scope := st.ChatEffort, "default"
+	var levels []string
+	if s := st.AppSettings; s != nil {
+		if pe, ok := s.ParentEfforts[parent]; ok {
+			current, scope, levels = pe.Effort, pe.Scope, pe.Levels
+		}
+	}
+	if len(levels) == 0 {
+		return nil // a parent with no reasoning flag
+	}
+	section := "reasoning for " + parent
+	var out []paletteItem
+	add := func(label, detail, action string) {
+		if q == "" || strings.Contains(strings.ToLower(label+" reasoning effort thinking"), q) {
+			out = append(out, paletteItem{section, label, detail, action})
+		}
+	}
+	detail := "its own setting"
+	if current == "" {
+		detail += " · in use"
+	}
+	add("default", detail, "effort:default")
+	seen := map[string]bool{"default": true}
+	for _, l := range levels {
+		seen[l] = true
+		d := ""
+		if l == current {
+			d = "in use"
+			if scope == "repo" {
+				d += " · this repo"
+			}
+		}
+		add(l, d, "effort:"+l)
+	}
+	if typed := strings.ToLower(strings.TrimSpace(st.App.Palette.Query)); typed != "" && !seen[typed] {
+		out = append(out, paletteItem{section, "use " + typed, "as " + parent + " writes it", "effort:" + typed})
 	}
 	return out
 }
@@ -133,6 +221,27 @@ func (m *Model) setModel(name string) tea.Cmd {
 	}
 	return func() tea.Msg {
 		if _, err := src.SetSetting("parent_model."+parent, name, "all", callTimeout); err != nil {
+			return appSettingsMsg{err: err}
+		}
+		return modelSetMsg{}
+	}
+}
+
+// setEffort keeps the parent's reasoning level for all repos (default: back to its own setting) and says so.
+func (m *Model) setEffort(level string) tea.Cmd {
+	parent := m.st.ChatParent
+	if parent == "" {
+		m.st.Message = "no parent yet: /parent chooses one"
+		return nil
+	}
+	level = strings.ToLower(strings.TrimSpace(level))
+	src := m.src
+	m.st.Message = parent + " reasons at " + level + " from the next message"
+	if level == "default" {
+		m.st.Message = parent + " uses its own reasoning setting from the next message"
+	}
+	return func() tea.Msg {
+		if _, err := src.SetSetting("parent_effort."+parent, level, "all", callTimeout); err != nil {
 			return appSettingsMsg{err: err}
 		}
 		return modelSetMsg{}
