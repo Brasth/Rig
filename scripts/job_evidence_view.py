@@ -169,6 +169,74 @@ def build(repo, job_id: str) -> dict:
 MAX_DIFF = 400_000
 
 
+def _unified(name: str, old: str | None, new: str | None) -> tuple[str, int, int]:
+    """One file's change as git writes it, from its two contents (None: the file is not there)."""
+    import difflib
+    a, b = (old or "").splitlines(), (new or "").splitlines()
+    hunks = list(difflib.unified_diff(a, b, lineterm="", n=3))[2:]
+    if not hunks:
+        return "", 0, 0
+    head = [f"diff --git a/{name} b/{name}"]
+    if old is None:
+        head.append("new file mode 100644")
+    if new is None:
+        head.append("deleted file mode 100644")
+    head += ["--- " + ("/dev/null" if old is None else "a/" + name), "+++ " + ("/dev/null" if new is None else "b/" + name)]
+    added = sum(1 for h in hunks if h.startswith("+"))
+    deleted = sum(1 for h in hunks if h.startswith("-"))
+    return "\n".join(head + hunks) + "\n", added, deleted
+
+
+def _git_text(repo: Path, args: list[str], env) -> str | None:
+    try:
+        done = subprocess.run(["git", "-C", str(repo), *args], capture_output=True, timeout=20, env=env)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if done.returncode != 0 or b"\0" in done.stdout[:8000]:
+        return None
+    return done.stdout.decode("utf-8", "replace")
+
+
+def _kept_diff(repo: Path, folder: Path, names, env) -> tuple[list, str]:
+    kept = evidence.read_json(folder / "change-contents.json") or {}
+    before, after = kept.get("before"), kept.get("after")
+    if not isinstance(before, dict) or not isinstance(after, dict):
+        return [], ""
+    files, parts = [], []
+    for name in names:
+        if name not in before and name not in after:
+            continue
+        old = _git_text(repo, ["cat-file", "blob", before[name]], env) if before.get(name) else None
+        new = _git_text(repo, ["cat-file", "blob", after[name]], env) if after.get(name) else None
+        text, added, deleted = _unified(name, old, new)
+        if text:
+            parts.append(text)
+            files.append({"path": name, "added": str(added), "deleted": str(deleted)})
+    return files, "".join(parts)
+
+
+def _worktree_diff(repo: Path, names, env) -> tuple[list, str]:
+    if not names:
+        return [], ""
+    tracked = set((_git_text(repo, ["ls-files", "-z", "--", *names], env) or "").split("\0")) - {""}
+    files = [{"path": name, "added": added, "deleted": deleted}
+             for added, deleted, name in _numstat(repo, "HEAD", "--", *sorted(tracked))] if tracked else []
+    text = (_git_text(repo, ["diff", "--no-color", "--no-renames", "--no-ext-diff", "HEAD", "--", *sorted(tracked)], env)
+            or "") if tracked else ""
+    for name in names:
+        if name in tracked or not (repo / name).is_file():
+            continue
+        try:
+            new = (repo / name).read_text(errors="replace") if (repo / name).stat().st_size <= evidence.MAX_BLOB else None
+        except OSError:
+            new = None
+        part, added, deleted = _unified(name, None, new) if new is not None else ("", 0, 0)
+        if part:
+            text += part
+            files.append({"path": name, "added": str(added), "deleted": str(deleted)})
+    return files, text
+
+
 def diff(repo, job_id: str) -> dict:
     """What a job changed, as a unified diff, from the same base and branch the Change section counts: the committed
     branch when there is one, else the worktree against its base. A job with neither has only the recorded paths."""
@@ -197,7 +265,18 @@ def diff(repo, job_id: str) -> dict:
             text = ""
     else:
         report = evidence.read_json(folder / "change-evidence.json") or {}
+        names = report.get("scoped_changed_paths") or report.get("files_changed") or []
         source = "recorded"
-        files = [{"path": name, "added": "", "deleted": ""} for name in report.get("scoped_changed_paths", [])]
+        files = [{"path": name, "added": "", "deleted": ""} for name in names]
+        # a job that edited the repository in place: the contents kept when it began and finished, else the files as
+        # they are now against the last commit
+        shown, text = _kept_diff(repo, folder, names, env)
+        if shown:
+            source = "contents"
+        else:
+            shown, text = _worktree_diff(repo, names, env)
+            source = "working tree" if shown else source
+        if shown:
+            files = shown
     truncated = len(text) > MAX_DIFF
     return {"job_id": job_id, "source": source, "files": files, "diff": text[:MAX_DIFF], "truncated": truncated}

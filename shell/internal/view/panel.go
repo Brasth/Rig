@@ -113,7 +113,7 @@ type ChatStatus struct {
 // JobDiff is job.diff: what one job changed, as a unified diff with per-file counts.
 type JobDiff struct {
 	JobID  string `json:"job_id"`
-	Source string `json:"source"` // "git", or "recorded" when only the paths are known
+	Source string `json:"source"` // "git"; "contents" or "working tree" for a job that edited in place; "recorded" when only the paths are known
 	Files  []struct {
 		Path    string `json:"path"`
 		Added   string `json:"added"`

@@ -869,3 +869,30 @@ func TestTheSplashShowsTheMarkWhileTheShellOpens(t *testing.T) {
 		t.Fatal("a key skips it, and is not typed")
 	}
 }
+
+func TestAJobThatEditedInPlaceShowsItsChange(t *testing.T) {
+	m, src := appModel(t)
+	withConversation(t, m, src)
+	for i := range m.view.Jobs {
+		m.view.Jobs[i].Ask = false
+	}
+	src.evidence = loadEvidence(t)
+	src.diffs = map[string]*view.JobDiff{"job-7f2": {JobID: "job-7f2", Source: "working tree", Diff: sampleDiff}}
+	run(press(m, "2"), m)
+	out := appScreen(m)
+	for _, want := range []string{"changed in place: the file now, against the last commit", "  16 +   rateLimit({ windowMs: 60_000, max: 5 }),"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("missing %q:\n%s", want, out)
+		}
+	}
+	src.diffs["job-7f2"] = &view.JobDiff{JobID: "job-7f2", Source: "recorded"}
+	src.diffs["job-7f2"].Files = append(src.diffs["job-7f2"].Files, struct {
+		Path    string `json:"path"`
+		Added   string `json:"added"`
+		Deleted string `json:"deleted"`
+	}{Path: "src/a.ts"})
+	m.st.App.Diff = src.diffs["job-7f2"]
+	if out := appScreen(m); !strings.Contains(out, "Rig kept only the names of the files this job changed.") {
+		t.Fatalf("no diff to show says why:\n%s", out)
+	}
+}

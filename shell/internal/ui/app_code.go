@@ -156,6 +156,13 @@ func changesScreen(v *view.View, st State, w, h int) ([]string, [][2]string) {
 			head += "   " + st.paint(colGreen, fmt.Sprintf("+%d", f.Added)) + " " + st.paint(colRed, fmt.Sprintf("−%d", f.Deleted))
 		}
 		body = append(body, head, "")
+		switch {
+		case a.Diff.Source == "working tree":
+			// a job that edited the repository in place, from before Rig kept its files' contents
+			body = append(body, st.faint("changed in place: the file now, against the last commit"), "")
+		case len(f.Lines) == 0:
+			body = append(body, st.dim("Rig kept only the names of the files this job changed."), "")
+		}
 		add, del := tints()
 		for i, l := range f.Lines {
 			if l.Kind == '@' {

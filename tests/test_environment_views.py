@@ -333,5 +333,50 @@ class Drawer(Gate):
             job_evidence_view.build(self.repo, "../etc")
 
 
+class InPlace(unittest.TestCase):
+    """A job that edited the repository in place, with no worktree: its diff is still shown."""
+
+    def setUp(self):
+        import subprocess
+        self.td = tempfile.TemporaryDirectory()
+        self.repo = Path(self.td.name)
+        self.git = lambda *a: subprocess.run(["git", "-C", str(self.repo), *a], check=True, capture_output=True)
+        self.git("init", "-q")
+        self.git("config", "user.email", "t@example.com")
+        self.git("config", "user.name", "t")
+        (self.repo / "a.txt").write_text("one\ntwo\nthree\n")
+        self.git("add", "a.txt")
+        self.git("commit", "-qm", "base")
+        self.folder = self.repo / ".rig" / "jobs" / "j1"
+        self.folder.mkdir(parents=True)
+        (self.folder / "change-evidence.json").write_text(json.dumps({"scoped_changed_paths": ["a.txt", "new.txt"]}))
+
+    def tearDown(self):
+        self.td.cleanup()
+
+    def test_the_contents_kept_when_it_began_and_finished(self):
+        import change_evidence
+        change_evidence.keep_contents(self.repo, self.folder, "before", ["a.txt", "new.txt"])
+        (self.repo / "a.txt").write_text("one\nTWO\nthree\n")
+        (self.repo / "new.txt").write_text("hello\n")
+        change_evidence.keep_contents(self.repo, self.folder, "after", ["a.txt", "new.txt"])
+        (self.repo / "a.txt").write_text("someone else's\n")  # later edits are not the job's
+        shown = job_evidence_view.diff(self.repo, "j1")
+        self.assertEqual(shown["source"], "contents")
+        self.assertEqual([(f["path"], f["added"], f["deleted"]) for f in shown["files"]], [("a.txt", "1", "1"), ("new.txt", "1", "0")])
+        self.assertIn("-two\n+TWO", shown["diff"])
+        self.assertIn("--- /dev/null\n+++ b/new.txt", shown["diff"])
+        self.assertNotIn("someone", shown["diff"])
+
+    def test_without_kept_contents_the_files_against_the_last_commit(self):
+        (self.repo / "a.txt").write_text("one\nTWO\nthree\n")
+        (self.repo / "new.txt").write_text("hello\n")
+        shown = job_evidence_view.diff(self.repo, "j1")
+        self.assertEqual(shown["source"], "working tree")
+        self.assertEqual([f["path"] for f in shown["files"]], ["a.txt", "new.txt"])
+        self.assertIn("+TWO", shown["diff"])
+        self.assertIn("+hello", shown["diff"])
+
+
 if __name__ == "__main__":
     unittest.main()
