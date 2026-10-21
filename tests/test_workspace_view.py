@@ -197,6 +197,22 @@ class Rendering(Base):
         view = workspace.view(status)
         self.assertIn("! dc-cli   0.23.0 (pin 9.9.9)", self.lines(view, "Workspace"))
 
+    def test_the_session_screens_short_form_reads_like_the_mockup(self):
+        brief = {sec["title"]: [(l["text"], l["tone"]) for l in sec["lines"]] for sec in workspace.view(self.sample())["brief"]}
+        self.assertEqual(list(brief), ["Workspace", "Ports", "Worktrees", "Doctor", "Memory"])
+        self.assertEqual(brief["Workspace"], [("kind    devcontainer", ""), ("image   node:22-bookworm", ""), ("● up    a3f9c1 · 2h", "active")])
+        self.assertEqual(brief["Ports"], [("3000  web", ""), ("5173  vite", ""), ("! 9229  held by node", "attention")])
+        self.assertEqual(brief["Worktrees"], [("main", ""), ("job-7f2  ● writer", ""), ("job-81c  ● writer", "")])
+        self.assertEqual(brief["Doctor"], [("! engine", "attention")])
+        status = self.sample()
+        status["memory"]["updated"] = __import__("time").time() - 720
+        status.update(doctor={"ok": True, "detail": "", "problems": []},
+                      dc={"found": False, "path": "", "version": "", "pin": "", "pin_state": "missing"}, containers=[])
+        brief = {sec["title"]: [(l["text"], l["tone"]) for l in sec["lines"]] for sec in workspace.brief(status)}
+        self.assertEqual(brief["Memory"], [("42/120 lines", ""), ("updated 12m ago", "muted")])
+        self.assertEqual(brief["Doctor"], [("no problems", "")])
+        self.assertIn(("! dc-cli is not installed", "attention"), brief["Workspace"])
+
     def test_go_shell_fixture_matches_the_view_builder(self):
         data = ROOT / "shell" / "testdata"
         fresh = {"view": workspace.view(self.sample())}

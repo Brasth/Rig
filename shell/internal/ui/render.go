@@ -68,6 +68,8 @@ type State struct {
 	DockID       string
 	DockE        string
 	Styled       bool      // apply colour and reverse video to list rows; golden tests leave it off
+	ChatModel    string    // the parent's model, for the title "Parent · claude opus"
+	Focus        string    // the Session screen's pane with the keyboard: "" (the parent's ask box), "jobs" or "workspace"
 	Picker       *Picker   // the parent picker, while it is open
 	SlashSel     int       // the chosen line of the / command list
 	Now          time.Time // the clock, for the working spinner and its elapsed time; zero in golden tests
@@ -420,6 +422,7 @@ func tabLineWith(v *view.View, st State, short bool) string {
 					continue
 				}
 				switch {
+				case name == "Workflows": // the mockup counts jobs and the queue, not workflows
 				case t.Attention > 0:
 					label += fmt.Sprintf(" !%d", t.Attention)
 				case t.Count > 0:
@@ -430,9 +433,6 @@ func tabLineWith(v *view.View, st State, short bool) string {
 		if name == SettingsTab && st.Settings != nil && st.Settings.Attention {
 			label += " !"
 		}
-		if name == EnvTab && ((st.Workspace != nil && st.Workspace.Attention) || (st.Fleet != nil && st.Fleet.Attention)) {
-			label += " !"
-		}
 		if name == active {
 			label = "[" + label + "]"
 		} else {
@@ -440,7 +440,7 @@ func tabLineWith(v *view.View, st State, short bool) string {
 		}
 		parts = append(parts, label)
 	}
-	return " " + strings.Join(parts, " ")
+	return strings.Join(parts, " ")
 }
 
 func rule(title string, w int) string {
@@ -563,7 +563,7 @@ func entry(r view.Row, selected bool, w, eh int, styled bool) []string {
 	if selected {
 		marker = ">"
 	}
-	label := fit(glyph(r)+" "+clean(r.Label), 14)
+	label := fit(glyph(r)+" "+clean(r.Label), 13)
 	prefixPlain := fmt.Sprintf("%s %s  ", marker, label)
 	room := w - lipgloss.Width(prefixPlain)
 	title := clean(r.Title)
@@ -587,7 +587,7 @@ func entry(r view.Row, selected bool, w, eh int, styled bool) []string {
 		if selected {
 			return selectedRow(marker, label, r.Tone, rest, second, eh)
 		}
-		lines := []string{marker + " " + tone(r.Tone).Render(label) + "  " + rest}
+		lines := []string{tone(r.Tone).Render(marker + " " + label + "  " + rest)} // the mockup colours the whole row
 		if eh == 2 {
 			lines = append(lines, muted(second))
 		}
@@ -790,7 +790,7 @@ func chatBody(st State, w, h int) []string {
 	if st.Picker != nil {
 		return lastLines(pickerLines(st, w), 0, w, h)
 	}
-	return lastLines(append(chatAll(st, w), askLines(st, w)...), st.ChatUp, w, h)
+	return lastLines(append(chatAll(st, w), askLines(nil, st, w)...), st.ChatUp, w, h)
 }
 
 // lastLines is the h lines ending up lines before the newest, padded to w.
@@ -859,6 +859,9 @@ func chatAll(st State, w int) []string {
 				lead := prefix
 				if i > 0 {
 					lead = strings.Repeat(" ", lipgloss.Width(prefix))
+					if e.Role == "assistant" && st.WideSession && st.Tab == SessionTab {
+						lead = "  " // the mockup starts the parent's next line under its name, not its text
+					}
 				}
 				for j, l := range wrap(sanitize(raw), max(8, w-2-lipgloss.Width(prefix)), "") {
 					if j > 0 {
@@ -1046,7 +1049,10 @@ func sectionLines(sections *[]view.Section, errText, name string, firstInRule bo
 
 func tonedLine(toneName, text string, styled bool) string {
 	if styled && toneName != "" {
-		return tone(map[string]string{"ok": "verified", "attention": "attention"}[toneName]).Render(text)
+		if toneName == "muted" {
+			return muted(text)
+		}
+		return tone(map[string]string{"ok": "verified", "attention": "attention", "active": "active"}[toneName]).Render(text)
 	}
 	return text
 }

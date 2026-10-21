@@ -320,11 +320,34 @@ def status(repo) -> dict:
     available = [name for name in HEADLESS if shutil.which(name)]
     import harness
     configured = harness.parse_harness(harness.harness_path(Path(repo)))["parent"]
-    result = {"enabled": on, "parents": sorted(HEADLESS), "available": available, "sessions": [], "parent": default_parent(repo),
-              "configured": configured}
+    parent = default_parent(repo)
+    result = {"enabled": on, "parents": sorted(HEADLESS), "available": available, "sessions": [], "parent": parent,
+              "configured": configured, "model": parent_model(parent)}
     if on:
         result["sessions"] = [{"id": s["id"], "parent": s["parent"], "state": s["state"], "turns": s.get("turns", 0)} for s in sessions(repo)[:20]]
     return result
+
+
+_FAMILY = re.compile(r"(opus|sonnet|haiku|fable)", re.I)
+
+
+def parent_model(parent: str) -> str:
+    """The model the parent CLI is set to use, from its own settings, in the mockup's short form ("opus"); empty when
+    its settings name none. Reads the file only; never runs the CLI."""
+    try:
+        if parent == "claude":
+            model = json.loads((Path.home() / ".claude" / "settings.json").read_text()).get("model")
+            if isinstance(model, str):
+                family = _FAMILY.search(model)
+                return family.group(1).lower() if family else model.strip()[:24]
+        elif parent == "codex":
+            import child_mcp
+            model = child_mcp._load_toml(Path.home() / ".codex" / "config.toml").get("model")
+            if isinstance(model, str):
+                return model.strip()[:24]
+    except (OSError, ValueError, AttributeError, UnicodeError):
+        pass
+    return ""
 
 
 PREFERRED = ("claude", "codex", "grok", "opencode", "omp", "pi", "agy")  # the order a parent is picked in when none is set

@@ -529,6 +529,23 @@ class ChoosingTheParent(Base):
         self.assertTrue(harness_module.parse_harness(harness)["project"]["enabled"])
         self.assertEqual((rig_chat.status(self.repo)["configured"], rig_chat.status(self.repo)["parent"]), ("grok", "grok"))
 
+    def test_the_title_names_the_model_from_the_parents_own_settings(self):
+        home = self.base / "home"
+        (home / ".claude").mkdir(parents=True)
+        (home / ".codex").mkdir()
+        with mock.patch.dict(os.environ, {"HOME": str(home)}):
+            self.assertEqual(rig_chat.parent_model("claude"), "")
+            (home / ".claude" / "settings.json").write_text('{"model": "claude-opus-4-7"}')
+            self.assertEqual(rig_chat.parent_model("claude"), "opus")
+            (home / ".claude" / "settings.json").write_text("not json")
+            self.assertEqual(rig_chat.parent_model("claude"), "")
+            (home / ".codex" / "config.toml").write_text('model = "gpt-5.6-sol"\n')
+            self.assertEqual(rig_chat.parent_model("codex"), "gpt-5.6-sol")
+            self.assertEqual(rig_chat.parent_model("grok"), "")
+            stand_in(self.bin, "claude", CLAUDE_STREAM)
+            (home / ".claude" / "settings.json").write_text('{"model": "sonnet"}')
+            self.assertEqual(rig_chat.status(self.repo)["model"], "sonnet")
+
     def test_a_parent_key_inside_a_table_is_left_alone(self):
         harness = self.repo / ".rig" / "harness.toml"
         harness.write_text('[project]\nenabled = true\n[other]\nparent = "x"\n')

@@ -84,7 +84,7 @@ func TestOnceWorkspaceFromFixtures(t *testing.T) {
 		t.Fatalf("exit %d: %s", code, errb.String())
 	}
 	text := out.String()
-	for _, want := range []string{"Rig . my-repo", "[Env !]", "! 9229  held by node"} {
+	for _, want := range []string{"Rig . my-repo", "[Env]", "! 9229  held by node"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("missing %q in\n%s", want, text)
 		}

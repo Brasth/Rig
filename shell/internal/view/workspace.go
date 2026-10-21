@@ -20,6 +20,7 @@ type Workspace struct {
 	Attention bool      `json:"attention"`
 	Context   string    `json:"context"` // the header's container identity, "devcontainer a3f9c1"; empty without a running one
 	Sections  []Section `json:"sections"`
+	Brief     []Section `json:"brief"` // the Session screen's left column, in the ADE mockup's short words
 	// Recovery is copied from the reply's raw status by the client; nil when dc-cli reports no fault.
 	Recovery *RecoveryPlan `json:"-"`
 }

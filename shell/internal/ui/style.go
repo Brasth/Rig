@@ -24,7 +24,7 @@ const (
 func tone(name string) lipgloss.Style {
 	switch name {
 	case "attention":
-		return lipgloss.NewStyle().Foreground(lipgloss.Color(colAmber)).Bold(true)
+		return lipgloss.NewStyle().Foreground(lipgloss.Color(colAmber)) // the mockup's amber is never bold
 	case "active":
 		return lipgloss.NewStyle().Foreground(lipgloss.Color(colAccent))
 	case "verified":
@@ -43,11 +43,10 @@ func border(s string) string {
 	return lipgloss.NewStyle().Foreground(lipgloss.Color(colBorder)).Render(s)
 }
 
-// selectedRow draws the selected entry as a dark bar with bold text; the state label keeps its tone on the bar.
+// selectedRow draws the selected entry as the mockup does: a dark bar with bold #eeeeee text, both lines.
 func selectedRow(marker, label, toneName, rest, second string, eh int) []string {
 	bar := lipgloss.NewStyle().Background(lipgloss.Color(colSelBg)).Foreground(lipgloss.Color(colText)).Bold(true)
-	lab := tone(toneName).Background(lipgloss.Color(colSelBg)).Bold(true)
-	lines := []string{bar.Render(marker+" ") + lab.Render(label) + bar.Render("  "+rest)}
+	lines := []string{bar.Render(marker + " " + label + "  " + rest)}
 	if eh == 2 {
 		lines = append(lines, bar.Render(second))
 	}

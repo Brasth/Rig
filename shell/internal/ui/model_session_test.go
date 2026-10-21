@@ -171,7 +171,8 @@ func TestTheSessionFrameShowsEveryColumnAndTheAttentionLine(t *testing.T) {
 	m, _, _, _ := sessionModel(t, 120, 36)
 	out := m.View()
 	for _, want := range []string{"Workspace", "Ports", "Worktrees", "Memory", "Jobs 1-7/7 · attention first", "Finished",
-		"Queue 2 pending", "job-7f2 needs input: a allows, d denies.", "a allow  d deny"} {
+		"Queue 2 pending", "job-7f2 needs input: allow or deny the command in the parent pane.", "a allow  d deny",
+		"u up  x shell  d doctor"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q:\n%s", want, out)
 		}
@@ -262,7 +263,8 @@ func TestTheMiddleColumnIsTheConversationAsInTheMockup(t *testing.T) {
 	}
 	out := m.View()
 	for _, want := range []string{"Parent · claude", "you › Fix the failing auth tests", "parent › Two writers, then a verify node.",
-		"rig_job_launch claude job-7f2", "Ask the parent anything · / for commands", "Enter send", "/ commands"} {
+		"rig_job_launch claude job-7f2", "› Ask the parent, or /queue to park a task▏", "a allow", "m message", "/ commands",
+		"parent › job-7f2 asks to run:", "npm i -D supertest", "in container a3f9c1", "a allow  d deny  m message"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q:\n%s", want, Render(m.view, m.st, 120, 36))
 		}
@@ -376,17 +378,19 @@ func TestABigTerminalIsFilledWithTheSideColumnsKeptAndTheChatGrown(t *testing.T)
 	}
 }
 
-func TestThePanelsAreTintedAndTheAskBoxIsRaised(t *testing.T) {
+func TestTheBoardIsOneGroundWithTheMockupsInputLine(t *testing.T) {
 	m, _, _ := chatSession(t)
 	out := strings.Split(m.View(), "\n")
-	row := out[5]
-	if !strings.Contains(row, "48;5;"+colPanel+"m") || !strings.Contains(row, "48;5;"+colGround+"m") {
-		t.Fatalf("the side columns are on the panel colour and the chat on the ground: %q", row)
+	for i, row := range out {
+		if strings.Contains(row, "48;5;234m") {
+			t.Fatalf("row %d: the mockup has no tinted panels", i)
+		}
 	}
 	g := sessionGeometry(120, 36)
-	box := out[2+g.grid-2]
-	if !strings.Contains(box, "48;5;"+colRaised+"m") || !strings.Contains(sgrSeq.ReplaceAllString(box, ""), "│ › ▏") {
-		t.Fatalf("the ask box is a raised card with the cursor in it: %q", sgrSeq.ReplaceAllString(box, ""))
+	plain := func(s string) string { return sgrSeq.ReplaceAllString(s, "") }
+	rule, box := plain(out[2+g.grid-2]), plain(out[2+g.grid-1])
+	if !strings.Contains(rule, "│ ────") || !strings.Contains(box, "│ › Ask the parent, or /queue to park a task▏") {
+		t.Fatalf("the mockup's rule and input line:\n%s\n%s", rule, box)
 	}
 }
 

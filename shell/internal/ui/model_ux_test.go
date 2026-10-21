@@ -43,14 +43,14 @@ func TestTheAskBoxAlwaysHasTheKeyboardOnTheSessionScreen(t *testing.T) {
 
 func TestEscClearsThenHandsTheKeyboardToTheBoard(t *testing.T) {
 	m, src, _ := chatSession(t)
-	typeText(m, "draft")
+	typeText(m, "hello")
 	press(m, "esc")
 	if m.st.Prompt != "" || !typingChat(m.st) {
 		t.Fatal("the first Esc clears the draft")
 	}
 	press(m, "esc")
-	if typingChat(m.st) || !strings.Contains(m.st.Message, "board keys") {
-		t.Fatalf("the second Esc gives the board its keys: %q", m.st.Message)
+	if typingChat(m.st) || m.st.Focus != "jobs" {
+		t.Fatalf("the second Esc gives the jobs the keyboard: %q", m.st.Focus)
 	}
 	runAll(m, press(m, "p"))
 	if src.parentCalls != 1 {
@@ -209,5 +209,77 @@ func TestTheReplyStreamsUnderASpinnerWithTheTimeItHasTaken(t *testing.T) {
 	m.spinning = false
 	if m.spin() != nil || strings.Contains(m.View(), "working…") {
 		t.Fatal("no spinner once the answer is in")
+	}
+}
+
+func TestTabMovesBetweenThePanesAsTheMockupsFooterSays(t *testing.T) {
+	m, src, _ := chatSession(t)
+	press(m, "tab")
+	if m.st.Focus != "jobs" || typingChat(m.st) {
+		t.Fatalf("Tab: the jobs: %q", m.st.Focus)
+	}
+	out := Render(m.view, m.st, 120, 36)
+	if !strings.Contains(out, " Tab pane  Enter details  a allow  d deny  e enqueue  v evidence  w workspace  ? help  q quit") {
+		t.Fatalf("the mockup's footer, word for word:\n%s", out)
+	}
+	press(m, "tab")
+	if m.st.Focus != "workspace" || !strings.Contains(Render(m.view, m.st, 120, 36), "Tab pane  u up  x shell  d doctor") {
+		t.Fatalf("Tab again: the workspace: %q", m.st.Focus)
+	}
+	press(m, "u")
+	if m.st.Mode != ModeConfirm || !strings.Contains(m.st.Prompt, "rig env up") {
+		t.Fatalf("u asks before starting the container: %q", m.st.Prompt)
+	}
+	var ran []string
+	m.exec = func(argv []string, done func(error) tea.Msg) tea.Cmd { ran = argv; return nil }
+	press(m, "y")
+	if strings.Join(ran, " ") != "rig env up" {
+		t.Fatalf("ran %v", ran)
+	}
+	src.shellPlan = &view.ShellPlan{Available: true, Argv: []string{"dc", "exec"}, Workspace: "a3f9c1"}
+	run(press(m, "x"), m)
+	if strings.Join(ran, " ") != "dc exec" {
+		t.Fatalf("x opens a shell in the container: %v", ran)
+	}
+	press(m, "d")
+	if m.st.Tab != EnvTab {
+		t.Fatal("d opens the doctor's full report")
+	}
+	m, _, _ = chatSession(t)
+	press(m, "tab", "tab", "tab")
+	if m.st.Focus != "" || !typingChat(m.st) {
+		t.Fatal("a third Tab gives the ask box the keyboard back")
+	}
+}
+
+func TestAJobsRequestIsAnsweredFromTheConversation(t *testing.T) {
+	m, src, _ := chatSession(t)
+	if out := Render(m.view, m.st, 120, 36); !strings.Contains(out, "parent › job-7f2 asks to run:") || !strings.Contains(out, "a allow  d deny  m message") {
+		t.Fatalf("the request shows in the conversation:\n%s", out)
+	}
+	run(press(m, "a"), m)
+	if last := src.calls[len(src.calls)-1]; last.method != "job.allow" || last.params["id"] != "job-7f2" {
+		t.Fatalf("a allows it: %v", src.calls)
+	}
+	m, src, _ = chatSession(t)
+	press(m, "m")
+	typeText(m, "allow, and pin the version")
+	if m.st.Prompt != "allow, and pin the version" {
+		t.Fatalf("after m, a and d are text: %q", m.st.Prompt)
+	}
+	for _, c := range src.calls {
+		if c.method == "job.allow" || c.method == "job.deny" {
+			t.Fatal("typing a message never answers the request")
+		}
+	}
+}
+
+func TestTheTitleNamesTheParentsModel(t *testing.T) {
+	m, src, _ := chatSession(t)
+	src.chatStatus.Parent, src.chatStatus.Model = "claude", "opus"
+	m.csLast = time.Time{}
+	run(m.fetchChatStatus(), m)
+	if !strings.Contains(Render(m.view, m.st, 120, 36), "━ Parent · claude opus ━") {
+		t.Fatal("the mockup's \"Parent · claude opus\"")
 	}
 }

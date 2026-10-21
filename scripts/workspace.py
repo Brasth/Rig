@@ -232,4 +232,67 @@ def view(status: dict) -> dict:
         if memory.get("updated"):
             lines.append(_line(f"updated {_ago(time.time() - memory['updated'])}"))
         sections.append({"title": "Memory", "lines": lines})
-    return {"version": VIEW_VERSION, "attention": attention, "context": _context(status), "sections": sections}
+    return {"version": VIEW_VERSION, "attention": attention, "context": _context(status), "sections": sections,
+            "brief": brief(status)}
+
+
+def brief(status: dict) -> list[dict]:
+    """The Session screen's left column, as the ADE mockup words it: short lines under Workspace, Ports, Worktrees,
+    Doctor and Memory. Tone ``active`` is the mockup's blue for what is up and running, ``muted`` its grey."""
+    dc, sections = status["dc"], []
+    work = [_line(f"kind    {status['kind']}")]
+    for box in status["containers"][:1]:
+        up = box["state"].lower().startswith(("up", "run"))
+        if box["image"]:
+            work.append(_line(f"image   {box['image']}"))
+        ident = (box["id"] or box["name"])[:6]
+        state = "up" if up else (box["state"].split() or ["stopped"])[0].lower()
+        work.append(_line(f"{'●' if up else '○'} {state:<5} {ident}" + (f" · {box['uptime']}" if box["uptime"] else ""),
+                          "active" if up else ""))
+    if not dc["found"]:
+        work.append(_line("! dc-cli is not installed", "attention"))
+    elif not status["containers"] and not status["error"]:
+        work.append(_line("○ no container yet"))
+    elif dc["pin_state"] == "mismatch":
+        work.append(_line(f"! dc-cli {dc['version'] or 'unknown'}, pin {dc['pin']}", "attention"))
+    if status["error"] and dc["found"]:
+        work.append(_line("! " + status["error"], "attention"))
+    sections.append({"title": "Workspace", "lines": work})
+    if status["ports"]:
+        lines = []
+        for port in status["ports"]:
+            text = f"{port['port']}  {port['name']}".rstrip()
+            if port["held_by"]:
+                text += f"  held by {port['held_by']}"
+            elif port["problem"] and port["state"]:
+                text += f"  {port['state']}"
+            lines.append(_line(("! " if port["problem"] else "") + text, "attention" if port["problem"] else ""))
+        sections.append({"title": "Ports", "lines": lines})
+    rows = status.get("worktrees") or []
+    if rows:
+        lines = [_line("main")]
+        for row in rows[:6]:
+            if row.get("kind") == "writer":
+                lines.append(_line(f"{row['job_id']}  ● writer"))
+            else:
+                lines.append(_line(f"! {row['job_id']}  {row.get('kind') or 'unreadable'}", "attention"))
+        if len(rows) > 6:
+            lines.append(_line(f"+{len(rows) - 6} more", "muted"))
+        sections.append({"title": "Worktrees", "lines": lines})
+    if status["doctor"] is not None:
+        doctor = status["doctor"]
+        if doctor["ok"]:
+            lines = [_line("no problems")]
+        else:
+            lines = [_line("! " + p["name"], "attention") for p in doctor["problems"]] or [_line("! " + doctor["detail"], "attention")]
+        recovery = status.get("recovery") or {"ready": True}
+        if not recovery.get("ready"):
+            lines.append(_line("! " + (recovery.get("summary") or recovery.get("error") or "dc recover reports a problem"), "attention"))
+        sections.append({"title": "Doctor", "lines": lines})
+    memory = status.get("memory")
+    if memory and memory.get("max"):
+        lines = [_line(f"{memory['lines']}/{memory['max']} lines")]
+        if memory.get("updated"):
+            lines.append(_line(f"updated {_ago(time.time() - memory['updated'])}", "muted"))
+        sections.append({"title": "Memory", "lines": lines})
+    return sections

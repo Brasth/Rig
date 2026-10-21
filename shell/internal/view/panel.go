@@ -78,6 +78,7 @@ type ChatStatus struct {
 	Parent    string   `json:"parent"` // who answers a new conversation; empty when no parent CLI is installed
 	// Configured is the project's own parent (.rig/harness.toml); empty means none was chosen, so the board offers its picker.
 	Configured string   `json:"configured"`
+	Model      string   `json:"model"`   // the parent CLI's own model setting, short ("opus"); empty when it names none
 	Parents    []string `json:"parents"` // every parent the chat can run
 	Sessions   []struct {
 		ID     string `json:"id"`
