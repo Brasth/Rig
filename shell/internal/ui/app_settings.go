@@ -79,6 +79,7 @@ func settingRows(st State, section string) []setRow {
 			{Label: "Default parent", Key: "parent", Options: append([]string(nil), s.Installed...), Value: parent, Group: true,
 				Right: st.tile(parent) + " " + parent + st.faint(" · "+model)},
 			{Label: parent + "'s model", Action: "model", Right: modelRight(st, parent)},
+			{Label: parent + "'s reasoning", Action: "model", Right: effortRight(st, parent)},
 			{Label: "When rig starts", Key: "ui.start", Options: []string{"last", "picker"}, Names: []string{"last project", "project picker"}, Value: s.Start,
 				Group: true},
 			func() setRow {
@@ -522,6 +523,28 @@ func modelRight(st State, parent string) string {
 		model = "auto"
 	}
 	return model + st.faint(" · "+where+"  ⏎ change")
+}
+
+// effortRight is the reasoning row's value: the level in use and where it was chosen, and ⏎ to change it.
+func effortRight(st State, parent string) string {
+	level, where := st.ChatEffort, "its own setting"
+	if s := st.AppSettings; s != nil {
+		if pe, ok := s.ParentEfforts[parent]; ok {
+			switch {
+			case pe.Effort != "" && pe.Scope == "repo":
+				level, where = pe.Effort, "this repo"
+			case pe.Effort != "":
+				level, where = pe.Effort, "all repos"
+			}
+			if len(pe.Levels) == 0 {
+				return st.faint("no reasoning flag for " + parent)
+			}
+		}
+	}
+	if level == "" {
+		level = "default"
+	}
+	return level + st.faint(" · "+where+"  ⏎ change")
 }
 
 // tomlLines is the toml section: the harness itself as the design shows it (its tables in the accent colour), whether

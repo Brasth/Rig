@@ -41,7 +41,10 @@ type State struct {
 	Mode           Mode
 	Prompt         string // confirm question or input draft
 	PromptBack     int    // the app's box: how many runes of the draft are after the cursor
-	PromptSel      bool   // and some of it is selected, from PromptAnchor to the cursor
+	PromptTop      int    // the wheel scrolled the box to this row, while the cursor is where it was (PromptTopCaret)
+	PromptTopAt    int
+	PromptScrolled bool
+	PromptSel      bool // and some of it is selected, from PromptAnchor to the cursor
 	PromptAnchor   int
 	Message        string
 	Stale          string // set when the last refresh failed; shown until one succeeds
@@ -78,6 +81,7 @@ type State struct {
 	DockE          string
 	Styled         bool      // apply colour and reverse video to list rows; golden tests leave it off
 	ChatModel      string    // the parent's model, for the title "Parent · claude opus"
+	ChatEffort     string    // the reasoning level chosen for the parent, shown after the model
 	Theme          string    // the colour theme in use; empty is the default, rig
 	ThemeScope     string    // where it is kept: "all" repos, this "repo", "default" or "this board" (rig shell --theme)
 	Focus          string    // the Session screen's pane with the keyboard: "" (the jobs, as the mockup opens), "parent" or "workspace"
@@ -111,6 +115,10 @@ type SlashCommand struct {
 	Skill            bool // a skill, which $name also names (as in codex's box)
 }
 
+// softCommands are Rig's commands a parent's own skill or command of the same name replaces, as its own screen would
+// run it: the parent's /review is the user's, not Rig's.
+var softCommands = map[string]bool{"/init": true, "/review": true, "/security-review": true}
+
 // SlashCommands are what the ask box understands besides a message for the parent.
 var SlashCommands = []SlashCommand{
 	{"/parent", "", "choose the parent CLI", false, false},
@@ -122,7 +130,17 @@ var SlashCommands = []SlashCommand{
 	{"/help", "", "every key", false, false},
 	{"/theme", " NAME", "rig, light, dark, material or dracula", false, false},
 	{"/settings", "", "theme, agents, routing, sandbox", false, false},
-	{"/model", "", "the model the parent talks with (or /model NAME)", false, false},
+	{"/plan", " [TEXT|off|go]", "the parent plans and changes nothing; off or go ends it", false, false},
+	{"/cost", "", "what this conversation has used so far", false, false},
+	{"/context", "", "how full the parent's context is", false, false},
+	{"/mcp", "", "the MCP servers the parent has", false, false},
+	{"/memory", "", "open CLAUDE.md or AGENTS.md to edit", false, false},
+	{"/init", "", "the parent writes CLAUDE.md or AGENTS.md for this project", false, false},
+	{"/review", " [FOCUS]", "the parent reviews the current changes", false, false},
+	{"/security-review", " [FOCUS]", "the parent reviews them for security problems", false, false},
+	{"/clear", "", "start a new conversation", false, false},
+	{"/model", "", "the model the parent talks with (or /model NAME [LEVEL])", false, false},
+	{"/effort", " LEVEL", "how much the parent reasons: low, medium, high…", false, false},
 	{"/quit", "", "leave rig shell", false, false},
 }
 
@@ -159,9 +177,16 @@ func (st State) slashes() []SlashCommand {
 		return nil
 	}
 	var out []SlashCommand
+	own := map[string]bool{}
+	for _, c := range st.ParentCommands {
+		own[c.Name] = true
+	}
 	for _, c := range append(append([]SlashCommand(nil), SlashCommands...), st.ParentCommands...) {
 		if c.Skill && conv.Dollar {
 			continue // codex names its skills with $, not /
+		}
+		if !c.Parent && softCommands[c.Name] && own[c.Name] {
+			continue // the parent's own /review, say, is the one that runs
 		}
 		if strings.HasPrefix(c.Name, prompt) || (c.Parent && strings.Contains(c.Name, prompt[1:]) && len(prompt) > 2) {
 			out = append(out, c)
@@ -935,6 +960,10 @@ func chatAll(st State, w int) []string {
 				prefix = "you › "
 			case "tool":
 				prefix = "  · "
+			case "result":
+				prefix = "    ⎿ "
+			case "result-error":
+				prefix = "    ⎿ ! "
 			case "error":
 				prefix = "! "
 			case "system":

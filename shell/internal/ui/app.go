@@ -121,6 +121,8 @@ type AppState struct {
 	DiffFollow           bool              // scroll to the chosen hunk on the next draw
 	Reviewed             map[string]string // hunks of helpers' work marked ok (v) or sent back to be redone (x), by hunkKey
 	RedoHunk             *redoTarget       // the hunk a request to redo is being written for
+	BoxTop, BoxTotal     int               // the reply box as last drawn: its first row shown and how many rows the draft has
+	Attached             []attachment      // pictures dropped on the box, shown above it while the draft names them
 	Search               *SearchState
 	Settings             *SettingsScreen
 	Onboard              *Onboarding // the first-run steps after the parent: helpers, then where agents work
@@ -137,6 +139,7 @@ type Palette struct {
 	Sel      int
 	Attach   bool // @: the chosen file goes into your message instead of opening
 	Model    bool // /model: the parent's models, or the name typed
+	Effort   bool // /effort, or the reasoning row of /model: the parent's reasoning levels
 	Symbols  bool // ⌃o in the code tab: the open file's functions and types, to go to
 	Branch   bool // b in the git view: a branch to switch to, or a new one
 	Problems bool // m in the code tab: what the helpers' checks found, each to go to
@@ -666,7 +669,10 @@ func conversationBody(v *view.View, st State, w, h int) ([]string, [][2]string) 
 		}
 	}
 	lines = append(lines, st.tile(parent)+"  "+st.bold(fit(title, cw-5)))
-	lines = append(lines, "     "+st.faint(parent+" · "+state))
+	if st.Chat.Plan {
+		state = st.paint(colAccent, "plan mode") + st.faint(" · "+state)
+	}
+	lines = append(lines, "     "+st.faint(parent+" · ")+state)
 	lines = append(lines, "", "")
 	// the transcript's lines are made once for each transcript, width and theme: a long conversation scrolls at once
 	a := st.App
@@ -701,7 +707,7 @@ func conversationBody(v *view.View, st State, w, h int) ([]string, [][2]string) 
 	if st.Prompt != "" {
 		keys = [][2]string{{"⏎", "send"}, {"⌥⏎", "new line"}, {"esc", "clear"}, {"⇥", "agents"}, {"⌃k", "commands"}}
 	}
-	box := replyBox(st, cw, "Reply to "+parent, false)
+	box := append(attachedRows(st, cw), replyBox(st, cw, "Reply to "+parent, false)...)
 	if a.ChatFind != nil {
 		box = chatFindRow(st, cw)
 		keys = [][2]string{{"⏎", "next"}, {"↑", "previous"}, {"esc", "close"}}
@@ -727,8 +733,8 @@ func entryLines(st State, entries []view.ChatEntry, cw int) []string {
 	last := ""
 	for _, e := range entries {
 		role := e.Role
-		if role == "tool" {
-			role = last // a tool call does not end the parent's answer
+		if role == "tool" || role == "result" || role == "result-error" {
+			role = last // a tool call and its answer do not end the parent's answer
 		}
 		if e.Role == "assistant" && several && last != "assistant" && e.Parent != "" {
 			lines = append(lines, st.tile(e.Parent)+"  "+st.faint(e.Parent))
@@ -748,19 +754,43 @@ func entryLines(st State, entries []view.ChatEntry, cw int) []string {
 				}
 			}
 		case "tool":
-			lines = append(lines, st.faint("  · "+fit(clean(e.Text), cw-4)))
+			lines = append(lines, toolLine(st, e.Text, cw))
+			continue
+		case "result", "result-error":
+			colour := ""
+			if e.Role == "result-error" {
+				colour = colAmber
+			}
+			lines = append(lines, resultLine(st, e.Text, cw, colour))
 			continue
 		case "error":
 			for _, l := range wrap(e.Text, cw-2, "") {
 				lines = append(lines, st.paint(colAmber, "! "+l))
 			}
 		default:
-			lines = append(lines, st.faint("  "+fit(clean(e.Text), cw-2)))
+			for _, l := range wrap(clean(e.Text), cw-4, "") {
+				lines = append(lines, st.faint("  "+l))
+			}
 			continue
 		}
 		lines = append(lines, "")
 	}
 	return lines
+}
+
+// toolLine is a tool the parent called, as its own screen draws one: a bullet, the tool's name, what it works on.
+func toolLine(st State, text string, cw int) string {
+	name, detail, _ := strings.Cut(clean(text), " ")
+	return "  " + st.paint(colAccent, "●") + " " + st.bold(name) + st.faint(" "+fit(detail, max(4, cw-6-lipgloss.Width(name))))
+}
+
+// resultLine is what the tool answered, under it: its first line, in amber when the tool failed.
+func resultLine(st State, text string, cw int, colour string) string {
+	body := fit(clean(text), max(4, cw-8))
+	if colour != "" {
+		return "    " + st.faint("⎿") + " " + st.paint(colour, body)
+	}
+	return "    " + st.faint("⎿ "+body)
 }
 
 // bubble is one of your messages: right-aligned on the raised surface, as the design draws it.
@@ -858,6 +888,7 @@ func emptyBody(v *view.View, st State, w, h int) ([]string, [][2]string) {
 	lines := []string{"", "", ""}
 	lines = append(lines, st.tile(parent)+"  "+st.bold("What should we work on in "+repo+"?"))
 	lines = append(lines, st.dim(parent+" plans, starts helpers when needed, checks and applies."), "")
+	lines = append(lines, attachedRows(st, cw)...)
 	lines = append(lines, roundBox(st, boxRows(st, cw, "ask "+parent+" anything about "+repo), cw, true)...)
 	if menu := slashMenu(st, cw); len(menu) > 0 {
 		lines = append(lines, menu...)
@@ -1105,6 +1136,9 @@ func paletteItems(st State) []paletteItem {
 	if st.App.Palette.Model {
 		return modelItems(st, q)
 	}
+	if st.App.Palette.Effort {
+		return effortItems(st, appParent(st), q)
+	}
 	if st.App.Palette.Symbols {
 		return symbolItems(st, q)
 	}
@@ -1242,7 +1276,10 @@ func paletteBox(v *view.View, st State, pw int) []string {
 			text = "  " + st.faint("@") + " ▏" + st.faint("a file to add to your message")
 		}
 		if st.App.Palette.Model {
-			text = "  " + st.faint("›") + " ▏" + st.faint("a model for "+appParent(st)+", or type its name")
+			text = "  " + st.faint("›") + " ▏" + st.faint("a model for "+appParent(st)+", or type its name; reasoning is one row down")
+		}
+		if st.App.Palette.Effort {
+			text = "  " + st.faint("›") + " ▏" + st.faint("how much "+appParent(st)+" reasons: low, medium, high…")
 		}
 		if st.App.Palette.Symbols {
 			text = "  " + st.faint("›") + " ▏" + st.faint("a function or type in "+filepath.Base(st.App.File))
@@ -1264,10 +1301,13 @@ func paletteBox(v *view.View, st State, pw int) []string {
 	items := paletteItems(st)
 	sel := clampSel(st.App.Palette.Sel, len(items))
 	section := ""
-	for i, it := range items {
-		if i >= 12 {
-			break
-		}
+	// twelve rows show; moving past them scrolls, so the chosen row is always one of them
+	start := 0
+	if sel >= 12 {
+		start = sel - 11
+	}
+	for i := start; i < len(items) && i < start+12; i++ {
+		it := items[i]
 		if it.Section != section {
 			section = it.Section
 			lines = append(lines, st.faint(section))
@@ -1343,11 +1383,16 @@ func tintIf(st State, s, bg string) string {
 func helpBox(st State, hw int) []string {
 	rows := [][2]string{
 		{"type, ⏎", "talk to the parent"},
-		{"⌥⏎ ⌃j", "a new line in your message"},
+		{"⌥⏎ ⌃j", "a new line in your message (the wheel over a long one scrolls it)"},
 		{"↑ ↓", "the lines of your message; in an empty box, what you sent"},
 		{"← →", "move in the box (⌥ a word, ⌃a ⌃e its ends, ⌃w a word back)"},
 		{"⇥", "the agents panel: done today, helpers, the queue"},
-		{"/model", "the model the parent talks with"},
+		{"/model", "the model and reasoning level the parent talks with (/effort LEVEL for the level)"},
+		{"/plan", "the parent plans and changes nothing (/plan TEXT, /plan go, /plan off)"},
+		{"/cost /context /mcp", "what the conversation used, how full the context is, the MCP servers"},
+		{"/init /review", "the parent writes CLAUDE.md or AGENTS.md; reviews the current changes"},
+		{"/memory", "open CLAUDE.md or AGENTS.md in the code tab"},
+		{"!command", "run a command in the terminal split"},
 		{"⌃k", "commands, files, # a symbol of the repository, or ask the parent"},
 		{"F12 F7", "in the code tab: go to a definition, find references"},
 		{"⌥z", "in the code tab: wrap long lines"},

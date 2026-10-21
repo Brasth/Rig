@@ -263,3 +263,83 @@ func TestHunksAreReviewedOneByOneAndSentBackWithAReason(t *testing.T) {
 		t.Fatal("esc drops the request")
 	}
 }
+
+func TestToolsTheParentCallsAreShownWithWhatTheyAnswered(t *testing.T) {
+	m, src := appModel(t)
+	src.chatView = transcript("idle", ce("user", "what is in a.ts?"), ce("assistant", "Let me look."), ce("tool", "Bash ls -la src"),
+		ce("result", "total 8  (+2 lines)"), ce("tool", "Read src/a.ts"), ce("result-error", "ENOENT: no such file"), ce("assistant", "It is not there."))
+	m.chatID, m.chBusy = "c-1a2b3c4d", false
+	run(m.fetchChat(true), m)
+	out := appScreen(m)
+	for _, want := range []string{"● Bash ls -la src", "⎿ total 8 (+2 lines)", "● Read src/a.ts", "⎿ ENOENT: no such file", "It is not there."} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("a tool is a bullet with its answer under it; missing %q:\n%s", want, out)
+		}
+	}
+	a := m.st.App
+	a.chatKey = ""
+	lines := entryLines(m.st, m.st.Chat.Entries, 80)
+	joined := strings.Join(lines, "\n")
+	if strings.Index(joined, "ENOENT") < strings.Index(joined, "Read src/a.ts") {
+		t.Fatal("the answer comes after its tool")
+	}
+}
+
+func TestPlanModeShowsInTheConversationAndTheCommandsReachTheParent(t *testing.T) {
+	m, src := appModel(t)
+	view := transcript("idle", ce("user", "/plan"), ce("system", "plan mode on: claude plans and changes nothing until /plan off or /plan go"))
+	view.Plan = true
+	src.chatView = view
+	m.chatID, m.chBusy = "c-1a2b3c4d", false
+	run(m.fetchChat(true), m)
+	out := appScreen(m)
+	if !strings.Contains(out, "claude · ") || !strings.Contains(out, "plan mode") {
+		t.Fatalf("the conversation says it is in plan mode:\n%s", out)
+	}
+	if !strings.Contains(out, "plan mode on: claude plans and changes nothing") {
+		t.Fatalf("and shows what the command answered:\n%s", out)
+	}
+	for _, cmd := range []string{"/plan add a throttle", "/cost", "/context", "/mcp", "/init", "/review"} {
+		src.chatSent = nil
+		run(m.appSend(cmd), m)
+		if len(src.chatSent) != 1 || src.chatSent[0][0] != cmd {
+			t.Fatalf("%s goes to the parent's chat as typed: %v", cmd, src.chatSent)
+		}
+	}
+	var names []string
+	for _, c := range SlashCommands {
+		names = append(names, c.Name)
+	}
+	for _, want := range []string{"/plan", "/cost", "/context", "/mcp", "/memory", "/init", "/review", "/security-review", "/clear"} {
+		if !strings.Contains(strings.Join(names, " "), want) {
+			t.Fatalf("the slash menu lists %s", want)
+		}
+	}
+}
+
+func TestBangRunsACommandInTheTerminalAndMemoryOpensTheInstructionsFile(t *testing.T) {
+	m, src := appModel(t)
+	withConversation(t, m, src)
+	pane := newFakePane()
+	m.spawn = func([]string, string, []string, int, int) (Pane, error) { return pane, nil }
+	typeText(m, "!git status")
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if len(pane.writes) != 1 || string(pane.writes[0]) != "git status\n" || !m.st.App.Term || len(src.chatSent) != 0 {
+		t.Fatalf("!command runs in the terminal split, not in the parent: %q %v", pane.writes, src.chatSent)
+	}
+	a := m.st.App
+	run(m.appSend("/memory"), m)
+	if !strings.Contains(m.st.Message, "no CLAUDE.md") || !strings.Contains(m.st.Message, "/init") {
+		t.Fatalf("with no instructions file it says how to get one: %q", m.st.Message)
+	}
+	_ = os.WriteFile(filepath.Join(a.Repo, "CLAUDE.md"), []byte("# rules\n"), 0o644)
+	run(m.appSend("/memory"), m)
+	if a.File != "CLAUDE.md" || a.Tab != 3 {
+		t.Fatalf("/memory opens it in the code tab: %q tab %d", a.File, a.Tab)
+	}
+	m.chatID, m.st.Chat = "c-x", transcript("idle")
+	run(m.appSend("/clear"), m)
+	if m.chatID != "" {
+		t.Fatal("/clear starts a new conversation")
+	}
+}

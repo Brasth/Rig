@@ -183,6 +183,12 @@ func (m *Model) appSend(text string) tea.Cmd {
 			return cmd
 		}
 	}
+	if cmd, ok := strings.CutPrefix(text, "!"); ok && strings.TrimSpace(cmd) != "" {
+		// !command runs in the terminal split, as the parents' own boxes run a shell command typed after !
+		m.rememberSent(text)
+		m.st.Prompt, m.st.SlashSel = "", 0
+		return m.runInTerminal(cmd)
+	}
 	m.rememberSent(text)
 	m.st.Prompt, m.st.SlashSel, m.st.Message = "", 0, "sending…"
 	m.st.App.Tab, m.st.App.Thread = 1, ""
@@ -1240,6 +1246,11 @@ func (m *Model) runPalette(it paletteItem, query string) tea.Cmd {
 		return nil
 	case strings.HasPrefix(it.Action, "model:"):
 		return m.setModel(strings.TrimPrefix(it.Action, "model:"))
+	case strings.HasPrefix(it.Action, "effort:"):
+		return m.setEffort(strings.TrimPrefix(it.Action, "effort:"))
+	case it.Action == "effort-menu":
+		a.Palette = &Palette{Effort: true}
+		return nil
 	case strings.HasPrefix(it.Action, "slash:"):
 		m.st.Prompt, m.st.SlashSel, a.Tab, a.Thread = strings.TrimPrefix(it.Action, "slash:")+" ", 0, 1, ""
 		return nil

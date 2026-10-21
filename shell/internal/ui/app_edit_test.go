@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -93,26 +94,26 @@ func TestUpAndDownBringBackWhatWasSent(t *testing.T) {
 
 func TestTheCursorIsABlockOnTheCharacterUnderIt(t *testing.T) {
 	st := State{Prompt: "hrewe te", PromptBack: 3, Styled: true}
-	if got := rowTexts(st.draftRows(40, 8)); len(got) != 1 || got[0] != "hrewe\x1b[7m \x1b[27mte" {
+	if got := rowTexts(draft(st, 40, 8)); len(got) != 1 || got[0] != "hrewe\x1b[7m \x1b[27mte" {
 		t.Fatalf("the text keeps its place, the space under the cursor lit: %q", got)
 	}
 	st.PromptBack = 0
-	if got := rowTexts(st.draftRows(40, 8)); got[0] != "hrewe te\x1b[7m \x1b[27m" {
+	if got := rowTexts(draft(st, 40, 8)); got[0] != "hrewe te\x1b[7m \x1b[27m" {
 		t.Fatalf("at the end, a lit space: %q", got)
 	}
 }
 
 func TestADraftWrapsAndShowsTheRowsAroundTheCursor(t *testing.T) {
 	st := State{Prompt: "abcdefghij\n\nxyz"}
-	if got := rowTexts(st.draftRows(5, 8)); strings.Join(got, "|") != "abcd|efgh|ij||xyz▏" {
+	if got := rowTexts(draft(st, 5, 8)); strings.Join(got, "|") != "abcd|efgh|ij||xyz▏" {
 		t.Fatalf("lines, an empty one, and a long one in pieces: %q", got)
 	}
 	st.PromptBack = 4 // on the empty line
-	if got := rowTexts(st.draftRows(5, 8)); got[3] != "▏" {
+	if got := rowTexts(draft(st, 5, 8)); got[3] != "▏" {
 		t.Fatalf("the cursor on the empty line: %q", got)
 	}
 	st = State{Prompt: strings.Repeat("line\n", 20) + "end"}
-	got := rowTexts(st.draftRows(40, 8))
+	got := rowTexts(draft(st, 40, 8))
 	if len(got) != 8 || got[7] != "end▏" {
 		t.Fatalf("eight rows at most, those around the cursor: %q", got)
 	}
@@ -236,5 +237,69 @@ func TestAClickPlacesTheCursorInAFileBeingEdited(t *testing.T) {
 	clickAt(m, x+6, y)
 	if a := m.st.App; a.CurLine != 3 || a.CurCol != 8 {
 		t.Fatalf("the cursor goes where the file was clicked: %d:%d", a.CurLine, a.CurCol)
+	}
+}
+
+// draft is the box's rows alone, without how many are hidden above and below.
+func draft(st State, room, most int) []draftRow {
+	rows, _, _ := st.draftRows(room, most)
+	return rows
+}
+
+func TestALongDraftScrollsInsideTheBoxWithTheWheel(t *testing.T) {
+	m, src := appModel(t)
+	withConversation(t, m, src)
+	m.SetMouse(true)
+	a := m.st.App
+	var lines []string
+	for i := 1; i <= 20; i++ {
+		lines = append(lines, fmt.Sprintf("line %02d", i))
+	}
+	draftText := strings.Join(lines, "\n")
+	m.setPrompt(draftText, len([]rune(draftText)))
+	screen := func() string { // what View draws: also where the zones are, for the pointer
+		m.View()
+		return strings.Join(m.plain, "\n")
+	}
+	out := screen()
+	if !strings.Contains(out, "line 20") || strings.Contains(out, "line 01") || !strings.Contains(out, "↑") {
+		t.Fatalf("typing shows the rows around the cursor, and says more are above:\n%s", out)
+	}
+	if a.BoxTotal != 20 || a.BoxTop != 12 {
+		t.Fatalf("the box knows where it is: top %d of %d", a.BoxTop, a.BoxTotal)
+	}
+	var y int
+	for row, text := range m.plain {
+		if strings.Contains(text, "line 20") {
+			y = row
+		}
+	}
+	x := len([]rune(m.plain[y][:strings.Index(m.plain[y], "line 20")])) // in cells, not bytes
+	wheel := func() {
+		m.Update(tea.MouseMsg{X: x, Y: y, Button: tea.MouseButtonWheelUp, Action: tea.MouseActionPress})
+		screen()
+	}
+	before := m.st.LogUp
+	wheel()
+	if out := strings.Join(m.plain, "\n"); !strings.Contains(out, "line 11") || strings.Contains(out, "line 20") || !strings.Contains(out, "↓") {
+		t.Fatalf("the wheel scrolls the box up, with a mark that more is below:\n%s", out)
+	}
+	for i := 0; i < 8; i++ {
+		wheel()
+	}
+	if out := strings.Join(m.plain, "\n"); !strings.Contains(out, "line 01") || !strings.Contains(out, "›") {
+		t.Fatalf("all the way up is the draft's start:\n%s", out)
+	}
+	if m.st.LogUp != before {
+		t.Fatal("the conversation did not move")
+	}
+	typeText(m, "!")
+	if out := screen(); !strings.Contains(out, "line 20!") || strings.Contains(out, "line 01") {
+		t.Fatalf("typing follows the cursor again:\n%s", out)
+	}
+	m.setPrompt("short", 5) // a short draft has nothing to scroll: the wheel goes to the conversation
+	screen()
+	if a.BoxTotal > boxMostRows {
+		t.Fatal("a short draft has nothing to scroll")
 	}
 }

@@ -3,6 +3,10 @@
 
 
 
+## Reasoning level, plan mode, the parent's commands and tools in rig shell (2026-10-21)
+
+`/model` now has a reasoning row and `/effort LEVEL` sets it, passed to each parent's own flag. `/plan` puts the parent in plan mode. `/cost`, `/context`, `/mcp`, `/memory`, `/init`, `/review`, `/security-review`, `/clear` and `!command` work inside rig shell; the parent's own skills and commands still pass through. Every tool the parent calls is shown with what it answered. A long draft scrolls inside the reply box with the wheel, and a dropped picture shows above it. The palette scrolls to the row you choose past the twelfth.
+
 ## Problems in the editor, hunk review, stale-prebuilt check (2026-10-21)
 
 A failed check's problems now mark the open file: a red or amber dot in the gutter and the message at the end of the line. `⇥` in the problems list (`m`) asks the parent to fix the chosen problem, with the code around it; its last row asks for all of them. On the changes tab `n` `N` choose a hunk, `v` marks it reviewed and `x` asks the helper to redo it with your reason (sent to its inbox with the file, lines and hunk). `rig doctor` in a source tree, and `python3 scripts/shell_dist.py status`, report when the prebuilt shells are older than the shell sources.

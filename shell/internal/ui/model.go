@@ -535,7 +535,15 @@ func (m *Model) runSlash(text string) (tea.Cmd, bool) {
 		}
 		m.st.Mode, m.st.InputLabel, m.inputFor = ModeNormal, "", ""
 		return m.act("queue.add", map[string]any{"text": rest, "idempotency_key": m.draftKey}, true), true
-	case "/new":
+	case "/memory":
+		clear()
+		m.st.Mode, m.st.InputLabel, m.inputFor = ModeNormal, "", ""
+		if !m.appOn() {
+			m.st.Message = "/memory is in the app: rig shell"
+			return nil, true
+		}
+		return m.openMemory(), true
+	case "/new", "/clear":
 		clear()
 		m.chatID, m.st.Chat, m.st.ChatUp, m.chatAdopted = "", nil, 0, true
 		m.st.Message = "new conversation: the next message starts it"
@@ -574,9 +582,27 @@ func (m *Model) runSlash(text string) (tea.Cmd, bool) {
 			return nil, true
 		}
 		if rest != "" {
+			// /model NAME, or /model NAME LEVEL for both at once
+			name, level, _ := strings.Cut(rest, " ")
+			if level = strings.TrimSpace(level); level != "" {
+				return tea.Batch(m.setModel(name), m.setEffort(level)), true
+			}
 			return m.setModel(rest), true
 		}
 		return m.runPalette(paletteItem{Action: "model"}, ""), true
+	case "/effort":
+		clear()
+		m.st.Mode, m.st.InputLabel, m.inputFor = ModeNormal, "", ""
+		if !m.appOn() {
+			m.st.Message = "/effort is in the app: rig shell"
+			return nil, true
+		}
+		if rest != "" {
+			return m.setEffort(rest), true
+		}
+		a := m.st.App
+		a.Settings, a.Palette = nil, &Palette{Effort: true}
+		return tea.Batch(m.fetchAppSettings()), true
 	case "/settings":
 		clear()
 		m.st.Mode, m.st.InputLabel, m.inputFor = ModeNormal, "", ""
@@ -713,7 +739,7 @@ func (m *Model) fetchParentCommands(parent string) tea.Cmd {
 		}
 		taken := map[string]bool{}
 		for _, c := range SlashCommands {
-			taken[c.Name] = true
+			taken[c.Name] = !softCommands[c.Name]
 		}
 		var list []SlashCommand
 		for _, c := range got.Commands {
@@ -983,9 +1009,9 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.st.ChatOn = true
 		m.chatStat = msg.status
-		m.st.ChatParent, m.st.ChatModel = msg.status.Parent, msg.status.Model
+		m.st.ChatParent, m.st.ChatModel, m.st.ChatEffort = msg.status.Parent, msg.status.Model, msg.status.Effort
 		if m.parentName != "" && m.parentName != msg.status.Parent {
-			m.st.ChatParent, m.st.ChatModel = m.parentName, "" // its model is in its own settings, not read for this one
+			m.st.ChatParent, m.st.ChatModel, m.st.ChatEffort = m.parentName, "", "" // its model is in its own settings, not read for this one
 		}
 		if !m.pickerSeen && msg.status.Configured == "" && m.parentName == "" && m.st.Tab == SessionTab {
 			m.pickerSeen = true // the first time only: a project with no parent of its own chooses one here
@@ -1235,7 +1261,7 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		was := appParent(m.st)
-		m.parentName, m.st.ChatParent, m.st.ChatModel = msg.name, msg.name, ""
+		m.parentName, m.st.ChatParent, m.st.ChatModel, m.st.ChatEffort = msg.name, msg.name, "", ""
 		if m.chatStat != nil {
 			m.chatStat.Configured = msg.name
 		}

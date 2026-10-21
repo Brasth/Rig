@@ -8,6 +8,31 @@ import (
 	"strings"
 )
 
+// attachment is a picture dropped on the box: what it is, and the thumbnail the terminal was sent for it, if any.
+type attachment struct {
+	ref, name  string
+	w, h       int
+	size       int64
+	cols, rows int // the thumbnail's cells; 0 where the terminal cannot show one
+}
+
+// isPicture is whether a path is a picture the shell can read.
+func isPicture(path string) bool {
+	switch strings.ToLower(filepath.Ext(path)) {
+	case ".png", ".jpg", ".jpeg", ".gif":
+		return true
+	}
+	return false
+}
+
+// thumbCells is the cells a picture's thumbnail takes: five rows, as wide as its shape asks (a cell is about twice
+// as tall as it is wide), never wider than 40.
+func thumbCells(w, h int) (cols, rows int) {
+	rows = 5
+	cols = min(40, max(4, (rows*2*w+h/2)/max(1, h)))
+	return cols, rows
+}
+
 // Dropping files on the window: a terminal pastes their paths, quoted or with \-escaped spaces (Ghostty, iTerm2,
 // Terminal), or as file:// URLs (kitty). When every word of a paste is a file that exists, the box gets @ references,
 // as ⌃k's "add a file" makes; anything else is pasted as text.
@@ -94,13 +119,19 @@ func fileRef(path, repo string) string {
 	return "@" + path
 }
 
-// dropFiles adds @ references for dropped files to the box, and says so.
+// dropFiles adds @ references for dropped files to the box, and says so. A picture is shown above the box too: its
+// name, size and shape, and a thumbnail where the terminal draws images.
 func (m *Model) dropFiles(paths []string) {
+	a := m.st.App
 	for _, p := range paths {
 		if m.st.Prompt != "" && !strings.HasSuffix(m.st.Prompt, " ") {
 			m.st.Prompt += " "
 		}
-		m.st.Prompt += fileRef(p, m.st.App.Repo) + " "
+		ref := fileRef(p, a.Repo)
+		m.st.Prompt += ref + " "
+		if isPicture(p) {
+			m.attach(p, ref)
+		}
 	}
 	m.st.SlashSel = 0
 	if len(paths) == 1 {
@@ -108,4 +139,81 @@ func (m *Model) dropFiles(paths []string) {
 	} else {
 		m.st.Message = fmt.Sprintf("added %d files", len(paths))
 	}
+}
+
+// attach shows a dropped picture above the box. The newest one gets the thumbnail.
+func (m *Model) attach(path, ref string) {
+	a := m.st.App
+	at := attachment{ref: ref, name: filepath.Base(path)}
+	if info, err := os.Stat(path); err == nil {
+		at.size = info.Size()
+	}
+	png, w, h := pictureAsPNG(path)
+	if png == nil {
+		return // not a picture after all: the @ reference stands alone
+	}
+	at.w, at.h = w, h
+	for i := range a.Attached {
+		a.Attached[i].cols, a.Attached[i].rows = 0, 0 // one thumbnail at a time
+	}
+	if m.st.Logos {
+		if cols, rows := thumbCells(w, h); SendImageAs(dropImageID, png, cols, rows) {
+			at.cols, at.rows = cols, rows
+		}
+	}
+	kept := a.Attached[:0:0]
+	for _, o := range a.Attached {
+		if o.ref != ref {
+			kept = append(kept, o)
+		}
+	}
+	a.Attached = append(kept, at)
+	if len(a.Attached) > 6 {
+		a.Attached = a.Attached[len(a.Attached)-6:]
+	}
+}
+
+// attachedRows are the rows above the box for the pictures the draft still names: the newest one's thumbnail, then a
+// line for each with its name, shape and size.
+func attachedRows(st State, w int) []string {
+	a := st.App
+	if a == nil || st.Prompt == "" {
+		return nil
+	}
+	var here []attachment
+	for _, at := range a.Attached {
+		if strings.Contains(st.Prompt, at.ref) {
+			here = append(here, at)
+		}
+	}
+	if len(here) == 0 {
+		return nil
+	}
+	var out []string
+	for _, at := range here {
+		if at.cols > 0 {
+			for _, r := range imageRows(dropImageID, at.cols, at.rows) {
+				out = append(out, " "+r)
+			}
+		}
+	}
+	for _, at := range here {
+		line := " " + st.faint("▣") + " " + st.bold(at.name)
+		if at.w > 0 {
+			line += st.faint(fmt.Sprintf("  %d×%d · %s", at.w, at.h, sizeWord(at.size)))
+		}
+		out = append(out, fit(line, w))
+	}
+	return out
+}
+
+// sizeWord is a file size as people say it: 214 KB, 1.3 MB.
+func sizeWord(n int64) string {
+	switch {
+	case n >= 1<<20:
+		return fmt.Sprintf("%.1f MB", float64(n)/(1<<20))
+	case n >= 1<<10:
+		return fmt.Sprintf("%d KB", (n+512)>>10)
+	}
+	return fmt.Sprintf("%d B", n)
 }

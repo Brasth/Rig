@@ -230,6 +230,7 @@ func (m *Model) mouse(e tea.MouseMsg) (tea.Model, tea.Cmd) {
 	}
 	switch {
 	case e.Button == tea.MouseButtonWheelUp || e.Button == tea.MouseButtonWheelDown:
+		m.hoverX, m.hoverY = e.X, e.Y // the wheel acts on what is under the pointer
 		return m.wheel(e.Button == tea.MouseButtonWheelUp)
 	case e.Action == tea.MouseActionMotion && e.Button == tea.MouseButtonNone:
 		m.hoverX, m.hoverY = e.X, e.Y
@@ -554,6 +555,9 @@ func (m *Model) wheel(up bool) (tea.Model, tea.Cmd) {
 	if a.Splash > 0 || m.st.Mode == ModeConfirm {
 		return m, nil
 	}
+	if m.wheelBox(up) {
+		return m, nil
+	}
 	m.sel = nil // the text under a selection moves away
 	list := a.Help || a.Welcome || a.Onboard != nil || a.Settings != nil || a.History != nil || a.Palette != nil ||
 		a.Panel || a.Search != nil || problemScreen(m.st) != "" || a.NewJob != nil
@@ -591,6 +595,23 @@ func (m *Model) wheel(up bool) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, cmd)
 	}
 	return m, tea.Batch(cmds...)
+}
+
+// wheelBox scrolls the reply box when the pointer is over a draft taller than the box shows; false when it is not.
+func (m *Model) wheelBox(up bool) bool {
+	a := m.st.App
+	if a.BoxTotal <= boxMostRows || a.Palette != nil {
+		return false
+	}
+	if z, ok := m.zoneAt(m.hoverX, m.hoverY); !ok || !strings.HasPrefix(z.id, "text:box:") {
+		return false
+	}
+	top := a.BoxTop + 2
+	if up {
+		top = a.BoxTop - 2
+	}
+	m.st.PromptTop, m.st.PromptScrolled, m.st.PromptTopAt = max(0, min(top, a.BoxTotal-boxMostRows)), true, m.st.caret()
+	return true
 }
 
 // click does what the zone under the pointer stands for; a click outside an open overlay closes it.

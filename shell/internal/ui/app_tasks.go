@@ -121,6 +121,21 @@ func taskPaletteItems(st State, q string) []paletteItem {
 	return out
 }
 
+// openMemory opens the file the parent reads for its standing instructions: CLAUDE.md for claude, AGENTS.md for the
+// others, in the code tab. The parent's own /memory does the same in its screen.
+func (m *Model) openMemory() tea.Cmd {
+	a := m.st.App
+	name := "AGENTS.md"
+	if appParent(m.st) == "claude" {
+		name = "CLAUDE.md"
+	}
+	if _, err := os.Stat(filepath.Join(a.Repo, name)); err != nil {
+		m.st.Message = "no " + name + " in this repository yet: /init asks " + appParent(m.st) + " to write one"
+		return nil
+	}
+	return m.runPalette(paletteItem{Action: "file:" + name}, "")
+}
+
 // runInTerminal types a command into the terminal split, opening it first when it is not there.
 func (m *Model) runInTerminal(command string) tea.Cmd {
 	a := m.st.App
