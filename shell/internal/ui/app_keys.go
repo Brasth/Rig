@@ -28,7 +28,7 @@ type fileMsg struct {
 func (m *Model) SetLogos(on bool) { m.st.Logos = on }
 
 func (m *Model) SetApp(repo string) {
-	m.st.App = &AppState{Repo: repo, Branch: gitBranch(repo), Tab: 1}
+	m.st.App = &AppState{Repo: repo, Branch: gitBranch(repo), Tab: 1, Facts: repoFacts(repo)}
 	m.st.Tab = SessionTab
 	if !m.themeFixed && ApplyTheme("light") { // the design's default; a saved theme replaces it when it loads
 		m.st.Theme = "light"
@@ -321,6 +321,9 @@ func (m *Model) appKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			// with the box empty, the design's single keys: the answer chips, the suggestions, the tabs, help, and
 			// d, u and h when there is a change to see, undo or hold (else the letter is typed)
 			switch r := k.Runes[0]; {
+			case r == '@':
+				a.Palette = &Palette{Attach: true} // the design's "@ add file"
+				return m, m.loadFiles()
 			case r == 'd' && len(appliedCards(m.view, m.st)) > 0:
 				m.selectJob(appliedCards(m.view, m.st)[0].ID)
 				a.Tab = 2
@@ -772,6 +775,12 @@ func (m *Model) runPalette(it paletteItem, query string) tea.Cmd {
 	switch {
 	case it.Action == "ask":
 		return m.appSend(query)
+	case strings.HasPrefix(it.Action, "attach:"):
+		if m.st.Prompt != "" && !strings.HasSuffix(m.st.Prompt, " ") {
+			m.st.Prompt += " "
+		}
+		m.st.Prompt += "@" + strings.TrimPrefix(it.Action, "attach:") + " "
+		return nil
 	case strings.HasPrefix(it.Action, "file:"):
 		rel := strings.TrimPrefix(it.Action, "file:")
 		a.Tab, a.File, a.FileLines, a.FileErr, a.FileOff, a.Selecting, a.Find = 3, rel, nil, "", 0, false, ""
@@ -795,6 +804,15 @@ func (m *Model) runPalette(it paletteItem, query string) tea.Cmd {
 			}
 		}
 		return m.switchTheme(next, m.st.ThemeScope)
+	case "undo-last":
+		if r := lastApplied(m.st); r != nil {
+			m.askApply("applies.undo", r.JobID, "Undo "+clean(r.Title)+"? It reverts its merge.")
+		} else {
+			m.st.Message = "nothing applied today to undo"
+		}
+	case "hold-all":
+		m.pendingX, m.pendingI = "applies.hold-all", ""
+		m.st.Mode, m.st.Prompt = ModeConfirm, "Hold every helper's work? "+appParent(m.st)+" applies none of it until you let it."
 	case "env-up":
 		m.pendingX, m.pendingI = "env.up", "up"
 		m.st.Mode, m.st.Prompt = ModeConfirm, "Start this project's container (rig env up)?"
@@ -916,4 +934,44 @@ func (m *Model) leadConfirmKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 	return m, nil
+}
+
+// repoFacts is what the first-conversation screen says about the repo: its stack, how many files git tracks, and
+// whether it has a dev container, read from the files at its root.
+func repoFacts(repo string) string {
+	has := func(name string) bool { _, err := os.Stat(filepath.Join(repo, name)); return err == nil }
+	var facts []string
+	switch {
+	case has("package.json"):
+		data, _ := os.ReadFile(filepath.Join(repo, "package.json"))
+		stack := "node"
+		for _, f := range []struct{ dep, name string }{{`"next"`, "next.js"}, {`"react"`, "react"}, {`"vue"`, "vue"}, {`"svelte"`, "svelte"}, {`"express"`, "express"}} {
+			if strings.Contains(string(data), f.dep) {
+				stack = f.name
+				break
+			}
+		}
+		facts = append(facts, stack)
+		for _, pm := range []struct{ lock, name string }{{"pnpm-lock.yaml", "pnpm"}, {"yarn.lock", "yarn"}, {"bun.lockb", "bun"}, {"package-lock.json", "npm"}} {
+			if has(pm.lock) {
+				facts = append(facts, pm.name)
+				break
+			}
+		}
+	case has("go.mod"):
+		facts = append(facts, "go")
+	case has("Cargo.toml"):
+		facts = append(facts, "rust")
+	case has("pyproject.toml") || has("requirements.txt"):
+		facts = append(facts, "python")
+	}
+	if out, err := exec.Command("git", "-C", repo, "ls-files").Output(); err == nil {
+		if n := strings.Count(string(out), "\n"); n > 0 {
+			facts = append(facts, fmt.Sprintf("%d files", n))
+		}
+	}
+	if has(".devcontainer/devcontainer.json") || has(".devcontainer.json") {
+		facts = append(facts, "dev container found")
+	}
+	return strings.Join(facts, " · ")
 }

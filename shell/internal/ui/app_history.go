@@ -76,6 +76,32 @@ func (m *Model) applyThenTell(method string, params map[string]any, done, tell s
 	}
 }
 
+// holdAll holds every helper's work not yet applied: the ones at work and the finished ones waiting on the parent.
+func (m *Model) holdAll() tea.Cmd {
+	var ids []string
+	for _, r := range m.view.Rows("Jobs") {
+		if r.Label == "Unverified" || r.Label == "Running" || r.Label == "Needs input" || r.Ask {
+			ids = append(ids, r.ID)
+		}
+	}
+	src := m.src
+	return func() tea.Msg {
+		held := 0
+		var last error
+		for _, id := range ids {
+			if _, err := src.Act("applies.hold", map[string]any{"id": id, "on": true}, 30*time.Second); err != nil {
+				last = err
+				continue
+			}
+			held++
+		}
+		if held == 0 && last != nil {
+			return appliedMsg{err: last}
+		}
+		return appliedMsg{text: fmt.Sprintf("holding %d helpers' work", held)}
+	}
+}
+
 // undoNote is what the parent is told after an undo, so it can handle anything built on that work.
 func (m *Model) undoNote(id string) string {
 	title, commit, branch := id, "", ""

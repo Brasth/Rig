@@ -55,6 +55,12 @@ type openStep struct {
 func NewLauncher(home, code, input string) *Launcher {
 	st := NewState()
 	st.Styled = true
+	if !ApplyTheme(savedTheme(home)) {
+		ApplyTheme("light") // the design's launcher, as the app opens
+	}
+	if input == "" && code != "" {
+		input = tildePath(code) + "/"
+	}
 	l := &Launcher{st: st, home: home, code: code, input: input, now: time.Now,
 		run: func(name string, args ...string) ([]byte, error) { return exec.Command(name, args...).CombinedOutput() }}
 	data, err := os.ReadFile(filepath.Join(home, "recent.json"))
@@ -161,8 +167,17 @@ func (l *Launcher) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			return reposMsg{repos: strings.Fields(string(out))}
 		}
+	case tea.KeyCtrlN:
+		// a new project: a name under the code folder, which ⏎ offers to create
+		l.input, l.message = tildePath(l.code)+"/", "type the new project's name, then ⏎"
 	case tea.KeyEnter:
 		text := strings.TrimSpace(l.input)
+		prefill := tildePath(l.code) + "/"
+		if text == prefill || text == tildePath(l.code) {
+			text = "" // the box starts on the code folder, as the design shows it: ⏎ then opens the chosen recent one
+		} else if rest := strings.TrimPrefix(text, prefill); rest != text && gitURL.MatchString(rest) {
+			text = rest // a URL typed after the code folder
+		}
 		switch {
 		case text != "" && gitURL.MatchString(text):
 			return l, l.clone(text)
@@ -294,10 +309,20 @@ func (l *Launcher) View() string {
 			case l.cloning == "" && s.Label == "clone":
 				mark = st.paint(colAccent, "⠹")
 			}
-			row := mark + " " + s.Label + "  " + note
+			current := !s.Done && !s.Failed && mark != st.faint("○")
+			label := s.Label
+			if current {
+				label = st.bold(label)
+			} else if !s.Done && !s.Failed {
+				label = st.faint(label)
+			}
+			row := mark + " " + label + "  " + note
 			if s.Took > 0 {
 				took := st.faint(fmt.Sprintf("%.1fs", s.Took.Seconds()))
 				row += strings.Repeat(" ", max(2, cw-lipgloss.Width(row)-lipgloss.Width(took)-2)) + took
+			}
+			if current && st.Styled {
+				row = tint(fit(row, cw), colSelBg) // the design marks the step in progress
 			}
 			body = append(body, row)
 		}
@@ -326,6 +351,8 @@ func (l *Launcher) View() string {
 				name, where = p, ""
 			} else if _, err := os.Stat(filepath.Join(p, ".rig", "harness.toml")); err != nil {
 				right = st.paint(colAmber, "not set up")
+			} else if n := runningAgents(p); n > 0 {
+				right = st.paint(colGreen, fmt.Sprintf("● %d agents", n))
 			} else {
 				right = st.faint(ago(l.now(), l.recents[i].At))
 			}
@@ -343,7 +370,7 @@ func (l *Launcher) View() string {
 			body = append(body, row)
 		}
 		body = append(body, "", "", st.faint("Paste a URL to clone, e.g. github.com/brasth/api-gateway"), st.faint("It goes into "+tildePath(l.code)+"/<name> and opens with Rig."))
-		keys = [][2]string{{"↑↓", "choose"}, {"⏎", "open"}, {"⌃g", "my GitHub repos"}, {"esc", "quit"}}
+		keys = [][2]string{{"↑↓", "choose"}, {"⏎", "open"}, {"⌃g", "my GitHub repos"}, {"⌃n", "new project"}, {"esc", "quit"}}
 	}
 	lines = append(lines, indentAll(body, (w-cw)/2, w)...)
 	for len(lines) < h-1 {
@@ -374,4 +401,43 @@ func ago(now time.Time, at float64) string {
 		return "yesterday"
 	}
 	return fmt.Sprintf("%dd", int(d.Hours()/24))
+}
+
+// savedTheme is the theme kept for all repos in home's config.toml ([ui] theme), or "".
+func savedTheme(home string) string {
+	data, err := os.ReadFile(filepath.Join(home, "config.toml"))
+	if err != nil {
+		return ""
+	}
+	section := ""
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "[") {
+			section = strings.Trim(line, "[] ")
+			continue
+		}
+		if k, v, ok := strings.Cut(line, "="); ok && section == "ui" && strings.TrimSpace(k) == "theme" {
+			return strings.Trim(strings.TrimSpace(v), `"'`)
+		}
+	}
+	return ""
+}
+
+// runningAgents counts the jobs at work in a project, for the launcher's "● 3 agents".
+func runningAgents(repo string) int {
+	metas, _ := filepath.Glob(filepath.Join(repo, ".rig", "jobs", "*", "meta.json"))
+	n := 0
+	for _, path := range metas {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		var meta struct {
+			Status string `json:"status"`
+		}
+		if json.Unmarshal(data, &meta) == nil && (meta.Status == "running" || meta.Status == "ask") {
+			n++
+		}
+	}
+	return n
 }

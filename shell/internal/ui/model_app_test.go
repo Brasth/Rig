@@ -49,9 +49,9 @@ func TestTheAppOpensOnTheFirstConversationInTheDesignsLight(t *testing.T) {
 		t.Fatalf("the design's default theme: %q", m.st.Theme)
 	}
 	out := appScreen(m)
-	for _, want := range []string{"r•••   my-repo", "1 [conversation]", "2 changes", "3 code", "working", "⌃k", "⇥ panel",
+	for _, want := range []string{"r•••   my-repo",
 		"What should we work on in my-repo?", "ask claude anything about my-repo", "1  explain this codebase", "4  review the open changes",
-		"⏎ send    1-4 suggestion    ⌃k commands"} {
+		"⏎ send    1-4 suggestion    @ add file    ⌃k commands    ? more"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q:\n%s", want, out)
 		}
@@ -60,6 +60,9 @@ func TestTheAppOpensOnTheFirstConversationInTheDesignsLight(t *testing.T) {
 	run(press(m, "1"), m)
 	if len(src.chatSent) != 1 || src.chatSent[0][0] != "explain this codebase" {
 		t.Fatalf("a digit sends its suggestion: %v", src.chatSent)
+	}
+	if strings.Contains(strings.Split(out, "\n")[0], "conversation") {
+		t.Fatal("the first conversation's top bar is the mark and the repo only, as the design draws it")
 	}
 }
 
@@ -96,9 +99,12 @@ func TestTheConversationScreenAndTheReplyBox(t *testing.T) {
 func TestTabOpensTheAgentsPanel(t *testing.T) {
 	m, src := appModel(t)
 	withConversation(t, m, src)
+	src.today = sampleToday()
+	run(m.fetchToday(), m)
 	press(m, "tab")
 	out := appScreen(m)
-	for _, want := range []string{"Done today", "Settings loader", "Agents", "started by claude", "parent · in the conversati",
+	for _, want := range []string{"Done today", "1 · all ›", "Rate limit POST /login", "claude · applied by claude", "Agents", "started by claude",
+		"parent · in the convers", "claude allowed 1 command today",
 		"codex", "Rate limit POST /login", "Queue", "claude picks next", "1  Add /logout audit", "⏎ watch thread", "⇥ close"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q:\n%s", want, out)

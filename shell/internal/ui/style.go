@@ -44,6 +44,12 @@ var Themes = []struct {
 	{"dracula", Theme{"#282a36", "#f8f8f2", "#c5c8d6", "#6272a4", "#343746", "#8be9fd", "#f1fa8c", "#50fa7b", "#ff5555", "#7c86b8"}},
 }
 
+// raised is each theme's card surface: the design's white boxes (reply box, change card, panel, palette) on light.
+var raised = map[string]string{"rig": "234", "light": "#ffffff", "dark": "#1d1e24", "material": "#26242b", "dracula": "#2f3241"}
+
+// colRaised is the current theme's card surface.
+var colRaised = "234"
+
 // ThemeNames lists the theme names in order.
 func ThemeNames() []string {
 	out := make([]string, len(Themes))
@@ -60,6 +66,7 @@ func ApplyTheme(name string) bool {
 			p := t.Theme
 			colGround, colText, colMuted, colBorder, colSelBg = p.Ground, p.Text, p.Muted, p.Border, p.SelBg
 			colAccent, colAmber, colGreen, colRed, colFaint = p.Accent, p.Amber, p.Green, p.Red, p.Faint
+			colRaised = raised[name]
 			return true
 		}
 	}
