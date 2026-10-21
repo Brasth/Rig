@@ -14,8 +14,10 @@ import (
 const (
 	sessionMinW = 120
 	sessionMinH = 30
-	sessLeftW   = 26
+	sessLeftW   = 26 // the mockup's widths at 120 columns; wider terminals keep its proportions up to the caps
 	sessRightW  = 40
+	sessLeftMax = 44
+	sessRightMx = 72
 	dockRows    = 4
 )
 
@@ -30,8 +32,10 @@ func sessionGeometry(w, h int) sessionGeom {
 	if w < sessionMinW || h < sessionMinH {
 		return sessionGeom{}
 	}
+	left := min(sessLeftMax, max(sessLeftW, w*sessLeftW/sessionMinW))
+	right := min(sessRightMx, max(sessRightW, w*sessRightW/sessionMinW))
 	// header, tab bar, evidence rule, message and footer take five rows; the dock takes dockRows more
-	return sessionGeom{ok: true, left: sessLeftW, right: sessRightW, mid: w - sessLeftW - sessRightW - 2, grid: h - 5 - dockRows}
+	return sessionGeom{ok: true, left: left, right: right, mid: w - left - right - 2, grid: h - 5 - dockRows}
 }
 
 // SessionPaneSize is the room the middle column gives the parent's terminal (its title takes the first row).
@@ -71,7 +75,17 @@ func sessionFrame(v *view.View, st State, w, h int) []string {
 	lines = append(lines, ruleS(st, dockTitle(st, row), w))
 	lines = append(lines, dockLines(st, row, w, dockRows)...)
 	msg := messageLine(st, w)
-	if strings.TrimSpace(msg) == "" && row != nil && row.Ask {
+	if st.Mode == ModeInput && st.InputLabel == "chat" { // the box is in the middle column; say what Enter does
+		msg = fit(" Enter sends to the parent · /queue TEXT parks it in the queue · Esc discards", w)
+		if st.Styled {
+			msg = muted(msg)
+		}
+	} else if strings.TrimSpace(msg) == "" && st.Chat != nil && st.Chat.Ask != nil && !st.PaneRunning {
+		msg = fit(" the parent needs input: a allows, d denies.", w)
+		if st.Styled {
+			msg = tone("attention").Render(msg)
+		}
+	} else if strings.TrimSpace(msg) == "" && row != nil && row.Ask {
 		msg = fit(" "+clean(row.ID)+" needs input: a allows, d denies.", w)
 		if st.Styled {
 			msg = tone("attention").Render(msg)
@@ -85,13 +99,19 @@ func sessionKeys(st State, row *view.Row) []string {
 	if st.PaneFocus {
 		return []string{"Ctrl-] back to the board (every other key goes to the program)"}
 	}
-	keys := []string{"Tab pane", "Enter type", "p parent", "s shell", "e enqueue", "v evidence", "? help", "q quit"}
+	enter := "Enter type"
+	if st.ChatOn && !st.PaneRunning {
+		enter = "Enter ask the parent"
+	}
+	keys := []string{"Tab pane", enter, "p parent", "e enqueue", "v evidence", "w workspace", "? help", "q quit"}
 	switch {
+	case st.Mode == ModeInput && st.InputLabel == "chat":
+		return []string{"Enter send", "Esc discard"}
 	case st.Mode == ModeInput:
 		return []string{"Enter queue it", "Esc discard"}
 	case st.Mode == ModeConfirm:
 		return []string{"y confirm", "n cancel"}
-	case row != nil && row.Ask:
+	case (st.Chat != nil && st.Chat.Ask != nil && !st.PaneRunning) || (row != nil && row.Ask):
 		return append([]string{"a allow", "d deny"}, keys...)
 	}
 	return keys
@@ -136,10 +156,16 @@ func leftColumn(st State, w, h int) []string {
 	return out
 }
 
-// midColumn is the parent's terminal when one runs, else how to start it.
+// chatPlaceholder is the mockup's input line while nothing is typed.
+const chatPlaceholder = " › Ask the parent, or /queue to park a task"
+
+// midColumn is the parent: its own terminal while one runs (p), else the conversation, as the mockup shows it.
 func midColumn(st State, w, h int) []string {
+	if st.ChatOn && !st.PaneRunning {
+		return chatColumn(st, w, h)
+	}
 	out := make([]string, 0, h)
-	out = append(out, heavy(st, termTitle(st), w))
+	out = append(out, heavy(st, parentTitle(st), w))
 	if len(st.PaneLines) == 0 {
 		for _, l := range []string{
 			"",
@@ -164,7 +190,7 @@ func midColumn(st State, w, h int) []string {
 
 // rightColumn is the Jobs list (attention first, finished last) with the queue under it.
 func rightColumn(v *view.View, st State, w, h int) []string {
-	jobs := v.Rows("Jobs")
+	jobs := withID(v.Rows("Jobs"))
 	queue := v.Rows("Queue")
 	sel := clampSel(st.Selected["Jobs"], len(jobs))
 	qBlock := 0
@@ -216,6 +242,122 @@ func rightColumn(v *view.View, st State, w, h int) []string {
 		out = append(out, fit("", w))
 	}
 	return out[:h]
+}
+
+// chatColumn is the conversation: the transcript, a rule, and the "› Ask the parent" box.
+func chatColumn(st State, w, h int) []string {
+	title := "Parent"
+	if st.Chat != nil {
+		title += " · " + clean(st.Chat.Parent)
+		if st.Chat.State == "running" {
+			title += " · working"
+		}
+	}
+	out := []string{heavy(st, title, w)}
+	body := h - 3
+	var lines []string
+	if st.Chat == nil && st.ChatE == "" {
+		lines = []string{"", " No conversation yet.", "", " Enter writes to the parent; the answer appears here.",
+			" /queue TEXT parks a task instead; p opens the parent's own screen."}
+		if st.Styled {
+			for i := range lines {
+				lines[i] = muted(lines[i])
+			}
+		}
+	} else {
+		lines = append(chatAll(st, w), askLines(st, w)...)
+	}
+	out = append(out, lastLines(lines, st.ChatUp, w, body)...)
+	sep := " " + strings.Repeat("─", max(0, w-2)) + " "
+	if st.Styled {
+		sep = border(sep)
+	}
+	input := chatPlaceholder
+	if st.Mode == ModeInput && st.InputLabel == "chat" {
+		input = " › " + st.Prompt + "▏"
+		if lipgloss.Width(input) > w { // keep the cursor end in view while typing a long message
+			r := []rune(st.Prompt)
+			input = " › …" + string(r[max(0, len(r)-(w-5)):]) + "▏"
+		}
+	} else if st.Styled {
+		input = muted(fit(input, w))
+	}
+	out = append(out, fit(sep, w), fit(input, w))
+	return out[:h]
+}
+
+// askLines is the mockup's request block: what the parent wants to run, in amber, and the keys that answer it. A
+// parent whose headless mode cannot ask says so once, under its first answer.
+func askLines(st State, w int) []string {
+	if st.Chat == nil {
+		return nil
+	}
+	paint := func(s string) string {
+		if st.Styled {
+			return tone("attention").Render(s)
+		}
+		return s
+	}
+	if ask := st.Chat.Ask; ask != nil {
+		var out []string
+		out = append(out, " "+paint("parent › asks to run:"))
+		for _, l := range wrap(clean(ask.Preview), max(8, w-5), "") {
+			out = append(out, "   "+paint(l))
+		}
+		hint := "   a allow  d deny"
+		if st.Styled {
+			hint = muted(hint)
+		}
+		return append(out, hint, "")
+	}
+	if !st.Chat.Asks && len(st.Chat.Entries) > 0 {
+		note := " " + clean(st.Chat.Parent) + " cannot ask for permission headless: it follows its own settings. p opens its own screen."
+		var out []string
+		for _, l := range wrap(note, max(8, w-2), "  ") {
+			if st.Styled {
+				l = muted(l)
+			}
+			out = append(out, " "+l)
+		}
+		return out
+	}
+	return nil
+}
+
+// parentTitle is the middle column's heading, as the mockup words it: "Parent · codex", and what it is doing.
+// How to get back to the board is the footer's job, so the heading never carries it.
+func parentTitle(st State) string {
+	if st.PaneTitle == "" {
+		return "Parent"
+	}
+	title := sanitize(st.PaneTitle)
+	if i := strings.Index(title, " ("); i > 0 {
+		title = title[:i]
+	}
+	return "Parent · " + title
+}
+
+// withID puts the job id after the worker on a job's second line, as the mockup shows it: "claude · job-7f2 · ASK".
+func withID(rows []view.Row) []view.Row {
+	out := make([]view.Row, len(rows))
+	for i, r := range rows {
+		out[i] = r
+		if r.ID == "" || strings.Contains(r.Second, r.ID) {
+			continue
+		}
+		lead := r.Worker + " · "
+		switch {
+		case r.Worker == "":
+			out[i].Second = r.ID + " · " + r.Second
+		case strings.HasPrefix(r.Second, lead):
+			out[i].Second = lead + r.ID + " · " + strings.TrimPrefix(r.Second, lead)
+		case r.Second == r.Worker || r.Second == "":
+			out[i].Second = r.Worker + " · " + r.ID
+		default: // an active job's second line is what it is doing now
+			out[i].Second = lead + r.ID + " · " + r.Second
+		}
+	}
+	return out
 }
 
 func dockTitle(st State, row *view.Row) string {

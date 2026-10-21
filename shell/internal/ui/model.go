@@ -27,11 +27,12 @@ type Source interface {
 	Recover(confirmID string, timeout time.Duration) (string, error)
 	Log(id string, lines int, timeout time.Duration) (*view.LogReply, error)
 	Shell(id string, timeout time.Duration) (*view.ShellPlan, error)
-	Parent(timeout time.Duration) (*view.ShellPlan, error)
+	Parent(name string, timeout time.Duration) (*view.ShellPlan, error)
 	ChatStatus(timeout time.Duration) (*view.ChatStatus, error)
 	ChatTranscript(session string, tail int, timeout time.Duration) (*view.ChatTranscript, error)
-	ChatSend(message, session string, timeout time.Duration) (*view.ChatStarted, error)
+	ChatSend(message, session, parent string, timeout time.Duration) (*view.ChatStarted, error)
 	ChatCancel(session string, timeout time.Duration) error
+	ChatAnswer(session, askID, decision string, timeout time.Duration) error
 }
 
 const (
@@ -126,6 +127,8 @@ type chatSentMsg struct {
 
 type chatCancelMsg struct{ err error }
 
+type chatAnsweredMsg struct{ err error }
+
 type shellPlanMsg struct {
 	plan *view.ShellPlan
 	err  error
@@ -146,31 +149,32 @@ type actionMsg struct {
 
 // Model is the Bubble Tea model for the board pane.
 type Model struct {
-	src       Source
-	st        State
-	view      *view.View
-	w, h      int
-	fetching  bool
-	wsBusy    bool
-	wsLast    time.Time
-	flBusy    bool
-	flLast    time.Time
-	lgBusy    bool
-	lgLast    time.Time
-	chBusy    bool
-	chLast    time.Time
-	csBusy    bool
-	csLast    time.Time
-	dkBusy    bool
-	stBusy    bool
-	stLast    time.Time
-	dkLast    time.Time
-	pane      Pane
-	paneName  string
-	paneFocus bool
-	spawn     func(argv []string, dir string, env []string, cols, rows int) (Pane, error)
-	chatID    string // the session the Chat tab follows; empty until one exists
-	inputFor  string // "chat" while the input line is a chat message, else enqueue
+	src        Source
+	st         State
+	view       *view.View
+	w, h       int
+	fetching   bool
+	wsBusy     bool
+	wsLast     time.Time
+	flBusy     bool
+	flLast     time.Time
+	lgBusy     bool
+	lgLast     time.Time
+	chBusy     bool
+	chLast     time.Time
+	csBusy     bool
+	csLast     time.Time
+	dkBusy     bool
+	stBusy     bool
+	stLast     time.Time
+	dkLast     time.Time
+	pane       Pane
+	paneName   string
+	paneFocus  bool
+	parentName string // the parent CLI `rig shell --parent` asked for; empty means the project's own
+	spawn      func(argv []string, dir string, env []string, cols, rows int) (Pane, error)
+	chatID     string // the session the Chat tab follows; empty until one exists
+	inputFor   string // "chat" while the input line is a chat message, else enqueue
 	// exec hands the terminal to a command and returns when it exits; tests replace it.
 	exec     func(argv []string, done func(error) tea.Msg) tea.Cmd
 	lastOK   time.Time
@@ -186,6 +190,7 @@ type Model struct {
 func NewModel(src Source, ascii bool) *Model {
 	st := NewState()
 	st.Loading, st.ASCII, st.Styled = true, ascii, true
+	st.WideSession = sessionGeometry(120, 36).ok
 	return &Model{src: src, st: st, w: 120, h: 36, now: time.Now, newKey: randomKey, selID: map[string]string{}, exec: execProcess, spawn: spawnPane}
 }
 
@@ -247,6 +252,32 @@ func (m *Model) fetchFleet(force bool) tea.Cmd {
 // composite is true while the Session tab shows the mockup's three columns and dock.
 func (m *Model) composite() bool {
 	return m.st.Tab == SessionTab && sessionGeometry(m.w, m.h).ok
+}
+
+// paneLive: a program is running in the Session pane (one that exited gives the middle column back to the chat).
+func (m *Model) paneLive() bool {
+	if m.pane == nil {
+		return false
+	}
+	done, _ := m.pane.Exited()
+	return !done
+}
+
+// chatInSession: the Session screen's middle column is the conversation with the parent, as in the mockup.
+func (m *Model) chatInSession() bool { return m.composite() && m.st.ChatOn && !m.paneLive() }
+
+// chatAsk is the parent's permission request a/d answer: shown in the conversation (the Chat tab, or the Session
+// screen's middle column) and still waiting. It comes before a worker's ASK, which the Jobs list also shows.
+func (m *Model) chatAsk() *view.ChatAsk {
+	if m.st.Chat == nil || m.st.Chat.Ask == nil || !(m.st.Tab == ChatTab || m.chatInSession()) {
+		return nil
+	}
+	return m.st.Chat.Ask
+}
+
+// startChatInput opens the mockup's "› Ask the parent" box.
+func (m *Model) startChatInput() {
+	m.st.Mode, m.st.InputLabel, m.inputFor, m.st.Message = ModeInput, "chat", "chat", ""
 }
 
 // showsWorkspace: the workspace panel is on screen (the Env tab, or the Session screen's left column).
@@ -341,7 +372,7 @@ func (m *Model) fetchChatStatus() tea.Cmd {
 }
 
 func (m *Model) fetchChat(force bool) tea.Cmd {
-	if m.st.Tab != ChatTab || m.chBusy || m.chatID == "" || (!force && m.now().Sub(m.chLast) < chatEvery) {
+	if !(m.st.Tab == ChatTab || m.chatInSession()) || m.chBusy || m.chatID == "" || (!force && m.now().Sub(m.chLast) < chatEvery) {
 		return nil
 	}
 	m.chBusy = true
@@ -370,12 +401,12 @@ func waitPane(p Pane) tea.Cmd {
 
 // askPane fetches the server's command for the parent CLI or for a container shell.
 func (m *Model) askPane(parent bool) tea.Cmd {
-	src := m.src
+	src, parentName := m.src, m.parentName
 	return func() tea.Msg {
 		var plan *view.ShellPlan
 		var err error
 		if parent {
-			plan, err = src.Parent(callTimeout)
+			plan, err = src.Parent(parentName, callTimeout)
 		} else {
 			plan, err = src.Shell("", callTimeout)
 		}
@@ -508,6 +539,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.w, m.h = msg.Width, msg.Height
+		m.st.WideSession = sessionGeometry(m.w, m.h).ok
 		if m.pane != nil {
 			m.pane.Resize(m.paneSize())
 		}
@@ -557,6 +589,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.st.Chat, m.st.ChatE = msg.chat, ""
 	case chatSentMsg:
+		if msg.err == nil && msg.started == nil {
+			msg.err = errors.New("the server sent no session")
+		}
 		if msg.err != nil {
 			m.st.InputLabel, m.inputFor = "chat", "chat"
 			m.st.Mode = ModeInput // keep the draft, as a failed enqueue does
@@ -565,6 +600,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.chatID, m.st.Prompt, m.st.ChatUp = msg.started.Session, "", 0
 		m.st.Message = "sent to " + clean(msg.started.Parent)
+		m.chLast = time.Time{}
+		return m, m.fetchChat(true)
+	case chatAnsweredMsg:
+		if msg.err != nil {
+			m.st.Message = "Answer failed: " + msg.err.Error()
+		}
 		m.chLast = time.Time{}
 		return m, m.fetchChat(true)
 	case chatCancelMsg:
@@ -586,6 +627,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.dkBusy, m.dkLast = false, m.now()
 		if msg.id != m.st.DockID {
 			return m, m.fetchDock(false) // the selection moved on while this was loading
+		}
+		if m.startingUp(msg.err) {
+			m.dkLast = time.Time{} // still loading, not a failure: try again on the next tick
+			return m, nil
 		}
 		if msg.err != nil {
 			m.st.DockE = msg.err.Error()
@@ -640,6 +685,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(m.fetchWorkspace(true), m.fetch())
 	case workspaceMsg:
 		m.wsBusy, m.wsLast = false, m.now()
+		if m.startingUp(msg.err) && m.st.Workspace == nil {
+			m.wsLast = time.Time{} // the API server is still starting: keep "Loading", retry on the next tick
+			return m, nil
+		}
 		if msg.err != nil {
 			// Keep the last good panel on screen; say why it is stale.
 			m.st.WorkspaceE = msg.err.Error()
@@ -722,17 +771,18 @@ func (m *Model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "s":
 			return m, m.askPane(false)
 		case "enter":
-			if m.pane != nil {
-				if done, _ := m.pane.Exited(); !done {
-					m.paneFocus = true
-					m.st.Message = ""
-				}
+			switch {
+			case m.paneLive():
+				m.paneFocus = true
+				m.st.Message = ""
+			case m.chatInSession():
+				m.startChatInput()
 			}
 			return m, nil
 		}
 	}
-	if k.String() == "c" && m.st.Tab == ChatTab {
-		m.st.Mode, m.st.InputLabel, m.inputFor, m.st.Message = ModeInput, "chat", "chat", ""
+	if k.String() == "c" && (m.st.Tab == ChatTab || m.chatInSession()) {
+		m.startChatInput()
 		return m, nil
 	}
 	if m.st.HelpOpen {
@@ -773,7 +823,7 @@ func (m *Model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m, m.goTab(tabs[(i+step)%len(tabs)])
 			}
 		}
-		return m, nil
+		return m, m.goTab(SessionTab) // on a tab the strip no longer lists (Chat, once the window is wide)
 	case "l":
 		if m.st.Tab != "Jobs" {
 			return m, nil
@@ -824,7 +874,7 @@ func (m *Model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "G":
 		m.st.LogUp, m.st.ChatUp = 0, 0
 	case "N":
-		if m.st.Tab == ChatTab {
+		if m.st.Tab == ChatTab || m.chatInSession() {
 			m.chatID, m.st.Chat, m.st.ChatUp = "", nil, 0
 			m.st.Message = "next message starts a new session"
 		}
@@ -857,6 +907,15 @@ func (m *Model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, tea.Batch(cmds...)
 	case "a", "d":
+		if ask := m.chatAsk(); ask != nil {
+			decision := "allow"
+			if k.String() == "d" {
+				decision = "deny"
+			}
+			m.st.Message = decision + " requested: " + clean(ask.Preview)
+			src, session, id := m.src, m.chatID, ask.ID
+			return m, func() tea.Msg { return chatAnsweredMsg{err: src.ChatAnswer(session, id, decision, callTimeout)} }
+		}
 		row, ok := m.selected()
 		if !ok || m.listTab() != "Jobs" || !row.Ask {
 			return m, nil
@@ -881,6 +940,9 @@ func (m *Model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	return m, nil
 }
+
+// SetParent names the parent CLI to talk to (`rig shell --parent`); empty means the project's configured one.
+func (m *Model) SetParent(name string) { m.parentName = name }
 
 // SetTab opens the board on a tab; the first refresh loads whatever it needs.
 func (m *Model) SetTab(name string) { m.st.Tab = name }
@@ -1022,9 +1084,16 @@ func (m *Model) inputKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.st.Mode = ModeNormal
 		if m.inputFor == "chat" {
 			m.st.InputLabel, m.inputFor = "", ""
-			src, session := m.src, m.chatID
+			if rest, ok := strings.CutPrefix(text, "/queue "); ok && strings.TrimSpace(rest) != "" {
+				// the mockup's "/queue to park a task": the same queue.add as e, never sent to the parent
+				if m.draftKey == "" {
+					m.draftKey = m.newKey()
+				}
+				return m, m.act("queue.add", map[string]any{"text": strings.TrimSpace(rest), "idempotency_key": m.draftKey}, true)
+			}
+			src, session, parent := m.src, m.chatID, m.parentName
 			return m, func() tea.Msg {
-				started, err := src.ChatSend(text, session, 10*time.Second)
+				started, err := src.ChatSend(text, session, parent, 10*time.Second)
 				return chatSentMsg{started: started, err: err}
 			}
 		}
@@ -1044,7 +1113,13 @@ func (m *Model) inputKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m *Model) View() string {
 	m.syncPane()
 	lines := RenderLines(m.view, m.st, m.w, m.h)
-	return strings.Join(Decorate(lines), "\n")
+	return strings.Join(Paint(Decorate(lines)), "\n")
+}
+
+// startingUp is true for the "no API server yet" error before the first snapshot has ever arrived: the board starts
+// the server itself, so that is a moment of loading, not a failure to show.
+func (m *Model) startingUp(err error) bool {
+	return err != nil && m.lastOK.IsZero() && IsNotRunning(err)
 }
 
 // IsNotRunning reports whether err means no API server answered.

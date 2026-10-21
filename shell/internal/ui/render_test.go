@@ -202,6 +202,26 @@ func TestGoldenFrames(t *testing.T) {
 			s.Mode, s.Prompt = ModeConfirm, "Stop job-7f2 Add supertest dev dep?"
 		}},
 		{"session-100x30-narrow", 100, 30, SessionTab, func(s *State) { s.Workspace = loadWorkspace(t) }},
+		{"session-120x36-chat", 120, 36, SessionTab, func(s *State) {
+			s.Workspace, s.DockEvidence, s.DockID = loadWorkspace(t), loadEvidence(t), loadView(t).Jobs[0].ID
+			s.ChatOn = true
+			s.Chat = &view.ChatTranscript{Session: "c-1a2b3c4d", Parent: "claude", State: "idle", Entries: []view.ChatEntry{
+				{Role: "user", Text: "Fix the failing auth tests and add rate limiting to POST /login"},
+				{Role: "assistant", Text: "Two writers, then a verify node.\nwf-12 · 3 nodes · 0/3 accepted"},
+				{Role: "tool", Text: "rig_job_launch auth-tests claude job-7f2"},
+				{Role: "user", Text: "allow, and pin the version"},
+				{Role: "assistant", Text: "Allowed with a pinned version. job-7f2 resumed; waiting on job-81c."}}}
+		}},
+		{"session-120x36-chat-typing", 120, 36, SessionTab, func(s *State) {
+			s.ChatOn, s.Mode, s.InputLabel, s.Prompt = true, ModeInput, "chat", "summarise the open jobs"
+		}},
+		{"session-120x36-chat-empty", 120, 36, SessionTab, func(s *State) { s.ChatOn = true }},
+		{"session-120x36-chat-ask", 120, 36, SessionTab, func(s *State) {
+			s.ChatOn = true
+			s.Chat = &view.ChatTranscript{Session: "c-1a2b3c4d", Parent: "claude", State: "running", Asks: true,
+				Entries: []view.ChatEntry{{Role: "user", Text: "add supertest and pin it"}, {Role: "tool", Text: "Read package.json"}},
+				Ask:     &view.ChatAsk{ID: "a1", Tool: "Bash", Preview: "Bash npm i -D supertest"}}
+		}},
 		{"settings-120x36", 120, 36, SettingsTab, func(s *State) { s.Settings = loadSettings(t) }},
 		{"settings-60x14-ascii", 60, 14, SettingsTab, func(s *State) { s.ASCII, s.Settings = true, loadSettings(t) }},
 		{"settings-loading", 80, 12, SettingsTab, nil},

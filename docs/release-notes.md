@@ -1,5 +1,13 @@
 # Release Notes
 
+## Every parent in the conversation, and approvals answered there (2026-10-21)
+
+The Session screen's conversation now runs all seven parents (claude, codex, grok, opencode, omp, pi, agy) in their headless modes. claude's and codex's approval requests wait in the conversation as the mockup's `parent › asks to run:` block and are answered with `a`/`d` (new API method `chat.answer`); codex runs as `codex mcp-server` for this and falls back to `codex exec` when that mode is unavailable. Parents that cannot ask headless say so. Built against the CLIs' documented formats and tested with stand-ins; no real parent CLI was run.
+
+## One screen in both modes, in the mockup's colours, with the conversation in the middle (2026-10-21)
+
+`rig shell` now opens the design's one screen in a tmux window (the earlier arrangement is `rig shell --layout split`), so it looks the same as `rig shell --no-tmux`. The Session screen's middle column is the conversation with the parent, as in the mockup: `you ›`, `parent ›`, tool calls, and a `› Ask the parent, or /queue to park a task` box; `p` still runs the parent's own screen there. The board paints the mockup's #eeeeee on #121212 over every cell whatever the terminal theme, keeps the mockup's column proportions on wide terminals, titles the middle column `Parent · codex`, shows each job's worker and id, and no longer flashes "API not running" while it starts. `shell.parent` and `chat.send` take a parent name (`rig shell --parent NAME`).
+
 ## The board matches the design mockup (2026-10-20)
 
 The `rig-shell` board now follows the ADE mockup. **Tabs:** Session, Jobs, Queue, Workflows, Env, Settings (Workspace and Fleet became Env, the program pane became Session, the log is a screen under Jobs: `l`; the old names still work as `--tab` aliases). **Session screen:** on a terminal of 120x30 or more, the workspace (now with worktrees and memory) on the left, the parent's own terminal in the middle, jobs and queue on the right, and the selected job's diff, checks, contract and ports docked below; the header names the container. **Settings** is a read-only view of what `.rig/harness.toml` makes effective. **Look:** the mockup's palette, a dark selected-row bar, an attention-first Jobs list with a "Finished" line, the mockup's footer keys and a `?` key list. **Job titles** are the task, not the first line of the worker preamble: a launch stores its `case` as the title, and older briefs are read with the preamble sentences dropped. New API method `settings.view` (read-only). `rig shell --no-tmux` opens on Session. See [the guide](ade-shell.md#the-board).

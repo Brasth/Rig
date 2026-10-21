@@ -1,12 +1,14 @@
 package ui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/Brasth/Rig/shell/internal/api"
 	"github.com/Brasth/Rig/shell/internal/view"
 )
 
@@ -58,8 +60,8 @@ func TestTheParentRunsInTheMiddleColumnAndFollowsResizes(t *testing.T) {
 		t.Fatalf("pane %dx%d, want the 52x26 middle column", c.cols, c.rows)
 	}
 	m.Update(tea.WindowSizeMsg{Width: 140, Height: 40})
-	if got := (*panes)[0].resizes; len(got) != 1 || got[0] != [2]int{72, 30} {
-		t.Fatalf("resizes %v, want the 72x30 middle column", got)
+	if got := (*panes)[0].resizes; len(got) != 1 || got[0] != [2]int{62, 30} {
+		t.Fatalf("resizes %v, want the 62x30 middle column (the side columns widen in proportion)", got)
 	}
 	m.Update(tea.WindowSizeMsg{Width: 100, Height: 36})
 	if got := (*panes)[0].resizes; got[len(got)-1] != [2]int{100, 31} {
@@ -172,4 +174,180 @@ func TestTheSessionFrameShowsEveryColumnAndTheAttentionLine(t *testing.T) {
 		}
 	}
 	assertGrid(t, Render(m.view, m.st, 120, 36), 120, 36)
+}
+
+func TestEveryJobsSecondLineNamesTheWorkerAndIdAsTheMockupDoes(t *testing.T) {
+	rows := withID([]view.Row{
+		{ID: "job-7f2", Worker: "claude", Second: "permission: npm i -D supertest"},
+		{ID: "job-4c1", Worker: "opencode", Second: "opencode · finished 4m ago"},
+		{ID: "job-9", Worker: "pi", Second: ""},
+		{ID: "job-1", Second: "queued"},
+		{ID: "job-2", Worker: "grok", Second: "grok · job-2 · already there"},
+	})
+	want := []string{"claude · job-7f2 · permission: npm i -D supertest", "opencode · job-4c1 · finished 4m ago",
+		"pi · job-9", "job-1 · queued", "grok · job-2 · already there"}
+	for i, w := range want {
+		if rows[i].Second != w {
+			t.Errorf("row %d: %q, want %q", i, rows[i].Second, w)
+		}
+	}
+}
+
+func TestTheMiddleColumnIsTitledParentAndKeepsTheHintInTheFooter(t *testing.T) {
+	for title, want := range map[string]string{
+		"": "Parent",
+		"codex · typing (Ctrl-] returns to the board)": "Parent · codex · typing",
+		"codex · exited: exit status 1":                "Parent · codex · exited: exit status 1",
+	} {
+		if got := parentTitle(State{PaneTitle: title}); got != want {
+			t.Errorf("%q -> %q, want %q", title, got, want)
+		}
+	}
+}
+
+func TestWideTerminalsKeepTheMockupsProportions(t *testing.T) {
+	for _, c := range []struct{ w, left, right int }{{120, 26, 40}, {180, 39, 60}, {240, 44, 72}, {400, 44, 72}} {
+		g := sessionGeometry(c.w, 40)
+		if g.left != c.left || g.right != c.right || g.left+g.mid+g.right+2 != c.w {
+			t.Errorf("%d columns: %d|%d|%d, want left %d right %d", c.w, g.left, g.mid, g.right, c.left, c.right)
+		}
+	}
+}
+
+func TestTheParentNamedByRigShellIsTheOneAsked(t *testing.T) {
+	m, src, _, _ := sessionModel(t, 120, 36)
+	m.SetParent("claude")
+	runAll(m, press(m, "p"))
+	if len(src.parentNames) != 1 || src.parentNames[0] != "claude" {
+		t.Fatalf("asked %v", src.parentNames)
+	}
+}
+
+func TestTheAPIStartingUpIsLoadingNotAFailure(t *testing.T) {
+	m := NewModel(&fakeSource{}, false)
+	m.Update(tea.WindowSizeMsg{Width: 120, Height: 36})
+	m.SetTab(SessionTab)
+	m.Update(workspaceMsg{err: fmt.Errorf("dial: %w", api.ErrNotRunning)})
+	if m.st.WorkspaceE != "" || !m.wsLast.IsZero() {
+		t.Fatalf("starting up must read as loading and retry soon: %q %v", m.st.WorkspaceE, m.wsLast)
+	}
+	m.lastOK = time.Now()
+	m.Update(workspaceMsg{err: fmt.Errorf("dial: %w", api.ErrNotRunning)})
+	if m.st.WorkspaceE == "" {
+		t.Fatal("after the board has run, a lost server is a failure to show")
+	}
+}
+
+// chatSession is the Session screen with the chat on and one conversation.
+func chatSession(t *testing.T) (*Model, *fakeSource, *[]*fakePane) {
+	t.Helper()
+	m, src, _, panes := sessionModel(t, 120, 36)
+	src.chatStatus = chatOn("c-1a2b3c4d")
+	m.csLast = time.Time{}
+	run(m.fetchChatStatus(), m)
+	src.chatView = transcript("idle", ce("user", "Fix the failing auth tests"), ce("assistant", "Two writers, then a verify node."),
+		ce("tool", "rig_job_launch claude job-7f2"))
+	m.chBusy = false
+	run(m.fetchChat(true), m)
+	return m, src, panes
+}
+
+func TestTheMiddleColumnIsTheConversationAsInTheMockup(t *testing.T) {
+	m, src, _ := chatSession(t)
+	if len(src.chatReads) == 0 {
+		t.Fatal("the transcript is read while the Session screen shows it")
+	}
+	out := m.View()
+	for _, want := range []string{"Parent · claude", "you › Fix the failing auth tests", "parent › Two writers, then a verify node.",
+		"rig_job_launch claude job-7f2", "› Ask the parent, or /queue to park a task", "Enter ask the parent"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q:\n%s", want, Render(m.view, m.st, 120, 36))
+		}
+	}
+	if strings.Contains(strings.Split(out, "\n")[1], "Chat") {
+		t.Error("no separate Chat tab while the Session screen carries the conversation")
+	}
+}
+
+func TestEnterAsksTheParentAndQueueParksATask(t *testing.T) {
+	m, src, _ := chatSession(t)
+	m.SetParent("claude")
+	src.chatStarted = &view.ChatStarted{Session: "c-1a2b3c4d", Parent: "claude"}
+	press(m, "enter")
+	if m.st.Mode != ModeInput || m.st.InputLabel != "chat" {
+		t.Fatalf("Enter opens the ask box: %+v", m.st)
+	}
+	for _, r := range "why" {
+		m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+	if !strings.Contains(Render(m.view, m.st, 120, 36), " › why▏") {
+		t.Fatal("what is typed shows in the middle column's box")
+	}
+	run(press(m, "enter"), m)
+	if len(src.chatSent) != 1 || src.chatSent[0] != [2]string{"why", "c-1a2b3c4d"} || src.chatParents[0] != "claude" {
+		t.Fatalf("sent %v to %v", src.chatSent, src.chatParents)
+	}
+	press(m, "enter")
+	for _, r := range "/queue Docs for rate limit" {
+		m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+	run(press(m, "enter"), m)
+	if len(src.chatSent) != 1 {
+		t.Fatal("/queue is never sent to the parent")
+	}
+	last := src.calls[len(src.calls)-1]
+	if last.method != "queue.add" || last.params["text"] != "Docs for rate limit" {
+		t.Fatalf("/queue parks the task: %v", src.calls)
+	}
+}
+
+func TestPSwapsInTheParentsOwnScreenAndClosingItGivesTheConversationBack(t *testing.T) {
+	m, _, _ := chatSession(t)
+	runAll(m, press(m, "p"))
+	m.Update(tea.KeyMsg{Type: tea.KeyCtrlCloseBracket})
+	if out := m.View(); !strings.Contains(out, "$ ready") || strings.Contains(out, "you › Fix") {
+		t.Fatalf("while its own screen runs, the middle column is that screen:\n%s", Render(m.view, m.st, 120, 36))
+	}
+	press(m, "X", "y")
+	if out := m.View(); !strings.Contains(out, "you › Fix the failing auth tests") {
+		t.Fatalf("closing it brings the conversation back:\n%s", Render(m.view, m.st, 120, 36))
+	}
+}
+
+func TestTheParentsRequestShowsInTheConversationAndADAnswerIt(t *testing.T) {
+	m, src, _ := chatSession(t)
+	src.chatView.Ask = &view.ChatAsk{ID: "ask-1", Tool: "Bash", Preview: "Bash npm i -D supertest"}
+	src.chatView.Asks = true
+	m.chBusy = false
+	run(m.fetchChat(true), m)
+	out := Render(m.view, m.st, 120, 36)
+	for _, want := range []string{"parent › asks to run:", "Bash npm i -D supertest", "a allow  d deny", "the parent needs input"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("missing %q:\n%s", want, out)
+		}
+	}
+	run(press(m, "a"), m)
+	if len(src.chatAnswers) != 1 || src.chatAnswers[0] != [3]string{"c-1a2b3c4d", "ask-1", "allow"} {
+		t.Fatalf("answers %v", src.chatAnswers)
+	}
+	for _, c := range src.calls {
+		if c.method == "job.allow" {
+			t.Fatal("the parent's request comes before the selected job's ASK")
+		}
+	}
+	run(press(m, "d"), m)
+	if src.chatAnswers[1][2] != "deny" {
+		t.Fatalf("d denies: %v", src.chatAnswers)
+	}
+}
+
+func TestAParentThatCannotAskSaysSoOnce(t *testing.T) {
+	m, src, _ := chatSession(t)
+	src.chatView.Parent, src.chatView.Asks = "codex", false
+	m.chBusy = false
+	run(m.fetchChat(true), m)
+	out := Render(m.view, m.st, 120, 36)
+	if strings.Count(out, "cannot ask for permission headless") != 1 {
+		t.Fatalf("one note expected:\n%s", out)
+	}
 }

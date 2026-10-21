@@ -32,6 +32,7 @@ repository. Owner tokens are never returned, and workers may not serve the API.
 | `api.methods` | no | none | List the methods this server offers |
 | `api.ping` | no | none | Check the server and protocol version |
 | `board.snapshot` | no | none | Board data (jobs window, pending queue, slots, settings, workflows) plus a ready-to-render `view` |
+| `chat.answer` | yes | none | Allow or deny the parent's pending permission request in a chat session (params: session, ask_id, decision) |
 | `chat.cancel` | yes | none | EXPERIMENT: stop a chat session's running turn (params: session) |
 | `chat.send` | yes | none | EXPERIMENT: send one message to the headless parent; the answer arrives in the transcript (params: message, session, parent) |
 | `chat.status` | no | none | EXPERIMENT: whether the headless-parent chat is on, which parents can run, and recent sessions |
@@ -45,6 +46,6 @@ repository. Owner tokens are never returned, and workers may not serve the API.
 | `job.evidence` | no | none | Evidence drawer for one job: where it ran, change, contract, checks, ports (params: id) |
 | `log.follow` | no | none | Tail of a job's log as plain text; without an id, the job worth watching (params: id, lines) |
 | `settings.view` | no | none | Settings tab: what this repository's .rig/harness.toml makes effective, ready to render and read-only |
-| `shell.parent` | no | none | The command that runs the parent CLI in a board pane, or why there is none |
+| `shell.parent` | no | none | The command that runs the parent CLI in a board pane, or why there is none (params: parent) |
 | `ui.request` | yes | none | Companion operations (snapshot, enqueue, stop, reply, details, sessions) on the hosted UI service |
 | `workspace.status` | no | none | Workspace panel: container, ports and dc-cli diagnosis as ready-to-render sections (params: deep) |

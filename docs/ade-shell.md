@@ -6,21 +6,21 @@ An optional terminal layout for working with a parent agent while Rig runs worke
 
 | Command | What it does |
 | --- | --- |
-| `rig shell` | One tmux window: the parent CLI unchanged in its own pane, the board (`rig-shell`) beside it, and a log pane following the most relevant job |
-| `rig shell --no-tmux` | The board in this terminal with nothing else installed, no tmux: its Session tab runs the parent CLI or a container shell on an emulated terminal beside the jobs, and `l` follows a job's log in place of the log pane |
+| `rig shell` | The board (`rig-shell`) as the design's one screen in a tmux window, so the session survives a detach. `--parent NAME` picks the parent; `--layout split` gives the earlier arrangement instead: the parent CLI in its own native tmux pane, a narrow board beside it and a log pane |
+| `rig shell --no-tmux` | The same screen in this terminal, with nothing else installed |
 | `rig shell print`, `rig shell kill` | Show the tmux commands it would run, or remove this repository's session |
 | `rig shell build` | Build `rig-shell` from a Rig clone with Go 1.24+ (no project needed) |
 | `rig init --sandbox` | Detect the workspace and, for a folder with no devcontainer, store dc-cli's generated config under `.rig/sandbox/override.json`; `--write-devcontainer` turns it into `.devcontainer/devcontainer.json` |
 | `rig env up`, `down`, `status`, `ports [--json]` | Start or stop the workspace container, show what dc-cli reports, and list the ports it forwards |
 | `rig env recover [--apply ID]` | Show the one next step `dc recover` proposes; apply it only by naming the plan id, and only if Rig allows that action (see [Environment recovery](#environment-recovery)) |
-| `rig chat send, show, sessions, cancel, status` | EXPERIMENT, off unless `RIG_EXPERIMENT_CHAT=1` or `[experiments] chat = true`: a headless parent CLI with a Rig-rendered chat ([details](#experiment-headless-parent-chat)) |
+| `rig chat send, show, sessions, cancel, status` | EXPERIMENT, off unless `RIG_EXPERIMENT_CHAT=1` or `[experiments] chat = true`: a headless parent CLI with a Rig-rendered chat ([details](#the-conversation-with-the-parent)) |
 | `rig web [--port N] [--open]` | A read-only board in the browser: the same Jobs, Queue, Workflows, Workspace, Fleet and Logs views, and the evidence drawer, from the same server-built data. 127.0.0.1 only |
 | `rig adapters list`, `validate DIR`, `check DIR` | Add a worker CLI as an adapter package ([reference](adapters.md)) |
 | `rig worktrees status [--json]`, `plan`, `create`, `commit`, `remove --job ID` | Per-job worktrees, below. `status` lists leftover job worktrees and the stopped containers keyed to them, and removes nothing |
 | `rig doctor [--workspace]` | Adds `workspace`, `dc-cli` and `rig-shell` checks. `--workspace` also runs dc-cli's own diagnosis |
 | `rig api serve`, `ensure`, `call`, `methods` | The local API behind all of this ([reference](local-api.md)) |
 
-`rig shell` needs tmux 3.3+, the parent CLI on `PATH` (`codex`, `grok`, `claude`, `opencode`, `omp`, `pi` or `agy`), and a built `rig-shell`. It uses its own tmux server unless you are already inside tmux, never binds the F8/F9 companion popups, and reuses the session if one exists for the repository.
+`rig shell` needs tmux 3.3+ (not with `--no-tmux`) and a built `rig-shell`; the split layout also needs the parent CLI on `PATH` (`codex`, `grok`, `claude`, `opencode`, `omp`, `pi` or `agy`), while the board layout reports a missing one on screen. It uses its own tmux server unless you are already inside tmux, never binds the F8/F9 companion popups, and reuses the session if one exists for the repository.
 
 ## The board
 
@@ -47,7 +47,9 @@ The footer shows only the keys that matter on the current screen; `?` lists them
 
 ### The Session screen
 
-On a terminal of at least **120 columns by 30 rows** the Session tab is the mockup's screen: the workspace on the left (container, ports, worktrees, doctor, memory), the parent's own terminal in the middle (`p` starts it), and the jobs and queue on the right, with the selected job's diff, checks, contract and ports docked along the bottom. The header names the container (`devcontainer a3f9c1`). Job keys (`a`, `d`, `x`, `v`, `j`, `k`) act on the selected job while the parent keeps the keyboard focus rules below, and `X` closes the program. The program is sized to the middle column and follows window resizes. On a smaller terminal the Session tab is the single-program view described under [The Session tab](#the-session-tab-one-program).
+On a terminal of at least **120 columns by 30 rows** the Session tab is the mockup's screen: the workspace on the left (container, ports, worktrees, doctor, memory), the conversation with the parent in the middle, and the jobs and queue on the right, with the selected job's diff, checks, contract and ports docked along the bottom. The header names the container (`devcontainer a3f9c1`). Job keys (`a`, `d`, `x`, `v`, `j`, `k`) act on the selected job. Wider terminals keep the mockup's proportions (the side columns grow to 44 and 72 columns). The whole screen is drawn in the mockup's colours, #eeeeee on #121212, whatever your terminal's theme.
+
+**The middle column** is the conversation, as the mockup shows it: `you ›`, `parent ›`, the parent's tool calls in blue, and a `› Ask the parent, or /queue to park a task` box. `Enter` writes to the parent (`Enter` sends, `Esc` discards); `/queue TEXT` parks a task in the queue instead of sending it; `N` starts a new conversation. Each message runs the parent once in its headless mode and resumes its session (see [the chat](#the-conversation-with-the-parent) for what that means). When the parent wants to run something that needs your approval, it appears in the conversation as `parent › asks to run:` in amber with `a allow  d deny`, as in the mockup; `a` and `d` answer it before any worker's prompt. `rig shell` turns this on for its board; elsewhere it follows the chat setting. When you need the parent's own screen, `p` runs it in the middle column on an emulated terminal (sized to the column, following resizes; `Enter` types into it, `Ctrl-]` returns to the board) and `X` closes it, which gives the conversation back. On a window this size there is no separate Chat tab. On a smaller terminal the Session tab is the single-program view described under [The Session tab](#the-session-tab-one-program).
 
 ### Env and Settings
 
@@ -67,15 +69,19 @@ The **Session** tab runs one interactive program on a pseudo-terminal inside the
 
 Limits: one program at a time; the live screen only, with no scrollback; the mouse is not forwarded; pasted text goes in as plain input (newlines become Enter), so a paste into a shell runs; wide characters (CJK, emoji) take one cell and can misalign. The tmux layout is unchanged and still gives the side-by-side view; on a terminal too small for the Session screen this tab is full-screen.
 
-## Experiment: headless parent chat
+## The conversation with the parent
 
-**Experimental and off by default.** With `RIG_EXPERIMENT_CHAT=1` (or `[experiments] chat = true`, exactly `true`), the board gains a Chat tab and `rig chat` works. A message runs the parent CLI once in its headless mode (`claude -p --output-format stream-json --verbose`, or `codex exec --json`), a detached runner decodes the event stream into a transcript under `.rig/chat/<session>.jsonl` (directory mode 0700), and the board renders it: your messages, the parent's text, and one short line per tool call. A later message in the same session resumes the parent's own session. The parent is the `parent` in `.rig/harness.toml` when that is `claude` or `codex`; `rig chat send --parent` picks another.
+Off by default, except in the board `rig shell` starts. With `RIG_EXPERIMENT_CHAT=1` (or `[experiments] chat = true`, exactly `true`) the Session screen's middle column is the conversation, a Chat tab appears on terminals too small for that screen, and `rig chat` works.
 
-On the Chat tab: `c` writes a message (`Enter` sends, `Esc` discards, a failed send keeps the draft), `N` starts a new session on the next message, `x` stops a running turn after a confirmation, `k`/`j`/`G` scroll. The web board shows the same transcript read-only; it has no way to send.
+**Every parent.** claude, codex, grok, opencode, omp, pi and agy each run in the headless mode Rig's worker launcher already uses for them, and what they say is read the way Rig reads their job logs. claude, codex, grok and opencode continue their own session from message to message; omp, pi and agy cannot, so each message carries the recent conversation.
 
-What it does not do: Rig adds no permission flags, so the parent runs with your own configuration, and in these modes a tool you have not allowed is refused rather than asked about. Messages reach the parent as one argument after `--` (or on the runner's standard input), never through a shell. Only one turn per session runs at a time.
+**Approvals.** Rig adds no permission flags: the parent runs with your own settings. claude asks through Rig's `rig-ask` permission server (`--permission-prompt-tool`, the same one Rig's workers use), and codex runs as `codex mcp-server`, whose exec and patch approvals come to Rig as requests. Either way the request waits in the conversation until you press `a` or `d` (API `chat.answer`), and your answer is recorded in the transcript. If `codex mcp-server` is not available or does not start, that turn falls back to `codex exec`, which cannot ask. grok, opencode, omp, pi and agy have no headless way to ask, so they follow their own settings and the conversation says so once; `p` opens a parent's own screen when you need its interactive approvals.
 
-**Not verified:** the event formats are the ones `run-worker.sh` already relies on for these CLIs, but no real parent CLI or credentials are available where this was built, so it was tested against stand-in parents that print recorded-shape streams. `rig doctor` says so while the experiment is on. Treat the first real run as the first verification.
+On the Chat tab: `c` writes a message (`Enter` sends, `Esc` discards, a failed send keeps the draft), `N` starts a new session on the next message, `x` stops a running turn after a confirmation, `k`/`j` scroll and `G` follows the newest. The web board shows the same transcript read-only; it has no way to send or answer.
+
+Messages reach the parent as one argument after `--`, in a prompt file, or on the runner's standard input, never through a shell. Only one turn per session runs at a time. `rig doctor` names the chat while it is on.
+
+**Not verified.** No real parent CLI is available where this was built: the decoders, the claude permission exchange and the codex server protocol (`codex`/`codex-reply` tools, `codex/event` notifications, `elicitation/create` approvals) follow the CLIs' documented shapes and are tested with stand-ins. A transcript lives under `.rig/chat/`; `rig chat sessions` lists them.
 
 ## Web board
 

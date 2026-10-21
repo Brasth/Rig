@@ -8,7 +8,7 @@
           Nothing else is in the file.                                                              
  you › thanks                                                                                       
  ! the parent exited with status 3: not logged in                                                   
-                                                                                                    
+ claude cannot ask for permission headless: it follows its own settings. p opens its own screen.    
                                                                                                     
                                                                                                     
                                                                                                     

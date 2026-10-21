@@ -179,10 +179,15 @@ func (c *Client) Log(id string, lines int, timeout time.Duration) (*view.LogRepl
 	return &out, nil
 }
 
-// Parent asks the server for the command that runs the parent CLI in a pane.
-func (c *Client) Parent(timeout time.Duration) (*view.ShellPlan, error) {
+// Parent asks the server for the command that runs the parent CLI in a pane. name picks one of the parent
+// CLIs the server allows (from `rig shell --parent`); empty means the project's configured parent.
+func (c *Client) Parent(name string, timeout time.Duration) (*view.ShellPlan, error) {
 	var out view.ShellPlan
-	if err := c.Call("shell.parent", nil, timeout, &out); err != nil {
+	var params map[string]any
+	if name != "" {
+		params = map[string]any{"parent": name}
+	}
+	if err := c.Call("shell.parent", params, timeout, &out); err != nil {
 		return nil, err
 	}
 	return &out, nil
@@ -215,12 +220,16 @@ func (c *Client) ChatTranscript(session string, tail int, timeout time.Duration)
 	return &out, nil
 }
 
-// ChatSend starts one turn; an empty session starts a new one. The answer arrives in the transcript.
-func (c *Client) ChatSend(message, session string, timeout time.Duration) (*view.ChatStarted, error) {
+// ChatSend starts one turn; an empty session starts a new one, with parent (a name the server checks) or the
+// project's own parent. The answer arrives in the transcript.
+func (c *Client) ChatSend(message, session, parent string, timeout time.Duration) (*view.ChatStarted, error) {
 	var out view.ChatStarted
 	params := map[string]any{"message": message}
 	if session != "" {
 		params["session"] = session
+	}
+	if parent != "" {
+		params["parent"] = parent
 	}
 	if err := c.Call("chat.send", params, timeout, &out); err != nil {
 		return nil, err
@@ -231,6 +240,11 @@ func (c *Client) ChatSend(message, session string, timeout time.Duration) (*view
 // ChatCancel stops a session's running turn.
 func (c *Client) ChatCancel(session string, timeout time.Duration) error {
 	return c.Call("chat.cancel", map[string]any{"session": session}, timeout, nil)
+}
+
+// ChatAnswer allows or denies the parent's pending permission request (decision "allow" or "deny").
+func (c *Client) ChatAnswer(session, askID, decision string, timeout time.Duration) error {
+	return c.Call("chat.answer", map[string]any{"session": session, "ask_id": askID, "decision": decision}, timeout, nil)
 }
 
 type textResult struct {

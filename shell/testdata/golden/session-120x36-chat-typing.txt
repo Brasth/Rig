@@ -1,0 +1,36 @@
+ Rig · my-repo                                                               ! 1 need attention  ● 1 running  slots 2/3 
+ [Session]  Jobs !1   Queue 2   Workflows 2   Env   Settings                                                            
+─ Workspace ──────────────│━ Parent ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━│─ Jobs 1-7/7 · attention first ─────────
+ Loading workspace…       │                                                    │> ! Needs input   Add supertest dev dep 
+                          │ No conversation yet.                               │    claude · job-7f2 · permission: npm …
+                          │                                                    │  ● Running       Rate limit POST /login
+                          │ Enter writes to the parent; the answer appears her…│    codex · job-81c · editing src/middl…
+                          │ /queue TEXT parks a task instead; p opens the pare…│  ● Checking      Verify wf-12 auth tes…
+                          │                                                    │    claude · job-6d0 · running npm test…
+                          │                                                    │  Finished                              
+                          │                                                    │  ○ Unverified    Session store refactor
+                          │                                                    │    opencode · job-4c1 · finished 4m ag…
+                          │                                                    │  ✗ Failed        Bump eslint config    
+                          │                                                    │    pi · job-5aa · check npm run lint f…
+                          │                                                    │  ✓ Verified      Settings loader       
+                          │                                                    │    claude · job-3b9 · Parent accepted …
+                          │                                                    │  – Cancelled     Spike: SSE logs       
+                          │                                                    │    grok · job-2e7 · Stop confirmed; th…
+                          │                                                    │                                        
+                          │                                                    │─ Queue 2 pending ──────────────────────
+                          │                                                    │  · Queued       Add /logout audit      
+                          │                                                    │  · Queued       Docs for rate limit    
+                          │                                                    │                                        
+                          │                                                    │                                        
+                          │                                                    │                                        
+                          │                                                    │                                        
+                          │                                                    │                                        
+                          │ ────────────────────────────────────────────────── │                                        
+ w the full env view      │ › summarise the open jobs▏                         │                                        
+─ Evidence · job-7f2 · Add supertest dev dep ───────────────────────────────────────────────────────────────────────────
+ Loading evidence…                                                                                                      
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+ Enter sends to the parent · /queue TEXT parks it in the queue · Esc discards                                           
+ Enter send  Esc discard                                                                                                

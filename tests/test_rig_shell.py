@@ -184,7 +184,7 @@ class RealTmuxLayout(unittest.TestCase):
         return [line.split() for line in out.strip().splitlines()]
 
     def test_start_builds_three_titled_panes_is_idempotent_and_kills_cleanly(self):
-        session = rig_shell.start(self.repo, parent_cmd="sleep 60", attach=False)
+        session = rig_shell.start(self.repo, parent_cmd="sleep 60", attach=False, layout="split")
         self.assertEqual(session, rig_shell.session_name(self.repo))
         panes = self.panes()
         self.assertEqual([p[1] for p in panes], ["parent", "board", "log"])
@@ -192,7 +192,7 @@ class RealTmuxLayout(unittest.TestCase):
         self.assertGreater(int(parent[2]), int(board[2]), "parent pane is the wide one")
         self.assertEqual(board[2], logs[2], "board and log share the right column")
         self.assertLess(int(logs[3]), int(board[3]) + 1)
-        rig_shell.start(self.repo, parent_cmd="sleep 60", attach=False)
+        rig_shell.start(self.repo, parent_cmd="sleep 60", attach=False, layout="split")
         self.assertEqual(len(self.panes()), 3, "a second start must reuse the session")
         self.assertTrue(rig_shell.kill(self.repo))
         self.assertFalse(rig_shell.kill(self.repo))
@@ -201,26 +201,44 @@ class RealTmuxLayout(unittest.TestCase):
         with mock.patch.object(rig_shell, "plan", return_value=[["new-session", "-d", "-s", rig_shell.session_name(self.repo), "sleep 60"],
                                                                  ["split-window", "-t", "nonexistent:9.9", "sleep 1"]]):
             with self.assertRaises(rig_shell.ShellError):
-                rig_shell.start(self.repo, parent_cmd="sleep 60", attach=False)
+                rig_shell.start(self.repo, parent_cmd="sleep 60", attach=False, layout="split")
         self.assertFalse(rig_shell.session_exists(self.tmux, rig_shell.session_name(self.repo)))
 
     def test_cli_print_and_detach(self):
         env = dict(os.environ)
         script = str(ROOT / "scripts" / "rig_shell.py")
-        printed = subprocess.run([sys.executable, script, "print", "--repo", str(self.repo), "--parent-cmd", "sleep 60"],
+        printed = subprocess.run([sys.executable, script, "print", "--repo", str(self.repo), "--layout", "split", "--parent-cmd", "sleep 60"],
                                  env=env, capture_output=True, text=True, timeout=30)
         self.assertEqual(printed.returncode, 0, printed.stderr)
         self.assertEqual(len(printed.stdout.strip().splitlines()), 11)
-        started = subprocess.run([sys.executable, script, "--repo", str(self.repo), "--parent-cmd", "sleep 60", "--detach"],
+        started = subprocess.run([sys.executable, script, "--repo", str(self.repo), "--layout", "split", "--parent-cmd", "sleep 60", "--detach"],
                                  env=env, capture_output=True, text=True, timeout=30)
         self.assertEqual(started.returncode, 0, started.stderr)
         self.assertIn("is ready", started.stdout)
         self.assertEqual(len(self.panes()), 3)
 
+    def test_the_default_layout_is_one_window_holding_the_board_as_the_design_screen(self):
+        session = rig_shell.start(self.repo, attach=False)
+        panes = self.panes()
+        self.assertEqual(len(panes), 1, "tmux only hosts the board; the board draws every column itself")
+        steps = rig_shell.layout_steps(self.repo, "board", "", "")
+        command = steps[0][-1]
+        for want in ("RIG_SHELL_START=Session", "RIG_EXPERIMENT_CHAT=1", "--repo"):
+            self.assertIn(want, command)
+        self.assertTrue(rig_shell.kill(self.repo), session)
+
+    def test_the_board_layout_checks_the_parent_by_name_only(self):
+        with self.assertRaisesRegex(rig_shell.ShellError, "cannot run in the board"):
+            rig_shell.layout_steps(self.repo, "board", "bash", "")
+        with self.assertRaisesRegex(rig_shell.ShellError, "--layout split"):
+            rig_shell.layout_steps(self.repo, "board", "", "sleep 60")
+        steps = rig_shell.layout_steps(self.repo, "board", "claude", "")  # need not be installed: the board reports that
+        self.assertIn("RIG_SHELL_PARENT=claude", steps[0][-1])
+
     def test_disabled_or_uninitialized_projects_are_refused(self):
         (self.repo / ".rig" / "harness.toml").write_text("[project]\nenabled = false\n")
         with self.assertRaises(ValueError):
-            rig_shell.start(self.repo, parent_cmd="sleep 1", attach=False)
+            rig_shell.start(self.repo, parent_cmd="sleep 1", attach=False, layout="split")
 
 
 if __name__ == "__main__":
