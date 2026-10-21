@@ -57,7 +57,11 @@ func TestF2RenamesEveryWholeWordInTheFile(t *testing.T) {
 	if strings.Join(a.FileLines, "|") != "const account = get(account)|users.push(account)|// account" {
 		t.Fatalf("renamed everywhere, users untouched: %q", a.FileLines)
 	}
-	if !strings.Contains(m.st.Message, "renamed in 4 places") || a.CodeAsk != nil {
-		t.Fatalf("%q", m.st.Message)
+	if !strings.Contains(m.st.Message, "renamed in 4 places") || a.CodeAsk == nil || a.CodeAsk.kind != "rename-where" {
+		t.Fatalf("renamed here, then asked about the rest of the repository: %q %+v", m.st.Message, a.CodeAsk)
+	}
+	keyMsg(m, tea.KeyEsc)
+	if a.CodeAsk != nil || len(a.Extra) != 0 {
+		t.Fatal("esc keeps it to this file")
 	}
 }

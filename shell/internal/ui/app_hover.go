@@ -109,6 +109,12 @@ func lookupHover(repo, file string, lines, files []string, name string, here, x,
 			if h := found(target, read(target)); h != nil {
 				return h
 			}
+			if j := throughReExports(repo, target, name, re, 0); j != nil {
+				ls := read(j.file)
+				if j.at.l < len(ls) {
+					return &hoverInfo{name: name, file: j.file, line: j.at.l, text: strings.TrimSpace(ls[j.at.l]), x: x, y: y}
+				}
+			}
 			return &hoverInfo{name: name, file: target, line: -1, text: "from " + spec, x: x, y: y}
 		}
 		return &hoverInfo{name: name, file: "", line: -1, text: "from " + spec + " (a package)", x: x, y: y}

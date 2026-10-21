@@ -538,6 +538,14 @@ func paintSelection(lines []string, s textSel, w int) {
 
 // wheel scrolls what the screen shows: the conversation, the diff and code, or the selection of a list.
 func (m *Model) wheel(up bool) (tea.Model, tea.Cmd) {
+	if a := m.st.App; m.appOn() && a.Term && m.pane != nil && m.hoverY >= m.winH-termRows(m.winH)-1 {
+		if up {
+			a.TermUp += wheelStep
+		} else {
+			a.TermUp = max(0, a.TermUp-wheelStep)
+		}
+		return m, nil
+	}
 	a := m.st.App
 	if a.Splash > 0 || m.st.Mode == ModeConfirm {
 		return m, nil
@@ -772,11 +780,22 @@ func (m *Model) clickRow(list, at string) (tea.Model, tea.Cmd) {
 		a.GitView, a.TreeFocus = true, true
 		return m.gitKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(key)})
 	case "side":
-		// the side bar's heads: the files, or git
-		if at == "git" {
+		// the side bar's heads: the files, git, or the outline
+		switch at {
+		case "git":
 			return m, m.openGit()
+		case "outline":
+			a.GitView, a.GitDiff = false, nil
+			m.toggleOutline()
+			return m, nil
 		}
-		a.GitView, a.GitDiff = false, nil
+		a.GitView, a.GitDiff, a.Outline = false, nil, false
+	case "outline":
+		if rows := outlineRows(a); i < len(rows) {
+			n, _ := strconv.Atoi(strings.TrimPrefix(rows[i].Action, "line:"))
+			a.OutlineSel = i
+			m.goToLine(n)
+		}
 	case "git":
 		// a changed file shows its diff; a click on the chosen one again stages or unstages it
 		rows := gitRows(a)

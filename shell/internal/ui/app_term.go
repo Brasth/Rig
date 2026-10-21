@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"fmt"
 	"os"
 	"strings"
 
@@ -78,7 +79,10 @@ func (m *Model) startTerm() tea.Cmd {
 func termSplit(st State, w, h int) []string {
 	a := st.App
 	name := " terminal "
-	keys := st.faint("⌃] rig shell · ⌃` hide")
+	keys := st.faint("⌃] rig shell · PgUp scroll · ⌃` hide")
+	if a.TermUp > 0 {
+		keys = st.paint(colAmber, fmt.Sprintf("↑%d ", a.TermUp)) + keys
+	}
 	if !a.TermFocus {
 		name = st.faint(" terminal ")
 		keys = st.faint("⌃` type here")

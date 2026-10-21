@@ -14,7 +14,7 @@ import (
 // are offered; the sections Rig has no settings for yet say what Rig does instead. Billing is left out.
 
 // SettingsSections are the design's sections, without billing.
-var SettingsSections = []string{"general", "agents", "routing", "approvals", "sandbox", "editor", "git", "notify", "toml"}
+var SettingsSections = []string{"general", "agents", "routing", "approvals", "sandbox", "editor", "keys", "git", "notify", "toml"}
 
 // SettingsScreen is where the Settings screen is.
 type SettingsScreen struct {
@@ -167,6 +167,26 @@ func settingRows(st State, section string) []setRow {
 			{Label: "Terminal shell", Right: lastWord(strings.ReplaceAll(s.Shell, "/", " "))},
 			{Label: "e opens in", Right: "$EDITOR" + st.faint(" · "+editor), Group: true, Note: "in the terminal, e hands the file to your own editor"},
 		}
+	case "keys":
+		// the editor's keys that clash in some terminals: each one of a few chords, kept for all repos
+		key := func(label, name, def, note string, options []string) setRow {
+			v := def
+			if s.Keys != nil && s.Keys[name] != "" {
+				v = s.Keys[name]
+			}
+			names := make([]string, len(options))
+			for i, o := range options {
+				names[i] = glyphOf(o)
+			}
+			return setRow{Label: label, Key: "keys." + name, Options: options, Names: names, Value: v, Note: note}
+		}
+		return []setRow{
+			key("Add next occurrence", "next_occurrence", "ctrl+d", "in the editor, selects the next place the selected text is", []string{"ctrl+d", "ctrl+n", "alt+d"}),
+			key("Rename in file", "rename", "f2", "every whole-word occurrence of the name at the cursor", []string{"f2", "ctrl+r", "alt+r"}),
+			key("Go to definition", "definition", "f12", "⌃t goes back", []string{"f12", "ctrl+]", "alt+g"}),
+			key("Find in conversation", "find_in_chat", "ctrl+/", "a find row in place of the reply box", []string{"ctrl+/", "ctrl+f", "alt+f"}),
+			key("Terminal", "terminal", "ctrl+`", "⌃` is taken by some terminals; the shell split at the foot of the screen", []string{"ctrl+`", "ctrl+j", "alt+t"}),
+		}
 	case "git":
 		account := st.faint("gh is not installed")
 		switch {
@@ -234,7 +254,7 @@ func sortedWorkers(m map[string]bool) []string {
 // settingsTitles are each section's heading and the line under it, as the design writes them.
 var settingsTitles = map[string][2]string{
 	"agents": {"Agents", ""}, "routing": {"Who does what", "smart defaults · change only what you care about"}, "approvals": {"", ""},
-	"sandbox": {"Sandbox", "powered by dc-cli"}, "editor": {"Editor", ""}, "git": {"Git and shipping", ""}, "notify": {"Notifications", ""},
+	"sandbox": {"Sandbox", "powered by dc-cli"}, "editor": {"Editor", ""}, "keys": {"Keys", "the editor's keys that clash in some terminals"}, "git": {"Git and shipping", ""}, "notify": {"Notifications", ""},
 }
 
 // settingsScreenLines is the Settings screen.
@@ -706,7 +726,7 @@ func (m *Model) changeSetting(r setRow, value, scope string) tea.Cmd {
 		scope = "repo"
 		switch {
 		case r.Key == "ui.bell" && s.BellScope != "all":
-		case strings.HasPrefix(r.Key, "ui."):
+		case strings.HasPrefix(r.Key, "ui."), strings.HasPrefix(r.Key, "keys."):
 			scope = "all" // the board's own preferences follow you to every repo; g keeps the bell for this one
 		}
 	}
@@ -795,7 +815,7 @@ func settingsKeys(section string) [][2]string {
 		return [][2]string{{"⇥", "section"}, {"E", "edit toml"}, {"esc", "back"}}
 	case "sandbox":
 		return [][2]string{{"←→", "choose"}, {"⏎", "apply"}, {"s", "stop"}, {"d", "doctor"}, {"⇥", "section"}, {"esc", "back"}}
-	case "editor", "git":
+	case "editor", "keys", "git":
 		return [][2]string{{"←→", "choose"}, {"⏎", "apply"}, {"⇥", "section"}, {"esc", "back"}}
 	case "notify":
 		return [][2]string{{"space", "on/off"}, {"g", "all repos / this repo"}, {"⇥", "section"}, {"esc", "back"}}

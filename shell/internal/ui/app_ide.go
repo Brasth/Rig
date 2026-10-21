@@ -422,8 +422,8 @@ func (m *Model) askKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch k.Type {
 	case tea.KeyEsc:
 		a.CodeAsk = nil
-		if q.kind == "rename-word" {
-			a.Extra = nil
+		if q.kind == "rename-word" || q.kind == "rename-where" {
+			a.Extra, a.renameOld, a.renameNew = nil, "", ""
 		}
 		if q.kind == "find" || q.kind == "replace" {
 			a.Find = ""
@@ -479,6 +479,9 @@ func (m *Model) askKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			a.CodeAsk = nil
 			m.renameTo(q.text)
 			m.keepCursorShown()
+		case "rename-where":
+			a.CodeAsk = nil
+			return m, m.renameEverywhere()
 		case "new", "rename":
 			a.CodeAsk = nil
 			return m, m.fileOp(q.kind, q.text)
@@ -607,17 +610,17 @@ func (m *Model) editFileKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 change:
-	switch key {
-	case "f12":
+	switch {
+	case isKey(k, bound(m.st, "definition", "f12")):
 		return m, m.goToDefinition()
-	case "ctrl+t":
+	case key == "ctrl+t":
 		return m, m.jumpBackCmd()
-	case "ctrl+d":
+	case isKey(k, bound(m.st, "next_occurrence", "ctrl+d")):
 		if _, _, ok := a.selRange(); ok || len(a.Extra) > 0 || wordAt(line2(a), a.CurCol) != "" {
 			m.addNextOccurrence()
 			return m, nil
 		}
-	case "f2":
+	case isKey(k, bound(m.st, "rename", "f2")):
 		m.rename()
 		return m, nil
 	}
@@ -754,7 +757,20 @@ func line2(a *AppState) string {
 }
 
 // editKeys is the footer while editing.
-func editKeys(a *AppState) [][2]string {
+// glyphOf is a chord as the footer draws it: ctrl+d → ⌃d, alt+t → ⌥t, f2 → F2.
+func glyphOf(chord string) string {
+	switch {
+	case strings.HasPrefix(chord, "ctrl+"):
+		return "⌃" + strings.TrimPrefix(chord, "ctrl+")
+	case strings.HasPrefix(chord, "alt+"):
+		return "⌥" + strings.TrimPrefix(chord, "alt+")
+	case strings.HasPrefix(chord, "f") && len(chord) <= 3:
+		return "F" + chord[1:]
+	}
+	return chord
+}
+
+func editKeys(st State, a *AppState) [][2]string {
 	if a.CodeAsk != nil {
 		if a.CodeAsk.kind == "find" {
 			return [][2]string{{"⏎", "next"}, {"esc", "close"}}
@@ -764,7 +780,7 @@ func editKeys(a *AppState) [][2]string {
 		}
 		return [][2]string{{"⏎", "ok"}, {"esc", "cancel"}}
 	}
-	return [][2]string{{"⌃s", "save"}, {"⌃z", "undo"}, {"⌃f", "find"}, {"⌃r", "replace"}, {"F12", "definition"}, {"⌃/", "comment"}, {"esc", "done"}}
+	return [][2]string{{"⌃s", "save"}, {"⌃z", "undo"}, {"⌃f", "find"}, {"⌃r", "replace"}, {glyphOf(bound(st, "definition", "f12")), "definition"}, {"⌃/", "comment"}, {"esc", "done"}}
 }
 
 // inRepo is a path the explorer may make, rename or delete: relative, inside the repository, not in .git.

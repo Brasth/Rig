@@ -28,6 +28,7 @@ type Source interface {
 	Recover(confirmID string, timeout time.Duration) (string, error)
 	Log(id string, lines int, timeout time.Duration) (*view.LogReply, error)
 	JobThread(id string, timeout time.Duration) (*view.JobThread, error)
+	JobProblems(id string, timeout time.Duration) (*view.JobProblems, error)
 	Shell(id string, timeout time.Duration) (*view.ShellPlan, error)
 	Parent(name string, timeout time.Duration) (*view.ShellPlan, error)
 	ChatStatus(timeout time.Duration) (*view.ChatStatus, error)
@@ -105,6 +106,8 @@ type Pane interface {
 	Write([]byte)
 	AppCursor() bool
 	Lines(styled, showCursor bool) []string
+	LinesFrom(up int, styled, showCursor bool) []string // scrolled up into the scrollback
+	Scrollback() int
 	Updates() <-chan struct{}
 	Exited() (bool, error)
 	Close()
@@ -252,6 +255,7 @@ type Model struct {
 	clickY      int
 	hoverX      int    // the pointer, for the zone drawn underlined
 	hoverKey    string // the hover lookup on its way: name@x,y
+	probLast    time.Time
 	hoverY      int
 }
 
@@ -828,7 +832,13 @@ func (m *Model) syncPane() {
 	}
 	done, err := m.pane.Exited()
 	m.st.PaneRunning = !done
-	m.st.PaneLines = m.pane.Lines(true, m.paneFocus && !done)
+	if m.appOn() && m.st.App.Term {
+		a := m.st.App
+		a.TermUp = max(0, min(a.TermUp, m.pane.Scrollback()))
+		m.st.PaneLines = m.pane.LinesFrom(a.TermUp, true, a.TermFocus && !done)
+	} else {
+		m.st.PaneLines = m.pane.Lines(true, m.paneFocus && !done)
+	}
 	switch {
 	case done && err != nil:
 		m.st.PaneTitle = m.paneName + " · exited: " + err.Error()
@@ -961,7 +971,7 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, waitPane(m.pane)
 	case tickMsg:
-		return m, tea.Batch(m.fetch(), m.fetchWorkspace(false), m.fetchFleet(false), m.fetchSettings(false), m.fetchLog(false), m.fetchDock(false), m.fetchChatStatus(), m.fetchChat(false), m.fetchDiff(false), m.fetchTodayEvery(), tick())
+		return m, tea.Batch(m.fetch(), m.fetchWorkspace(false), m.fetchFleet(false), m.fetchSettings(false), m.fetchLog(false), m.fetchDock(false), m.fetchChatStatus(), m.fetchChat(false), m.fetchDiff(false), m.fetchTodayEvery(), m.fetchProblems(false), tick())
 	case chatStatusMsg:
 		m.csBusy, m.csLast = false, m.now()
 		if msg.err != nil || msg.status == nil || !msg.status.Enabled {
@@ -993,6 +1003,10 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.appOn() && m.st.ChatParent != "" && m.st.ChatParent != m.cmdsFor {
 			return m, m.fetchParentCommands(m.st.ChatParent) // the / menu offers this parent's skills and commands
+		}
+	case problemsMsg:
+		if m.appOn() && msg.err == nil && msg.p != nil {
+			m.st.App.Problems = msg.p
 		}
 	case hoverMsg:
 		if m.appOn() && msg.key == m.hoverKey && msg.info != nil {

@@ -85,6 +85,9 @@ func (m *Model) treeKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if a.GitView {
 		return m.gitKey(k)
 	}
+	if a.Outline {
+		return m.outlineKey(k)
+	}
 	if a.CodeAsk != nil {
 		return m.askKey(k)
 	}
@@ -171,6 +174,8 @@ func (m *Model) treeKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	case "g":
 		return m, m.openGit()
+	case "o":
+		m.toggleOutline()
 	case "esc", "ctrl+b":
 		a.TreeFocus = false
 		if a.TreeFilter != "" && k.String() == "esc" {

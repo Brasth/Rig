@@ -72,14 +72,19 @@ type AppState struct {
 	GitView              bool                // the side bar shows git (g) instead of the files
 	GitSel               int
 	Git                  *gitState
-	GitDiff              *gitDiffView  // a file's diff, shown in place of the file
-	Conflict             *conflictView // a conflicted file's conflicts, each with its two sides, in place of the file
-	Extra                []span        // more selections than the cursor's: ⌃d add next occurrence, F2 rename
-	Term                 bool          // ⌃`: a shell in a split at the foot of the screen
-	TermFocus            bool          // its keys go to the shell
-	ChatFind             *chatFind     // ⌃/: find in the conversation
-	Hover                *hoverInfo    // the name the pointer rests on, and where it is defined
-	SeenChat             int           // how many conversation entries were on screen last: more are new
+	GitDiff              *gitDiffView      // a file's diff, shown in place of the file
+	Conflict             *conflictView     // a conflicted file's conflicts, each with its two sides, in place of the file
+	Extra                []span            // more selections than the cursor's: ⌃d add next occurrence, F2 rename
+	Term                 bool              // ⌃`: a shell in a split at the foot of the screen
+	TermFocus            bool              // its keys go to the shell
+	TermUp               int               // rows scrolled up into the split's scrollback
+	Problems             *view.JobProblems // what the helpers' failed checks found, for the status bar
+	renameOld, renameNew string            // F2: the names, for the question about the rest of the repository
+	Outline              bool              // o: the file's symbols in the side bar instead of the files
+	OutlineSel           int
+	ChatFind             *chatFind  // ⌃/: find in the conversation
+	Hover                *hoverInfo // the name the pointer rests on, and where it is defined
+	SeenChat             int        // how many conversation entries were on screen last: more are new
 	SeenJobs             map[string]bool
 	NewChat, NewJobs     bool // a dot in the top bar: something arrived while you were elsewhere
 	Blame                bool // b: who last changed each line
@@ -114,12 +119,13 @@ type AppState struct {
 
 // Palette is Ctrl-K: ask the parent, open a file, or run a command.
 type Palette struct {
-	Query   string
-	Sel     int
-	Attach  bool // @: the chosen file goes into your message instead of opening
-	Model   bool // /model: the parent's models, or the name typed
-	Symbols bool // ⌃o in the code tab: the open file's functions and types, to go to
-	Branch  bool // b in the git view: a branch to switch to, or a new one
+	Query    string
+	Sel      int
+	Attach   bool // @: the chosen file goes into your message instead of opening
+	Model    bool // /model: the parent's models, or the name typed
+	Symbols  bool // ⌃o in the code tab: the open file's functions and types, to go to
+	Branch   bool // b in the git view: a branch to switch to, or a new one
+	Problems bool // m in the code tab: what the helpers' checks found, each to go to
 }
 
 // paletteItem is one row of the palette.
@@ -1089,6 +1095,9 @@ func paletteItems(st State) []paletteItem {
 	if st.App.Palette.Branch {
 		return branchItems(st, q)
 	}
+	if st.App.Palette.Problems {
+		return problemItems(st, q)
+	}
 	if st.App.Palette.Attach {
 		for _, f := range st.App.Files {
 			if q == "" || strings.Contains(strings.ToLower(f), q) {
@@ -1207,6 +1216,9 @@ func paletteBox(v *view.View, st State, pw int) []string {
 		}
 		if st.App.Palette.Branch {
 			text = "  " + st.faint("⎇") + " ▏" + st.faint("a branch to switch to, or a new branch's name")
+		}
+		if st.App.Palette.Problems {
+			text = "  " + st.faint("✕") + " ▏" + st.faint("a problem a helper's check found, to go to")
 		}
 	}
 	lines := []string{text, ""}

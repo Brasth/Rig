@@ -53,6 +53,7 @@ repository. Owner tokens are never returned, and workers may not serve the API.
 | `job.diff` | no | none | What one job changed, as a unified diff with per-file counts (params: id) |
 | `job.evidence` | no | none | Evidence drawer for one job: where it ran, change, contract, checks, ports (params: id) |
 | `job.pause` | yes | none | Pause a running helper (SIGSTOP to its process group) or let it go on (params: id, on) |
+| `job.problems` | no | none | Problems a job's failed checks found (file, line, severity, message); no id: the newest job with any (params: id) |
 | `job.thread` | no | none | A helper's thread with the parent: its brief, what it did, messages, its question and result (params: id) |
 | `log.follow` | no | none | Tail of a job's log as plain text; without an id, the job worth watching (params: id, lines) |
 | `settings.app` | no | none | The board's Settings screen: the values it can change and where each is kept |

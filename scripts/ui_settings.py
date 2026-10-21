@@ -35,6 +35,12 @@ SETTINGS = {
     "ui.start": ("ui", "start", ("last", "picker"), ("all",)),
     "ui.ship": ("ui", "ship", ("pr", "push"), ("all", "repo")),
     "ui.tab_size": ("ui", "tab_size", ("2", "4", "8"), ("all",)),
+    # the editor's keys that clash in some terminals: each one of a few chords, kept for all repos
+    "keys.next_occurrence": ("keys", "next_occurrence", ("ctrl+d", "ctrl+n", "alt+d"), ("all",)),
+    "keys.find_in_chat": ("keys", "find_in_chat", ("ctrl+/", "ctrl+f", "alt+f"), ("all",)),
+    "keys.terminal": ("keys", "terminal", ("ctrl+`", "ctrl+j", "alt+t"), ("all",)),
+    "keys.rename": ("keys", "rename", ("f2", "ctrl+r", "alt+r"), ("all",)),
+    "keys.definition": ("keys", "definition", ("f12", "ctrl+]", "alt+g"), ("all",)),
     "ui.notify_needs": ("ui", "notify_needs", _BOOL, ("all", "repo")),
     "ui.notify_applied": ("ui", "notify_applied", _BOOL, ("all", "repo")),
     "ui.desktop": ("ui", "desktop", _BOOL, ("all", "repo")),
@@ -140,6 +146,8 @@ def read(repo) -> dict:
         "global": str(ui_theme.global_path()).replace(str(Path.home()), "~"),
         "editor": os.environ.get("VISUAL") or os.environ.get("EDITOR") or "", "shell": os.environ.get("SHELL", ""),
         "start": _ui(repo, "start", "picker"), "ship": _ui(repo, "ship", "pr"), "tab_size": int(_ui(repo, "tab_size", "4")),
+        "keys": {name: _read_key(ui_theme.global_path(), "keys", name) or SETTINGS[f"keys.{name}"][2][0]
+                 for name in ("next_occurrence", "find_in_chat", "terminal", "rename", "definition")},
         "notify_needs": _ui(repo, "notify_needs", "true") == "true", "notify_applied": _ui(repo, "notify_applied", "false") == "true",
         "desktop": _ui(repo, "desktop", "false") == "true",
         "routing_table": _routing_table(parsed, installed, parsed["parent"] or "claude"),

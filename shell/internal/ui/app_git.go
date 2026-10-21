@@ -541,17 +541,21 @@ func gitButton(st State, id, label string) string {
 
 // sideHeads are the side bar's two views, the open one lit: the files and git.
 func sideHeads(st State, w int) string {
-	files, git := st.faint("EXPLORER"), st.faint("GIT")
-	if st.App.GitView {
+	a := st.App
+	files, git, outline := st.faint("EXPLORER"), st.faint("GIT"), st.faint("OUTLINE")
+	switch {
+	case a.GitView:
 		git = st.bold("GIT")
-	} else {
+	case a.Outline:
+		outline = st.bold("OUTLINE")
+	default:
 		files = st.bold("EXPLORER")
 	}
 	n := ""
-	if g := st.App.Git; g != nil && len(g.files) > 0 {
+	if g := a.Git; g != nil && len(g.files) > 0 {
 		n = st.faint(fmt.Sprintf(" %d", len(g.files)))
 	}
-	return fit(" "+st.zone("row:side:files", files)+"  "+st.zone("row:side:git", git+n), w)
+	return fit(" "+st.zone("row:side:files", files)+"  "+st.zone("row:side:git", git+n)+"  "+st.zone("row:side:outline", outline), w)
 }
 
 // gitKey is the source control view's keys.

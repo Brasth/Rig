@@ -205,16 +205,38 @@ func (m *Model) rename() {
 	a.CodeAsk = &codeAsk{kind: "rename-word", label: fmt.Sprintf("rename %s (%d places) to", word, len(all)), text: word}
 }
 
-// renameTo puts the new name in every selected place (⏎ in the rename question).
+// renameTo puts the new name in every selected place (⏎ in the rename question), then asks whether to go on to
+// the rest of the repository: the search tab's replace, whole word, with the names filled in.
 func (m *Model) renameTo(name string) {
+	a := m.st.App
 	name = strings.TrimSpace(name)
 	if name == "" {
-		m.st.App.Extra = nil
+		a.Extra = nil
 		return
 	}
-	n := len(m.st.App.Extra) + 1
+	old, _ := m.selectedWordOrText()
+	n := len(a.Extra) + 1
 	m.editAll("rename", name)
 	m.st.Message = fmt.Sprintf("renamed in %d places", n)
+	if old != "" && old != name {
+		a.renameOld, a.renameNew = old, name
+		a.CodeAsk = &codeAsk{kind: "rename-where", label: fmt.Sprintf("renamed here · ⏎ also in the rest of the repository (%s → %s), esc done", old, name)}
+	}
+}
+
+// renameEverywhere opens the search tab on the old name, whole word, with the replace filled in: ⏎ there runs it
+// after its question, so nothing in another file changes without a look.
+func (m *Model) renameEverywhere() tea.Cmd {
+	a := m.st.App
+	old, with := a.renameOld, a.renameNew
+	a.renameOld, a.renameNew = "", ""
+	if old == "" {
+		return nil
+	}
+	m.saveFile() // the open file first, so the search does not find it changed under it
+	a.Search = &SearchState{Query: old, Word: true, Case: true}
+	a.Search.Replace = &with
+	return m.runSearch()
 }
 
 // extraSelected lights the extra selections on a drawn line of the file.

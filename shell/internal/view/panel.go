@@ -110,6 +110,21 @@ type ChatStatus struct {
 	} `json:"sessions"`
 }
 
+// JobProblems is job.problems: what a job's failed checks found, as an IDE's Problems view lists them.
+type JobProblems struct {
+	JobID    string `json:"job_id"`
+	Errors   int    `json:"errors"`
+	Warnings int    `json:"warnings"`
+	Problems []struct {
+		File     string `json:"file"`
+		Line     int    `json:"line"`
+		Col      int    `json:"col"`
+		Severity string `json:"severity"`
+		Message  string `json:"message"`
+		Check    string `json:"check"`
+	} `json:"problems"`
+}
+
 // JobThread is job.thread: a helper's thread with the parent, in order.
 type JobThread struct {
 	JobID   string `json:"job_id"`
@@ -142,33 +157,34 @@ type JobDiff struct {
 
 // AppSettings is settings.app: what the Settings screen can change, and where each value is kept.
 type AppSettings struct {
-	Theme             string          `json:"theme"`
-	ThemeScope        string          `json:"theme_scope"`
-	Themes            []string        `json:"themes"`
-	Bell              bool            `json:"bell"`
-	BellScope         string          `json:"bell_scope"`
-	Parent            string          `json:"parent"`
-	Enabled           bool            `json:"enabled"`
-	Workers           map[string]bool `json:"workers"`
-	Installed         []string        `json:"installed"`
-	MaxRunning        int             `json:"max_running"`
-	Objective         string          `json:"objective"`
-	RoutingMode       string          `json:"routing_mode"`
-	Sandbox           string          `json:"sandbox"`
-	Worktrees         string          `json:"worktrees"`
-	WorktreeContainer string          `json:"worktree_container"`
-	Harness           string          `json:"harness"`
-	HarnessText       string          `json:"harness_text"`
-	Problems          []string        `json:"problems"`
-	Global            string          `json:"global"`
-	Editor            string          `json:"editor"`
-	Shell             string          `json:"shell"`
-	Start             string          `json:"start"`    // what rig shell opens outside a project: last or picker
-	Ship              string          `json:"ship"`     // what ship offers first: pr or push
-	TabSize           int             `json:"tab_size"` // the code view's tab width
-	NotifyNeeds       bool            `json:"notify_needs"`
-	NotifyApplied     bool            `json:"notify_applied"`
-	Desktop           bool            `json:"desktop"` // a desktop notice through the terminal, as well as or instead of the bell
+	Theme             string            `json:"theme"`
+	ThemeScope        string            `json:"theme_scope"`
+	Themes            []string          `json:"themes"`
+	Bell              bool              `json:"bell"`
+	BellScope         string            `json:"bell_scope"`
+	Parent            string            `json:"parent"`
+	Enabled           bool              `json:"enabled"`
+	Workers           map[string]bool   `json:"workers"`
+	Installed         []string          `json:"installed"`
+	MaxRunning        int               `json:"max_running"`
+	Objective         string            `json:"objective"`
+	RoutingMode       string            `json:"routing_mode"`
+	Sandbox           string            `json:"sandbox"`
+	Worktrees         string            `json:"worktrees"`
+	WorktreeContainer string            `json:"worktree_container"`
+	Harness           string            `json:"harness"`
+	HarnessText       string            `json:"harness_text"`
+	Problems          []string          `json:"problems"`
+	Global            string            `json:"global"`
+	Editor            string            `json:"editor"`
+	Shell             string            `json:"shell"`
+	Start             string            `json:"start"`    // what rig shell opens outside a project: last or picker
+	Ship              string            `json:"ship"`     // what ship offers first: pr or push
+	TabSize           int               `json:"tab_size"` // the code view's tab width
+	Keys              map[string]string `json:"keys"`     // the editor's keys that can be moved: next_occurrence, find_in_chat, terminal, rename, definition
+	NotifyNeeds       bool              `json:"notify_needs"`
+	NotifyApplied     bool              `json:"notify_applied"`
+	Desktop           bool              `json:"desktop"` // a desktop notice through the terminal, as well as or instead of the bell
 	RoutingTable      []struct {
 		Task   string `json:"task"`
 		Kind   string `json:"kind"`
