@@ -63,8 +63,8 @@ func TestTheParentRunsInTheMiddleColumnAndFollowsResizes(t *testing.T) {
 		t.Fatalf("pane %dx%d, want the 52x26 middle column", c.cols, c.rows)
 	}
 	m.Update(tea.WindowSizeMsg{Width: 140, Height: 40})
-	if got := (*panes)[0].resizes; len(got) != 1 || got[0] != [2]int{62, 30} {
-		t.Fatalf("resizes %v: a 140x40 terminal is filled, so the middle column grows to 62x30", got)
+	if got := (*panes)[0].resizes; len(got) != 1 || got[0] != [2]int{61, 28} {
+		t.Fatalf("resizes %v: a 140x40 terminal is filled inside the border, so the middle column grows to 61x28", got)
 	}
 	m.Update(tea.WindowSizeMsg{Width: 100, Height: 36})
 	if got := (*panes)[0].resizes; got[len(got)-1] != [2]int{100, 31} {
@@ -253,6 +253,7 @@ func chatSession(t *testing.T) (*Model, *fakeSource, *[]*fakePane) {
 		ce("tool", "rig_job_launch claude job-7f2"))
 	m.chBusy = false
 	run(m.fetchChat(true), m)
+	press(m, "i") // the screen opens on the jobs, as the mockup does; i gives the ask line the keyboard
 	return m, src, panes
 }
 
@@ -278,9 +279,8 @@ func TestEnterAsksTheParentAndQueueParksATask(t *testing.T) {
 	m, src, _ := chatSession(t)
 	m.SetParent("claude")
 	src.chatStarted = &view.ChatStarted{Session: "c-1a2b3c4d", Parent: "claude"}
-	press(m, "enter")
 	if m.st.Mode != ModeInput || m.st.InputLabel != "chat" {
-		t.Fatalf("Enter opens the ask box: %+v", m.st)
+		t.Fatalf("the ask line has the keyboard: %+v", m.st)
 	}
 	for _, r := range "why" {
 		m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
@@ -357,7 +357,7 @@ func TestAParentThatCannotAskSaysSoOnce(t *testing.T) {
 	}
 }
 
-func TestABigTerminalIsFilledWithTheSideColumnsKeptAndTheChatGrown(t *testing.T) {
+func TestABigTerminalIsFilledInsideTheMockupsBorder(t *testing.T) {
 	m, _, _, _ := sessionModel(t, 250, 57)
 	out := strings.Split(m.View(), "\n")
 	if len(out) != 57 {
@@ -369,12 +369,19 @@ func TestABigTerminalIsFilledWithTheSideColumnsKeptAndTheChatGrown(t *testing.T)
 		}
 	}
 	plain := func(s string) string { return sgrSeq.ReplaceAllString(s, "") }
-	if !strings.HasPrefix(plain(out[0]), " Rig · my-repo") && !strings.HasPrefix(plain(out[0]), "Rig · my-repo") {
-		t.Fatalf("the header starts the first row, with no frame around the board: %q", plain(out[0]))
+	if top, bottom := plain(out[0]), plain(out[56]); !strings.HasPrefix(top, "┌──") || !strings.HasSuffix(top, "─┐") || !strings.HasPrefix(bottom, "└") {
+		t.Fatalf("the border is the window's edge: %q %q", top, bottom)
 	}
-	g := sessionGeometry(250, 57)
-	if g.left != sessLeftMax || g.right != sessRightMx || g.mid != 250-sessLeftMax-sessRightMx-2 {
+	if !strings.HasPrefix(plain(out[1]), "│ Rig · my-repo") || !strings.HasSuffix(plain(out[1]), "│") {
+		t.Fatalf("the header sits just inside the border: %q", plain(out[1]))
+	}
+	g := sessionGeometry(248, 55)
+	if g.left != sessLeftMax || g.right != sessRightMx || g.mid != 248-sessLeftMax-sessRightMx-2 {
 		t.Fatalf("the side columns stop at their caps and the chat takes the rest: %+v", g)
+	}
+	m.Update(tea.WindowSizeMsg{Width: 121, Height: 37})
+	if strings.HasPrefix(plain(strings.Split(m.View(), "\n")[0]), "┌") {
+		t.Fatal("no room for the border: the board takes the whole window")
 	}
 }
 

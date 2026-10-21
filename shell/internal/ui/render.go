@@ -69,7 +69,7 @@ type State struct {
 	DockE        string
 	Styled       bool      // apply colour and reverse video to list rows; golden tests leave it off
 	ChatModel    string    // the parent's model, for the title "Parent · claude opus"
-	Focus        string    // the Session screen's pane with the keyboard: "" (the parent's ask box), "jobs" or "workspace"
+	Focus        string    // the Session screen's pane with the keyboard: "" (the jobs, as the mockup opens), "parent" or "workspace"
 	Picker       *Picker   // the parent picker, while it is open
 	SlashSel     int       // the chosen line of the / command list
 	Now          time.Time // the clock, for the working spinner and its elapsed time; zero in golden tests

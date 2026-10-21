@@ -322,7 +322,7 @@ func TestNavigationTabsDetailAndQuit(t *testing.T) {
 		t.Fatalf("tab wraps after Settings to Session, got %q", m.st.Tab)
 	}
 	press(m, "tab")
-	if m.st.Tab != SessionTab || m.st.Focus != "jobs" {
+	if m.st.Tab != SessionTab || m.st.Focus == "" {
 		t.Fatalf("on the Session screen Tab moves between its panes: %q %q", m.st.Tab, m.st.Focus)
 	}
 	press(m, "shift+tab")

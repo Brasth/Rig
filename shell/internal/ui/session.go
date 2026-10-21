@@ -381,8 +381,8 @@ func askBox(st State, w int) []string {
 		if st.Styled {
 			text = muted(text)
 		}
-	default:
-		text = fit(" › "+chatPlaceholder, w)
+	default: // as drawn in the mockup, cursor included; Tab, i or m give it the keyboard
+		text = fit(" › "+chatPlaceholder+"▏", w)
 		if st.Styled {
 			text = muted(text)
 		}

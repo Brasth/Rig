@@ -196,6 +196,7 @@ type Model struct {
 	pendingX   string // method for a confirmed stop: job.cancel or queue.cancel
 	pendingI   string // id for a confirmed stop
 	pickerSeen bool   // the picker opened by itself once, for a project with no parent
+	framed     bool   // the window has room for the mockup's border around the board
 	messaging  bool   // m was pressed under a request: a and d type again until the message is sent
 	spinning   bool   // the spinner's tick is scheduled
 	chatStat   *view.ChatStatus
@@ -295,7 +296,7 @@ func (m *Model) startChatInput() {
 	m.st.Mode, m.st.InputLabel, m.inputFor, m.st.Message = ModeInput, "chat", "chat", ""
 }
 
-// autoFocus keeps the Session screen's ask box ready for typing, as codex and grok keep theirs: whenever nothing
+// autoFocus keeps the Session screen's ask line ready for typing once Tab (or i, m, /) gave it the keyboard: whenever nothing
 // else holds the keyboard (a confirmation, the help list, the picker, board keys), the box does.
 func (m *Model) autoFocus() {
 	if !m.chatInSession() {
@@ -304,7 +305,7 @@ func (m *Model) autoFocus() {
 		}
 		return
 	}
-	if m.st.Mode == ModeNormal && m.st.Focus == "" && !m.st.HelpOpen && !m.st.EvidenceOpen && m.st.Picker == nil && !m.paneFocus {
+	if m.st.Mode == ModeNormal && m.st.Focus == "parent" && !m.st.HelpOpen && !m.st.EvidenceOpen && m.st.Picker == nil && !m.paneFocus {
 		m.st.Mode, m.st.InputLabel, m.inputFor = ModeInput, "chat", "chat"
 	}
 }
@@ -722,7 +723,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
-		m.w, m.h = msg.Width, msg.Height // the board fills the window; the side columns keep their widths and the chat grows
+		// the board fills the window inside the mockup's thin border; the side columns keep their widths and the chat grows
+		m.w, m.h, m.framed = msg.Width, msg.Height, false
+		if msg.Width >= sessionMinW+2 && msg.Height >= sessionMinH+2 {
+			m.w, m.h, m.framed = msg.Width-2, msg.Height-2, true
+		}
 		m.st.WideSession = sessionGeometry(m.w, m.h).ok
 		if m.pane != nil {
 			m.pane.Resize(m.paneSize())
@@ -995,20 +1000,20 @@ func (m *Model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			case m.paneLive():
 				m.paneFocus = true
 				m.st.Message = ""
-			case m.chatInSession() && m.st.Focus == "jobs":
+			case m.chatInSession() && m.st.Focus == "":
 				if _, ok := m.selected(); ok { // the mockup's "Enter details": the Jobs tab, opened on this job
 					cmd := m.goTab("Jobs")
 					m.st.DetailOpen = true
 					return m, cmd
 				}
 			case m.chatInSession():
-				m.st.Focus = ""
+				m.st.Focus = "parent"
 				m.startChatInput()
 			}
 			return m, nil
 		case "i", "/", "m":
 			if m.chatInSession() {
-				m.st.Focus = ""
+				m.st.Focus = "parent"
 				m.startChatInput()
 				if k.String() == "/" {
 					m.st.Prompt = "/"
@@ -1016,11 +1021,11 @@ func (m *Model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 		case "tab":
-			if m.composite() { // the mockup's "Tab pane": the ask box, then the jobs, then the workspace
-				m.st.Focus = map[string]string{"": "jobs", "jobs": "workspace", "workspace": ""}[m.st.Focus]
+			if m.composite() { // the mockup's "Tab pane": the jobs, then the ask line, then the workspace
+				m.st.Focus = map[string]string{"": "parent", "parent": "workspace", "workspace": ""}[m.st.Focus]
 				m.st.Message = ""
-				if m.st.Focus == "" && !m.chatInSession() {
-					m.st.Focus = "jobs"
+				if m.st.Focus == "parent" && !m.chatInSession() {
+					m.st.Focus = "workspace"
 				}
 				return m, nil
 			}
@@ -1397,7 +1402,7 @@ func (m *Model) chatKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		m.st.Mode, m.st.InputLabel, m.inputFor = ModeNormal, "", ""
 		if inSession {
-			m.st.Focus = "jobs" // as Tab: the board's keys, with the jobs
+			m.st.Focus = "" // the board's keys, with the jobs
 		}
 		return m, nil
 	case tea.KeyEnter:
@@ -1470,7 +1475,7 @@ func (m *Model) chatKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.st.ChatUp = max(0, m.st.ChatUp-8)
 	case "tab":
 		m.st.Mode, m.st.InputLabel, m.inputFor = ModeNormal, "", ""
-		m.st.Focus = "jobs"
+		m.st.Focus = "workspace"
 	case "shift+tab":
 		m.st.Mode, m.st.InputLabel, m.inputFor = ModeNormal, "", ""
 		return m, m.goTab("Jobs")
@@ -1494,6 +1499,9 @@ func (m *Model) View() string {
 	m.syncPane()
 	m.st.Now = m.now()
 	lines := Decorate(RenderLines(m.view, m.st, m.w, m.h))
+	if m.framed {
+		lines = Border(lines, m.w)
+	}
 	return strings.Join(Paint(lines), "\n")
 }
 

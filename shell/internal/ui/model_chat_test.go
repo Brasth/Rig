@@ -163,7 +163,7 @@ func TestEscDropsTheChatInputLabel(t *testing.T) {
 	if m.st.Mode != ModeNormal || m.st.InputLabel != "" || m.inputFor != "" {
 		t.Fatal("esc leaves chat input cleanly")
 	}
-	press(m, "tab", "tab") // Session, whose ask box takes the keyboard, then Jobs
+	press(m, "tab", "shift+tab") // Session, then Jobs
 	press(m, "e")
 	if m.inputFor == "chat" || m.st.InputLabel != "" {
 		t.Fatal("enqueue after chat is an enqueue")

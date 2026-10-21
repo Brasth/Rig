@@ -214,3 +214,13 @@ func tint(s, bg string) string {
 		return seq
 	}) + "\x1b[49m"
 }
+
+// Border draws the mockup's thin #5f5f87 frame around a board w cells wide.
+func Border(board []string, w int) []string {
+	out := make([]string, 0, len(board)+2)
+	out = append(out, border("┌"+strings.Repeat("─", w)+"┐"))
+	for _, line := range board {
+		out = append(out, border("│")+line+border("│"))
+	}
+	return append(out, border("└"+strings.Repeat("─", w)+"┘"))
+}

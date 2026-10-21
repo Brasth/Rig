@@ -16,12 +16,31 @@ func typeText(m *Model, text string) {
 	}
 }
 
-func TestTheAskBoxAlwaysHasTheKeyboardOnTheSessionScreen(t *testing.T) {
+func TestTheScreenOpensAsTheMockupDrawsIt(t *testing.T) {
+	m, _, _ := chatSession(t)
+	press(m, "esc")
+	run(m.fetchChatStatus(), m)
+	if typingChat(m.st) || m.st.Focus != "" {
+		t.Fatal("the jobs have the keyboard")
+	}
+	out := Render(m.view, m.st, 120, 36)
+	for _, want := range []string{"│ › Ask the parent, or /queue to park a task▏", " Tab pane  Enter details  a allow  d deny  e enqueue  v evidence  w workspace  ? help  q quit"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q:\n%s", want, out)
+		}
+	}
+	press(m, "m")
+	if !typingChat(m.st) || m.st.Prompt != "" {
+		t.Fatal("m starts a message")
+	}
+}
+
+func TestTheAskLineKeepsTheKeyboardOnceItHasIt(t *testing.T) {
 	m, src, _ := chatSession(t)
 	m.SetParent("claude")
 	src.chatStarted = &view.ChatStarted{Session: "c-1a2b3c4d", Parent: "claude", State: "running"}
 	if !typingChat(m.st) {
-		t.Fatal("the box has the keyboard without pressing anything")
+		t.Fatal("i gave the ask line the keyboard")
 	}
 	typeText(m, "pvq") // board letters are text while the box has the keyboard
 	if m.st.Prompt != "pvq" || len(src.parentNames) != 0 {
@@ -49,7 +68,7 @@ func TestEscClearsThenHandsTheKeyboardToTheBoard(t *testing.T) {
 		t.Fatal("the first Esc clears the draft")
 	}
 	press(m, "esc")
-	if typingChat(m.st) || m.st.Focus != "jobs" {
+	if typingChat(m.st) || m.st.Focus != "" {
 		t.Fatalf("the second Esc gives the jobs the keyboard: %q", m.st.Focus)
 	}
 	runAll(m, press(m, "p"))
@@ -154,7 +173,7 @@ func TestAProjectWithNoParentChoosesOneInThePicker(t *testing.T) {
 	if len(src.parentSet) != 1 || src.parentSet[0] != "codex" || m.st.Picker != nil {
 		t.Fatalf("saved %v", src.parentSet)
 	}
-	if m.parentName != "codex" || m.st.ChatParent != "codex" || !strings.Contains(m.st.Message, "saved in .rig/harness.toml") || !typingChat(m.st) {
+	if m.parentName != "codex" || m.st.ChatParent != "codex" || !strings.Contains(m.st.Message, "saved in .rig/harness.toml") {
 		t.Fatalf("the new parent answers from now on: %q %q", m.parentName, m.st.Message)
 	}
 	m.csLast = time.Time{}
@@ -168,8 +187,8 @@ func TestAProjectWithNoParentChoosesOneInThePicker(t *testing.T) {
 		t.Fatalf("/parent opens it on the parent in use: %+v", m.st.Picker)
 	}
 	press(m, "esc")
-	if m.st.Picker != nil || !typingChat(m.st) {
-		t.Fatal("Esc closes it and gives the box the keyboard back")
+	if m.st.Picker != nil {
+		t.Fatal("Esc closes it")
 	}
 }
 
@@ -214,13 +233,17 @@ func TestTheReplyStreamsUnderASpinnerWithTheTimeItHasTaken(t *testing.T) {
 
 func TestTabMovesBetweenThePanesAsTheMockupsFooterSays(t *testing.T) {
 	m, src, _ := chatSession(t)
-	press(m, "tab")
-	if m.st.Focus != "jobs" || typingChat(m.st) {
-		t.Fatalf("Tab: the jobs: %q", m.st.Focus)
+	press(m, "esc")
+	if m.st.Focus != "" || typingChat(m.st) {
+		t.Fatalf("Esc: the jobs: %q", m.st.Focus)
 	}
 	out := Render(m.view, m.st, 120, 36)
 	if !strings.Contains(out, " Tab pane  Enter details  a allow  d deny  e enqueue  v evidence  w workspace  ? help  q quit") {
 		t.Fatalf("the mockup's footer, word for word:\n%s", out)
+	}
+	press(m, "tab")
+	if m.st.Focus != "parent" || !typingChat(m.st) {
+		t.Fatalf("Tab: the ask line: %q", m.st.Focus)
 	}
 	press(m, "tab")
 	if m.st.Focus != "workspace" || !strings.Contains(Render(m.view, m.st, 120, 36), "Tab pane  u up  x shell  d doctor") {
@@ -246,9 +269,9 @@ func TestTabMovesBetweenThePanesAsTheMockupsFooterSays(t *testing.T) {
 		t.Fatal("d opens the doctor's full report")
 	}
 	m, _, _ = chatSession(t)
-	press(m, "tab", "tab", "tab")
-	if m.st.Focus != "" || !typingChat(m.st) {
-		t.Fatal("a third Tab gives the ask box the keyboard back")
+	press(m, "tab", "tab")
+	if m.st.Focus != "" || typingChat(m.st) {
+		t.Fatal("Tab cycles back to the jobs")
 	}
 }
 

@@ -26,7 +26,7 @@
                           │                                                    │                                        
                           │                                                    │                                        
                           │ ────────────────────────────────────────────────── │                                        
- u up  x shell  d doctor  │ › Ask the parent, or /queue to park a task         │                                        
+ u up  x shell  d doctor  │ › Ask the parent, or /queue to park a task▏        │                                        
 ─ Evidence · job-7f2 · Add supertest dev dep ───────────────────────────────────────────────────────────────────────────
  Loading evidence…                                                                                                      
                                                                                                                         
