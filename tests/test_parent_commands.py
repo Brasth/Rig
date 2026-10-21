@@ -75,8 +75,11 @@ class ParentCommands(unittest.TestCase):
         self.assertEqual(sent.count("Use your ak skill"), 1)
         self.assertIn(str(self.home / ".agents/skills/ak/SKILL.md"), sent)
         self.write(self.repo / ".claude/skills/deploy/SKILL.md", "---\ndescription: Deploy\n---\n")
-        self.assertIn("Use your deploy skill", parent_commands.expand(self.repo, "claude", "$deploy please"),
-                      "claude has no $ mentions of its own: it is told too")
+        self.assertEqual(parent_commands.expand(self.repo, "claude", "$deploy please"), "$deploy please",
+                         "claude's box has no $ mentions: the text goes as typed")
+        self.write(self.home / ".pi/agent/skills/check/SKILL.md", "---\ndescription: Check\n---\n")
+        self.assertIn("Use your check skill", parent_commands.expand(self.repo, "pi", "/skill:check now"), "pi's /skill:name")
+        self.assertEqual(parent_commands.expand(self.repo, "pi", "/check now"), "/check now")
         self.assertEqual(parent_commands.expand(self.repo, "codex", "costs $5"), "costs $5")
 
     def test_over_the_api(self):

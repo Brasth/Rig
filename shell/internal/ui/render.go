@@ -119,15 +119,29 @@ var SlashCommands = []SlashCommand{
 	{"/quit", "", "leave rig shell", false, false},
 }
 
+// Convention is how a parent's own box names its skills, so the box here works as the one its users know.
+type Convention struct {
+	Dollar      bool   // $name mentions a skill anywhere in a message, and skills are not in the / menu (codex)
+	SkillPrefix string // the / name a skill goes by after its prefix: /skill:name in pi and omp
+}
+
+// Conventions are the parents whose box differs from claude's, where / lists commands and skills alike.
+var Conventions = map[string]Convention{
+	"codex": {Dollar: true},
+	"pi":    {SkillPrefix: "skill:"},
+	"omp":   {SkillPrefix: "skill:"},
+}
+
 // slashes is the commands a draft that starts with / could be, until it has a space: Rig's own, then the parent's
-// skills and commands.
+// skills and commands, named as the parent's own box names them.
 func (st State) slashes() []SlashCommand {
 	prompt := st.Prompt
-	if word := mentionWord(prompt); word != "" {
+	conv := Conventions[st.ChatParent]
+	if word := mentionWord(prompt); word != "" && conv.Dollar {
 		// a $ word anywhere in the message names one of the parent's skills, as codex's box does
 		var out []SlashCommand
 		for _, c := range st.ParentCommands {
-			name := "$" + strings.TrimPrefix(c.Name, "/")
+			name := "$" + strings.TrimPrefix(c.Name, "/"+conv.SkillPrefix)
 			if c.Skill && (strings.HasPrefix(name, word) || (len(word) > 2 && strings.Contains(name, word[1:]))) {
 				out = append(out, SlashCommand{Name: name, Help: c.Help, Parent: true, Skill: true})
 			}
@@ -139,6 +153,9 @@ func (st State) slashes() []SlashCommand {
 	}
 	var out []SlashCommand
 	for _, c := range append(append([]SlashCommand(nil), SlashCommands...), st.ParentCommands...) {
+		if c.Skill && conv.Dollar {
+			continue // codex names its skills with $, not /
+		}
 		if strings.HasPrefix(c.Name, prompt) || (c.Parent && strings.Contains(c.Name, prompt[1:]) && len(prompt) > 2) {
 			out = append(out, c)
 		}

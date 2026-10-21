@@ -3,6 +3,10 @@
 
 
 
+## The box names skills as each parent does (2026-10-21)
+
+The parent's skills are named in the box as its own box names them: `$name` with codex (and not under `/`), `/skill:name` with pi and omp, `/name` with claude and the others, where `$` stays plain text.
+
 ## Select and copy, $ skills, and a thread that scrolls (2026-10-21)
 
 Dragging over the conversation, a thread or any screen selects text and letting go copies it (OSC 52, also through tmux), as in opencode and grok; a click now happens as the button comes up, so a drag never clicks. `$` in the box lists the parent's skills, as in codex (with codex's bundled `.system` skills), completes the word in place, and the parent is told where each named skill is kept. A helper's thread wraps its lines and scrolls with the wheel and PgUp/PgDn (`G` follows the newest again), and both it and the conversation stop at their first line. A long conversation draws in about 1.5 ms instead of 35 ms, so scrolling keeps up with the wheel.

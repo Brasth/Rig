@@ -676,7 +676,11 @@ func (m *Model) fetchParentCommands(parent string) tea.Cmd {
 		}
 		var list []SlashCommand
 		for _, c := range got.Commands {
-			if name := "/" + c.Name; !taken[name] {
+			name := "/" + c.Name
+			if c.Kind == "skill" {
+				name = "/" + Conventions[parent].SkillPrefix + c.Name // pi and omp call a skill /skill:name
+			}
+			if !taken[name] {
 				taken[name] = true
 				list = append(list, SlashCommand{Name: name, Args: " …", Help: c.Kind + " · " + c.Help, Parent: true, Skill: c.Kind == "skill"})
 			}
