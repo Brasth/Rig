@@ -381,7 +381,7 @@ func TestSettingsChangeRealSettingsWhereTheyAreKept(t *testing.T) {
 	out := appScreen(m)
 	for _, want := range []string{"←  Settings   [all repos]", "[general]", "agents", "routing", "toml", "Theme", "› [light]", "dracula", "all repos",
 		"Default parent", "[c] claude · auto", "When rig starts", "[last project]", "Rig in this repo", "on", "off keeps history and memory", "Updates",
-		"←→ change    ⇥ section    g all repos / this repo"} {
+		"←→ choose    ⏎ apply    ⇥ section    g all repos / this repo"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q:\n%s", want, out)
 		}
@@ -390,8 +390,20 @@ func TestSettingsChangeRealSettingsWhereTheyAreKept(t *testing.T) {
 		t.Fatal("no billing")
 	}
 	run(press(m, "right"), m)
+	if colGround != "#fafafa" || len(src.themeSaved) != 0 || m.st.App.Settings.Pick != "dark" {
+		t.Fatalf("→ only picks: nothing changes yet: %v", src.themeSaved)
+	}
+	if out := appScreen(m); !strings.Contains(out, "<dark>") || !strings.Contains(out, "⏎ apply dark") {
+		t.Fatalf("the pick is shown with ⏎ to apply it:\n%s", out)
+	}
+	press(m, "esc")
+	if m.st.App.Settings == nil || m.st.App.Settings.Pick != "" {
+		t.Fatal("esc drops the pick and stays in Settings")
+	}
+	press(m, "right")
+	run(press(m, "enter"), m)
 	if colGround != "#15161a" || src.themeSaved[0] != [2]string{"dark", "all"} {
-		t.Fatalf("→ switches the theme at once and keeps it: %v", src.themeSaved)
+		t.Fatalf("⏎ applies the theme and keeps it: %v", src.themeSaved)
 	}
 	press(m, "tab")
 	press(m, "down")
@@ -402,13 +414,15 @@ func TestSettingsChangeRealSettingsWhereTheyAreKept(t *testing.T) {
 	for i := 0; i < 4; i++ {
 		press(m, "down")
 	}
-	run(press(m, "left"), m)
+	press(m, "left")
+	run(press(m, "enter"), m)
 	if last := src.settingsSaved[len(src.settingsSaved)-1]; last != [3]string{"queue.max_running", "2", "repo"} {
 		t.Fatalf("← fewer at the same time: %v", src.settingsSaved)
 	}
 	press(m, "shift+tab") // back to general
 	press(m, "down", "down", "down")
-	run(press(m, "right"), m)
+	press(m, "right")
+	run(press(m, "enter"), m)
 	if m.st.Mode != ModeConfirm || !strings.Contains(m.st.Prompt, "Turn Rig off") {
 		t.Fatalf("turning Rig off asks first: %q", m.st.Prompt)
 	}

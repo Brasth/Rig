@@ -307,6 +307,9 @@ func AppFrame(v *view.View, st State, w, h int) []string {
 	if a.Settings != nil {
 		lines := settingsScreenLines(v, st, w, h-1)
 		keys := settingsKeys(SettingsSections[a.Settings.Section])
+		if a.Settings.Pick != "" {
+			keys = [][2]string{{"⏎", "apply " + a.Settings.Pick}, {"←→", "choose"}, {"esc", "cancel"}}
+		}
 		switch {
 		case st.Mode == ModeConfirm:
 			lines = append(lines, confirmLine(st, w))
