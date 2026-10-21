@@ -348,6 +348,7 @@ func (m *Model) moveTo(p pos, shift bool) {
 	if !shift {
 		a.EdSel = false
 	}
+	a.Complete = nil
 	a.setCursor(p)
 	if a.EdSel && a.EdAnchor == a.cursor() {
 		a.EdSel = false
@@ -555,6 +556,14 @@ func (m *Model) editFileKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	a.setCursor(a.cursor())
 	key := k.String()
+	wasOpen := a.Complete != nil
+	if wasOpen && m.completeKey(k) {
+		m.keepCursorShown()
+		return m, nil
+	}
+	if key == "backspace" && wasOpen {
+		defer m.refreshCompletion() // the list follows the shorter word
+	}
 	line := []rune(a.FileLines[a.CurLine])
 	cur := a.cursor()
 	shift := strings.HasPrefix(key, "shift+") || strings.HasPrefix(key, "ctrl+shift+") || strings.HasPrefix(key, "alt+shift+")
@@ -613,6 +622,8 @@ change:
 	switch {
 	case isKey(k, bound(m.st, "definition", "f12")):
 		return m, m.goToDefinition()
+	case isKey(k, bound(m.st, "references", "f7")):
+		return m, m.findReferences()
 	case key == "ctrl+t":
 		return m, m.jumpBackCmd()
 	case isKey(k, bound(m.st, "next_occurrence", "ctrl+d")):
@@ -641,7 +652,7 @@ change:
 			return m, nil
 		}
 		// editing stops; changes not saved stay, marked in the tab, until ⌃s saves them or ⌃w throws them away
-		a.Editing = false
+		a.Editing, a.ColOff, a.Complete = false, 0, nil
 		if a.Dirty {
 			m.st.Message = filepath.Base(a.File) + " is not saved: ⌃s saves it, e edits again"
 		}
@@ -743,6 +754,9 @@ change:
 			m.edit("paste", text)
 		} else {
 			m.typeRunes(text)
+			if r := []rune(text)[0]; unicode.IsLetter(r) || unicode.IsDigit(r) || r == '_' || r == '$' {
+				m.refreshCompletion()
+			}
 		}
 	}
 	m.keepCursorShown()
@@ -779,6 +793,9 @@ func editKeys(st State, a *AppState) [][2]string {
 			return [][2]string{{"⏎", "replace"}, {"⌃a", "all"}, {"esc", "close"}}
 		}
 		return [][2]string{{"⏎", "ok"}, {"esc", "cancel"}}
+	}
+	if a.Complete != nil {
+		return [][2]string{{"⇥ ⏎", "complete"}, {"↑↓", "choose"}, {"esc", "dismiss"}}
 	}
 	return [][2]string{{"⌃s", "save"}, {"⌃z", "undo"}, {"⌃f", "find"}, {"⌃r", "replace"}, {glyphOf(bound(st, "definition", "f12")), "definition"}, {"⌃/", "comment"}, {"esc", "done"}}
 }

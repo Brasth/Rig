@@ -3,6 +3,10 @@
 
 
 
+## Completion, references, repository symbols, recent files, wrap (2026-10-21)
+
+While editing, the words of the file complete the one being typed (`⇥` `⏎` take one, `esc` dismisses). `F7` lists the references of the name at the cursor in the search tab, and so does `F12` on the definition itself. `#name` in `⌃k` lists the symbols of the whole repository. `⌃p` lists the files opened lately first. Long lines scroll across while editing, and `⌥z` wraps them while reading. Settings › Keys has the references key (`[keys]` `references`).
+
 ## tsconfig aliases and re-exports, rename everywhere, an outline (2026-10-21)
 
 Go to definition and hover follow `tsconfig.json`'s `paths` and `baseUrl`, and `export * from` / `export { x } from` in an index. `F2` renames in the file, then offers the rest of the repository through the search tab's replace. `O` shows an outline of the file in the side bar that follows the cursor.

@@ -1008,6 +1008,10 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.appOn() && msg.err == nil && msg.p != nil {
 			m.st.App.Problems = msg.p
 		}
+	case symIndexMsg:
+		if m.appOn() {
+			m.st.App.SymIndex = &symIndex{at: m.now(), items: msg.items}
+		}
 	case hoverMsg:
 		if m.appOn() && msg.key == m.hoverKey && msg.info != nil {
 			m.st.App.Hover = msg.info

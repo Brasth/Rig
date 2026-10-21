@@ -92,8 +92,15 @@ type AppState struct {
 	BlameLines           []blameLine
 	Gutter               map[int]byte // the open file's lines changed since the last commit
 	GutterFor            string
-	pendingAt            *jumpTo  // where the cursor goes once the file being opened is read
-	Branches             []string // the branch list: local branches, newest first
+	pendingAt            *jumpTo     // where the cursor goes once the file being opened is read
+	Complete             *completion // the words that complete the one being typed
+	noComplete           pos         // the word esc dismissed the list for: where it starts, and what was typed of it
+	noCompleteWord       string
+	ColOff               int       // cells scrolled off the left while editing, so the cursor stays in view
+	Wrap                 bool      // ⌥z: long lines wrap while reading
+	Recent               []string  // the files opened lately, newest first, for ⌃p
+	SymIndex             *symIndex // every symbol of the repository, for # in the palette
+	Branches             []string  // the branch list: local branches, newest first
 	RemoteBranches       []string
 	reloadFiles          bool          // after a switch of branch the explorer reads the files again
 	findAt               pos           // where find last stopped, while not editing
@@ -1098,6 +1105,12 @@ func paletteItems(st State) []paletteItem {
 	if st.App.Palette.Problems {
 		return problemItems(st, q)
 	}
+	if strings.HasPrefix(q, "#") {
+		return workspaceSymbolItems(st, q[1:]) // the repository's symbols
+	}
+	if q == "" {
+		out = append(out, recentItems(st, st.App.Palette.Attach)...) // the files opened lately first
+	}
 	if st.App.Palette.Attach {
 		for _, f := range st.App.Files {
 			if q == "" || strings.Contains(strings.ToLower(f), q) {
@@ -1105,7 +1118,7 @@ func paletteItems(st State) []paletteItem {
 				if i := strings.LastIndex(f, "/"); i >= 0 {
 					dir, name = f[:i], f[i+1:]
 				}
-				if out = append(out, paletteItem{"add a file", name, dir, "attach:" + f}); len(out) == 10 {
+				if out = append(out, paletteItem{"add a file", name, dir, "attach:" + f}); len(out) >= 10 {
 					break
 				}
 			}
@@ -1191,6 +1204,7 @@ var PaletteCommands = [][3]string{
 	{"change theme", "rig, light, dark, material, dracula", "theme"},
 	{"change model", "the model the parent talks with", "model"},
 	{"search the code", "text in every file (⌃f)", "search"},
+	{"find references", "every use of the name at the cursor (F7)", "references"},
 	{"done today", "what was applied, undo and redo", "today"},
 	{"settings", "theme, agents, routing, sandbox, toml", "settings"},
 	{"start the sandbox", "rig env up", "env-up"},
@@ -1204,7 +1218,7 @@ func paletteBox(v *view.View, st State, pw int) []string {
 	iw := pw - 6
 	text := "  " + st.faint("›") + " " + st.App.Palette.Query + "▏"
 	if st.App.Palette.Query == "" {
-		text = "  " + st.faint("›") + " ▏" + st.faint("search files and commands, or ask "+appParent(st))
+		text = "  " + st.faint("›") + " ▏" + st.faint("search files and commands, # a symbol, or ask "+appParent(st))
 		if st.App.Palette.Attach {
 			text = "  " + st.faint("@") + " ▏" + st.faint("a file to add to your message")
 		}
@@ -1309,7 +1323,9 @@ func helpBox(st State, hw int) []string {
 		{"← →", "move in the box (⌥ a word, ⌃a ⌃e its ends, ⌃w a word back)"},
 		{"⇥", "the agents panel: done today, helpers, the queue"},
 		{"/model", "the model the parent talks with"},
-		{"⌃k", "commands, files, or ask the parent"},
+		{"⌃k", "commands, files, # a symbol of the repository, or ask the parent"},
+		{"F12 F7", "in the code tab: go to a definition, find references"},
+		{"⌥z", "in the code tab: wrap long lines"},
 		{"1 2 3", "conversation, changes, code (with the box empty)"},
 		{"/", "commands: /parent /queue /new /stop /theme /quit"},
 		{"1 2", "allow or deny a request the conversation shows"},

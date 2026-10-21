@@ -184,6 +184,7 @@ func settingRows(st State, section string) []setRow {
 			key("Add next occurrence", "next_occurrence", "ctrl+d", "in the editor, selects the next place the selected text is", []string{"ctrl+d", "ctrl+n", "alt+d"}),
 			key("Rename in file", "rename", "f2", "every whole-word occurrence of the name at the cursor", []string{"f2", "ctrl+r", "alt+r"}),
 			key("Go to definition", "definition", "f12", "⌃t goes back", []string{"f12", "ctrl+]", "alt+g"}),
+			key("Find references", "references", "f7", "every use of the name at the cursor, in the search tab", []string{"f7", "alt+u", "ctrl+u"}),
 			key("Find in conversation", "find_in_chat", "ctrl+/", "a find row in place of the reply box", []string{"ctrl+/", "ctrl+f", "alt+f"}),
 			key("Terminal", "terminal", "ctrl+`", "⌃` is taken by some terminals; the shell split at the foot of the screen", []string{"ctrl+`", "ctrl+j", "alt+t"}),
 		}

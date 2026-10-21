@@ -538,6 +538,9 @@ func codeRows(st State, w, room int) []string {
 		if a.Editing && i == a.CurLine {
 			text = withCursor(st, text, displayCol(a.FileLines[i], a.CurCol, tabSize(st)))
 		}
+		if a.Editing && a.ColOff > 0 {
+			text = ansi.TruncateLeft(text, a.ColOff, "") // scrolled across, so the cursor's column is in view
+		}
 		gutter := " "
 		switch {
 		case marks[i+1]:
@@ -555,24 +558,36 @@ func codeRows(st State, w, room int) []string {
 		if blame := inlineBlame(st, i, w-8-lipgloss.Width(gutter)-ansi.StringWidth(text)); blame != "" {
 			text += blame
 		}
+		parts := []string{text}
+		if tw := w - 6 - lipgloss.Width(gutter); a.Wrap && !a.Editing && tw > 10 && ansi.StringWidth(text) > tw {
+			parts = strings.Split(ansi.Wrap(text, tw, ""), "\n") // ⌥z: a long line goes on under itself
+		}
 		if a.Editing || canEdit(a) {
 			// a click in the text puts the cursor there, and starts editing
-			text = st.zone(fmt.Sprintf("text:code:%d", i), text+strings.Repeat(" ", max(0, w-6-lipgloss.Width(gutter)+1-ansi.StringWidth(text))))
+			parts[0] = st.zone(fmt.Sprintf("text:code:%d", i), parts[0]+strings.Repeat(" ", max(0, w-6-lipgloss.Width(gutter)+1-ansi.StringWidth(parts[0]))))
 		}
-		row := gutter + st.paint("#c3c5ce", fmt.Sprintf("%3d  ", i+1)) + text
-		row = fit(row, w)
-		if a.Selecting && i >= lo && i <= hi {
-			if st.Styled {
-				sel := "#eeedfc"
-				if !lightGround() {
-					sel = colSelBg
+		for j, part := range parts {
+			num, g := fmt.Sprintf("%3d  ", i+1), gutter
+			if j > 0 {
+				num, g = "     ", strings.Repeat(" ", lipgloss.Width(gutter))
+			}
+			row := fit(g+st.paint("#c3c5ce", num)+part, w)
+			if a.Selecting && i >= lo && i <= hi {
+				if st.Styled {
+					sel := "#eeedfc"
+					if !lightGround() {
+						sel = colSelBg
+					}
+					row = tint(row, sel)
+				} else {
+					row = ">" + row[1:]
 				}
-				row = tint(row, sel)
-			} else {
-				row = ">" + row[1:]
+			}
+			out = append(out, row)
+			if len(out) >= room {
+				break
 			}
 		}
-		out = append(out, row)
 	}
 	return out
 }
@@ -663,6 +678,21 @@ func codeScreen(v *view.View, st State, w, h int) ([]string, [][2]string) {
 	default:
 		ed = []string{codeTabs(st, ew), breadcrumb(st, ew)}
 		ed = append(ed, codeRows(st, ew, h-1-len(ed)-1)...)
+		if a.Complete != nil && a.Editing && a.CurLine < len(a.FileLines) {
+			// the completion list under the cursor
+			gutter := 1
+			if a.Blame && a.BlameFor == a.File {
+				gutter += blameWidth
+			}
+			row := 2 + a.CurLine - min(a.FileOff, max(0, len(a.FileLines)-(h-4)))
+			col := gutter + 5 + displayCol(a.FileLines[a.CurLine], a.CurCol, tabSize(st)) - a.ColOff
+			if box, x, y := completionBox(st, row, col, h-2, ew); box != nil {
+				for len(ed) < h-2 {
+					ed = append(ed, "")
+				}
+				overlay(ed, box, x, y)
+			}
+		}
 	}
 	for len(ed) < h-2 {
 		ed = append(ed, "")
