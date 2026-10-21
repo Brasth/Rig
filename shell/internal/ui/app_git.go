@@ -397,12 +397,12 @@ func gitRows(a *AppState) []gitRow {
 		return nil
 	}
 	for _, f := range a.Git.files {
-		if f.staged {
+		if f.staged && inScope(a, f.path) {
 			rows = append(rows, gitRow{kind: "staged", file: f})
 		}
 	}
 	for _, f := range a.Git.files {
-		if !f.staged {
+		if !f.staged && inScope(a, f.path) {
 			rows = append(rows, gitRow{kind: "change", file: f})
 		}
 	}
@@ -449,6 +449,9 @@ func gitPane(st State, w, h int) []string {
 		}
 		lines = append(lines, st.zone("row:gitbtn:branch", branch), " "+st.zone("row:gitbtn:commit", box),
 			" "+gitButton(st, "commit", "✓ Commit")+" "+gitButton(st, "pull", "↓ Pull")+" "+gitButton(st, "push", "↑ Push"), "")
+		if len(a.GitScope) > 0 {
+			lines[len(lines)-1] = " " + st.paint(colAccent, "⟲ this turn's files") + st.faint(" · t all · c commits these")
+		}
 	}
 	rows := gitRows(a)
 	sel := -1
@@ -631,7 +634,18 @@ func (m *Model) gitKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			m.st.Mode, m.st.Prompt = ModeConfirm, what
 		}
+	case "t":
+		if len(a.GitScope) > 0 {
+			a.GitScope, a.GitSel = nil, 0
+			m.st.Message = "every change"
+		} else if mk := lastMark(m.st); mk != nil {
+			a.GitScope, a.GitSel = markPaths(mk), 0
+			m.st.Message = "this turn's files"
+		}
 	case "c":
+		if len(a.GitScope) > 0 {
+			return m, m.askTurnCommit()
+		}
 		staged := false
 		for _, f := range a.Git.filesOr() {
 			staged = staged || f.staged

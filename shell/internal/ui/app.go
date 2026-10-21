@@ -71,6 +71,7 @@ type AppState struct {
 	CodeAsk              *codeAsk            // go to line, find, a new file or a new name, asked on the code tab's last row
 	GitView              bool                // the side bar shows git (g) instead of the files
 	GitSel               int
+	GitScope             []string // g after a turn: the git view shows only these files, the turn's (t shows all)
 	Git                  *gitState
 	GitDiff              *gitDiffView      // a file's diff, shown in place of the file
 	Conflict             *conflictView     // a conflicted file's conflicts, each with its two sides, in place of the file
