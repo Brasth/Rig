@@ -82,7 +82,7 @@ func confirmLine(st State, w int) string {
 	if st.App != nil && st.App.ConfirmLead != "" {
 		yes, no = "⏎", "esc"
 	}
-	return center(st.paint(colAmber, st.Prompt)+"   "+st.dim(yes)+" "+st.faint("yes")+"    "+st.dim(no)+" "+st.faint("no"), w)
+	return center(st.paint(colAmber, st.Prompt)+"   "+st.hint([2]string{yes, "yes"})+"    "+st.hint([2]string{no, "no"}), w)
 }
 
 // AppRightKeys are the right half of the design's footer on the conversation, changes and code screens.
@@ -156,6 +156,14 @@ func (st State) washed(lines []string) []string {
 	return out
 }
 
+// layer marks an overlay's lines, so a click outside it closes it.
+func layer(st State, name string, lines []string) []string {
+	for i, l := range lines {
+		lines[i] = st.zone("layer:"+name, l)
+	}
+	return lines
+}
+
 // center puts s in the middle of w cells.
 func center(s string, w int) string {
 	pad := max(0, (w-lipgloss.Width(s))/2)
@@ -183,7 +191,7 @@ func spread(left, mid, right string, w int) string {
 func keyHints(st State, pairs [][2]string, w int) string {
 	parts := make([]string, 0, len(pairs))
 	for _, p := range pairs {
-		parts = append(parts, st.dim(p[0])+" "+st.faint(p[1]))
+		parts = append(parts, st.hint(p))
 	}
 	return center(strings.Join(parts, "    "), w)
 }
@@ -374,16 +382,16 @@ func AppFrame(v *view.View, st State, w, h int) []string {
 	var modal []string
 	modalY := 3
 	if a.Palette != nil {
-		modal = paletteBox(v, st, min(76, w-8))
+		modal = layer(st, "palette", paletteBox(v, st, min(76, w-8)))
 		keys = [][2]string{{"↑↓", "move"}, {"⏎", "open"}, {"esc", "close"}}
 	}
 	if a.NewJob != nil && a.Palette == nil {
-		modal, modalY = newJobBox(st, *a.NewJob, min(84, w-8)), 5
+		modal, modalY = layer(st, "newjob", newJobBox(st, *a.NewJob, min(84, w-8))), 5
 		keys = nil
 	}
 	if a.Help {
 		hw := min(64, w-8)
-		overlay(main, helpBox(st, hw), (w-hw)/2, 2)
+		overlay(main, layer(st, "help", helpBox(st, hw)), (w-hw)/2, 2)
 		keys = [][2]string{{"esc", "close"}}
 	}
 	lines = append(lines, main...)
@@ -415,7 +423,7 @@ func AppFrame(v *view.View, st State, w, h int) []string {
 		// the design's panel: from under the top bar to the bottom, its own keys at its foot, the screen faded behind
 		pw := min(46, w/2)
 		copy(lines[1:], st.washed(lines[1:]))
-		overlay(lines, agentsPanel(v, st, pw, h-1), w-pw, 1)
+		overlay(lines, layer(st, "panel", agentsPanel(v, st, pw, h-1)), w-pw, 1)
 	}
 	return lines
 }
@@ -443,7 +451,7 @@ func topBar(v *view.View, st State, w int) string {
 		} else {
 			label = st.faint(fmt.Sprint(n)) + " " + st.dim(name)
 		}
-		return label + extra
+		return st.zone(fmt.Sprintf("tab:%d", n), label+extra)
 	}
 	changes := ""
 	if n := len(doneJobs(v)) + countLabel(v, "Unverified"); n > 0 {
@@ -451,9 +459,9 @@ func topBar(v *view.View, st State, w int) string {
 	}
 	mid := tab(1, "conversation", "") + "     " + tab(2, "changes", changes) + "     " + tab(3, "code", "")
 	working := len(activeJobs(v))
-	right := st.dim("⌃k") + "   " + st.dim("⇥") + " " + st.faint("panel") + "   "
+	right := st.zone("key:⌃k", st.dim("⌃k")) + "   " + st.hint([2]string{"⇥", "panel"}) + "   "
 	if working > 0 {
-		right = st.paint(colAccent, "●") + " " + st.dim(fmt.Sprintf("%d working", working)) + "   " + right
+		right = st.zone("key:⇥", st.paint(colAccent, "●")+" "+st.dim(fmt.Sprintf("%d working", working))) + "   " + right
 	}
 	return spread(left, mid, right, w)
 }
@@ -624,7 +632,7 @@ func changeCard(st State, r view.Row, cw int) []string {
 	about := appParent(st) + " applied " + clean(r.Title)
 	hints := "2 changes   u undo"
 	line2 := "  " + st.paint(colAccent, "●") + " " + st.dim(fit(about, max(8, cw-12-len(hints)))) + "     " + st.faint(hints)
-	return roundBox(st, []string{line1, "", line2}, cw, false)
+	return roundBox(st, []string{st.zone("row:card:"+r.ID, line1), "", st.zone("row:card:"+r.ID, line2)}, cw, false)
 }
 
 // questionLines is what waits on you: the parent's own request, else a helper's, with the answer chips.
@@ -656,7 +664,8 @@ func questionLines(v *view.View, st State, cw int) []string {
 		return " " + label + " "
 	}
 	deny := st.App != nil && st.App.AnswerDeny
-	return append(out, "", chip("allow", !deny)+"   "+chip("deny", deny)+"    "+st.faint("or type below"), "")
+	return append(out, "", st.zone("row:answer:allow", chip("allow", !deny))+"   "+st.zone("row:answer:deny", chip("deny", deny))+"    "+
+		st.faint("or type below"), "")
 }
 
 // emptyBody is the design's first conversation: what should we work on, the box, and four suggestions.
@@ -680,7 +689,7 @@ func emptyBody(v *view.View, st State, w, h int) ([]string, [][2]string) {
 	}
 	lines = append(lines, "", "")
 	for i, s := range Suggestions {
-		lines = append(lines, st.dim(fmt.Sprint(i+1))+"  "+s)
+		lines = append(lines, st.zone(fmt.Sprintf("row:suggest:%d", i), st.dim(fmt.Sprint(i+1))+"  "+s))
 	}
 	lines = append(lines, "", "")
 	if st.App.Facts != "" {
@@ -737,9 +746,11 @@ func welcomeScreen(st State, w, h int) []string {
 			}
 			right := st.faint(model+" model") + " "
 			row += strings.Repeat(" ", max(2, cw-2-lipgloss.Width(row)-lipgloss.Width(right))) + right
-			body = append(body, roundBox(st, []string{row}, cw, true)...)
+			for _, l := range roundBox(st, []string{row}, cw, true) {
+				body = append(body, st.zone(fmt.Sprintf("row:welcome:%d", i), l))
+			}
 		} else {
-			body = append(body, row)
+			body = append(body, st.zone(fmt.Sprintf("row:welcome:%d", i), fit(row, cw)))
 		}
 		body = append(body, "")
 	}
@@ -785,7 +796,7 @@ func agentsPanel(v *view.View, st State, pw, h int) []string {
 			case "applied":
 				undo := ""
 				if len(applied) == 0 {
-					undo = st.dim("u") + " " + st.faint("undo")
+					undo = st.hint([2]string{"u", "undo"})
 				}
 				top := " " + st.tile(r.Worker) + "  " + fit(clean(r.Title), iw-14)
 				if len(applied) < 4 {
@@ -797,7 +808,7 @@ func agentsPanel(v *view.View, st State, pw, h int) []string {
 			}
 		}
 	}
-	lines = append(lines, head("Done today", fmt.Sprintf("%d · all ›", len(applied)/2)))
+	lines = append(lines, st.zone("key:a", head("Done today", fmt.Sprintf("%d · all ›", len(applied)/2))))
 	if len(applied) == 0 {
 		lines = append(lines, st.faint("  nothing applied yet"))
 	}
@@ -825,10 +836,12 @@ func agentsPanel(v *view.View, st State, pw, h int) []string {
 		if r.Ask {
 			activity = "      " + st.paint(colAmber, fit("asks: "+strings.TrimPrefix(clean(r.Second), "permission: "), iw-10))
 		}
+		group := []string{top, activity}
 		if i == sel {
-			lines = append(lines, roundBox(st, []string{top, activity}, iw, true)...)
-		} else {
-			lines = append(lines, top, activity)
+			group = roundBox(st, group, iw, true)
+		}
+		for _, l := range group {
+			lines = append(lines, st.zone(fmt.Sprintf("row:panel:%d", i), fit(l, iw)))
 		}
 	}
 	if len(jobs) == 0 {
@@ -857,7 +870,7 @@ func agentsPanel(v *view.View, st State, pw, h int) []string {
 	if st.Workspace != nil && st.Workspace.Context != "" {
 		foot = append(foot, st.paint(colGreen, "●")+" "+st.faint("sandbox "+lastWord(st.Workspace.Context)))
 	}
-	keys := st.dim("⏎") + " " + st.faint("watch thread") + "   " + st.dim("s") + " " + st.faint("stop") + "   " + st.dim("⇥") + " " + st.faint("close")
+	keys := st.hint([2]string{"⏎", "watch thread"}) + "   " + st.hint([2]string{"s", "stop"}) + "   " + st.hint([2]string{"⇥", "close"})
 	room := h - len(foot) - 2
 	if len(lines) > room {
 		lines = lines[:room]
@@ -924,6 +937,14 @@ func paletteItems(st State) []paletteItem {
 		if q == "" || strings.Contains(c[0], q) {
 			out = append(out, command(c))
 			matched++
+		}
+	}
+	// the parent's own skills and commands, when the query names one: ⏎ puts it in the box
+	skills := 0
+	for _, c := range st.ParentCommands {
+		if q != "" && skills < 4 && strings.Contains(strings.ToLower(c.Name), q) {
+			out = append(out, paletteItem{appParent(st) + " skills", c.Name, c.Help, "slash:" + c.Name})
+			skills++
 		}
 	}
 	if matched == 0 {
@@ -1004,7 +1025,7 @@ func paletteBox(v *view.View, st State, pw int) []string {
 				row = ">" + row[1:]
 			}
 		}
-		lines = append(lines, row)
+		lines = append(lines, st.zone(fmt.Sprintf("row:palette:%d", i), row))
 	}
 	return roundBox(st, indentAll(append([]string{""}, append(lines, "")...), 2, pw-2), pw, false)
 }
@@ -1036,14 +1057,14 @@ func newJobBox(st State, r view.Row, dw int) []string {
 		now = clean(r.Second)
 	}
 	lines = append(lines, st.paint(colGreen, "✓ admitted")+"  "+st.paint(colGreen, "✓ worktree")+"  "+st.bold("● "+fit(now, 30))+"  "+st.faint("○ checks  ○ applied"), "")
-	keys := st.dim("t") + " " + st.faint("tell "+parent) + "   " + st.dim("s") + " " + st.faint("stop") + "   " + st.dim("esc") + " " + st.faint("close")
+	keys := st.hint([2]string{"t", "tell " + parent}) + "   " + st.hint([2]string{"s", "stop"}) + "   " + st.hint([2]string{"esc", "close"})
 	button := " ⏎ watch thread "
 	if st.Styled {
 		button = lipgloss.NewStyle().Background(lipgloss.Color(colText)).Foreground(lipgloss.Color(colGround)).Bold(true).Render(button)
 	} else {
 		button = "[⏎ watch thread]"
 	}
-	foot := keys + strings.Repeat(" ", max(2, iw-lipgloss.Width(keys)-lipgloss.Width(button))) + button
+	foot := keys + strings.Repeat(" ", max(2, iw-lipgloss.Width(keys)-lipgloss.Width(button))) + st.zone("key:⏎", button)
 	box := roundBox(st, append(indentAll(lines, 2, iw+2), st.paint(colBorder, strings.Repeat("─", iw+4)), "  "+foot), dw, false)
 	return box
 }
@@ -1066,6 +1087,7 @@ func helpBox(st State, hw int) []string {
 		{"/", "commands: /parent /queue /new /stop /theme /quit"},
 		{"1 2", "allow or deny a request the conversation shows"},
 		{"PgUp PgDn", "scroll the conversation"},
+		{"click", "does what its key would; the wheel scrolls"},
 		{"esc", "close, or clear the box"},
 		{"⌃c", "clear the box, or quit"},
 	}

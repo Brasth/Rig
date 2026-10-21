@@ -116,7 +116,7 @@ func sessionKeys(st State, row *view.Row, jobAsks bool) []string {
 		return []string{"y confirm", "n cancel"}
 	case st.Mode == ModeInput && !typingChat(st):
 		return []string{"Enter queue it", "Esc discard"}
-	case typingChat(st) && len(slashMatches(st.Prompt)) > 0:
+	case typingChat(st) && len(st.slashes()) > 0:
 		return []string{"↑↓ choose", "Tab complete", "Enter run", "Esc clear"}
 	case typingChat(st) && st.Prompt != "":
 		return []string{"Enter send", "Esc clear", "↑↓ jobs", "PgUp/PgDn scroll", "Ctrl-C clear"}
@@ -435,10 +435,15 @@ func pickerLines(st State, w int) []string {
 
 // slashMenu is the command list above the box while a / command is being typed, the chosen one raised.
 func slashMenu(st State, w int) []string {
-	matches := slashMatches(st.Prompt)
+	matches := st.slashes()
 	out := make([]string, 0, len(matches))
 	sel := clampSel(st.SlashSel, len(matches))
+	// ten rows at most, scrolled to keep the chosen one: a parent can have many skills
+	from := max(0, min(sel-9, len(matches)-10))
 	for i, c := range matches {
+		if i < from || i >= from+10 {
+			continue
+		}
 		line := fit(fmt.Sprintf("   %-12s %s", c.Name+c.Args, c.Help), w-2)
 		if st.Styled {
 			style := lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted))
@@ -447,7 +452,7 @@ func slashMenu(st State, w int) []string {
 			}
 			line = tint(style.Render(line), colSelBg)
 		}
-		out = append(out, " "+line+" ")
+		out = append(out, st.zone(fmt.Sprintf("row:slash:%d", i), " "+line+" "))
 	}
 	return out
 }

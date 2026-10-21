@@ -28,59 +28,61 @@ const (
 
 // State is everything Render needs besides the view. It holds no I/O.
 type State struct {
-	Logos        bool // agents drawn as their logo tiles with kitty's image placeholders (gfx.go)
-	Tab          string
-	Selected     map[string]int
-	Offsets      map[string]int
-	DetailOpen   bool
-	DetailOff    int
-	Mode         Mode
-	Prompt       string // confirm question or input draft
-	Message      string
-	Stale        string // set when the last refresh failed; shown until one succeeds
-	Loading      bool
-	ASCII        bool
-	Workspace    *view.Workspace
-	WorkspaceE   string // why the workspace panel could not load
-	Fleet        *view.Panel
-	FleetE       string
-	Settings     *view.Panel
-	SettingsE    string
-	PaneLines    []string // the Session pane's screen, already styled by the emulator
-	PaneTitle    string
-	PaneFocus    bool
-	PaneRunning  bool
-	ChatOn       bool   // the chat experiment is on: the Chat tab exists
-	ChatParent   string // who answers a new conversation (chat.status); empty when no parent CLI is installed
-	Chat         *view.ChatTranscript
-	ChatE        string
-	ChatUp       int    // lines scrolled back from the newest
-	InputLabel   string // what the input line is for; empty means enqueue
-	Log          *view.LogReply
-	LogE         string
-	LogUp        int // lines scrolled back from the newest; 0 follows the tail
-	Evidence     *view.Evidence
-	EvidenceE    string
-	EvidenceID   string
-	EvidenceOpen bool           // the evidence drawer replaces the board body
-	HelpOpen     bool           // the key list replaces the board body
-	WideSession  bool           // the window fits the Session screen, whose middle column is the chat: no separate Chat tab
-	DockEvidence *view.Evidence // the selected job's evidence in the Session screen's dock
-	DockID       string
-	DockE        string
-	Styled       bool      // apply colour and reverse video to list rows; golden tests leave it off
-	ChatModel    string    // the parent's model, for the title "Parent · claude opus"
-	Theme        string    // the colour theme in use; empty is the default, rig
-	ThemeScope   string    // where it is kept: "all" repos, this "repo", "default" or "this board" (rig shell --theme)
-	Focus        string    // the Session screen's pane with the keyboard: "" (the jobs, as the mockup opens), "parent" or "workspace"
-	Picker       *Picker   // the parent picker, while it is open
-	App          *AppState // the app (the design's ADE screens); nil while the board shows
-	AppSettings  *view.AppSettings
-	Today        *view.Today      // what helpers applied today
-	Ship         *view.ShipStatus // what is ahead of the upstream branch
-	ShipE        string
-	SlashSel     int       // the chosen line of the / command list
-	Now          time.Time // the clock, for the working spinner and its elapsed time; zero in golden tests
+	ParentCommands []SlashCommand // the parent's skills and commands, in the / menu after Rig's
+	Mouse          bool           // clickable places are marked as zones (mouse.go)
+	Logos          bool           // agents drawn as their logo tiles with kitty's image placeholders (gfx.go)
+	Tab            string
+	Selected       map[string]int
+	Offsets        map[string]int
+	DetailOpen     bool
+	DetailOff      int
+	Mode           Mode
+	Prompt         string // confirm question or input draft
+	Message        string
+	Stale          string // set when the last refresh failed; shown until one succeeds
+	Loading        bool
+	ASCII          bool
+	Workspace      *view.Workspace
+	WorkspaceE     string // why the workspace panel could not load
+	Fleet          *view.Panel
+	FleetE         string
+	Settings       *view.Panel
+	SettingsE      string
+	PaneLines      []string // the Session pane's screen, already styled by the emulator
+	PaneTitle      string
+	PaneFocus      bool
+	PaneRunning    bool
+	ChatOn         bool   // the chat experiment is on: the Chat tab exists
+	ChatParent     string // who answers a new conversation (chat.status); empty when no parent CLI is installed
+	Chat           *view.ChatTranscript
+	ChatE          string
+	ChatUp         int    // lines scrolled back from the newest
+	InputLabel     string // what the input line is for; empty means enqueue
+	Log            *view.LogReply
+	LogE           string
+	LogUp          int // lines scrolled back from the newest; 0 follows the tail
+	Evidence       *view.Evidence
+	EvidenceE      string
+	EvidenceID     string
+	EvidenceOpen   bool           // the evidence drawer replaces the board body
+	HelpOpen       bool           // the key list replaces the board body
+	WideSession    bool           // the window fits the Session screen, whose middle column is the chat: no separate Chat tab
+	DockEvidence   *view.Evidence // the selected job's evidence in the Session screen's dock
+	DockID         string
+	DockE          string
+	Styled         bool      // apply colour and reverse video to list rows; golden tests leave it off
+	ChatModel      string    // the parent's model, for the title "Parent · claude opus"
+	Theme          string    // the colour theme in use; empty is the default, rig
+	ThemeScope     string    // where it is kept: "all" repos, this "repo", "default" or "this board" (rig shell --theme)
+	Focus          string    // the Session screen's pane with the keyboard: "" (the jobs, as the mockup opens), "parent" or "workspace"
+	Picker         *Picker   // the parent picker, while it is open
+	App            *AppState // the app (the design's ADE screens); nil while the board shows
+	AppSettings    *view.AppSettings
+	Today          *view.Today      // what helpers applied today
+	Ship           *view.ShipStatus // what is ahead of the upstream branch
+	ShipE          string
+	SlashSel       int       // the chosen line of the / command list
+	Now            time.Time // the clock, for the working spinner and its elapsed time; zero in golden tests
 }
 
 // Picker is the parent picker: every parent the chat can run, the installed ones first.
@@ -99,30 +101,33 @@ type PickItem struct {
 // SlashCommand is one of the ask box's / commands.
 type SlashCommand struct {
 	Name, Args, Help string
+	Parent           bool // the parent's own skill or command, sent to it
 }
 
 // SlashCommands are what the ask box understands besides a message for the parent.
 var SlashCommands = []SlashCommand{
-	{"/parent", "", "choose the parent CLI"},
-	{"/queue", " TEXT", "park a task in the queue instead"},
-	{"/new", "", "start a new conversation"},
-	{"/stop", "", "stop the parent's running turn"},
-	{"/jobs", "", "the Jobs tab"},
-	{"/env", "", "the container, ports and worktrees"},
-	{"/help", "", "every key"},
-	{"/theme", " NAME", "rig, light, dark, material or dracula"},
-	{"/settings", "", "theme, agents, routing, sandbox"},
-	{"/quit", "", "leave rig shell"},
+	{"/parent", "", "choose the parent CLI", false},
+	{"/queue", " TEXT", "park a task in the queue instead", false},
+	{"/new", "", "start a new conversation", false},
+	{"/stop", "", "stop the parent's running turn", false},
+	{"/jobs", "", "the Jobs tab", false},
+	{"/env", "", "the container, ports and worktrees", false},
+	{"/help", "", "every key", false},
+	{"/theme", " NAME", "rig, light, dark, material or dracula", false},
+	{"/settings", "", "theme, agents, routing, sandbox", false},
+	{"/quit", "", "leave rig shell", false},
 }
 
-// slashMatches is the commands a draft that starts with / could be, until it has a space.
-func slashMatches(prompt string) []SlashCommand {
+// slashes is the commands a draft that starts with / could be, until it has a space: Rig's own, then the parent's
+// skills and commands.
+func (st State) slashes() []SlashCommand {
+	prompt := st.Prompt
 	if !strings.HasPrefix(prompt, "/") || strings.Contains(prompt, " ") {
 		return nil
 	}
 	var out []SlashCommand
-	for _, c := range SlashCommands {
-		if strings.HasPrefix(c.Name, prompt) {
+	for _, c := range append(append([]SlashCommand(nil), SlashCommands...), st.ParentCommands...) {
+		if strings.HasPrefix(c.Name, prompt) || (c.Parent && strings.Contains(c.Name, prompt[1:]) && len(prompt) > 2) {
 			out = append(out, c)
 		}
 	}

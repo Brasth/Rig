@@ -58,6 +58,7 @@ type fakeSource struct {
 	chatStarted     *view.ChatStarted
 	chatSendErr     error
 	chatSent        [][2]string
+	parentCmds      *view.ParentCommands
 	chatParents     []string
 	chatAnswers     [][3]string
 	chatAnswerErr   error
@@ -106,6 +107,12 @@ func (f *fakeSource) ChatStatus(time.Duration) (*view.ChatStatus, error) {
 func (f *fakeSource) ChatTranscript(session string, tail int, _ time.Duration) (*view.ChatTranscript, error) {
 	f.chatReads = append(f.chatReads, session)
 	return f.chatView, f.chatErr
+}
+func (f *fakeSource) ChatCommands(parent string, _ time.Duration) (*view.ParentCommands, error) {
+	if f.parentCmds == nil {
+		return nil, errors.New("no chat.commands here")
+	}
+	return f.parentCmds, nil
 }
 func (f *fakeSource) ChatSend(message, session, parent string, _ time.Duration) (*view.ChatStarted, error) {
 	f.chatSent = append(f.chatSent, [2]string{message, session})

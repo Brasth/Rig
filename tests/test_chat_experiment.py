@@ -246,6 +246,17 @@ class Turns(Base):
         self.assertEqual(first["argv"], ["exec", "--json", "go"])
         self.assertEqual(second["argv"], ["exec", "--json", "resume", "native-codex-1", "again"])
 
+    def test_a_parents_own_command_is_expanded_for_its_headless_mode(self):
+        home = self.base / "home"
+        (home / ".codex/prompts").mkdir(parents=True)
+        (home / ".codex/prompts/fix.md").write_text("---\ndescription: fix one test\n---\nFix the test $1.\n")
+        stand_in(self.bin, "codex", CODEX_STREAM)
+        with mock.patch.dict(os.environ, {"HOME": str(home)}):
+            started = rig_chat.send(self.repo, "/prompts:fix login", parent="codex")
+            view = self.wait_idle(started["session"])
+        self.assertEqual(self.calls()[0]["argv"], ["exec", "--json", "Fix the test login.\n"])
+        self.assertEqual(view["entries"][0]["text"], "/prompts:fix login", "the conversation shows what was typed")
+
     def test_messages_are_data_never_shell_text_or_flags(self):
         stand_in(self.bin, "claude", CLAUDE_STREAM)
         nasty = "--dangerously-skip-permissions; $(touch /tmp/pwned-by-chat) `id` 'q' \"d\"\nsecond line"

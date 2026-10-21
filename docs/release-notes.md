@@ -3,6 +3,9 @@
 
 
 
+## The mouse, the parent's skills, and files dropped in (2026-10-21)
+
+`rig shell` works with the mouse as codex and grok do: a click on a tab, a footer key, an answer chip, a palette or `/` menu row, a helper in the agents panel, a Settings value or any other row does what its key would; a click outside an overlay closes it; the wheel scrolls the conversation, the diff and the code; what the pointer is over is underlined. `RIG_MOUSE=0` turns it off. `/` also lists the parent's own skills and slash commands (new API method `chat.commands`), and for a parent whose headless mode cannot run them Rig sends the command's prompt or an instruction to use the skill. Files dragged onto the window go in the box as `@` references. Fixed: the first settings load while the server was still starting said "Could not save the setting".
 ## A splash, rig-agent, and Settings that apply on ⏎ (2026-10-21)
 
 `rig shell` opens on the design's rig mark while it starts: the stem and three dots pulsing in turn, the wordmark and what it is opening; Ghostty and kitty draw the mark as an image, other terminals in blocks; any key skips it and `RIG_SPLASH=0` turns it off. `rig agent`, `rig-agent` and `agent-rig` open the shell as `rig shell` does (`rig setup` links the two commands next to `rig`). In Settings, `←→` now only picks a value, shown underlined, and `⏎` applies it, so the theme no longer changes as you move.

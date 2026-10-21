@@ -40,6 +40,7 @@ type setRow struct {
 	Install string // the command that installs a missing agent (i)
 	Stacked bool   // the label on its own line and the choices under it, as the design draws the theme
 	Pick    string // the value ←→ has picked and ⏎ would apply
+	At      int    // its place in the section, for the mouse
 }
 
 func settingRows(st State, section string) []setRow {
@@ -109,7 +110,7 @@ func settingRows(st State, section string) []setRow {
 					}
 				}
 				if r.Install != "" {
-					r.Right = st.dim("i") + " " + st.faint("install")
+					r.Right = st.zone(fmt.Sprintf("row:install:%d", len(rows)), st.dim("i")+" "+st.faint("install"))
 				}
 			}
 			rows = append(rows, r)
@@ -259,7 +260,7 @@ func settingsScreenLines(v *view.View, st State, w, h int) []string {
 	if scope == "all repos" {
 		other = repo
 	}
-	head := "   " + st.faint("←") + "  " + st.bold("Settings") + "   " + chipOn(st, scope) + "  " + st.faint(other) + "  " + st.faint(file)
+	head := "   " + st.zone("key:esc", st.faint("←")+"  "+st.bold("Settings")) + "   " + chipOn(st, scope) + "  " + st.faint(other) + "  " + st.faint(file)
 	var tabs []string
 	for i, name := range SettingsSections {
 		if i == sc.Section {
@@ -271,6 +272,7 @@ func settingsScreenLines(v *view.View, st State, w, h int) []string {
 		} else {
 			tabs = append(tabs, st.faint(name))
 		}
+		tabs[len(tabs)-1] = st.zone(fmt.Sprintf("row:section:%d", i), tabs[len(tabs)-1])
 	}
 	lines := []string{spread(head, "", "", w), center(strings.Join(tabs, "   "), w)}
 	cw := min(76, w-8)
@@ -300,7 +302,13 @@ func settingsScreenLines(v *view.View, st State, w, h int) []string {
 			if i == sel && sc.Pick != "" {
 				r.Pick = sc.Pick
 			}
-			rowsOut = append(rowsOut, settingLines(st, r, i == sel, cw, scopeName(st, r))...)
+			r.At = i
+			for _, l := range settingLines(st, r, i == sel, cw, scopeName(st, r)) {
+				if strings.HasPrefix(l, "\x00") {
+					l = "\x00" + st.zone(fmt.Sprintf("row:setting:%d", i), l[1:])
+				}
+				rowsOut = append(rowsOut, l)
+			}
 			if r.Note != "" && r.Agent == "" {
 				rowsOut = append(rowsOut, "    "+st.dim(fit(r.Note, cw-4)))
 			}
@@ -417,7 +425,7 @@ func settingLines(st State, r setRow, selected bool, cw int, scope string) []str
 	}
 	var parts []string
 	for _, o := range r.Options {
-		parts = append(parts, choice(st, r, o, o))
+		parts = append(parts, choiceZone(st, r, o, choice(st, r, o, o)))
 	}
 	if scope != "" {
 		parts = append(parts, st.faint(" "+scope))
@@ -458,11 +466,14 @@ func settingLine(st State, r setRow, selected bool, cw int) string {
 			if i < len(r.Names) {
 				name = r.Names[i]
 			}
-			parts = append(parts, choice(st, r, o, name))
+			parts = append(parts, choiceZone(st, r, o, choice(st, r, o, name)))
 		}
 		if r.Right == "" {
 			right = strings.Join(parts, "  ")
 		}
+	}
+	if len(r.Options) > 0 && r.Toggle {
+		right = choiceZone(st, r, "", right)
 	}
 	left := mark + label
 	return left + strings.Repeat(" ", max(2, cw-lipgloss.Width(left)-lipgloss.Width(right))) + right
@@ -777,6 +788,11 @@ func choice(st State, r setRow, value, name string) string {
 		return chipOn(st, name)
 	}
 	return st.faint(" " + name + " ")
+}
+
+// choiceZone makes a row's value clickable: a click picks it and applies it.
+func choiceZone(st State, r setRow, value, s string) string {
+	return st.zone(fmt.Sprintf("row:choice:%d=%s", r.At, value), s)
 }
 
 // picked is a value ←→ has moved to: bold and underlined, not yet applied.

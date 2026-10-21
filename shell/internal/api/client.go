@@ -211,6 +211,15 @@ func (c *Client) ChatStatus(timeout time.Duration) (*view.ChatStatus, error) {
 	return &out, nil
 }
 
+// ChatCommands lists the parent's own skills and slash commands; an empty parent means the project's.
+func (c *Client) ChatCommands(parent string, timeout time.Duration) (*view.ParentCommands, error) {
+	var out view.ParentCommands
+	if err := c.Call("chat.commands", map[string]any{"parent": parent}, timeout, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 // ChatTranscript fetches the tail of one chat session.
 func (c *Client) ChatTranscript(session string, tail int, timeout time.Duration) (*view.ChatTranscript, error) {
 	var out view.ChatTranscript

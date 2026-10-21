@@ -2,10 +2,12 @@ package ui
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/Brasth/Rig/shell/internal/api"
 	"github.com/Brasth/Rig/shell/internal/view"
 )
 
@@ -89,5 +91,18 @@ func TestSettingsShowTheEffectiveValuesAndFlagAProblemOnTheTab(t *testing.T) {
 	st.Settings = &view.Panel{Attention: true, Sections: st.Settings.Sections}
 	if !strings.Contains(strings.Split(Render(loadView(t), st, 120, 36), "\n")[1], "Settings !") {
 		t.Error("a settings problem is flagged on the tab")
+	}
+}
+
+func TestTheFirstSettingsLoadWaitsQuietlyForTheServer(t *testing.T) {
+	m, _ := appModel(t)
+	m.st.AppSettings, m.st.Message = nil, ""
+	_, cmd := m.Update(appSettingsMsg{err: fmt.Errorf("dial: %w", api.ErrNotRunning)})
+	if cmd == nil || m.st.Message != "" {
+		t.Fatalf("asked again, nothing said: %q", m.st.Message)
+	}
+	m.Update(appSettingsMsg{err: errors.New("boom")})
+	if !strings.HasPrefix(m.st.Message, "Could not load the settings") {
+		t.Fatalf("another failure is a load failure: %q", m.st.Message)
 	}
 }
