@@ -128,6 +128,13 @@ class Settings(unittest.TestCase):
         ui_settings.save(self.repo, "parent_effort.claude", "default", "all")
         self.assertEqual(ui_settings.chosen_effort(self.repo, "claude"), ("", "default"))
 
+    def test_a_long_turn_notice_is_on_by_default_and_can_be_turned_off(self):
+        self.assertTrue(ui_settings.read(self.repo)["notify_done"])
+        result = ui_settings.save(self.repo, "ui.notify_done", "false", "all")
+        self.assertFalse(result["notify_done"])
+        self.assertIn("notify_done = false", ui_theme.global_path().read_text())
+        self.assertTrue(ui_settings.save(self.repo, "ui.notify_done", "true", "all")["notify_done"])
+
     def test_over_the_api(self):
         api = local_api.Api(self.repo, "t" * 64)
         call = lambda method, params=None: api.dispatch({"jsonrpc": "2.0", "id": 1, "method": method, "params": params or {},

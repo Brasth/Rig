@@ -1123,10 +1123,11 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.chat != nil && msg.chat.Session != "" && msg.chat.Session != m.chatID {
 			return m, nil // the conversation was left (a switch of parent, a new one) while this was on its way
 		}
+		prev := m.st.Chat
 		m.st.Chat, m.st.ChatE = msg.chat, ""
 		if m.appOn() {
 			m.rememberChat()
-			return m, tea.Batch(m.spin(), m.bell(), m.drainOutbox())
+			return m, tea.Batch(m.spin(), m.bell(), m.afterTurn(prev, msg.chat), m.drainOutbox())
 		}
 		return m, m.spin()
 	case splashTickMsg:

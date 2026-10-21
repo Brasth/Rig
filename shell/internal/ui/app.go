@@ -675,6 +675,14 @@ func conversationBody(v *view.View, st State, w, h int) ([]string, [][2]string) 
 	if st.Chat.Plan {
 		state = st.paint(colAccent, "plan mode") + st.faint(" · "+state)
 	}
+	if pct := st.Chat.ContextPct; pct != nil && *pct >= 0 {
+		note := fmt.Sprintf("context %d%%", *pct)
+		if *pct >= 80 {
+			state += st.faint(" · ") + st.paint(colAmber, note)
+		} else {
+			state += st.faint(" · " + note)
+		}
+	}
 	lines = append(lines, "     "+st.faint(parent+" · ")+state)
 	lines = append(lines, "", "")
 	// the transcript's lines are made once for each transcript, width and theme: a long conversation scrolls at once
@@ -762,6 +770,16 @@ func entryLines(st State, entries []view.ChatEntry, cw int) []string {
 			continue
 		case "diff":
 			lines = append(lines, diffLines(st, e.Text, cw)...)
+			continue
+		case "summary":
+			// what /compact carried over from the conversation before, with its lines kept
+			lines = append(lines, center(st.faint("── summary carried over ──"), cw))
+			for _, raw := range strings.Split(strings.TrimRight(e.Text, "\n"), "\n") {
+				for _, l := range wrap(plainMarkdown(sanitize(raw)), cw-4, "") {
+					lines = append(lines, "  "+st.dim(l))
+				}
+			}
+			lines = append(lines, center(st.faint("──"), cw), "")
 			continue
 		case "result", "result-error":
 			colour := ""
