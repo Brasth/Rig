@@ -277,15 +277,24 @@ func doneJobs(v *view.View) []view.Row {
 
 // AppFrame renders the app at w by h.
 func AppFrame(v *view.View, st State, w, h int) []string {
-	a := st.App
-	if w < 60 || h < 16 {
+	if w < 60 || h < 18 {
 		lines := make([]string, h)
 		for i := range lines {
 			lines[i] = fit("", w)
 		}
-		lines[0] = fit(" rig · window too small (need 60×16); q quits", w)
+		lines[0] = fit(" rig · window too small (need 60×18); q quits", w)
 		return lines
 	}
+	if st.App.Splash > 0 {
+		return splashScreen(v, st, w, h)
+	}
+	// a row of room above the top bar and below the footer, so neither sits on the window's edge
+	return append(append([]string{fit("", w)}, appBody(v, st, w, h-2)...), fit("", w))
+}
+
+// appBody is the screen inside AppFrame's margin.
+func appBody(v *view.View, st State, w, h int) []string {
+	a := st.App
 	confirm := func(lines []string) []string {
 		switch {
 		case st.Mode == ModeConfirm:
