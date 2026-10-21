@@ -8,9 +8,9 @@ import (
 )
 
 // The reply box edits as codex's and grok's do: ←→ move through the text, ⌥←→ (⌥b ⌥f, ⌃←→) a word at a time, ⌃a or
-// Home and ⌃e or End go to its ends, ⌫ and Delete (⌃d) remove a character, ⌃w and ⌥⌫ the word before the cursor, ⌥d
-// the one after it, ⌃u everything before it (⌃k stays the palette). ↑↓ bring back the messages you sent, newest first,
-// and ↓ past the newest brings back what you were typing.
+// Home and ⌃e or End go to the line's ends, ⌥⏎ (or ⌃j) starts a new line, ⌫ and Delete (⌃d) remove a character, ⌃w and ⌥⌫ the word before the cursor, ⌥d
+// the one after it, ⌃u the line before it (⌃k stays the palette). ↑↓ move between the draft's lines, and from an empty
+// box bring back the messages you sent, newest first; ↓ past the newest brings back what you were typing.
 
 // caret is where the cursor is in the box, in runes from the start.
 func (st State) caret() int {
@@ -18,31 +18,96 @@ func (st State) caret() int {
 	return n - min(max(0, st.PromptBack), n)
 }
 
-// draft is the box's text with the cursor drawn in it, kept to room cells around the cursor. With colour the cursor is
-// a block on the character under it, as codex and grok draw theirs, so the text keeps its place; without, a bar.
-func (st State) draft(room int) string {
-	r := []rune(st.Prompt)
-	c := st.caret()
-	from, to := 0, len(r)
-	if len(r) >= room {
-		from = max(0, min(c-room/2, len(r)-room+1))
-		to = min(len(r), from+room-1)
+// draftRows is the box's text as rows of at most room cells: its lines, wrapped, with the cursor drawn in its row. With
+// colour the cursor is a block on the character under it, as codex and grok draw theirs, so the text keeps its place;
+// without, a bar. A draft taller than most rows shows the rows around the cursor.
+func (st State) draftRows(room, most int) []string {
+	room = max(2, room-1) // a cell for the cursor after a full row
+	r, c := []rune(st.Prompt), st.caret()
+	var rows []string
+	at := 0 // the row the cursor is on
+	for line := 0; line <= len(r); {
+		end := line
+		for end < len(r) && r[end] != '\n' {
+			end++
+		}
+		for p := line; ; p += room { // a long line in pieces of room
+			q := min(p+room, end)
+			if c >= p && (c < q || (c == q && q == end)) {
+				at = len(rows)
+				rows = append(rows, cursorIn(st, r[p:q], c-p))
+			} else {
+				rows = append(rows, string(r[p:q]))
+			}
+			if q == end {
+				break
+			}
+		}
+		line = end + 1
 	}
-	before, after := string(r[from:c]), string(r[c:to])
-	if from > 0 {
-		before = "…" + string([]rune(before)[1:])
+	if len(rows) > most {
+		from := max(0, min(at-most/2, len(rows)-most))
+		rows = rows[from : from+most]
 	}
-	if to < len(r) {
-		after = string([]rune(after)[:len([]rune(after))-1]) + "…"
-	}
+	return rows
+}
+
+// cursorIn draws the cursor at col in a row of the draft.
+func cursorIn(st State, row []rune, col int) string {
 	if !st.Styled {
-		return before + "▏" + after
+		return string(row[:col]) + "▏" + string(row[col:])
 	}
-	under, rest := " ", after
-	if a := []rune(after); len(a) > 0 && c < to {
-		under, rest = string(a[0]), string(a[1:])
+	under, rest := " ", ""
+	if col < len(row) {
+		under, rest = string(row[col]), string(row[col+1:])
 	}
-	return before + "\x1b[7m" + under + "\x1b[27m" + rest
+	return string(row[:col]) + "\x1b[7m" + under + "\x1b[27m" + rest
+}
+
+// boxRows is the reply box's content: the › and the draft's rows under it, or the placeholder.
+func boxRows(st State, w int, placeholder string) []string {
+	if st.Prompt == "" {
+		return []string{" " + st.faint("›") + " ▏" + st.faint(placeholder)}
+	}
+	rows := st.draftRows(w-7, 8)
+	for i := range rows {
+		lead := "   "
+		if i == 0 {
+			lead = " " + st.faint("›") + " "
+		}
+		rows[i] = lead + rows[i]
+	}
+	return rows
+}
+
+// lineOf is where rune c of r is: its line's start and end, and its column.
+func lineOf(r []rune, c int) (start, end int) {
+	start, end = c, c
+	for start > 0 && r[start-1] != '\n' {
+		start--
+	}
+	for end < len(r) && r[end] != '\n' {
+		end++
+	}
+	return start, end
+}
+
+// moveLine puts the cursor on the line above (-1) or below (+1) at the same column; false on the first or last line.
+func (m *Model) moveLine(step int) bool {
+	r, c := []rune(m.st.Prompt), m.st.caret()
+	start, end := lineOf(r, c)
+	col := c - start
+	switch {
+	case step < 0 && start > 0:
+		ps, _ := lineOf(r, start-1)
+		m.setPrompt(m.st.Prompt, ps+min(col, start-1-ps))
+	case step > 0 && end < len(r):
+		_, ne := lineOf(r, end+1)
+		m.setPrompt(m.st.Prompt, end+1+min(col, ne-end-1))
+	default:
+		return false
+	}
+	return true
 }
 
 // syncCaret puts the cursor at the end of a box that something other than the editor filled or emptied.
@@ -103,9 +168,13 @@ func (m *Model) editKey(k tea.KeyMsg) bool {
 	case "alt+right", "ctrl+right", "alt+f":
 		m.setPrompt(m.st.Prompt, wordRight(r, c))
 	case "home", "ctrl+a":
-		m.setPrompt(m.st.Prompt, 0)
+		start, _ := lineOf(r, c)
+		m.setPrompt(m.st.Prompt, start)
 	case "end", "ctrl+e":
-		m.setPrompt(m.st.Prompt, len(r))
+		_, end := lineOf(r, c)
+		m.setPrompt(m.st.Prompt, end)
+	case "alt+enter", "ctrl+j":
+		m.insert("\n") // a new line, as ⌥⏎ (and ⌃j) give in codex
 	case "backspace":
 		if c > 0 {
 			cut(c-1, c)
@@ -119,7 +188,8 @@ func (m *Model) editKey(k tea.KeyMsg) bool {
 	case "alt+d":
 		cut(c, wordRight(r, c))
 	case "ctrl+u":
-		cut(0, c)
+		start, _ := lineOf(r, c)
+		cut(start, c)
 	default:
 		return false
 	}

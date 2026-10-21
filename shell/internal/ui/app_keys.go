@@ -379,6 +379,7 @@ func (m *Model) appKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.st.SlashSel = clampSel(clampSel(m.st.SlashSel, len(matches))+step, len(matches))
 		case m.st.Prompt == "" || m.histAt >= 0:
 			m.recall(step) // as in codex and grok: the messages sent before
+		case m.moveLine(step):
 		case step < 0:
 			m.setPrompt(m.st.Prompt, 0) // a draft of your own: ↑ goes to its start, ↓ to its end
 		default:

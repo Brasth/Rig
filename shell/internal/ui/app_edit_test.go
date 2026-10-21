@@ -90,20 +90,63 @@ func TestUpAndDownBringBackWhatWasSent(t *testing.T) {
 
 func TestTheCursorIsABlockOnTheCharacterUnderIt(t *testing.T) {
 	st := State{Prompt: "hrewe te", PromptBack: 3, Styled: true}
-	if got := st.draft(40); got != "hrewe\x1b[7m \x1b[27mte" {
+	if got := st.draftRows(40, 8); len(got) != 1 || got[0] != "hrewe\x1b[7m \x1b[27mte" {
 		t.Fatalf("the text keeps its place, the space under the cursor lit: %q", got)
 	}
 	st.PromptBack = 0
-	if got := st.draft(40); got != "hrewe te\x1b[7m \x1b[27m" {
+	if got := st.draftRows(40, 8); got[0] != "hrewe te\x1b[7m \x1b[27m" {
 		t.Fatalf("at the end, a lit space: %q", got)
 	}
 }
 
-func TestALongDraftShowsTheTextAroundTheCursor(t *testing.T) {
-	st := State{Prompt: strings.Repeat("a", 50) + "MIDDLE" + strings.Repeat("b", 50)}
-	st.PromptBack = 53
-	out := st.draft(20)
-	if !strings.Contains(out, "MID▏DLE") || !strings.HasPrefix(out, "…") || !strings.HasSuffix(out, "…") || len([]rune(out)) != 20 {
-		t.Fatalf("%q", out)
+func TestADraftWrapsAndShowsTheRowsAroundTheCursor(t *testing.T) {
+	st := State{Prompt: "abcdefghij\n\nxyz"}
+	if got := st.draftRows(5, 8); strings.Join(got, "|") != "abcd|efgh|ij||xyz▏" {
+		t.Fatalf("lines, an empty one, and a long one in pieces: %q", got)
+	}
+	st.PromptBack = 4 // on the empty line
+	if got := st.draftRows(5, 8); got[3] != "▏" {
+		t.Fatalf("the cursor on the empty line: %q", got)
+	}
+	st = State{Prompt: strings.Repeat("line\n", 20) + "end"}
+	got := st.draftRows(40, 8)
+	if len(got) != 8 || got[7] != "end▏" {
+		t.Fatalf("eight rows at most, those around the cursor: %q", got)
+	}
+}
+
+func TestNewLinesAndMovingBetweenThem(t *testing.T) {
+	m, src := appModel(t)
+	withConversation(t, m, src)
+	typeText(m, "first line")
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter, Alt: true})
+	typeText(m, "two")
+	key(m, tea.KeyCtrlJ, false)
+	typeText(m, "third line")
+	if m.st.Prompt != "first line\ntwo\nthird line" || len(src.chatSent) != 0 {
+		t.Fatalf("⌥⏎ and ⌃j start a new line, nothing is sent: %q", m.st.Prompt)
+	}
+	if screen := appScreen(m); !strings.Contains(screen, "› first line") || !strings.Contains(screen, "   two") {
+		t.Fatalf("the box grows a row for each line:\n%s", screen)
+	}
+	key(m, tea.KeyUp, false)
+	if m.st.caret() != len("first line\ntwo") {
+		t.Fatalf("↑ goes to the line above, as far in as the line has: %d", m.st.caret())
+	}
+	key(m, tea.KeyUp, false)
+	key(m, tea.KeyHome, false)
+	typeText(m, "> ")
+	if m.st.Prompt != "> first line\ntwo\nthird line" {
+		t.Fatalf("↑ again, then Home goes to the line's start: %q", m.st.Prompt)
+	}
+	key(m, tea.KeyDown, false)
+	key(m, tea.KeyEnd, false)
+	typeText(m, "!")
+	if m.st.Prompt != "> first line\ntwo!\nthird line" {
+		t.Fatalf("↓, then End goes to the line's end: %q", m.st.Prompt)
+	}
+	run(press(m, "enter"), m)
+	if n := len(src.chatSent); n == 0 || src.chatSent[n-1][0] != "> first line\ntwo!\nthird line" {
+		t.Fatalf("⏎ sends every line: %v", src.chatSent)
 	}
 }
