@@ -3,6 +3,10 @@
 
 
 
+## The mouse places the cursor and selects in the reply box (2026-10-21)
+
+As in codex's and grok's box, a click in the reply box puts the cursor there, dragging selects text (and copies it), a double click selects a word, and Shift with the arrows, Home and End selects from the keyboard; typing, a paste, `⌫` or Delete replace or remove the selection. While a file is edited in the code tab, a click puts the cursor where you click.
+
 ## The panel docks in a wide terminal, and the code tab is an editor (2026-10-21)
 
 Following the design's updated shell spec, the agents panel stays docked beside the main view in a terminal 160 columns wide or more (`⇥` hides it) and floats as a card over the faded screen in a narrower one. The code tab follows the new Code board: an explorer of the whole repository with folders that open and close, a filter, and the helpers' `A`/`M` marks; open files as tabs (`⌃w` closes); a breadcrumb to the code around the cursor; marks on the lines a helper's change touches; `x` to have the parent explain the selected lines; a status bar; and `e` to edit the file in place (`⌃s` saves), with `E` for `$EDITOR`.

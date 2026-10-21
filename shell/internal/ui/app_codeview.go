@@ -443,6 +443,9 @@ func codeRows(st State, w, room int) []string {
 		if marks[i+1] {
 			gutter = st.paint(agentColor(who), "▎")
 		}
+		if a.Editing {
+			text = st.zone(fmt.Sprintf("text:code:%d", i), text+strings.Repeat(" ", max(0, w-6-ansi.StringWidth(text))))
+		}
 		row := gutter + st.paint("#c3c5ce", fmt.Sprintf("%3d  ", i+1)) + text
 		row = fit(row, w)
 		if a.Selecting && i >= lo && i <= hi {

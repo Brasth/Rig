@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
@@ -106,8 +107,8 @@ func zonesOf(lines []string, hx, hy int) ([]string, []hitZone) {
 // underlineHovered draws the clickable zone under the pointer underlined, through the resets inside it.
 func underlineHovered(line string, marks []zoneMark, zones []hitZone, hx, hy int) string {
 	z := innermost(zones, hx, hy)
-	if z < 0 || strings.HasPrefix(zones[z].id, "layer:") {
-		return line
+	if z < 0 || strings.HasPrefix(zones[z].id, "layer:") || strings.HasPrefix(zones[z].id, "text:") {
+		return line // an overlay or text to place the cursor in is not underlined
 	}
 	from, to := -1, len(line)
 	for _, mk := range marks {
@@ -192,16 +193,38 @@ func (m *Model) mouse(e tea.MouseMsg) (tea.Model, tea.Cmd) {
 		m.hoverX, m.hoverY = e.X, e.Y
 		return m, nil
 	case e.Action == tea.MouseActionPress && e.Button == tea.MouseButtonLeft:
+		if m.textPress(e.X, e.Y) {
+			return m, nil // in the reply box or a file being edited: the cursor goes there, as in an editor
+		}
 		// a press only marks where: lifting the button there clicks, dragging away selects text
 		m.press, m.sel = &textSel{ax: e.X, ay: e.Y, bx: e.X, by: e.Y}, nil
 		if strings.HasPrefix(m.st.Message, "copied ") {
 			m.st.Message = ""
 		}
 		return m, nil
+	case e.Action == tea.MouseActionMotion && e.Button == tea.MouseButtonLeft && m.boxDrag:
+		if at, ok := m.boxAt(e.X, e.Y); ok {
+			if at >= m.boxFrom {
+				at = min(at+1, len([]rune(m.st.Prompt))) // dragging forward takes in the character under the pointer
+			}
+			m.st.PromptSel, m.st.PromptAnchor = true, m.boxFrom
+			m.setPrompt(m.st.Prompt, at)
+		}
+		return m, nil
 	case e.Action == tea.MouseActionMotion && e.Button == tea.MouseButtonLeft:
 		if m.press != nil && (e.X != m.press.ax || e.Y != m.press.ay || m.sel != nil) {
 			m.press.bx, m.press.by = e.X, e.Y
 			m.sel, m.hoverX, m.hoverY = m.press, -1, -1
+		}
+		return m, nil
+	case e.Action == tea.MouseActionRelease && m.boxDrag:
+		m.boxDrag = false
+		if s0, s1 := m.st.selection(); s1 > s0 {
+			// what was selected in the box is also copied, as a selection in the screen is
+			text := string([]rune(m.st.Prompt)[s0:s1])
+			if Copy(text) {
+				m.st.Message = fmt.Sprintf("copied %d characters", len([]rune(text)))
+			}
 		}
 		return m, nil
 	case e.Action == tea.MouseActionRelease:
@@ -222,6 +245,86 @@ func (m *Model) mouse(e tea.MouseMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 	return m, nil
+}
+
+// zoneAt is the zone under (x, y) and whether there is one.
+func (m *Model) zoneAt(x, y int) (hitZone, bool) {
+	if i := innermost(m.zones, x, y); i >= 0 {
+		return m.zones[i], true
+	}
+	return hitZone{}, false
+}
+
+// boxAt is the place in the box's text under (x, y): text:box:<start>:<end> marks a row of it.
+func (m *Model) boxAt(x, y int) (int, bool) {
+	z, ok := m.zoneAt(x, y)
+	if !ok || !strings.HasPrefix(z.id, "text:box:") {
+		return 0, false
+	}
+	var start, end int
+	if _, err := fmt.Sscanf(strings.TrimPrefix(z.id, "text:box:"), "%d:%d", &start, &end); err != nil {
+		return 0, false
+	}
+	return start + min(max(0, x-z.x0), end-start), true
+}
+
+// textPress puts the cursor where the reply box or a file being edited was pressed; a second press there soon after
+// selects the word under it. False when the press was elsewhere.
+func (m *Model) textPress(x, y int) bool {
+	a := m.st.App
+	if a.Palette != nil || a.Help || a.NewJob != nil || (a.Panel && !panelDocks(m.st, m.winW)) || m.st.Mode == ModeConfirm {
+		return false
+	}
+	double := m.now().Sub(m.clickAt) < 400*time.Millisecond && m.clickX == x && m.clickY == y
+	m.clickAt, m.clickX, m.clickY = m.now(), x, y
+	if at, ok := m.boxAt(x, y); ok {
+		m.sel = nil
+		m.st.PromptSel = false
+		m.setPrompt(m.st.Prompt, at)
+		if double {
+			r := []rune(m.st.Prompt)
+			from, to := at, at
+			for from > 0 && !unicode.IsSpace(r[from-1]) {
+				from--
+			}
+			for to < len(r) && !unicode.IsSpace(r[to]) {
+				to++
+			}
+			if to > from {
+				m.st.PromptSel, m.st.PromptAnchor = true, from
+				m.setPrompt(m.st.Prompt, to)
+			}
+			return true
+		}
+		m.boxDrag, m.boxFrom = true, at
+		return true
+	}
+	z, ok := m.zoneAt(x, y)
+	if !ok || !strings.HasPrefix(z.id, "text:code:") || !a.Editing {
+		return false
+	}
+	line, err := strconv.Atoi(strings.TrimPrefix(z.id, "text:code:"))
+	if err != nil || line < 0 || line >= len(a.FileLines) {
+		return false
+	}
+	a.CurLine, a.CurCol = line, runeAtCell(a.FileLines[line], x-z.x0, tabSize(m.st))
+	return true
+}
+
+// runeAtCell is the rune of a line drawn at cell col, with its tabs as spaces.
+func runeAtCell(line string, col, tab int) int {
+	cell := 0
+	for i, r := range []rune(line) {
+		w := 1
+		if r == '\t' {
+			w = tab
+		}
+		if col < cell+w {
+			return i
+		}
+		cell += w
+	}
+	return len([]rune(line))
 }
 
 // textSel is a stretch of the screen dragged over, from where the button went down (a) to where it is (b).

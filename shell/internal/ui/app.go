@@ -1168,6 +1168,7 @@ func helpBox(st State, hw int) []string {
 		{"PgUp PgDn", "scroll the conversation"},
 		{"click", "does what its key would; the wheel scrolls"},
 		{"drag", "selects text; letting go copies it"},
+		{"⇧ ← →", "select in the box; a click there places the cursor"},
 		{"esc", "close, or clear the box"},
 		{"⌃c", "clear the box, or quit"},
 	}

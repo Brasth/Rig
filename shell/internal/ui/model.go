@@ -236,7 +236,12 @@ type Model struct {
 	zones       []hitZone // where the last frame's clickable places are (mouse.go)
 	plain       []string  // the last frame's text, for copying a selection
 	press, sel  *textSel  // where the button went down, and the text dragged over since
-	hoverX      int       // the pointer, for the zone drawn underlined
+	boxDrag     bool      // the button went down in the reply box: dragging selects its text
+	boxFrom     int       // where in the box's text it went down
+	clickAt     time.Time // the last press, for a double click
+	clickX      int
+	clickY      int
+	hoverX      int // the pointer, for the zone drawn underlined
 	hoverY      int
 }
 
