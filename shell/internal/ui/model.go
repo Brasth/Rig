@@ -1366,6 +1366,9 @@ func (m *Model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.pane.Write(term.KeyBytes(k, m.pane.AppCursor()))
 		return m, nil
 	}
+	if k.Type == tea.KeyCtrlQ {
+		return m, tea.Quit
+	}
 	if k.Type == tea.KeyCtrlC {
 		if m.st.Mode == ModeInput && m.st.Prompt != "" {
 			m.st.Prompt, m.st.SlashSel = "", 0 // as in codex: Ctrl-C clears a draft first, and quits on an empty box

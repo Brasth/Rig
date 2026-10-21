@@ -222,6 +222,14 @@ func (m *Model) appKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	a := m.st.App
 	key := k.String()
 	m.syncCaret()
+	if k.Type == tea.KeyCtrlQ {
+		// ⌃q quits from anywhere; with edits not saved it asks, and ⌃q again quits anyway
+		if m.st.Mode == ModeConfirm && m.pendingX == "quit.unsaved" {
+			return m, tea.Quit
+		}
+		m.st.Mode, m.pendingX, a.ConfirmLead = ModeNormal, "", ""
+		return m, m.quit()
+	}
 	if a.Splash > 0 {
 		a.Splash = 0 // a key goes straight to the screen
 		if k.Type == tea.KeyCtrlC {
@@ -237,6 +245,10 @@ func (m *Model) appKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	if k.Type == tea.KeyCtrlC && a.Editing && a.Tab == 3 && a.Thread == "" && a.Palette == nil && !a.Help {
 		return m.editFileKey(k) // in the editor ⌃c copies, as in an IDE
+	}
+	if k.Type == tea.KeyCtrlD && m.st.Prompt == "" && !(a.Tab == 3 && (a.Editing || a.CodeAsk != nil)) && a.Palette == nil &&
+		a.Settings == nil && a.Search == nil && !a.Commenting {
+		return m, m.quit() // ⌃d on an empty box quits, as in codex and claude
 	}
 	if k.Type == tea.KeyCtrlC && m.st.Prompt == "" {
 		return m, m.quit()

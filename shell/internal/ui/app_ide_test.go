@@ -330,3 +330,44 @@ func TestThePaletteOpensWhileEditing(t *testing.T) {
 		t.Fatal("⌃p opens the files while a file is edited, as an IDE's quick open")
 	}
 }
+
+func isQuit(cmd tea.Cmd) bool {
+	if cmd == nil {
+		return false
+	}
+	_, ok := cmd().(tea.QuitMsg)
+	return ok
+}
+
+func TestCtrlQQuitsFromAnywhere(t *testing.T) {
+	m, _ := editing(t, 3, 2)
+	typeText(m, "x")
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlQ})
+	if isQuit(cmd) || m.st.Mode != ModeConfirm || !strings.Contains(m.st.Prompt, "not saved") {
+		t.Fatalf("⌃q with an edit not saved asks first: %q", m.st.Prompt)
+	}
+	if _, cmd = m.Update(tea.KeyMsg{Type: tea.KeyCtrlQ}); !isQuit(cmd) {
+		t.Fatal("⌃q again quits anyway")
+	}
+	m2, src := appModel(t)
+	withConversation(t, m2, src)
+	m2.st.App.Palette = &Palette{}
+	if _, cmd = m2.Update(tea.KeyMsg{Type: tea.KeyCtrlQ}); !isQuit(cmd) {
+		t.Fatal("⌃q quits even with the palette open")
+	}
+}
+
+func TestCtrlDQuitsOnAnEmptyBox(t *testing.T) {
+	m, src := appModel(t)
+	withConversation(t, m, src)
+	typeText(m, "ab")
+	m.Update(tea.KeyMsg{Type: tea.KeyLeft})
+	if _, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlD}); isQuit(cmd) || m.st.Prompt != "a" {
+		t.Fatalf("⌃d in a box with text deletes forward: %q", m.st.Prompt)
+	}
+	m.st.Prompt = ""
+	m.syncCaret()
+	if _, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlD}); !isQuit(cmd) {
+		t.Fatal("⌃d on an empty box quits")
+	}
+}
