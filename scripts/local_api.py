@@ -82,6 +82,7 @@ LOCAL_METHODS = {
     "log.follow": (False, "Tail of a job's log as plain text; without an id, the job worth watching (params: id, lines)"),
     "shell.parent": (False, "The command that runs the parent CLI in a board pane, or why there is none (params: parent)"),
     "env.shell": (False, "The dc exec --no-start command for an interactive shell in a job's container, or why there is none (params: id)"),
+    "job.thread": (False, "A helper's thread with the parent: its brief, what it did, messages, its question and result (params: id)"),
     "job.diff": (False, "What one job changed, as a unified diff with per-file counts (params: id)"),
     "job.evidence": (False, "Evidence drawer for one job: where it ran, change, contract, checks, ports (params: id)"),
     "fleet.status": (False, "Fleet panel: workspace containers on the engine with observed CPU and memory, ready to render"),
@@ -188,7 +189,7 @@ class Api:
             return self._board_snapshot(request_id, params)
         if method == "workspace.status":
             return self._workspace(request_id, params)
-        if method in ("job.evidence", "job.diff", "fleet.status", "settings.view", "env.recovery", "env.recover", "log.follow", "env.shell", "shell.parent",
+        if method in ("job.evidence", "job.diff", "job.thread", "fleet.status", "settings.view", "env.recovery", "env.recover", "log.follow", "env.shell", "shell.parent",
                       "chat.status", "chat.transcript", "chat.send", "chat.cancel", "chat.answer", "chat.commands", "chat.models", "chat.parent", "ui.theme", "ui.set_theme", "settings.app", "settings.set",
                       "applies.today", "applies.undo", "applies.redo", "applies.hold", "ship.status", "ship.run"):
             return self._environment(request_id, method, params)
@@ -277,6 +278,12 @@ def _environment(self, request_id, method, params):
                 return _reply(request_id, error=_error(INVALID_PARAMS, "id must be a job id"))
             import job_evidence_view
             result = job_evidence_view.build(self.repo, job_id)
+        elif method == "job.thread":
+            job_id = params.get("id")
+            if not isinstance(job_id, str) or not job_id:
+                return _reply(request_id, error=_error(INVALID_PARAMS, "id must be a job id"))
+            import job_thread
+            result = job_thread.thread(self.repo, job_id)
         elif method == "job.diff":
             job_id = params.get("id")
             if not isinstance(job_id, str) or not job_id:

@@ -110,6 +110,22 @@ type ChatStatus struct {
 	} `json:"sessions"`
 }
 
+// JobThread is job.thread: a helper's thread with the parent, in order.
+type JobThread struct {
+	JobID   string `json:"job_id"`
+	Worker  string `json:"worker"`
+	Parent  string `json:"parent"`
+	Title   string `json:"title"`
+	Running bool   `json:"running"`
+	Ending  string `json:"ending"`
+	Entries []struct {
+		Who  string `json:"who"`
+		Kind string `json:"kind"` // brief, activity, message, ask, result
+		Text string `json:"text"`
+		At   string `json:"at"`
+	} `json:"entries"`
+}
+
 // JobDiff is job.diff: what one job changed, as a unified diff with per-file counts.
 type JobDiff struct {
 	JobID  string `json:"job_id"`

@@ -27,6 +27,7 @@ type Source interface {
 	JobEvidence(id string, timeout time.Duration) (*view.Evidence, error)
 	Recover(confirmID string, timeout time.Duration) (string, error)
 	Log(id string, lines int, timeout time.Duration) (*view.LogReply, error)
+	JobThread(id string, timeout time.Duration) (*view.JobThread, error)
 	Shell(id string, timeout time.Duration) (*view.ShellPlan, error)
 	Parent(name string, timeout time.Duration) (*view.ShellPlan, error)
 	ChatStatus(timeout time.Duration) (*view.ChatStatus, error)
@@ -92,9 +93,10 @@ type evidenceMsg struct {
 }
 
 type logMsg struct {
-	log *view.LogReply
-	err error
-	at  time.Time
+	log    *view.LogReply
+	thread *view.JobThread // a helper's thread, when the server has job.thread
+	err    error
+	at     time.Time
 }
 
 // Pane is a program running on an emulated terminal. *term.Pane is the real one; tests use a fake.
@@ -677,6 +679,12 @@ func (m *Model) fetchLog(force bool) tea.Cmd {
 		id, rows = m.st.App.Thread, 500 // the most log.follow gives: a thread scrolls back through it
 	}
 	return func() tea.Msg {
+		if thread {
+			// the thread as a conversation; an older server without job.thread shows the helper's log instead
+			if t, err := src.JobThread(id, callTimeout); err == nil && t != nil {
+				return logMsg{thread: t, log: &view.LogReply{}, at: time.Now()}
+			}
+		}
 		l, err := src.Log(id, rows, callTimeout)
 		return logMsg{log: l, err: err, at: time.Now()}
 	}
@@ -1204,7 +1212,7 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.st.LogE = msg.err.Error()
 			return m, nil
 		}
-		m.st.Log, m.st.LogE = msg.log, ""
+		m.st.Log, m.st.LogE, m.st.ThreadView = msg.log, "", msg.thread
 	case shellPlanMsg:
 		switch {
 		case msg.err != nil:
