@@ -32,6 +32,7 @@ type AppState struct {
 	Help                 bool
 	AnswerDeny           bool     // the answer chip chosen with ← →: deny, else allow
 	ConfirmLead          string   // a question u or h asked: confirmed with ⏎; the letter typed into the reply box, or "\x00"
+	Splash               int      // the splash's frame while rig shell opens; 0 once it is gone
 	Thread               string   // the job whose thread (its log) is open, from the panel
 	Files                []string // the repository's tracked files, for Ctrl-K
 	File                 string   // the file the code tab shows
@@ -280,6 +281,9 @@ func AppFrame(v *view.View, st State, w, h int) []string {
 			lines[len(lines)-1] = center(st.paint(colAmber, clean(st.Message)), w)
 		}
 		return lines
+	}
+	if a.Splash > 0 {
+		return splashScreen(v, st, w, h)
 	}
 	if a.Welcome {
 		return confirm(welcomeScreen(st, w, h))
@@ -1117,4 +1121,52 @@ func appliedCards(v *view.View, st State) []view.Row {
 			Second: fmt.Sprintf("%s · applied · %d files +%d −%d", r.Worker, r.Files, r.Added, r.Deleted)})
 	}
 	return out
+}
+
+// splashScreen is the design's rig mark while rig shell opens: the stem is the parent, the three dots its helpers,
+// pulsing in turn, left to right; then the wordmark and what is happening. Ghostty and kitty draw the mark itself.
+func splashScreen(v *view.View, st State, w, h int) []string {
+	a := st.App
+	dots := []string{"#6d4aff", "#0d9488", "#db2777"}
+	pulse := (a.Splash / 3) % 3
+	dot := func(i int) string {
+		if i == pulse {
+			return st.paint(dots[i], "●")
+		}
+		return st.paint(colBorder, "●")
+	}
+	mark := []string{ // the stem with its arc, in blocks, and the dots on the arc's level
+		st.bold("██ ▄▄▄▄▄") + "  " + dot(0) + " " + dot(1) + " " + dot(2),
+		st.bold("██▀▀    "),
+		st.bold("██      "),
+		st.bold("██      "),
+	}
+	if st.Logos && st.Styled {
+		if rows := markRowsFor(st.Theme); rows != nil {
+			mark = rows
+		}
+	}
+	status := "starting the local API"
+	if a.Repo != "" {
+		status = "opening " + appProject(v, a)
+	}
+	frame := spinFrames[a.Splash%len(spinFrames)]
+	body := append(append([]string(nil), mark...), "", "", st.bold("rig"), "", st.faint(string(frame)+" "+status))
+	top := max(0, (h-len(body))/2-1)
+	lines := make([]string, 0, h)
+	for i := 0; i < top; i++ {
+		lines = append(lines, fit("", w))
+	}
+	markW := lipgloss.Width(mark[0])
+	for i, l := range body {
+		pad := (w - lipgloss.Width(l)) / 2
+		if i < len(mark) {
+			pad = (w - markW) / 2 // the mark's rows share one left edge
+		}
+		lines = append(lines, fit(strings.Repeat(" ", max(0, pad))+l, w))
+	}
+	for len(lines) < h {
+		lines = append(lines, fit("", w))
+	}
+	return lines[:h]
 }

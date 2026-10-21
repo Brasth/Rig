@@ -24,7 +24,7 @@ An optional terminal layout for working with a parent agent while Rig runs worke
 
 ## The app (rig shell's default)
 
-`rig shell` opens the design's ADE screens: one conversation with the parent in the middle of the window, as codex and grok draw theirs, in the design's light theme unless you saved another (Settings › Theme, `/theme`). The board below is still there: `rig shell --layout board`, or `⌃k` › the board.
+`rig shell` (or `rig agent`, `rig-agent`, `agent-rig`) opens the design's ADE screens, after a splash of the rig mark while it starts (the stem is the parent, the three dots its helpers, pulsing in turn; Ghostty and kitty draw the mark itself; any key skips it, `RIG_SPLASH=0` turns it off): one conversation with the parent in the middle of the window, as codex and grok draw theirs, in the design's light theme unless you saved another (Settings › Theme, `/theme`). The board below is still there: `rig shell --layout board`, or `⌃k` › the board.
 
 - **Agent logos:** each agent is drawn as the design's tile: its logo on a white tile ringed in its colour (claude, codex, opencode, pi, cursor, grok), three cells wide. Ghostty and kitty draw them, with the kitty graphics protocol's Unicode placeholders, also inside the tmux `rig shell` opens (it turns on `allow-passthrough` for its window). Other terminals, and agents without a logo, get the design's fallback: the agent's letter on its colour. `RIG_LOGOS=1` or `0` forces either. The logos are their owners' marks, used to name their agents.
 - **Top bar:** the mark, the repo and branch, the parent with its tile; the three tabs `1 conversation`, `2 changes`, `3 code`; how many helpers are working, `⌃k` and `⇥ panel`.

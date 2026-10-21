@@ -99,13 +99,13 @@ func TestTheWriterSendsTheTilesOnTheAlternateScreenAndWhenAsked(t *testing.T) {
 		t.Fatal("not before the alternate screen")
 	}
 	w.Write([]byte("\x1b[?1049h\x1b[2J"))
-	if strings.Count(read(), "a=T,U=1") != len(logoIDs) {
+	if strings.Count(read(), "a=T,U=1") != len(logoIDs)+len(markIDs) {
 		t.Fatal("sent once on entering the alternate screen")
 	}
 	w.Write([]byte("frame"))
 	ResendLogos()
 	w.Write([]byte("frame after a resize"))
-	if strings.Count(read(), "a=T,U=1") != 2*len(logoIDs) {
+	if strings.Count(read(), "a=T,U=1") != 2*(len(logoIDs)+len(markIDs)) {
 		t.Fatal("sent again when asked")
 	}
 }

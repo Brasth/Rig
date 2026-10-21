@@ -243,6 +243,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	switch *layout {
 	case "app":
 		model.SetApp(*repo)
+		model.SetSplash(os.Getenv("RIG_SPLASH") != "0") // the design's rig mark while the shell opens
 	case "", "board":
 	default:
 		fmt.Fprintln(stderr, "rig-shell: --layout must be app or board")

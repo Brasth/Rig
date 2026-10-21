@@ -72,6 +72,7 @@ usage: rig <command> [args]
   tui
   env up | down | status | ports [--json]   # workspace container through dc-cli
   shell [--parent NAME] [--parent-cmd CMD] [--detach] | shell kill | shell print | shell build   # parent, board and logs in tmux
+  agent | rig-agent | agent-rig                               # the same as rig shell
   api serve | ensure | call METHOD [JSON] | methods | doc   # local JSON-RPC API v1 (docs/local-api.md)
   memory [show]
   memory add "standing fact"
@@ -483,9 +484,12 @@ PY
   fi
 
   mkdir -p "$HOME/.local/bin"
-  if [[ ! -e "$HOME/.local/bin/rig" || -L "$HOME/.local/bin/rig" ]]; then
-    ln -sfn "$dest/bin/rig" "$HOME/.local/bin/rig"
-  fi
+  local link
+  for link in rig rig-agent agent-rig; do # rig-agent and agent-rig open the shell
+    if [[ ! -e "$HOME/.local/bin/$link" || -L "$HOME/.local/bin/$link" ]]; then
+      ln -sfn "$dest/bin/rig" "$HOME/.local/bin/$link"
+    fi
+  done
   if [[ "$shell_ui" -eq 1 ]]; then
     python3 "$dest/scripts/ui_shell.py" enable ${shell_args[@]+"${shell_args[@]}"}
   fi
@@ -1567,6 +1571,11 @@ cmd_run() {
 
 main() {
   local cmd="${1:-}"
+  # rig-agent and agent-rig (links to this script) and `rig agent` open the shell, as `rig shell` does
+  case "$(basename "$0")" in
+    rig-agent|agent-rig) cmd="shell"; set -- shell "$@" ;;
+  esac
+  [[ "$cmd" != "agent" ]] || cmd="shell"
   shift || true
   if [[ -e "$(rig_home)/updates/pending.json" || -L "$(rig_home)/updates/pending.json" ]]; then
     case "$cmd" in update|help|-h|--help|"") ;; *)

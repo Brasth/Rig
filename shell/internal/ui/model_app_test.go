@@ -833,3 +833,35 @@ func TestThePreviewPageKeepsItsKeysAtTheFoot(t *testing.T) {
 		t.Fatalf("the keys on the last line:\n%s", strings.Join(lines, "\n"))
 	}
 }
+
+func TestTheSplashShowsTheMarkWhileTheShellOpens(t *testing.T) {
+	m, _ := appModel(t)
+	clock := time.Now()
+	m.now = func() time.Time { return clock }
+	m.lastOK = time.Time{}
+	m.SetSplash(true)
+	out := appScreen(m)
+	for _, want := range []string{"██ ▄▄▄▄▄", "rig", "opening my-repo"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "What should we work on") {
+		t.Fatal("the splash covers the screen")
+	}
+	clock = clock.Add(2 * time.Second)
+	m.Update(splashTickMsg{})
+	if m.st.App.Splash != 2 {
+		t.Fatalf("the server has not answered: the splash stays and pulses on: %d", m.st.App.Splash)
+	}
+	m.lastOK = clock
+	m.Update(splashTickMsg{})
+	if m.st.App.Splash != 0 {
+		t.Fatal("it gives way once the server answered")
+	}
+	m.SetSplash(true)
+	press(m, "x")
+	if m.st.App.Splash != 0 || m.st.Prompt != "" {
+		t.Fatal("a key skips it, and is not typed")
+	}
+}

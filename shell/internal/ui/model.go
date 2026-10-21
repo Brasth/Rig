@@ -218,6 +218,7 @@ type Model struct {
 	tdLast      time.Time
 	ringer      func()                   // rings the terminal bell; tests replace it
 	notifier    func(title, text string) // a desktop notice through the terminal (OSC 9 and 777); tests replace it
+	splashFrom  time.Time                // when the splash began
 	seenApplied map[string]bool          // the applied work done today already known, so only new applies notify
 	seenJobs    map[string]bool
 	themeFixed  bool // rig shell --theme chose the theme for this board; the saved one is not loaded
@@ -247,7 +248,11 @@ func randomKey() string {
 
 func (m *Model) Init() tea.Cmd {
 	if m.appOn() {
-		return tea.Batch(m.fetch(), tick(), m.fetchTheme(), m.fetchAppSettings())
+		cmds := []tea.Cmd{m.fetch(), tick(), m.fetchTheme(), m.fetchAppSettings()}
+		if m.st.App.Splash > 0 {
+			cmds = append(cmds, splashTick())
+		}
+		return tea.Batch(cmds...)
 	}
 	return tea.Batch(m.fetch(), tick(), m.fetchTheme())
 }
@@ -921,6 +926,15 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Batch(m.spin(), m.bell())
 		}
 		return m, m.spin()
+	case splashTickMsg:
+		if a := m.st.App; a != nil && a.Splash > 0 {
+			if m.splashDone() {
+				a.Splash = 0
+				return m, nil
+			}
+			a.Splash++
+			return m, splashTick()
+		}
 	case todayMsg:
 		m.tdLast = m.now()
 		if msg.err == nil {

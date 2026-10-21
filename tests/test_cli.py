@@ -36,6 +36,34 @@ def run_rig(repo: Path, *args: str, env: dict | None = None, stdin: str | None =
     )
 
 
+class ShellAliasesCli(unittest.TestCase):
+    """rig agent, rig-agent and agent-rig open the shell, as rig shell does."""
+
+    def setUp(self):
+        self.td = tempfile.TemporaryDirectory()
+        self.repo = Path(self.td.name) / "repo"
+        (self.repo / ".git").mkdir(parents=True)
+        self.assertEqual(run_rig(self.repo, "init").returncode, 0)
+        self.links = Path(self.td.name) / "links"
+        self.links.mkdir()
+        for name in ("rig-agent", "agent-rig"):
+            (self.links / name).symlink_to(RIG)
+
+    def tearDown(self):
+        self.td.cleanup()
+
+    def test_every_name_prints_the_same_shell(self):
+        env = {"RIG_SHELL_BIN": "/bin/true"}
+        want = run_rig(self.repo, "shell", "print", "--no-tmux", env=env)
+        self.assertEqual(want.returncode, 0, want.stderr)
+        self.assertEqual(run_rig(self.repo, "agent", "print", "--no-tmux", env=env).stdout, want.stdout)
+        for name in ("rig-agent", "agent-rig"):
+            merged = {**os.environ, "RIG_HOME": str(ROOT), "RIG_INSTALL_TRANSACTION": "1", "RIG_SKIP_UPDATE_CHECK": "1", **env}
+            done = subprocess.run([str(self.links / name), "print", "--no-tmux"], cwd=self.repo, env=merged, text=True,
+                                  capture_output=True, check=False)
+            self.assertEqual((done.returncode, done.stdout), (0, want.stdout), done.stderr)
+
+
 class ProjectLifecycleCli(unittest.TestCase):
     def setUp(self):
         self.td = tempfile.TemporaryDirectory()

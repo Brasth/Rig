@@ -2,6 +2,10 @@
 
 
 
+
+## A splash, rig-agent, and Settings that apply on ⏎ (2026-10-21)
+
+`rig shell` opens on the design's rig mark while it starts: the stem and three dots pulsing in turn, the wordmark and what it is opening; Ghostty and kitty draw the mark as an image, other terminals in blocks; any key skips it and `RIG_SPLASH=0` turns it off. `rig agent`, `rig-agent` and `agent-rig` open the shell as `rig shell` does (`rig setup` links the two commands next to `rig`). In Settings, `←→` now only picks a value, shown underlined, and `⏎` applies it, so the theme no longer changes as you move.
 ## Every ADE screen checked against the design again (2026-10-21)
 
 Each terminal screen was compared with its design board and brought in line: cards and panels on a white surface with the screen faded behind overlays, the agents panel full height with its own keys and today's allowed commands, the palette, the new-helper card, the launcher (light theme, `~/code/`, `⌃n` new project, running agents per project), the first conversation (repo facts, `@` to add a file), changes, done today, ship, search (case, word, regex, path filter, `⌃r` replace after a question), a preview page (markdown, tables with `/` to filter, pictures inline in Ghostty and kitty), Settings in the design's layout with new real settings (when rig starts, ship default, tab size, which events notify you and how), the no-agent screen and the problem screens.
