@@ -1201,11 +1201,17 @@ func (m *Model) paletteKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			p.Query = string(r[:len(r)-1])
 		}
 		p.Sel = 0
+		if p.Resume {
+			return m, m.searchChats(p.Query)
+		}
 	case tea.KeyRunes, tea.KeySpace:
 		p.Query += string(k.Runes)
 		p.Sel = 0
 		if strings.HasPrefix(p.Query, "#") {
 			return m, m.indexCmd()
+		}
+		if p.Resume {
+			return m, m.searchChats(p.Query)
 		}
 	case tea.KeyTab:
 		if p.Problems && len(items) > 0 {

@@ -40,6 +40,22 @@ func resumeItems(st State, q string) []paletteItem {
 		}
 		out = append(out, paletteItem{"conversations", title, detail, "resume:" + s.ID})
 	}
+	if q != "" && st.App.FoundQ == q {
+		listed := map[string]bool{}
+		for _, it := range out {
+			listed[strings.TrimPrefix(it.Action, "resume:")] = true
+		}
+		for _, h := range st.App.Found {
+			if listed[h.Session] {
+				continue
+			}
+			title := clean(h.Title)
+			if title == "" {
+				title = "(no message yet)"
+			}
+			out = append(out, paletteItem{"found in messages", title, h.Where + ": “" + clean(h.Snippet) + "”", "resume:" + h.Session})
+		}
+	}
 	if len(out) == 0 {
 		detail := "no conversation matches"
 		if q == "" {
@@ -62,15 +78,21 @@ func (m *Model) openResume() tea.Cmd {
 func (m *Model) resumeSession(id string) tea.Cmd {
 	var found bool
 	var parent string
+	title := shortTitle(m.st.ChatSessions, id)
 	for _, s := range m.st.ChatSessions {
 		if s.ID == id {
 			found, parent = true, s.Parent
 		}
 	}
+	for _, h := range m.st.App.Found { // one an older search found, past the sixty listed
+		if !found && h.Session == id {
+			found, parent, title = true, h.Parent, fit(clean(h.Title), 50)
+		}
+	}
 	if !found {
 		return nil
 	}
-	return m.openSession(id, parent, shortTitle(m.st.ChatSessions, id))
+	return m.openSession(id, parent, strings.TrimRight(title, " "))
 }
 
 // openSession makes a conversation the one the box talks to, with its own parent.
@@ -101,4 +123,42 @@ func shortTitle(rows []view.ChatSession, id string) string {
 		}
 	}
 	return id
+}
+
+type chatFoundMsg struct {
+	q    string
+	hits []view.ChatHit
+	err  error
+}
+
+// searchChats looks in the messages of every conversation for what is typed in /resume. One search runs at a time; when
+// it ends with the box changed, the next one starts.
+func (m *Model) searchChats(q string) tea.Cmd {
+	q = strings.ToLower(strings.TrimSpace(q))
+	a := m.st.App
+	if len([]rune(q)) < 2 {
+		a.Found, a.FoundQ = nil, ""
+		return nil
+	}
+	if m.searching || a.FoundQ == q {
+		return nil
+	}
+	m.searching = true
+	src := m.src
+	return func() tea.Msg {
+		hits, err := src.ChatSearch(q, callTimeout)
+		return chatFoundMsg{q: q, hits: hits, err: err}
+	}
+}
+
+func (m *Model) onChatFound(msg chatFoundMsg) tea.Cmd {
+	m.searching = false
+	a := m.st.App
+	if msg.err == nil {
+		a.Found, a.FoundQ = msg.hits, msg.q
+	}
+	if p := a.Palette; p != nil && p.Resume && msg.err == nil && strings.ToLower(strings.TrimSpace(p.Query)) != msg.q {
+		return m.searchChats(p.Query) // typed on meanwhile
+	}
+	return nil
 }

@@ -68,6 +68,8 @@ type fakeSource struct {
 	chatAnswers     [][3]string
 	chatAnswerErr   error
 	chatCancelled   []string
+	searches        []string
+	hits            []view.ChatHit
 	forks           []string
 	forked          *view.ChatForked
 	forkErr         error
@@ -199,6 +201,10 @@ func (f *fakeSource) ChatSetParent(name string, _ time.Duration) error {
 func (f *fakeSource) ChatCancel(session string, _ time.Duration) error {
 	f.chatCancelled = append(f.chatCancelled, session)
 	return nil
+}
+func (f *fakeSource) ChatSearch(query string, _ time.Duration) ([]view.ChatHit, error) {
+	f.searches = append(f.searches, query)
+	return f.hits, nil
 }
 func (f *fakeSource) ChatFork(session string, turn int, _ time.Duration) (*view.ChatForked, error) {
 	f.forks = append(f.forks, fmt.Sprintf("%s %d", session, turn))

@@ -385,6 +385,95 @@ def _updated(repo, session: str) -> float:
     return max(stamps) if stamps else 0.0
 
 
+SEARCH_ROWS = 20
+SEARCH_ROLES = frozenset({"user", "assistant", "summary"})
+
+
+def search(repo, query: str) -> list[dict]:
+    """The conversations whose messages (yours and the parent's) contain the words of the query, the one used last first:
+    {session, parent, title, updated, where: who said it, snippet: the line around the first hit}."""
+    require_enabled(repo)
+    words = [w for w in str(query or "").lower().split() if w][:6]
+    if not words or len("".join(words)) < 2:
+        return []
+    found = []
+    for meta in sessions(repo):
+        path = chat_dir(repo) / f"{meta['id']}.jsonl"
+        try:
+            lines = path.read_text(errors="replace").splitlines()
+        except OSError:
+            continue
+        for line in lines:
+            try:
+                row = json.loads(line)
+            except ValueError:
+                continue
+            text = row.get("text") if isinstance(row, dict) else None
+            if not isinstance(text, str) or row.get("role") not in SEARCH_ROLES:
+                continue
+            low = text.lower()
+            if all(w in low for w in words):
+                at = max(0, low.find(words[0]) - 30)
+                snippet = " ".join(text[at:at + 110].split())
+                found.append({"session": meta["id"], "parent": meta["parent"], "title": _title(repo, meta["id"]),
+                              "updated": _updated(repo, meta["id"]), "where": "you" if row["role"] == "user" else meta["parent"],
+                              "snippet": snippet})
+                break
+    return sorted(found, key=lambda row: row["updated"], reverse=True)[:SEARCH_ROWS]
+
+
+EXPORT_COMMAND = re.compile(r"/export(?:\s+(\S.*))?\s*")
+EXPORT_TOOLS = {"tool": "▸", "result": "  ↳", "result-error": "  ↳ error:"}
+
+
+def export(repo, session: str, path: str = "") -> dict:
+    """Write a conversation as markdown: the messages, the tools the parent used and the files each turn changed. The file is
+    .rig/exports/ID.md unless a path inside the project is given."""
+    repo = Path(repo).resolve()
+    require_enabled(repo)
+    meta = read_meta(repo, session)
+    try:
+        lines = (chat_dir(repo) / f"{meta['id']}.jsonl").read_text(errors="replace").splitlines()
+    except OSError:
+        lines = []
+    out = [f"# {_title(repo, meta['id']) or 'Conversation'}", "",
+           f"*{meta['id']} · {meta['parent']} · {meta.get('turns', 0)} turn{'s' if meta.get('turns', 0) != 1 else ''}"
+           f" · exported {time.strftime('%Y-%m-%d %H:%M', time.gmtime())} UTC*", ""]
+    who = meta.get("first_parent") or meta["parent"]
+    count = 0
+    for line in lines:
+        try:
+            row = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(row, dict) or not isinstance(row.get("text"), str):
+            continue
+        role, text = str(row.get("role", "")), row["text"]
+        if role == "switch" and " → " in text:
+            who = text.split(" → ", 1)[1]
+        count += 1
+        if role == "user":
+            out += ["## You", "", text, ""]
+        elif role == "assistant":
+            out += [f"## {who}", "", text, ""]
+        elif role in EXPORT_TOOLS:
+            out += [f"{EXPORT_TOOLS[role]} `{' '.join(text.split())[:200]}`", ""]
+        elif role == "diff":
+            head, _, body = text.partition("\n")
+            out += [f"**changed {head}**", "", "```diff", body, "```", ""]
+        elif role == "summary":
+            out += ["> **Summary carried over**", ">", *["> " + part for part in text.splitlines()], ""]
+        elif role in ("system", "switch", "error"):
+            out += [f"*{role}: {' '.join(text.split())}*", ""]
+    target = Path(path) if path else Path(".rig") / "exports" / f"{meta['id']}.md"
+    target = (repo / target).resolve()
+    if repo not in target.parents or target.parts[len(repo.parts)] == ".git":
+        raise ChatError("an export goes to a file inside the project")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("\n".join(out))
+    return {"session": meta["id"], "path": str(target.relative_to(repo)), "entries": count}
+
+
 def new_session(repo, parent: str) -> dict:
     folder = chat_dir(repo)
     folder.mkdir(parents=True, exist_ok=True)
@@ -739,6 +828,12 @@ def send(repo, message: str, session: str = "", parent: str = "") -> dict:
             note += " (" + meta["parent"] + "'s headless mode does not ask for permission at all)"
         append(repo, meta["id"], "system", note)
         return {"session": meta["id"], "parent": meta["parent"], "state": meta["state"], "turn": meta.get("turns", 0), "mode": now}
+    exported = EXPORT_COMMAND.fullmatch(message)
+    if exported:
+        result = export(repo, meta["id"], (exported.group(1) or "").strip())
+        append(repo, meta["id"], "system", f"exported {result['entries']} entries to {result['path']}")
+        return {"session": meta["id"], "parent": meta["parent"], "state": meta["state"], "turn": meta.get("turns", 0),
+                "exported": result["path"]}
     forked = FORK_COMMAND.fullmatch(message)
     if forked:
         if meta["state"] == "running":

@@ -37,6 +37,7 @@ type Source interface {
 	ChatTranscript(session string, tail int, timeout time.Duration) (*view.ChatTranscript, error)
 	ChatSend(message, session, parent string, timeout time.Duration) (*view.ChatStarted, error)
 	ChatCancel(session string, timeout time.Duration) error
+	ChatSearch(query string, timeout time.Duration) ([]view.ChatHit, error)
 	ChatFork(session string, turn int, timeout time.Duration) (*view.ChatForked, error)
 	ChatRewind(session string, turn int, path string, dry, undo bool, timeout time.Duration) (*view.ChatRewound, error)
 	ChatAnswer(session, askID, decision string, timeout time.Duration) error
@@ -221,6 +222,7 @@ type Model struct {
 	pendingI    string // id for a confirmed stop
 	pickerSeen  bool   // the picker opened by itself once, for a project with no parent
 	chatAdopted bool   // a conversation was picked up, or one was left on purpose: none is picked up again
+	searching   bool   // a /resume message search is out; the next waits for it
 	framed      bool   // the window has room for the mockup's border around the board
 	winW, winH  int    // the window; the app uses all of it
 	dfBusy      bool
@@ -1333,6 +1335,8 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.chLast = time.Time{}
 		return m, m.fetchChat(true)
+	case chatFoundMsg:
+		return m, m.onChatFound(msg)
 	case forkedMsg:
 		return m, m.onForked(msg)
 	case rewindPlanMsg:

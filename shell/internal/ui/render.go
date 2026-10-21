@@ -143,6 +143,7 @@ var SlashCommands = []SlashCommand{
 	{"/compact", " [FOCUS]", "continue in a fresh conversation from the parent's own summary", false, false},
 	{"/resume", "", "open an earlier conversation again", false, false},
 	{"/mode", " [ask|edits|plan]", "how much the parent may do without asking (⇧Tab goes round)", false, false},
+	{"/export", " [FILE]", "write this conversation as markdown (default .rig/exports/ID.md)", false, false},
 	{"/fork", "", "branch from a turn into a new conversation", false, false},
 	{"/rewind", "", "put files back as they were before a turn", false, false},
 	{"/model", "", "the model the parent talks with (or /model NAME [LEVEL])", false, false},

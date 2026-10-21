@@ -557,6 +557,42 @@ class Turns(Base):
         other = rig_chat.send(self.repo, "/mode edits", parent="grok")
         self.assertIn("grok's headless mode does not ask for permission", rig_chat.transcript(self.repo, other["session"])["entries"][-1]["text"])
 
+    def test_search_finds_conversations_by_what_was_said_in_them(self):
+        stand_in(self.bin, "claude", CLAUDE_STREAM)
+        first = rig_chat.send(self.repo, "please fix the flaky payment test")["session"]
+        self.wait_idle(first)
+        second = rig_chat.send(self.repo, "rename the config loader")["session"]
+        self.wait_idle(second)
+        rows = rig_chat.search(self.repo, "PAYMENT flaky")
+        self.assertEqual([(r["session"], r["where"]) for r in rows], [(first, "you")])
+        self.assertIn("flaky payment test", rows[0]["snippet"])
+        self.assertEqual(rows[0]["title"], "please fix the flaky payment test")
+        answered = rig_chat.search(self.repo, "it says one")  # what the stand-in parent answers
+        self.assertEqual({r["where"] for r in answered}, {"claude"}, [r for r in answered])
+        self.assertEqual(rig_chat.search(self.repo, "x"), [], "one letter is not a search")
+        self.assertEqual(rig_chat.search(self.repo, "nothing like this"), [])
+
+    def test_export_writes_the_conversation_as_markdown_inside_the_project(self):
+        if shutil.which("git") is None:
+            self.skipTest("no git here")
+        subprocess.run(["git", "init", "-q", str(self.repo)], check=True)
+        (self.repo / ".gitignore").write_text(".rig/\n")
+        self._editing_parent("open('a.py', 'w').write('two\\n')\n")
+        session = rig_chat.send(self.repo, "change a.py")["session"]
+        self.wait_idle(session)
+        result = rig_chat.send(self.repo, "/export", session)
+        self.assertEqual(result["exported"], f".rig/exports/{session}.md")
+        text = (self.repo / result["exported"]).read_text()
+        self.assertTrue(text.startswith("# change a.py\n"), text[:60])
+        self.assertIn("## You\n\nchange a.py", text)
+        self.assertIn("**changed a.py +1 −0**\n\n```diff", text)
+        self.assertEqual(len(self.calls()), 1, "exporting starts no turn")
+        rig_chat.send(self.repo, "/export notes/chat.md", session)
+        self.assertTrue((self.repo / "notes" / "chat.md").is_file())
+        for bad in ("../out.md", "/tmp/out.md", ".git/x"):
+            with self.assertRaisesRegex(rig_chat.ChatError, "inside the project"):
+                rig_chat.export(self.repo, session, bad)
+
     def test_a_long_patch_and_many_files_are_cut_short(self):
         files = rig_chat.turn_changes(self.repo, "", "x")
         self.assertEqual(files, [], "no trees, no changes")

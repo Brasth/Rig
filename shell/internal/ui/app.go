@@ -96,10 +96,12 @@ type AppState struct {
 	Complete             *completion // the words that complete the one being typed
 	noComplete           pos         // the word esc dismissed the list for: where it starts, and what was typed of it
 	noCompleteWord       string
-	ColOff               int         // cells scrolled off the left while editing, so the cursor stays in view
-	Wrap                 bool        // ⌥z: long lines wrap while reading
-	Recent               []string    // the files opened lately, newest first, for ⌃p
-	SymIndex             *symIndex   // every symbol of the repository, for # in the palette
+	ColOff               int            // cells scrolled off the left while editing, so the cursor stays in view
+	Wrap                 bool           // ⌥z: long lines wrap while reading
+	Recent               []string       // the files opened lately, newest first, for ⌃p
+	SymIndex             *symIndex      // every symbol of the repository, for # in the palette
+	Found                []view.ChatHit // /resume: the conversations with a message that matches what was typed (FoundQ)
+	FoundQ               string
 	Tasks                []taskItem  // the repository's scripts and targets, for ⌃k › run a task
 	FileLog              []gitCommit // the commits that touched the open file, for l
 	FileLogFor           string

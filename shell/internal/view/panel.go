@@ -117,6 +117,16 @@ type ChatSession struct {
 	Updated float64 `json:"updated"` // when it was last used, as unix seconds
 }
 
+// ChatHit is a conversation with a message that matches a search (chat.search): who said it and the words around it.
+type ChatHit struct {
+	Session string  `json:"session"`
+	Parent  string  `json:"parent"`
+	Title   string  `json:"title"`
+	Updated float64 `json:"updated"`
+	Where   string  `json:"where"` // "you", or the parent's name
+	Snippet string  `json:"snippet"`
+}
+
 // JobProblems is job.problems: what a job's failed checks found, as an IDE's Problems view lists them.
 type JobProblems struct {
 	JobID    string       `json:"job_id"`

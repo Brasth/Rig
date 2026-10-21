@@ -298,6 +298,17 @@ func (c *Client) ChatFork(session string, turn int, timeout time.Duration) (*vie
 	return &out, nil
 }
 
+// ChatSearch finds the conversations with a message that contains the words of query.
+func (c *Client) ChatSearch(query string, timeout time.Duration) ([]view.ChatHit, error) {
+	var out struct {
+		Rows []view.ChatHit `json:"rows"`
+	}
+	if err := c.Call("chat.search", map[string]any{"query": query}, timeout, &out); err != nil {
+		return nil, err
+	}
+	return out.Rows, nil
+}
+
 // JobDiff is what one job changed (job.diff).
 func (c *Client) JobDiff(id string, timeout time.Duration) (*view.JobDiff, error) {
 	var out view.JobDiff
