@@ -67,7 +67,7 @@ func TestZonesAreTakenOutOfTheFrameAndTheHoveredOneIsUnderlined(t *testing.T) {
 		t.Fatalf("a layer alone is not a click target: %q", id)
 	}
 	hovered, _ := zonesOf([]string{line}, 4, 0)
-	if !strings.Contains(hovered[0], "\x1b[4m\x1b[1m\x1b[4mxy\x1b[0m\x1b[4mz\x1b[24m") {
+	if !strings.Contains(hovered[0], "\x1b[1m\x1b[4mxy\x1b[0m\x1b[4mz\x1b[24m") {
 		t.Fatalf("the hovered zone is underlined through its resets: %q", hovered[0])
 	}
 	if off := (State{}).zone("key:x", "s"); off != "s" {
@@ -351,5 +351,14 @@ func TestAWholeListRowIsNotUnderlinedOnHover(t *testing.T) {
 	out, _ = zonesOf([]string{row + " " + button}, ansi.StringWidth(ansi.Strip(row))+3, 0)
 	if !strings.Contains(out[0], "\x1b[4msettings\x1b[24m") {
 		t.Fatalf("a hovered button still is: %q", out[0])
+	}
+}
+
+func TestAHoveredRowUnderlinesItsTextNotItsPadding(t *testing.T) {
+	st := State{Mouse: true}
+	row := st.zone("row:tree:package.json", "    \x1b[1mpackage.json\x1b[0m        ")
+	out, _ := zonesOf([]string{row}, 6, 0)
+	if !strings.Contains(out[0], "    \x1b[1m\x1b[4mpackage.json\x1b[24m\x1b[0m        ") {
+		t.Fatalf("only the name is underlined: %q", out[0])
 	}
 }
