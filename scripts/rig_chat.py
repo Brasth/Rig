@@ -828,6 +828,15 @@ def send(repo, message: str, session: str = "", parent: str = "") -> dict:
             note += " (" + meta["parent"] + "'s headless mode does not ask for permission at all)"
         append(repo, meta["id"], "system", note)
         return {"session": meta["id"], "parent": meta["parent"], "state": meta["state"], "turn": meta.get("turns", 0), "mode": now}
+    kept = REMEMBER_COMMAND.fullmatch(message)
+    if kept:
+        result = remember(repo, kept.group(1) or "")
+        append(repo, meta["id"], "system", f"kept in {NOTES_FILE} ({result['lines']} notes): it goes with every conversation's first message")
+        return {"session": meta["id"], "parent": meta["parent"], "state": meta["state"], "turn": meta.get("turns", 0), "notes": result["lines"]}
+    if NOTES_COMMAND.fullmatch(message):
+        text = notes(repo)
+        append(repo, meta["id"], "system", (NOTES_FILE + ":\n" + text) if text else f"no notes yet: /remember NOTE keeps one in {NOTES_FILE}")
+        return {"session": meta["id"], "parent": meta["parent"], "state": meta["state"], "turn": meta.get("turns", 0)}
     exported = EXPORT_COMMAND.fullmatch(message)
     if exported:
         result = export(repo, meta["id"], (exported.group(1) or "").strip())
@@ -899,20 +908,48 @@ def send(repo, message: str, session: str = "", parent: str = "") -> dict:
     return {"session": meta["id"], "parent": meta["parent"], "state": "running", "turn": meta["turns"]}
 
 
-def cancel(repo, session: str) -> dict:
+def cancel(repo, session: str, why: str = "cancelled") -> dict:
     require_enabled(repo)
     meta = read_meta(repo, session)
     if meta["state"] != "running":
         return {"session": meta["id"], "state": meta["state"], "cancelled": False}
     pid = meta.get("runner_pid")
+    meta.update(state="idle", note=why)
+    _write_json(_meta_path(repo, meta["id"]), meta)  # before the signal: the runner reads it as it winds up
     try:
-        os.killpg(pid, signal.SIGTERM)  # the runner leads its own group, with the parent CLI inside it
-    except (ProcessLookupError, PermissionError, TypeError):
+        os.killpg(pid, signal.SIGTERM)  # the runner leads its own group, with the parent CLI inside it; the runner itself
+    except (ProcessLookupError, PermissionError, TypeError):  # survives the signal to note what the turn changed
         pass
-    meta.update(state="idle", note="cancelled")
-    _write_json(_meta_path(repo, meta["id"]), meta)
-    append(repo, meta["id"], "system", "cancelled")
+    append(repo, meta["id"], "system", why)
     return {"session": meta["id"], "state": "idle", "cancelled": True}
+
+
+STEER_NOTE = ("[Note from Rig: the user interrupted your previous turn with the message below. What you had done before the "
+              "interruption stands; what you had not finished was not done. Go on from the message.]")
+STEER_SECONDS = 10
+
+
+def steer(repo, session: str, message: str) -> dict:
+    """A message for the parent now, in the middle of its turn: the turn is stopped, what it changed so far is noted, and
+    the parent goes on from the message, told that it was interrupted. On an idle session it is a plain send."""
+    repo = Path(repo).resolve()
+    require_enabled(repo)
+    meta = read_meta(repo, session)
+    if meta["state"] == "running":
+        pid = meta.get("runner_pid")
+        cancel(repo, meta["id"], "interrupted")
+        deadline = time.monotonic() + STEER_SECONDS
+        while _alive(pid) and time.monotonic() < deadline:
+            time.sleep(0.05)  # the runner notes what the turn changed, then exits
+        if _alive(pid):
+            try:
+                os.killpg(pid, signal.SIGKILL)  # it is stuck: it must not write the next turn's state over ours
+            except (ProcessLookupError, PermissionError, TypeError):
+                pass
+        meta = read_meta(repo, meta["id"])
+        meta["notes"] = list(meta.get("notes") or []) + [STEER_NOTE]
+        _write_json(_meta_path(repo, meta["id"]), meta)
+    return send(repo, message, meta["id"])
 
 
 def turn_dir(repo, session) -> Path:
@@ -1129,6 +1166,7 @@ def run_codex_server(repo: Path, session: str, message: str, meta: dict, folder:
                                 env={**os.environ, "RIG_PARENT": "codex", "RIG_OWNER_SESSION": session})
     except OSError:
         return False, False, 0
+    _CHILD.append(proc)
     lines = _Lines(proc.stdout)
 
     def send(obj):
@@ -1180,6 +1218,8 @@ def run_codex_server(repo: Path, session: str, message: str, meta: dict, folder:
         while True:
             line = lines.get()
             if line is None:
+                if _was_stopped(repo, session):
+                    break
                 error = True
                 append(repo, session, "error", "codex mcp-server stopped before the turn finished")
                 written += 1
@@ -1377,6 +1417,47 @@ def _mentions(repo, parent: str, message: str) -> str:
     return message + ("\n\n" + "\n\n".join(blocks) if blocks else "")
 
 
+NOTES_FILE = ".rig/notes.md"
+NOTES_CHARS = 4000
+REMEMBER_COMMAND = re.compile(r"/remember(?:\s+(.*))?", re.S)
+NOTES_COMMAND = re.compile(r"/notes\s*")
+
+
+def notes_path(repo) -> Path:
+    return Path(repo).resolve() / NOTES_FILE
+
+
+def notes(repo) -> str:
+    """What the user keeps in .rig/notes.md for every conversation: project facts, conventions, things not to touch."""
+    try:
+        text = notes_path(repo).read_text(errors="replace").strip()
+    except OSError:
+        return ""
+    return text[:NOTES_CHARS] + ("\n…" if len(text) > NOTES_CHARS else "")
+
+
+def remember(repo, text: str) -> dict:
+    """Add a line to the notes; they go with the first message of every conversation from now on."""
+    text = " ".join(str(text or "").split())
+    if not text:
+        raise ChatError("/remember NOTE keeps NOTE for every conversation; /notes opens them")
+    path = notes_path(repo)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    had = path.read_text(errors="replace") if path.is_file() else ""
+    with path.open("a") as stream:
+        stream.write(("" if not had or had.endswith("\n") else "\n") + "- " + text + "\n")
+    return {"path": NOTES_FILE, "lines": sum(1 for l in path.read_text(errors="replace").splitlines() if l.strip())}
+
+
+def _with_notes(repo, meta: dict, message: str) -> str:
+    """The notes go with a parent's first message: once per native session for the parents that resume their own, with
+    every message for the others (which get the conversation with every message too)."""
+    text = notes(repo)
+    if not text or (meta["parent"] in RESUMES and meta.get("native")):
+        return message
+    return "[Project notes the user keeps in " + NOTES_FILE + "]\n" + text + "\n\n" + message
+
+
 def _last_user(repo, session: str) -> str:
     """What the last message said, on one line, to name a turn by."""
     try:
@@ -1482,9 +1563,32 @@ def rewind(repo, session: str, turn: int = 0, path: str = "", dry: bool = False,
     return result
 
 
+_CHILD: list = []  # the parent CLI the runner is waiting on, for the SIGTERM handler
+
+
+def _stop_child(*_) -> None:
+    """A cancel sends SIGTERM to the whole group; the runner itself only stops its child and goes on to note what the
+    turn changed and leave the state file right."""
+    for proc in _CHILD:
+        try:
+            proc.terminate()
+        except OSError:
+            pass
+
+
+def _was_stopped(repo, session: str) -> str:
+    """The reason a cancel wrote while the turn ran, if one did."""
+    try:
+        note = json.loads(_meta_path(repo, session).read_text()).get("note")
+    except (OSError, ValueError):
+        return ""
+    return note if note in ("cancelled", "interrupted") else ""
+
+
 def run_turn(repo, session: str) -> int:
     """The detached runner: spawn the parent in its headless mode and write what it says to the transcript."""
     repo = Path(repo).resolve()
+    signal.signal(signal.SIGTERM, _stop_child)
     message = sys.stdin.buffer.read().decode(errors="replace")
     meta = read_meta(repo, session)
     folder = turn_dir(repo, session)
@@ -1492,6 +1596,7 @@ def run_turn(repo, session: str) -> int:
     import parent_commands
     message = parent_commands.expand(repo, parent, message)  # /name: the parent's own skill or command
     message = _mentions(repo, parent, message)  # @file and @file:10-40: what they name goes with the message
+    message = _with_notes(repo, meta, message)  # .rig/notes.md, with the parent's first message
     if parent not in RESUMES:
         message = _with_context(repo, session, message)
     elif meta.get("context_from") is not None:
@@ -1528,6 +1633,11 @@ def run_turn(repo, session: str) -> int:
         if started:
             _record_changes(repo, session, before)
             _write_json(folder / "meta.json", {"status": "idle"})
+            if _was_stopped(repo, session):
+                fresh = read_meta(repo, session)
+                fresh.update(native=meta.get("native", ""), state="idle", runner_pid=0, model=meta.get("model", ""))
+                _write_json(_meta_path(repo, session), fresh)
+                return 0
             fresh = read_meta(repo, session) if _meta_path(repo, session).exists() else meta
             fresh.update(native=meta.get("native", ""), state="failed" if error else "idle", runner_pid=0,
                          note="see the transcript" if error else "", asks=True, model=meta.get("model", ""))
@@ -1547,6 +1657,7 @@ def run_turn(repo, session: str) -> int:
         return 1
     proc = subprocess.Popen([binary, *argv[1:]], cwd=str(repo), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                             text=True, errors="replace", env={**os.environ, "RIG_PARENT": meta["parent"], "RIG_OWNER_SESSION": session})
+    _CHILD.append(proc)
     done = error = False
     count = 0
     said = False
@@ -1602,6 +1713,12 @@ def run_turn(repo, session: str) -> int:
     _record_changes(repo, session, before)
     if parent in ASKS:
         _write_json(folder / "meta.json", {"status": "idle"})  # a late answer to this turn's request is refused
+    stopped = _was_stopped(repo, session)
+    if stopped:
+        fresh = read_meta(repo, session)
+        fresh.update(native=meta.get("native", ""), state="idle", runner_pid=0, note=stopped, model=meta.get("model", ""))
+        _write_json(_meta_path(repo, session), fresh)
+        return 0
     if code != 0 and not error:
         tail = [row for row in stderr.strip().splitlines() if row.strip()][-3:]
         append(repo, session, "error", _clean(f"the parent exited with status {code}" + (": " + " | ".join(tail) if tail else "")))

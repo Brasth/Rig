@@ -476,6 +476,9 @@ func (m *Model) askKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "commit":
 			a.CodeAsk = nil
 			return m, m.commit(q.text)
+		case "commit-turn":
+			a.CodeAsk = nil
+			return m, m.commitTurn(q.text)
 		case "rename-word":
 			a.CodeAsk = nil
 			m.renameTo(q.text)

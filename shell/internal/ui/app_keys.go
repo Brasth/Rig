@@ -195,7 +195,7 @@ func (m *Model) appSend(text string) tea.Cmd {
 		a := m.st.App
 		a.Outbox = append(a.Outbox, text)
 		m.st.Prompt, m.st.SlashSel = "", 0
-		m.st.Message = "queued: " + appParent(m.st) + " gets it when this turn ends (↑ takes it back)"
+		m.st.Message = "queued: " + appParent(m.st) + " gets it when this turn ends · ⏎ again sends it now · ↑ takes it back"
 		return nil
 	}
 	m.st.Prompt, m.st.SlashSel, m.st.Message = "", 0, "sending…"
@@ -518,6 +518,9 @@ func (m *Model) appKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			a.AnswerDeny = false
 			return m.answer(!deny)
 		}
+		if strings.TrimSpace(m.st.Prompt) == "" && len(a.Outbox) > 0 && m.working() {
+			return m, m.steer("") // ⏎ again, on the empty box: the queued message goes now, interrupting the turn
+		}
 		return m, m.appSend(m.st.Prompt)
 	case tea.KeyRunes, tea.KeySpace:
 		if m.st.Prompt == "" && !k.Paste && k.Type == tea.KeyRunes && len(k.Runes) == 1 {
@@ -533,6 +536,10 @@ func (m *Model) appKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m, tea.Batch(m.fetchDock(true), m.fetchDiff(true))
 			case (r == 'u' || r == 'h') && m.quickApply(string(r), true):
 				return m, nil
+			case r == 'g' && lastMark(m.st) != nil:
+				return m, m.openTurnChanges()
+			case r == 'c' && lastMark(m.st) != nil:
+				return m, m.askTurnCommit()
 			case m.st.Chat == nil && r >= '1' && r <= '4':
 				return m, m.appSend(Suggestions[r-'1'])
 			case asking && (r == '1' || r == '2'):
@@ -1205,6 +1212,13 @@ func (m *Model) paletteKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, m.searchChats(p.Query)
 		}
 	case tea.KeyRunes, tea.KeySpace:
+		if p.Running && string(k.Runes) == "x" && len(items) > 0 {
+			it := items[clampSel(p.Sel, len(items))]
+			if it.Action != "" {
+				a.Palette = nil
+				return m, m.stopRunning(it.Action) // x stops what the row names
+			}
+		}
 		p.Query += string(k.Runes)
 		p.Sel = 0
 		if strings.HasPrefix(p.Query, "#") {
@@ -1285,6 +1299,10 @@ func (m *Model) runPalette(it paletteItem, query string) tea.Cmd {
 		return m.openRewind()
 	case it.Action == "fork":
 		return m.openFork()
+	case it.Action == "running":
+		return m.openRunning()
+	case strings.HasPrefix(it.Action, "running:"):
+		return m.goRunning(it.Action)
 	case strings.HasPrefix(it.Action, "fork:"):
 		n, _ := strconv.Atoi(strings.TrimPrefix(it.Action, "fork:"))
 		return m.doFork(n)

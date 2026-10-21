@@ -136,6 +136,22 @@ func (m *Model) openMemory() tea.Cmd {
 	return m.runPalette(paletteItem{Action: "file:" + name}, "")
 }
 
+// openNotes opens .rig/notes.md in the editor: what /remember keeps, and what every conversation's first message
+// carries. The file is made when there is none yet.
+func (m *Model) openNotes() tea.Cmd {
+	a := m.st.App
+	rel := ".rig/notes.md"
+	path := filepath.Join(a.Repo, filepath.FromSlash(rel))
+	if _, err := os.Stat(path); err != nil {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err == nil {
+			_ = os.WriteFile(path, []byte("# Notes for the parent\n\n- \n"), 0o644)
+		}
+	}
+	cmd := m.runPalette(paletteItem{Action: "file:" + rel}, "")
+	m.st.Message = "notes: ⏎ edits; they go with every conversation's first message"
+	return cmd
+}
+
 // runInTerminal types a command into the terminal split, opening it first when it is not there.
 func (m *Model) runInTerminal(command string) tea.Cmd {
 	a := m.st.App

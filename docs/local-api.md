@@ -46,6 +46,7 @@ repository. Owner tokens are never returned, and workers may not serve the API.
 | `chat.search` | no | none | EXPERIMENT: the chat sessions whose messages contain the words of a query (params: query) |
 | `chat.send` | yes | none | EXPERIMENT: send one message to the headless parent; the answer arrives in the transcript (params: message, session, parent) |
 | `chat.status` | no | none | EXPERIMENT: whether the headless-parent chat is on, which parents can run, and recent sessions |
+| `chat.steer` | yes | none | EXPERIMENT: interrupt a chat session's running turn with a message the parent goes on from (params: session, message) |
 | `chat.transcript` | no | none | EXPERIMENT: a chat session's transcript (params: session, tail) |
 | `env.recover` | yes | none | Apply the confirmed environment recovery step once, if it is safe (params: confirm_id) |
 | `env.recovery` | no | none | The one next step dc-cli proposes for an environment fault, and whether Rig would apply it |

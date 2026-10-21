@@ -37,6 +37,7 @@ type Source interface {
 	ChatTranscript(session string, tail int, timeout time.Duration) (*view.ChatTranscript, error)
 	ChatSend(message, session, parent string, timeout time.Duration) (*view.ChatStarted, error)
 	ChatCancel(session string, timeout time.Duration) error
+	ChatSteer(session, message string, timeout time.Duration) (*view.ChatStarted, error)
 	ChatSearch(query string, timeout time.Duration) ([]view.ChatHit, error)
 	ChatFork(session string, turn int, timeout time.Duration) (*view.ChatForked, error)
 	ChatRewind(session string, turn int, path string, dry, undo bool, timeout time.Duration) (*view.ChatRewound, error)
@@ -576,6 +577,22 @@ func (m *Model) runSlash(text string) (tea.Cmd, bool) {
 		clear()
 		m.chatID, m.st.Chat, m.st.ChatUp, m.chatAdopted = "", nil, 0, true
 		m.st.Message = "new conversation: the next message starts it"
+	case "/notes":
+		clear()
+		m.st.Mode, m.st.InputLabel, m.inputFor = ModeNormal, "", ""
+		if !m.appOn() {
+			m.st.Message = "/notes is in the app: rig shell"
+			return nil, true
+		}
+		return m.openNotes(), true
+	case "/running":
+		clear()
+		m.st.Mode, m.st.InputLabel, m.inputFor = ModeNormal, "", ""
+		if !m.appOn() {
+			m.st.Message = "/running is in the app: rig shell"
+			return nil, true
+		}
+		return m.openRunning(), true
 	case "/stop":
 		clear()
 		if m.chatID == "" || m.st.Chat == nil || m.st.Chat.State != "running" {

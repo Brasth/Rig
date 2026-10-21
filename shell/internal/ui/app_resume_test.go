@@ -84,7 +84,7 @@ func TestAMessageTypedWhileTheParentWorksWaitsBehindItAndGoesWhenTheTurnEnds(t *
 		t.Fatalf("while it works, a message queues instead of failing: sent %v, queued %v, box %q", src.chatSent, a.Outbox, m.st.Prompt)
 	}
 	out := appScreen(m)
-	for _, want := range []string{"↳ next  second", "↳ then  third", "↑ takes the last one back"} {
+	for _, want := range []string{"↳ next  second", "↳ then  third", "⏎ sends the first one now"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("the queue shows under the spinner; missing %q:\n%s", want, out)
 		}

@@ -593,6 +593,35 @@ class Turns(Base):
             with self.assertRaisesRegex(rig_chat.ChatError, "inside the project"):
                 rig_chat.export(self.repo, session, bad)
 
+    def test_notes_go_with_the_parents_first_message_and_remember_adds_one(self):
+        stand_in(self.bin, "claude", CLAUDE_STREAM)
+        first = rig_chat.send(self.repo, "/remember never touch vendor/")
+        session = first["session"]
+        self.assertEqual(first["notes"], 1)
+        rig_chat.send(self.repo, "/remember   tests run with   make test ", session)
+        self.assertEqual((self.repo / ".rig" / "notes.md").read_text(), "- never touch vendor/\n- tests run with make test\n")
+        rig_chat.send(self.repo, "/notes", session)
+        self.assertIn("- tests run with make test", rig_chat.transcript(self.repo, session)["entries"][-1]["text"])
+        self.assertEqual(len(self.calls()), 0, "the commands start no turn")
+        rig_chat.send(self.repo, "first real question", session)
+        self.wait_idle(session)
+        rig_chat.send(self.repo, "second", session)
+        self.wait_idle(session)
+        first_sent, second_sent = self.calls()[0]["argv"][-1], self.calls()[1]["argv"][-1]
+        self.assertTrue(first_sent.startswith("[Project notes the user keeps in .rig/notes.md]\n- never touch vendor/"), first_sent)
+        self.assertTrue(first_sent.endswith("first real question"))
+        self.assertNotIn("Project notes", second_sent, "claude resumes its own session: told once")
+        # a parent that cannot resume gets them each time; a fork or a compacted successor starts fresh and gets them again
+        stand_in(self.bin, "pi", CLAUDE_STREAM)
+        other = rig_chat.send(self.repo, "hi", parent="pi")["session"]
+        self.wait_idle(other)
+        rig_chat.send(self.repo, "again", other)
+        self.wait_idle(other)
+        for call in self.calls()[2:4]:
+            self.assertIn("Project notes", call["argv"][-1])
+        with self.assertRaisesRegex(rig_chat.ChatError, "/remember NOTE"):
+            rig_chat.send(self.repo, "/remember", session)
+
     def test_a_long_patch_and_many_files_are_cut_short(self):
         files = rig_chat.turn_changes(self.repo, "", "x")
         self.assertEqual(files, [], "no trees, no changes")
@@ -762,6 +791,35 @@ class Turns(Base):
             self.assertFalse(rig_chat._alive(pid), f"{pid} survived the cancel")
         self.assertEqual(rig_chat.transcript(self.repo, started["session"])["entries"][-1]["text"], "cancelled")
         self.assertFalse(rig_chat.cancel(self.repo, started["session"])["cancelled"])
+
+    def test_steer_stops_the_turn_notes_what_it_changed_and_goes_on_from_the_message(self):
+        if shutil.which("git") is None:
+            self.skipTest("no git here")
+        subprocess.run(["git", "init", "-q", str(self.repo)], check=True)
+        (self.repo / ".gitignore").write_text(".rig/\n")
+        self._editing_parent("open('half.py', 'w').write('half\\n')\n")
+        script = self.bin / "claude"
+        script.write_text(script.read_text().replace("sys.exit(0)", "sys.exit(0)").replace("time.sleep(0)", "time.sleep(300)"))
+        started = rig_chat.send(self.repo, "long job")
+        session = started["session"]
+        time.sleep(0.6)
+        self.assertEqual(rig_chat.transcript(self.repo, session)["state"], "running")
+        stand_in(self.bin, "claude", CLAUDE_STREAM)  # the next turn's parent answers at once
+        result = rig_chat.steer(self.repo, session, "stop, do it the other way")
+        self.assertEqual((result["session"], result["state"], result["turn"]), (session, "running", 2))
+        view = self.wait_idle(session)
+        texts = [(e["role"], e["text"].split("\n", 1)[0]) for e in view["entries"]]
+        self.assertIn(("system", "interrupted"), texts)
+        self.assertIn(("diff", "half.py +1 −0"), texts, "what the stopped turn changed is noted: " + str(texts))
+        self.assertNotIn("error", [r for r, _ in texts], "a stopped turn is not a failure")
+        self.assertEqual([m["turn"] for m in view["marks"]], [1], "and can be rewound")
+        sent = self.calls()[-1]["argv"][-1]
+        self.assertTrue(sent.startswith("[Note from Rig: the user interrupted") and sent.endswith("stop, do it the other way"), sent)
+        self.assertEqual(view["state"], "idle")
+        # on an idle session it is a plain send
+        rig_chat.steer(self.repo, session, "and now?")
+        self.wait_idle(session)
+        self.assertNotIn("interrupted", self.calls()[-1]["argv"][-1])
 
     def test_a_dead_runner_is_reported_failed_not_running_forever(self):
         stand_in(self.bin, "claude", CLAUDE_STREAM, sleep=300)

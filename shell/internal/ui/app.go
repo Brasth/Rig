@@ -71,6 +71,7 @@ type AppState struct {
 	CodeAsk              *codeAsk            // go to line, find, a new file or a new name, asked on the code tab's last row
 	GitView              bool                // the side bar shows git (g) instead of the files
 	GitSel               int
+	GitScope             []string // g after a turn: the git view shows only these files, the turn's (t shows all)
 	Git                  *gitState
 	GitDiff              *gitDiffView      // a file's diff, shown in place of the file
 	Conflict             *conflictView     // a conflicted file's conflicts, each with its two sides, in place of the file
@@ -149,7 +150,10 @@ type Palette struct {
 	Effort bool // /effort, or the reasoning row of /model: the parent's reasoning levels
 	Resume bool // /resume: the conversations of this repository, to open one again
 	Fork   bool // /fork: the turns of this conversation, each to branch from
-	Rewind bool // /rewind: the turns that changed files, each to put back (RewindTurn: the one chosen, whose files are listed)
+	// Running is /running: the parent's tool call, the helpers at work (Jobs, as they were when it opened), the terminal.
+	Running bool
+	Jobs    []view.Row
+	Rewind  bool // /rewind: the turns that changed files, each to put back (RewindTurn: the one chosen, whose files are listed)
 	// RewindTurn and RewindPlan are the second step: the chosen turn and what putting it back would change.
 	RewindTurn int
 	RewindPlan *view.ChatRewound
@@ -778,7 +782,7 @@ func entryLines(st State, entries []view.ChatEntry, cw int) []string {
 				}
 			}
 		case "tool":
-			lines = append(lines, toolLine(st, e.Text, cw))
+			lines = append(lines, toolLineWith(st, e.Text, cw, toolProgress(st, e)))
 			continue
 		case "diff":
 			lines = append(lines, diffLines(st, e.Text, cw)...)
@@ -817,8 +821,14 @@ func entryLines(st State, entries []view.ChatEntry, cw int) []string {
 
 // toolLine is a tool the parent called, as its own screen draws one: a bullet, the tool's name, what it works on.
 func toolLine(st State, text string, cw int) string {
+	return toolLineWith(st, text, cw, "")
+}
+
+// toolLineWith is a tool line with a suffix after the detail: the progress of one still running.
+func toolLineWith(st State, text string, cw int, suffix string) string {
 	name, detail, _ := strings.Cut(clean(text), " ")
-	return "  " + st.paint(colAccent, "●") + " " + st.bold(name) + st.faint(" "+fit(detail, max(4, cw-6-lipgloss.Width(name))))
+	room := max(4, cw-6-lipgloss.Width(name)-lipgloss.Width(suffix))
+	return "  " + st.paint(colAccent, "●") + " " + st.bold(name) + st.faint(" "+fit(detail, room)) + st.paint(colAccent, suffix)
 }
 
 // diffLines is a file the parent's turn changed, as its own screen shows an edit: the file with its counts, then the
@@ -1221,6 +1231,9 @@ func paletteItems(st State) []paletteItem {
 	if st.App.Palette.Fork {
 		return forkItems(st, q)
 	}
+	if st.App.Palette.Running {
+		return runningItems(st, q)
+	}
 	if st.App.Palette.Symbols {
 		return symbolItems(st, q)
 	}
@@ -1346,6 +1359,7 @@ var PaletteCommands = [][3]string{
 	{"rewind files", "put files back as they were before a turn (/rewind)", "rewind"},
 	{"search the code", "text in every file (⌃f)", "search"},
 	{"find references", "every use of the name at the cursor (F7)", "references"},
+	{"what is running", "the parent's tool call, the helpers at work, the terminal (/running)", "running"},
 	{"run a task", "a script, make or just target, or the tests, in the terminal", "tasks"},
 	{"run the test at the cursor", "go, pytest, jest, vitest or cargo (F9)", "test"},
 	{"format document", "gofmt, prettier, ruff, black, rustfmt or shfmt (⌥⇧f)", "format"},
@@ -1372,6 +1386,9 @@ func paletteBox(v *view.View, st State, pw int) []string {
 		}
 		if st.App.Palette.Effort {
 			text = "  " + st.faint("›") + " ▏" + st.faint("how much "+appParent(st)+" reasons: low, medium, high…")
+		}
+		if st.App.Palette.Running {
+			text = "  " + st.faint("⟳") + " ▏" + st.faint("what is running: ⏎ goes to it, x stops it")
 		}
 		if st.App.Palette.Fork {
 			text = "  " + st.faint("⑂") + " ▏" + st.faint("a turn to branch from: the new conversation starts as a copy up to it")

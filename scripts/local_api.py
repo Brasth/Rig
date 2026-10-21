@@ -64,6 +64,7 @@ LOCAL_METHODS = {
     "chat.status": (False, "EXPERIMENT: whether the headless-parent chat is on, which parents can run, and recent sessions"),
     "chat.transcript": (False, "EXPERIMENT: a chat session's transcript (params: session, tail)"),
     "chat.send": (True, "EXPERIMENT: send one message to the headless parent; the answer arrives in the transcript (params: message, session, parent)"),
+    "chat.steer": (True, "EXPERIMENT: interrupt a chat session's running turn with a message the parent goes on from (params: session, message)"),
     "chat.search": (False, "EXPERIMENT: the chat sessions whose messages contain the words of a query (params: query)"),
     "chat.fork": (True, "EXPERIMENT: start a new chat session that begins as a copy of this one up to a turn (params: session, turn)"),
     "chat.rewind": (True, "EXPERIMENT: put the working tree back as it was before a chat turn (params: session, turn, path, dry, undo)"),
@@ -195,7 +196,7 @@ class Api:
         if method == "workspace.status":
             return self._workspace(request_id, params)
         if method in ("job.evidence", "job.diff", "job.thread", "job.pause", "job.problems", "fleet.status", "settings.view", "env.recovery", "env.recover", "log.follow", "env.shell", "shell.parent",
-                      "chat.status", "chat.transcript", "chat.send", "chat.cancel", "chat.rewind", "chat.fork", "chat.search", "chat.answer", "chat.commands", "chat.models", "chat.parent", "ui.theme", "ui.set_theme", "settings.app", "settings.set",
+                      "chat.status", "chat.transcript", "chat.send", "chat.cancel", "chat.rewind", "chat.fork", "chat.search", "chat.steer", "chat.answer", "chat.commands", "chat.models", "chat.parent", "ui.theme", "ui.set_theme", "settings.app", "settings.set",
                       "applies.today", "applies.undo", "applies.redo", "applies.hold", "ship.status", "ship.run"):
             return self._environment(request_id, method, params)
         if method in ("ui.request", "events.list", "events.ack"):
@@ -376,6 +377,11 @@ def _environment(self, request_id, method, params):
                 result = rig_chat.status(self.repo)
             elif method == "chat.transcript":
                 result = rig_chat.transcript(self.repo, session, tail)
+            elif method == "chat.steer":
+                message = params.get("message")
+                if not isinstance(message, str) or not session:
+                    return _reply(request_id, error=_error(INVALID_PARAMS, "message and session must be strings"))
+                result = rig_chat.steer(self.repo, session, message)
             elif method == "chat.search":
                 query = params.get("query", "")
                 if not isinstance(query, str):

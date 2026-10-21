@@ -74,7 +74,7 @@ func queuedRows(st State, w int) []string {
 		line := st.faint(lead) + st.dim(fit(clean(text), max(8, w-lipglossWidth(lead)-2)))
 		out = append(out, st.zone(fmt.Sprintf("row:queued:%d", i), line))
 	}
-	return append(out, st.faint("    ↑ takes the last one back to edit"))
+	return append(out, st.faint("    ⏎ sends the first one now (the turn stops and goes on from it) · ↑ takes the last one back"))
 }
 
 // cycleMode is the permission-mode key: ask, then auto-edit (the parent edits files without asking and still asks about
@@ -89,5 +89,30 @@ func (m *Model) cycleMode() tea.Cmd {
 	return func() tea.Msg { // not through the box: a draft stays as it is
 		started, err := src.ChatSend("/mode next", session, parent, 10*time.Second)
 		return chatSentMsg{started: started, err: err, sent: "/mode next", quiet: true}
+	}
+}
+
+// steer sends a message now, in the middle of the parent's turn, as the parents' own screens do when you press ⏎ on a
+// queued message: the turn stops where it is, what it changed so far is kept and shown, and the parent goes on from
+// the message, told it was interrupted. With no text, the first queued message goes. When nothing runs it is a plain send.
+func (m *Model) steer(text string) tea.Cmd {
+	a := m.st.App
+	text = strings.TrimSpace(text)
+	if text == "" && len(a.Outbox) > 0 {
+		text, a.Outbox = a.Outbox[0], a.Outbox[1:]
+	}
+	if text == "" {
+		return nil
+	}
+	if !m.working() || m.chatID == "" {
+		return m.appSend(text)
+	}
+	m.rememberSent(text)
+	m.st.Prompt, m.st.SlashSel, m.st.Message = "", 0, "interrupting "+appParent(m.st)+"…"
+	a.Sending = true
+	src, id := m.src, m.chatID
+	return func() tea.Msg {
+		started, err := src.ChatSteer(id, text, 20*time.Second)
+		return chatSentMsg{started: started, err: err, sent: text}
 	}
 }
