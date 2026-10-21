@@ -3,6 +3,10 @@
 
 
 
+## Problems in the editor, hunk review, stale-prebuilt check (2026-10-21)
+
+A failed check's problems now mark the open file: a red or amber dot in the gutter and the message at the end of the line. `⇥` in the problems list (`m`) asks the parent to fix the chosen problem, with the code around it; its last row asks for all of them. On the changes tab `n` `N` choose a hunk, `v` marks it reviewed and `x` asks the helper to redo it with your reason (sent to its inbox with the file, lines and hunk). `rig doctor` in a source tree, and `python3 scripts/shell_dist.py status`, report when the prebuilt shells are older than the shell sources.
+
 ## rig-shell ships prebuilt: nothing to build on install or update (2026-10-21)
 
 `rig setup`, `install.sh` and `rig update` now put a prebuilt `rig-shell` (Linux and macOS, x86-64 and arm64, checksum-checked) in `~/.rig/bin`, and `rig shell`, `rig-agent` and `agent-rig` set it up themselves the first time they find none, instead of stopping with "rig-shell is not built". Go is only used for a shell newer than the prebuilt one. Where nothing can run the Go shell, `rig shell` opens the Python board (`rig tui`). `rig doctor` reports a prebuilt shell as ready. Maintainers refresh `prebuilt/` with `python3 scripts/shell_dist.py build`.

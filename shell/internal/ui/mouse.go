@@ -731,7 +731,9 @@ func (m *Model) clickRow(list, at string) (tea.Model, tea.Cmd) {
 			a.ShipScreen.Push = at == "push"
 		}
 	case "difffile":
-		a.DiffFile, a.DiffOff = i, 0
+		a.DiffFile, a.DiffOff, a.DiffHunk = i, 0, 0
+	case "diffhunk":
+		a.DiffHunk = i
 	case "helper":
 		if o := a.Onboard; o != nil {
 			o.HelperSel = i

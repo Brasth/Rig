@@ -173,3 +173,93 @@ func TestFormatDocumentAndFormatOnSave(t *testing.T) {
 		t.Fatalf("a language with no formatter here says so: %q", m.st.Message)
 	}
 }
+
+const twoHunkDiff = `diff --git a/src/a.ts b/src/a.ts
+index 1111111..2222222 100644
+--- a/src/a.ts
++++ b/src/a.ts
+@@ -1,3 +1,3 @@
+ const a = 1
+-const b = 2
++const b = 3
+ const c = 4
+@@ -20,3 +20,4 @@
+ function f() {
+-  return 1
++  return 2
++  // changed
+ }
+diff --git a/src/b.ts b/src/b.ts
+--- a/src/b.ts
++++ b/src/b.ts
+@@ -1,1 +1,1 @@
+-x
++y
+`
+
+func TestHunksAreReviewedOneByOneAndSentBackWithAReason(t *testing.T) {
+	m, src := appModel(t)
+	withConversation(t, m, src)
+	for i := range m.view.Jobs {
+		m.view.Jobs[i].Ask = false
+	}
+	src.diffs = map[string]*view.JobDiff{"job-7f2": {JobID: "job-7f2", Source: "git", Diff: twoHunkDiff}}
+	run(press(m, "2"), m)
+	a := m.st.App
+	files := ParseDiff(twoHunkDiff)
+	spans := hunkSpans(files[0])
+	if len(spans) != 2 || spans[0].start != 1 || spans[0].end != 3 || spans[1].start != 20 || spans[1].end != 23 {
+		t.Fatalf("each hunk knows the lines it covers: %+v", spans)
+	}
+	out := appScreen(m)
+	for _, want := range []string{"hunk 1/2 · lines 1–3", "hunk 2/2 · lines 20–23", "n N hunk", "v reviewed", "x redo"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("missing %q:\n%s", want, out)
+		}
+	}
+	press(m, "v") // hunk 1 is fine: marked, and on to the next
+	if a.Reviewed[hunkKey("job-7f2", "src/a.ts", 0)] != "ok" || a.DiffHunk != 1 {
+		t.Fatalf("v marks the hunk reviewed and moves on: %v %d", a.Reviewed, a.DiffHunk)
+	}
+	if out := appScreen(m); !strings.Contains(out, "✓ reviewed") || !strings.Contains(out, "1/3 hunks reviewed") {
+		t.Fatalf("the mark and the count show:\n%s", out)
+	}
+	press(m, "N")
+	press(m, "v")
+	if a.Reviewed[hunkKey("job-7f2", "src/a.ts", 0)] != "" {
+		t.Fatal("v on a reviewed hunk takes the mark off")
+	}
+	press(m, "n", "x")
+	if a.RedoHunk == nil || !a.Commenting {
+		t.Fatal("x starts a request to redo the chosen hunk")
+	}
+	if out := appScreen(m); !strings.Contains(out, "redo a.ts:20-23, why ›") {
+		t.Fatalf("the prompt names the hunk:\n%s", out)
+	}
+	typeText(m, "keep the comment out")
+	run(press(m, "enter"), m)
+	last := src.calls[len(src.calls)-1]
+	text, _ := last.params["text"].(string)
+	if last.method != "job.message" || last.params["id"] != "job-7f2" {
+		t.Fatalf("the helper's inbox gets it: %v", src.calls)
+	}
+	for _, want := range []string{"Please redo this change in src/a.ts (lines 20-23)", "```diff", "-  return 1", "+  return 2", "Why: keep the comment out"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("the request names the file, lines and hunk; missing %q:\n%s", want, text)
+		}
+	}
+	if a.Reviewed[hunkKey("job-7f2", "src/a.ts", 1)] != "redo" || a.RedoHunk != nil || a.Commenting {
+		t.Fatalf("the hunk is marked sent back: %v", a.Reviewed)
+	}
+	if out := appScreen(m); !strings.Contains(out, "↺ redo asked") || !strings.Contains(out, "redo src/a.ts:20-23 — keep the comment out") {
+		t.Fatalf("it shows in the hunk and in what you said:\n%s", out)
+	}
+	press(m, "]")
+	if a.DiffHunk != 0 {
+		t.Fatal("another file starts at its first hunk")
+	}
+	press(m, "x", "esc")
+	if a.RedoHunk != nil || a.Commenting {
+		t.Fatal("esc drops the request")
+	}
+}

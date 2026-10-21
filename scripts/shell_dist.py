@@ -82,6 +82,19 @@ def read_stamp(folder: Path) -> str:
         return ""
 
 
+def prebuilt_state(src: Path) -> dict:
+    """Do the shipped prebuilt shells match the shell sources of this source tree?
+
+    state: "none" (no source tree or no prebuilt folder here), "current" or "stale" (the sources changed since the
+    shells were built: maintainers run `python3 scripts/shell_dist.py build`)."""
+    src = Path(src)
+    stamp = read_stamp(src / "prebuilt")
+    if not (src / "shell" / "go.mod").is_file() or not stamp:
+        return {"state": "none", "stamp": stamp, "sources": ""}
+    sources = source_stamp(src)
+    return {"state": "current" if sources == stamp else "stale", "stamp": stamp, "sources": sources}
+
+
 def build_all(src: Path, out: Path | None = None, *, log=print) -> tuple[bool, str]:
     """Cross-compile the shell for every target into prebuilt/ with SHA256SUMS and STAMP (needs Go 1.24+)."""
     src = Path(src)
@@ -214,10 +227,18 @@ def download(home: Path, ref: str = "") -> tuple[bool, str]:
 def main(argv=None) -> int:
     import argparse
     parser = argparse.ArgumentParser(description="Build the prebuilt rig-shell binaries (needs Go) or install one")
-    parser.add_argument("action", choices=["build", "install", "download"])
+    parser.add_argument("action", choices=["build", "install", "download", "status"])
     parser.add_argument("--src", default=str(Path(__file__).resolve().parent.parent))
     parser.add_argument("--out", default="")
     args = parser.parse_args(argv)
+    if args.action == "status":
+        info = prebuilt_state(Path(args.src))
+        if info["state"] == "none":
+            print("no prebuilt shells to compare here")
+            return 0
+        print(f"prebuilt {info['state']}: built from sources {info['stamp']}, sources now {info['sources']}"
+              + ("" if info["state"] == "current" else "; refresh with: python3 scripts/shell_dist.py build"))
+        return 0 if info["state"] == "current" else 1
     if args.action == "build":
         ok, message = build_all(Path(args.src), Path(args.out) if args.out else None)
     elif args.action == "install":

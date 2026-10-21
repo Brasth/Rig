@@ -117,6 +117,10 @@ type AppState struct {
 	DiffOff              int
 	Comments             map[string][]string // what you said to each helper from the changes tab
 	Commenting           bool
+	DiffHunk             int               // the changes tab's chosen hunk of the open file
+	DiffFollow           bool              // scroll to the chosen hunk on the next draw
+	Reviewed             map[string]string // hunks of helpers' work marked ok (v) or sent back to be redone (x), by hunkKey
+	RedoHunk             *redoTarget       // the hunk a request to redo is being written for
 	Search               *SearchState
 	Settings             *SettingsScreen
 	Onboard              *Onboarding // the first-run steps after the parent: helpers, then where agents work
@@ -1247,7 +1251,7 @@ func paletteBox(v *view.View, st State, pw int) []string {
 			text = "  " + st.faint("⎇") + " ▏" + st.faint("a branch to switch to, or a new branch's name")
 		}
 		if st.App.Palette.Problems {
-			text = "  " + st.faint("✕") + " ▏" + st.faint("a problem a helper's check found, to go to")
+			text = "  " + st.faint("✕") + " ▏" + st.faint("a problem a helper's check found: ⏎ opens it, ⇥ asks "+appParent(st)+" to fix it")
 		}
 		if st.App.Palette.Tasks {
 			text = "  " + st.faint("$") + " ▏" + st.faint("a task to run in the terminal, or type a command")
