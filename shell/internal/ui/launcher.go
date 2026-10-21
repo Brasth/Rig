@@ -179,6 +179,8 @@ func (l *Launcher) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	list := l.choices()
 	switch k.Type {
+	case tea.KeyCtrlQ:
+		return l, tea.Quit
 	case tea.KeyCtrlC, tea.KeyEsc:
 		if l.repos != nil {
 			l.repos = nil

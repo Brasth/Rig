@@ -3,6 +3,10 @@
 
 
 
+## ⌃q quits from anywhere (2026-10-21)
+
+`⌃q` quits `rig shell` from any screen, including while a file is edited (it asks first when edits are not saved; `⌃q` again quits anyway) and in the launcher; the footer shows it. `⌃d` on an empty reply box quits too, as in codex and claude.
+
 ## Go to definition in the code tab (2026-10-21)
 
 `F12`, or a `⌃` or `⌥` click on a name, opens where it is defined: an import's path opens that file, a name imported from the repository opens its file at the definition, any other name is found in the file, its folder or the repository, and a package's name says it is outside the repository. `⌃t` goes back. The palette and the explorer now list new, untracked files too.

@@ -126,7 +126,7 @@ func confirmLine(st State, w int) string {
 }
 
 // AppRightKeys are the right half of the design's footer on the conversation, changes and code screens.
-var AppRightKeys = [][2]string{{"u", "undo"}, {"h", "hold"}, {"⌃p", "files"}, {"?", "help"}}
+var AppRightKeys = [][2]string{{"u", "undo"}, {"h", "hold"}, {"⌃p", "files"}, {"?", "help"}, {"⌃q", "quit"}}
 
 var (
 	mdCode = regexp.MustCompile("`([^`]+)`")
@@ -1272,6 +1272,8 @@ func helpBox(st State, hw int) []string {
 		{"⇧ ← →", "select in the box; a click there places the cursor"},
 		{"esc", "close, or clear the box"},
 		{"⌃c", "clear the box, or quit"},
+		{"⌃q", "quit, from anywhere (asks if edits are not saved)"},
+		{"⌃d", "quit, with the box empty"},
 	}
 	lines := []string{"", st.bold("Keys"), ""}
 	for _, r := range rows {
