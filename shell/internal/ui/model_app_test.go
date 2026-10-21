@@ -268,7 +268,7 @@ func TestTheChangesTabShowsTheHelpersDiff(t *testing.T) {
 	out := appScreen(m)
 	for _, want := range []string{"2 [changes]", "Add supertest dev dep", "claude · 2 files", "login.ts", "login.test.ts",
 		"src/routes/login.ts   +3 −1", "  13   export const router = Router()", "  15 − router.post('/login', async (req, res) => {",
-		"  16 +   rateLimit({ windowMs: 60_000, max: 5 }),", "[ ] file", "c comment"} {
+		"  16 +   rateLimit({ windowMs: 60_000, max: 5 }),", "] next file", "c comment"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q:\n%s", want, out)
 		}
@@ -329,7 +329,7 @@ func TestSearchFindsTextAcrossTheRepository(t *testing.T) {
 	withConversation(t, m, src)
 	m.Update(tea.KeyMsg{Type: tea.KeyCtrlF})
 	m.st.App.Search.Query = "rateLimit"
-	m.Update(searchMsg{query: "rateLimit", hits: []SearchHit{{"src/middleware/limit.ts", 4, "export const rateLimit = (opts = {}) => {"},
+	m.Update(searchMsg{query: m.st.App.Search.key(), hits: []SearchHit{{"src/middleware/limit.ts", 4, "export const rateLimit = (opts = {}) => {"},
 		{"src/routes/login.ts", 2, "import { rateLimit } from '../middleware/limit'"}}})
 	out := appScreen(m)
 	for _, want := range []string{"/ rateLimit▏", "2 results in 2 files", "src/middleware/limit.ts", "4    export const [rateLimit]", "src/routes/login.ts",
@@ -733,5 +733,50 @@ func TestHoldAndUndoFromTheReplyBoxAskFirstAndNeverEatTyping(t *testing.T) {
 func TestTheParentsMarkdownMarkersAreNotShownRaw(t *testing.T) {
 	if got := plainMarkdown("on `feature/x` with **care**"); got != "on feature/x with care" {
 		t.Fatalf("%q", got)
+	}
+}
+
+func TestChecksAreWordedAsTheDesignDoes(t *testing.T) {
+	st := State{}
+	for in, want := range map[string]string{"● unit  exit 0  devcontainer": "● unit pass", "! lint  exit 1  host": "● lint failed",
+		"● tests  exit running  host": "● tests running", "no checks run": ""} {
+		if got := checkWord(st, in); got != want {
+			t.Errorf("%q: %q", in, got)
+		}
+	}
+}
+
+func TestSearchOptionsAndReplaceAskFirst(t *testing.T) {
+	m, src := appModel(t)
+	withConversation(t, m, src)
+	path := filepath.Join(m.st.App.Repo, "limit.ts")
+	_ = os.WriteFile(path, []byte("const rateLimit = 1\nuse(rateLimit)\nrateLimiter()\n"), 0o644)
+	m.Update(tea.KeyMsg{Type: tea.KeyCtrlF})
+	s := m.st.App.Search
+	s.Query = "rateLimit"
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("w"), Alt: true})
+	if !s.Word {
+		t.Fatal("alt+w matches whole words")
+	}
+	m.Update(searchMsg{query: s.key(), hits: []SearchHit{{"limit.ts", 1, "const rateLimit = 1"}, {"limit.ts", 2, "use(rateLimit)"}}})
+	out := appScreen(m)
+	for _, want := range []string{"› search", "/ rateLimit▏", "aa   ab   .*   **", "2 results in 1 files · tab: ask claude instead", "⌃r replace"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q:\n%s", want, out)
+		}
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyCtrlR})
+	for _, r := range "limitRate" {
+		m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if m.st.Mode != ModeConfirm || !strings.Contains(m.st.Prompt, `Replace 2 matches of "rateLimit" in 1 files with "limitRate"?`) {
+		t.Fatalf("asks first: %q", m.st.Prompt)
+	}
+	if msg := m.replaceAll("limitRate")(); msg.(appliedMsg).err != nil {
+		t.Fatal(msg.(appliedMsg).err)
+	}
+	if data, _ := os.ReadFile(path); string(data) != "const limitRate = 1\nuse(limitRate)\nrateLimiter()\n" {
+		t.Fatalf("only the matches, whole words: %q", data)
 	}
 }

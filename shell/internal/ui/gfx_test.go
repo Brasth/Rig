@@ -3,6 +3,8 @@ package ui
 import (
 	"bytes"
 	"encoding/base64"
+	"image"
+	"image/png"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -121,5 +123,43 @@ func TestTheAppDrawsLogoTilesWhenTheTerminalCan(t *testing.T) {
 	}
 	if !strings.Contains(strings.Join(AppFrame(m.view, st, 120, 36), "\n"), "\x1b[38;5;231m"+placeholderCells) {
 		t.Fatal("claude's tile is drawn")
+	}
+}
+
+func TestAPictureIsPreviewedInlineWhereTheTerminalShowsImages(t *testing.T) {
+	m, src := appModel(t)
+	withConversation(t, m, src)
+	m.SetLogos(true)
+	out, err := os.Create(filepath.Join(t.TempDir(), "out"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer out.Close()
+	NewLogoWriter(out, false)
+	t.Cleanup(func() { logoOut = nil })
+	img := image.NewRGBA(image.Rect(0, 0, 400, 200))
+	var buf bytes.Buffer
+	_ = png.Encode(&buf, img)
+	_ = os.WriteFile(filepath.Join(m.st.App.Repo, "logo.png"), buf.Bytes(), 0o644)
+	_ = os.WriteFile(filepath.Join(m.st.App.Repo, "notes.md"), []byte("# notes\n"), 0o644)
+	run(m.runPalette(paletteItem{Action: "file:logo.png"}, ""), m)
+	a := m.st.App
+	if a.ImageCols == 0 || a.ImageRows == 0 || a.ImageRows*4 > a.ImageCols*2+4 {
+		t.Fatalf("sent for cells in its shape: %d × %d", a.ImageCols, a.ImageRows)
+	}
+	st := m.st
+	st.Styled = true
+	screen := strings.Join(AppFrame(m.view, st, 120, 36), "\n")
+	if !strings.Contains(screen, "› preview") || !strings.Contains(screen, "\x1b[38;5;240m\U0010EEEE") || !strings.Contains(screen, "shown inline") {
+		t.Fatal("the picture's cells on the preview page")
+	}
+	logoOut.Write([]byte("frame"))
+	if data, _ := os.ReadFile(out.Name()); !strings.Contains(string(data), "i=240,c="+strconv.Itoa(a.ImageCols)) {
+		t.Fatal("the picture went to the terminal with the next frame")
+	}
+	a.Files = []string{"logo.png", "notes.md", "main.go"}
+	run(press(m, "tab"), m)
+	if a.File != "notes.md" {
+		t.Fatalf("⇥ goes to the next file the preview shows: %q", a.File)
 	}
 }

@@ -20,43 +20,45 @@ import (
 type AppState struct {
 	Repo, Branch string
 	Facts        string // what the first-conversation screen says about the repo: its stack, files, dev container
-	Tab          int    // 1 conversation, 2 changes, 3 code
-	Panel        bool   // the agents panel (Tab)
-	PanelSel     int    // the selected agent in the panel
-	Palette      *Palette
-	Welcome      bool // the "Who do you want to talk to?" screen
-	WelcomeSel   int
-	NewJob       *view.Row // a helper the parent has just started, shown once
-	Help         bool
-	AnswerDeny   bool     // the answer chip chosen with ← →: deny, else allow
-	ConfirmLead  string   // a question u or h asked: confirmed with ⏎; the letter typed into the reply box, or "\x00"
-	Thread       string   // the job whose thread (its log) is open, from the panel
-	Files        []string // the repository's tracked files, for Ctrl-K
-	File         string   // the file the code tab shows
-	FileLines    []string
-	FileErr      string
-	FileOff      int
-	Preview      bool // the file is previewed (markdown rendered, a csv as a table) instead of shown as source
-	Selecting    bool // v: lines are being selected to ask the parent about
-	SelFrom      int
-	SelTo        int
-	Finding      bool // /: typing a word to find in the file
-	Find         string
-	Changed      map[string]string // the files each active helper is changing, by path, to its worker
-	Diff         *view.JobDiff     // the changes tab's job, its diff
-	DiffID       string
-	DiffFile     int
-	DiffOff      int
-	Comments     map[string][]string // what you said to each helper from the changes tab
-	Commenting   bool
-	Search       *SearchState
-	Settings     *SettingsScreen
-	Onboard      *Onboarding // the first-run steps after the parent: helpers, then where agents work
-	FirstRun     bool        // the welcome screen opened by itself: the other steps follow it
-	InstallSel   int         // the no-agents screen's choice
-	ProblemSeen  string      // a problem screen you closed with esc, not shown again for the same problem
-	History      *HistoryState
-	ShipScreen   *ShipState
+	// ImageCols and ImageRows are the cells a previewed picture was sent to the terminal for (gfx.go); 0 when it was not
+	ImageCols, ImageRows int
+	Tab                  int  // 1 conversation, 2 changes, 3 code
+	Panel                bool // the agents panel (Tab)
+	PanelSel             int  // the selected agent in the panel
+	Palette              *Palette
+	Welcome              bool // the "Who do you want to talk to?" screen
+	WelcomeSel           int
+	NewJob               *view.Row // a helper the parent has just started, shown once
+	Help                 bool
+	AnswerDeny           bool     // the answer chip chosen with ← →: deny, else allow
+	ConfirmLead          string   // a question u or h asked: confirmed with ⏎; the letter typed into the reply box, or "\x00"
+	Thread               string   // the job whose thread (its log) is open, from the panel
+	Files                []string // the repository's tracked files, for Ctrl-K
+	File                 string   // the file the code tab shows
+	FileLines            []string
+	FileErr              string
+	FileOff              int
+	Preview              bool // the file is previewed (markdown rendered, a csv as a table) instead of shown as source
+	Selecting            bool // v: lines are being selected to ask the parent about
+	SelFrom              int
+	SelTo                int
+	Finding              bool // /: typing a word to find in the file
+	Find                 string
+	Changed              map[string]string // the files each active helper is changing, by path, to its worker
+	Diff                 *view.JobDiff     // the changes tab's job, its diff
+	DiffID               string
+	DiffFile             int
+	DiffOff              int
+	Comments             map[string][]string // what you said to each helper from the changes tab
+	Commenting           bool
+	Search               *SearchState
+	Settings             *SettingsScreen
+	Onboard              *Onboarding // the first-run steps after the parent: helpers, then where agents work
+	FirstRun             bool        // the welcome screen opened by itself: the other steps follow it
+	InstallSel           int         // the no-agents screen's choice
+	ProblemSeen          string      // a problem screen you closed with esc, not shown again for the same problem
+	History              *HistoryState
+	ShipScreen           *ShipState
 }
 
 // Palette is Ctrl-K: ask the parent, open a file, or run a command.
@@ -319,12 +321,16 @@ func AppFrame(v *view.View, st State, w, h int) []string {
 		return lines
 	}
 	lines := []string{topBar(v, st, w), st.paint(colBorder, strings.Repeat("─", w))}
+	if a.Search != nil {
+		lines = []string{fit(rigBarLeft(st, v)+st.faint(" › search"), w), fit("", w)} // the design's search is a page of its own
+	}
 	if a.Search == nil && a.Thread == "" && a.Tab == 1 && st.Chat == nil && st.ChatE == "" {
 		lines = []string{rigBarLeft(st, v) + "", fit("", w)} // the design's first conversation has the mark and repo only
 		lines[0] = fit(lines[0], w)
 	}
 	// The conversation, changes and code screens end in the design's full-width footer under a rule.
-	ruled := a.Search == nil && a.Thread == "" && (a.Tab == 2 || a.Tab == 3 || st.Chat != nil || st.ChatE != "")
+	previewing := a.Tab == 3 && a.Preview && previewKind(a.File) != "" && a.FileErr == ""
+	ruled := a.Search == nil && a.Thread == "" && !previewing && (a.Tab == 2 || a.Tab == 3 || st.Chat != nil || st.ChatE != "")
 	body := h - 3
 	if ruled {
 		body = h - 4
@@ -339,6 +345,15 @@ func AppFrame(v *view.View, st State, w, h int) []string {
 		main, keys = threadBody(st, w, body)
 	case a.Tab == 2:
 		main, footer = changesScreen(v, st, w, body)
+	case a.Tab == 3 && a.Preview && previewKind(a.File) != "" && a.FileErr == "":
+		// the design's preview is a page of its own: the file rendered in the middle, its keys at the foot
+		lines = []string{fit(rigBarLeft(st, v)+st.faint(" › preview"), w), fit("", w)}
+		cw := min(appColumn, w-8)
+		main = indentAll(previewLines(st, a, cw, body), (w-cw)/2, w)
+		keys = [][2]string{{"⇥", "next file"}, {"s", "source"}, {"/", "filter rows"}, {"o", "open in app"}, {"?", "ask " + appParent(st)}}
+		if a.Finding {
+			keys = [][2]string{{"⏎", "keep"}, {"esc", "all rows"}}
+		}
 	case a.Tab == 3:
 		main, footer = codeScreen(st, w, body)
 	case st.Chat == nil && st.ChatE == "":

@@ -157,7 +157,7 @@ func stateColour(state string) string {
 // historyScreen is "Done today": one row per applied, undone or held job, and the chosen one's details.
 func historyScreen(st State, w, h int) []string {
 	parent := appParent(st)
-	cw := min(appColumn, w-8)
+	cw := min(70, w-8) // the design's done today and ship are 70 wide
 	lines := []string{spread(rigBarLeft(st, nil)+st.faint(" › done today"), "", "", w), fit("", w)}
 	body := []string{"", st.bold("Done today") + "  " + st.faint("applied, held and allowed by "+parent), ""}
 	var keys [][2]string
@@ -189,14 +189,14 @@ func historyScreen(st State, w, h int) []string {
 				}
 			}
 			left := st.faint(when) + "  " + st.tile(r.Worker) + " " + title
-			row := left + strings.Repeat(" ", max(2, cw-2-lipgloss.Width(left)-lipgloss.Width(right))) + right
+			row := left + strings.Repeat(" ", max(2, cw-2-lipgloss.Width(left)-lipgloss.Width(right))) + right + "  "
 			if i == sel {
-				row = st.bold("›") + " " + row
+				row = " " + row // the design shifts the chosen row by one and lights it
 				if st.Styled {
 					row = tint(fit(row, cw), colSelBg)
+				} else {
+					row = ">" + row[1:]
 				}
-			} else {
-				row = "  " + row
 			}
 			body = append(body, row)
 		}
@@ -231,7 +231,7 @@ func historyScreen(st State, w, h int) []string {
 func shipScreen(st State, w, h int) []string {
 	s := st.Ship
 	sh := st.App.ShipScreen
-	cw := min(appColumn, w-8)
+	cw := min(70, w-8) // the design's done today and ship are 70 wide
 	lines := []string{spread(rigBarLeft(st, nil)+st.faint(" › ship"), "", "", w), fit("", w)}
 	var body []string
 	keys := [][2]string{{"esc", "not now"}}

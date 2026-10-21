@@ -2,10 +2,16 @@ package ui
 
 import (
 	"bufio"
+	"bytes"
 	"fmt"
+	"image"
+	_ "image/gif"
+	_ "image/jpeg"
+	"image/png"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -21,6 +27,8 @@ type fileMsg struct {
 	path  string
 	lines []string
 	err   error
+	image []byte // a picture as PNG, for terminals that show images
+	w, h  int    // its size in pixels
 }
 
 // SetApp opens the board as the app (the design's ADE screens) for the repository at repo.
@@ -80,7 +88,11 @@ func (m *Model) openFile(rel string) tea.Cmd {
 	return func() tea.Msg {
 		path := filepath.Join(repo, filepath.Clean("/"+rel))
 		if previewKind(rel) == "binary" {
-			return fileMsg{path: rel, lines: []string{}}
+			msg := fileMsg{path: rel, lines: []string{}}
+			if img, w, h := pictureAsPNG(path); img != nil {
+				msg.image, msg.w, msg.h = img, w, h
+			}
+			return msg
 		}
 		data, err := os.ReadFile(path)
 		if err != nil {
@@ -234,6 +246,12 @@ func (m *Model) appKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		a.Search = &SearchState{}
 		return m, m.fetchChanged()
 	case "tab":
+		if a.Tab == 3 && a.Preview && previewKind(a.File) != "" && a.Search == nil && a.Palette == nil {
+			if next := nextPreview(a.Files, a.File); next != "" && next != a.File {
+				return m, m.runPalette(paletteItem{Action: "file:" + next}, "")
+			}
+			return m, m.loadFiles()
+		}
 		if matches := slashMatches(m.st.Prompt); len(matches) > 0 {
 			sel := clampSel(m.st.SlashSel, len(matches))
 			m.st.Prompt, m.st.SlashSel = matches[sel].Name, 0
@@ -465,7 +483,11 @@ func (m *Model) appTabKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case "/":
 		if a.File != "" {
-			a.Finding, a.Find = true, ""
+			a.Finding, a.Find = true, "" // in a table, the rows that hold it
+		}
+	case "?":
+		if a.Preview && previewKind(a.File) != "" {
+			return m, m.appSend("Tell me about " + a.File + ": what it is for and what stands out.")
 		}
 	case "s":
 		if previewKind(a.File) != "" && previewKind(a.File) != "binary" {
@@ -618,13 +640,29 @@ func (m *Model) fetchChanged() tea.Cmd {
 // runSearch greps the repository's tracked files for the query (case-insensitive, fixed text, up to 200 matches).
 func (m *Model) runSearch() tea.Cmd {
 	s := m.st.App.Search
-	query, repo := s.Query, m.st.App.Repo
+	query, repo, key := s.Query, m.st.App.Repo, s.key()
 	if strings.TrimSpace(query) == "" {
-		s.Results, s.Ran = nil, query
+		s.Results, s.Ran = nil, key
 		return nil
 	}
+	args := []string{"-C", repo, "grep", "-n", "-I", "--max-count=20"}
+	if !s.Case {
+		args = append(args, "-i")
+	}
+	if s.Word {
+		args = append(args, "-w")
+	}
+	if s.Regex {
+		args = append(args, "-E")
+	} else {
+		args = append(args, "-F")
+	}
+	args = append(args, "-e", query)
+	if scope := strings.TrimSpace(s.Scope); scope != "" {
+		args = append(args, "--", ":(glob)"+scope)
+	}
 	return func() tea.Msg {
-		out, _ := exec.Command("git", "-C", repo, "grep", "-n", "-I", "-i", "-F", "--max-count=20", "-e", query).Output()
+		out, _ := exec.Command("git", args...).Output()
 		var hits []SearchHit
 		sc := bufio.NewScanner(strings.NewReader(string(out)))
 		for sc.Scan() && len(hits) < 200 {
@@ -635,7 +673,7 @@ func (m *Model) runSearch() tea.Cmd {
 			n, _ := strconv.Atoi(parts[1])
 			hits = append(hits, SearchHit{Path: parts[0], Line: n, Text: parts[2]})
 		}
-		return searchMsg{query: query, hits: hits}
+		return searchMsg{query: key, hits: hits}
 	}
 }
 
@@ -643,8 +681,56 @@ func (m *Model) runSearch() tea.Cmd {
 func (m *Model) searchKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	a := m.st.App
 	s := a.Search
+	if s.Replace != nil {
+		switch k.Type {
+		case tea.KeyEsc:
+			s.Replace = nil
+		case tea.KeyBackspace:
+			if r := []rune(*s.Replace); len(r) > 0 {
+				*s.Replace = string(r[:len(r)-1])
+			}
+		case tea.KeyRunes, tea.KeySpace:
+			*s.Replace += string(k.Runes)
+		case tea.KeyEnter:
+			files := map[string]bool{}
+			for _, r := range s.Results {
+				files[r.Path] = true
+			}
+			m.pendingX, m.pendingI = "search.replace", *s.Replace
+			m.st.Mode, m.st.Prompt = ModeConfirm, fmt.Sprintf("Replace %d matches of %q in %d files with %q?", len(s.Results), s.Query, len(files), *s.Replace)
+		}
+		return m, nil
+	}
+	switch k.String() {
+	case "alt+c":
+		s.Case = !s.Case
+		return m, m.runSearch()
+	case "alt+w":
+		s.Word = !s.Word
+		return m, m.runSearch()
+	case "alt+r":
+		s.Regex = !s.Regex
+		return m, m.runSearch()
+	case "alt+p":
+		s.EditScope = !s.EditScope
+		return m, nil
+	case "ctrl+r":
+		if len(s.Results) > 0 {
+			empty := ""
+			s.Replace = &empty
+		}
+		return m, nil
+	}
+	edit := &s.Query
+	if s.EditScope {
+		edit = &s.Scope
+	}
 	switch k.Type {
 	case tea.KeyEsc:
+		if s.EditScope {
+			s.EditScope = false
+			return m, nil
+		}
 		a.Search = nil
 	case tea.KeyUp:
 		s.Sel = clampSel(clampSel(s.Sel, len(s.Results))-1, len(s.Results))
@@ -658,6 +744,10 @@ func (m *Model) searchKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, m.appSend("Where is " + q + " used, and what does it do?")
 	case tea.KeyEnter:
+		if s.EditScope {
+			s.EditScope = false
+			return m, nil
+		}
 		if len(s.Results) == 0 {
 			return m, nil
 		}
@@ -666,17 +756,68 @@ func (m *Model) searchKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		a.Tab, a.File, a.FileLines, a.FileErr, a.FileOff, a.Preview, a.Find = 3, hit.Path, nil, "", max(0, hit.Line-4), false, s.Query
 		return m, tea.Batch(m.openFile(hit.Path), m.fetchChanged())
 	case tea.KeyBackspace:
-		if r := []rune(s.Query); len(r) > 0 {
-			s.Query = string(r[:len(r)-1])
+		if r := []rune(*edit); len(r) > 0 {
+			*edit = string(r[:len(r)-1])
 		}
 		s.Sel = 0
 		return m, m.runSearch()
 	case tea.KeyRunes, tea.KeySpace:
-		s.Query += string(k.Runes)
+		*edit += string(k.Runes)
 		s.Sel = 0
 		return m, m.runSearch()
 	}
 	return m, nil
+}
+
+// replaceAll puts with in place of the search's matches, on the lines it found them, in the files it found them in.
+func (m *Model) replaceAll(with string) tea.Cmd {
+	s := m.st.App.Search
+	repo, hits := m.st.App.Repo, append([]SearchHit(nil), s.Results...)
+	pattern := regexp.QuoteMeta(s.Query)
+	if s.Regex {
+		pattern = s.Query
+	}
+	if s.Word {
+		pattern = `\b(?:` + pattern + `)\b`
+	}
+	if !s.Case {
+		pattern = "(?i)" + pattern
+	}
+	return func() tea.Msg {
+		re, err := regexp.Compile(pattern)
+		if err != nil {
+			return appliedMsg{err: err}
+		}
+		byFile := map[string]map[int]bool{}
+		for _, h := range hits {
+			if byFile[h.Path] == nil {
+				byFile[h.Path] = map[int]bool{}
+			}
+			byFile[h.Path][h.Line] = true
+		}
+		changed := 0
+		for rel, lines := range byFile {
+			path := filepath.Join(repo, rel)
+			data, err := os.ReadFile(path)
+			if err != nil {
+				return appliedMsg{err: err}
+			}
+			rows := strings.Split(string(data), "\n")
+			for n := range lines {
+				if n >= 1 && n <= len(rows) {
+					if out := re.ReplaceAllLiteralString(rows[n-1], with); out != rows[n-1] {
+						rows[n-1] = out
+						changed++
+					}
+				}
+			}
+			info, _ := os.Stat(path)
+			if err := os.WriteFile(path, []byte(strings.Join(rows, "\n")), info.Mode().Perm()); err != nil {
+				return appliedMsg{err: err}
+			}
+		}
+		return appliedMsg{text: fmt.Sprintf("replaced on %d lines in %d files", changed, len(byFile))}
+	}
 }
 
 func (m *Model) welcomeKey(key string) (tea.Model, tea.Cmd) {
@@ -974,4 +1115,49 @@ func repoFacts(repo string) string {
 		facts = append(facts, "dev container found")
 	}
 	return strings.Join(facts, " · ")
+}
+
+// pictureAsPNG reads a PNG, JPEG or GIF and gives it as PNG with its size, for the preview to show; nil for anything
+// else or anything too large to send to a terminal.
+func pictureAsPNG(path string) ([]byte, int, int) {
+	info, err := os.Stat(path)
+	if err != nil || info.Size() > 16<<20 {
+		return nil, 0, 0
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, 0, 0
+	}
+	img, format, err := image.Decode(bytes.NewReader(data))
+	if err != nil {
+		return nil, 0, 0
+	}
+	b := img.Bounds()
+	if format == "png" {
+		return data, b.Dx(), b.Dy()
+	}
+	var out bytes.Buffer
+	if png.Encode(&out, img) != nil {
+		return nil, 0, 0
+	}
+	return out.Bytes(), b.Dx(), b.Dy()
+}
+
+// nextPreview is the next file after the open one that the preview shows, in the repository's order.
+func nextPreview(files []string, current string) string {
+	var list []string
+	for _, f := range files {
+		if previewKind(f) != "" {
+			list = append(list, f)
+		}
+	}
+	for i, f := range list {
+		if f == current && i+1 < len(list) {
+			return list[i+1]
+		}
+	}
+	if len(list) > 0 {
+		return list[0]
+	}
+	return ""
 }

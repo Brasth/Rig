@@ -975,7 +975,7 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.st.App.Changed = msg.files
 		}
 	case searchMsg:
-		if m.appOn() && m.st.App.Search != nil && m.st.App.Search.Query == msg.query {
+		if m.appOn() && m.st.App.Search != nil && m.st.App.Search.key() == msg.query {
 			m.st.App.Search.Results, m.st.App.Search.Ran = msg.hits, msg.query
 		}
 	case reopenMsg:
@@ -988,9 +988,21 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case fileMsg:
 		if m.appOn() && msg.path == m.st.App.File {
-			m.st.App.FileLines, m.st.App.FileErr = msg.lines, ""
+			a := m.st.App
+			a.FileLines, a.FileErr, a.ImageCols, a.ImageRows = msg.lines, "", 0, 0
 			if msg.err != nil {
-				m.st.App.FileErr = msg.err.Error()
+				a.FileErr = msg.err.Error()
+			}
+			if msg.image != nil && m.st.Logos && msg.w > 0 && msg.h > 0 {
+				// shown inline: as wide as the column allows, as tall as its shape needs (a cell is about twice as tall as wide)
+				cols := min(84, m.w-8, msg.w/8+1)
+				rows := max(1, cols*msg.h/msg.w/2)
+				if limit := max(4, m.h-10); rows > limit {
+					rows, cols = limit, max(1, limit*2*msg.w/msg.h)
+				}
+				if SendImage(msg.image, cols, rows) {
+					a.ImageCols, a.ImageRows = cols, rows
+				}
 			}
 		}
 	case themeMsg:
@@ -1561,6 +1573,12 @@ func (m *Model) confirmKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, m.applyAct("applies.hold", map[string]any{"id": id, "on": true}, "holding "+id)
 		case "applies.hold-all":
 			return m, m.holdAll()
+		case "search.replace":
+			if m.st.App != nil && m.st.App.Search != nil {
+				cmd := m.replaceAll(id)
+				m.st.App.Search.Replace = nil
+				return m, tea.Sequence(cmd, m.runSearch())
+			}
 		case "ship.push":
 			return m, m.applyAct("ship.run", map[string]any{"mode": "push"}, "pushed")
 		case "ship.pr":
