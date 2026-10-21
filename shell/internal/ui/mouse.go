@@ -154,6 +154,9 @@ func keyFor(glyph string) (tea.KeyMsg, bool) {
 	named := map[string]tea.KeyType{"⏎": tea.KeyEnter, "enter": tea.KeyEnter, "esc": tea.KeyEsc, "⇥": tea.KeyTab,
 		"tab": tea.KeyTab, "⇧⇥": tea.KeyShiftTab, "shift+tab": tea.KeyShiftTab, "pgup": tea.KeyPgUp, "pgdown": tea.KeyPgDown,
 		"up": tea.KeyUp, "down": tea.KeyDown, "left": tea.KeyLeft, "right": tea.KeyRight, "backspace": tea.KeyBackspace}
+	if glyph == "⌥⏎" {
+		return tea.KeyMsg{Type: tea.KeyEnter, Alt: true}, true
+	}
 	if t, ok := named[glyph]; ok {
 		return tea.KeyMsg{Type: t}, true
 	}

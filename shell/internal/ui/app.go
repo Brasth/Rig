@@ -494,13 +494,7 @@ func countLabel(v *view.View, label string) int {
 
 // replyBox is the design's rounded reply box with the draft or the placeholder.
 func replyBox(st State, w int, placeholder string, lit bool) []string {
-	text := " " + st.faint("›") + " "
-	if st.Prompt != "" {
-		text += st.draft(w - 7)
-	} else {
-		text += "▏" + st.faint(placeholder)
-	}
-	return roundBox(st, []string{text}, w, lit)
+	return roundBox(st, boxRows(st, w, placeholder), w, lit)
 }
 
 // conversationBody is the design's main screen: what the parent is working on, the conversation, the change cards,
@@ -563,7 +557,7 @@ func conversationBody(v *view.View, st State, w, h int) ([]string, [][2]string) 
 		lines = append(lines, workingLine(st))
 	}
 	if st.Prompt != "" {
-		keys = [][2]string{{"⏎", "send"}, {"esc", "clear"}, {"⇥", "agents"}, {"⌃k", "commands"}}
+		keys = [][2]string{{"⏎", "send"}, {"⌥⏎", "new line"}, {"esc", "clear"}, {"⇥", "agents"}, {"⌃k", "commands"}}
 	}
 	box := replyBox(st, cw, "Reply to "+parent, false)
 	if menu := slashMenu(st, cw); len(menu) > 0 {
@@ -701,13 +695,7 @@ func emptyBody(v *view.View, st State, w, h int) ([]string, [][2]string) {
 	lines := []string{"", "", ""}
 	lines = append(lines, st.tile(parent)+"  "+st.bold("What should we work on in "+repo+"?"))
 	lines = append(lines, st.dim(parent+" plans, starts helpers when needed, checks and applies."), "")
-	text := " " + st.faint("›") + " "
-	if st.Prompt != "" {
-		text += st.draft(cw - 7)
-	} else {
-		text += "▏" + st.faint("ask "+parent+" anything about "+repo)
-	}
-	lines = append(lines, roundBox(st, []string{text}, cw, true)...)
+	lines = append(lines, roundBox(st, boxRows(st, cw, "ask "+parent+" anything about "+repo), cw, true)...)
 	if menu := slashMenu(st, cw); len(menu) > 0 {
 		lines = append(lines, menu...)
 	}
@@ -1109,7 +1097,8 @@ func tintIf(st State, s, bg string) string {
 func helpBox(st State, hw int) []string {
 	rows := [][2]string{
 		{"type, ⏎", "talk to the parent"},
-		{"↑ ↓", "the messages you sent before, newest first"},
+		{"⌥⏎ ⌃j", "a new line in your message"},
+		{"↑ ↓", "the lines of your message; in an empty box, what you sent"},
 		{"← →", "move in the box (⌥ a word, ⌃a ⌃e its ends, ⌃w a word back)"},
 		{"⇥", "the agents panel: done today, helpers, the queue"},
 		{"⌃k", "commands, files, or ask the parent"},
