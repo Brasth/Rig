@@ -246,6 +246,7 @@ type Model struct {
 	boxFrom     int       // where in the box's text it went down
 	clickAt     time.Time // the last press, for a double click
 	clickN      int       // presses in a row at one place: 2 a double click, 3 a triple one
+	jumpBack    []jumpTo  // where go to definition came from, for ⌃t
 	clicks      int
 	clickX      int
 	clickY      int
@@ -988,6 +989,10 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.appOn() && m.st.ChatParent != "" && m.st.ChatParent != m.cmdsFor {
 			return m, m.fetchParentCommands(m.st.ChatParent) // the / menu offers this parent's skills and commands
 		}
+	case definitionMsg:
+		if m.appOn() {
+			return m, m.afterDefinition(msg)
+		}
 	case gitStatusMsg:
 		if m.appOn() {
 			m.st.App.Git = msg.state
@@ -1135,6 +1140,10 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds := []tea.Cmd{m.fetchGutter()}
 			if a.Blame {
 				cmds = append(cmds, m.fetchBlame())
+			}
+			if to := a.pendingAt; to != nil && to.file == msg.path && msg.err == nil {
+				a.pendingAt = nil
+				m.goTo(to.at) // go to definition: the cursor on the name
 			}
 			if msg.image != nil && m.st.Logos && msg.w > 0 && msg.h > 0 {
 				// shown inline: as wide as the column allows, as tall as its shape needs (a cell is about twice as tall as wide)

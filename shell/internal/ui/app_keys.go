@@ -107,7 +107,7 @@ func (m *Model) loadFiles() tea.Cmd {
 	}
 	repo := m.st.App.Repo
 	return func() tea.Msg {
-		out, err := exec.Command("git", "-C", repo, "ls-files").Output()
+		out, err := exec.Command("git", "-C", repo, "ls-files", "--cached", "--others", "--exclude-standard").Output() // new files too, not ignored ones
 		if err != nil {
 			return filesMsg{}
 		}
@@ -627,6 +627,8 @@ func (m *Model) appTabKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, m.closeTab()
 	case "e":
 		m.startEdit()
+	case "ctrl+t":
+		return m, m.jumpBackCmd()
 	case "g":
 		return m, m.openGit()
 	case "b":

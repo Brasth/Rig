@@ -3,6 +3,10 @@
 
 
 
+## Go to definition in the code tab (2026-10-21)
+
+`F12`, or a `⌃` or `⌥` click on a name, opens where it is defined: an import's path opens that file, a name imported from the repository opens its file at the definition, any other name is found in the file, its folder or the repository, and a package's name says it is outside the repository. `⌃t` goes back. The palette and the explorer now list new, untracked files too.
+
 ## Git in the code tab: blame, change marks, source control (2026-10-21)
 
 The code tab now has git as an IDE does. The gutter marks the lines added, changed and removed since the last commit. `b` shows blame beside the line numbers (who last changed each line and when) and the cursor line's author, age and commit in the status bar. `g`, or a click on `GIT` above the explorer, turns the side bar into source control: the branch (ahead and behind its upstream), staged and changed files, and the recent commits; `space` stages or unstages, `a` stages everything, `⏎` shows a file's diff, `u` discards after a question, `c` commits what is staged, and `p` pushes through the ship screen. Hover now underlines only the text of a button or a file name, not the padding around it.

@@ -240,6 +240,16 @@ func (m *Model) mouse(e tea.MouseMsg) (tea.Model, tea.Cmd) {
 			return m, m.closeTabFile(strings.TrimPrefix(id, "row:tabfile:"))
 		}
 		return m, nil
+	case e.Action == tea.MouseActionPress && e.Button == tea.MouseButtonLeft && (e.Ctrl || e.Alt):
+		// ⌃ or ⌥ click on a name: go to where it is defined
+		if _, ok := m.codeAt(e.X, e.Y); ok || m.codeZone(e.X, e.Y) {
+			m.textPress(e.X, e.Y, false)
+			m.codeDrag = false
+			if m.st.App.Editing {
+				return m, m.goToDefinition()
+			}
+		}
+		return m, nil
 	case e.Action == tea.MouseActionPress && e.Button == tea.MouseButtonLeft:
 		if m.textPress(e.X, e.Y, e.Shift) {
 			return m, nil // in the reply box or a file being edited: the cursor goes there, as in an editor
@@ -412,6 +422,12 @@ func (m *Model) textPress(x, y int, shift bool) bool {
 	}
 	m.codeDrag, a.EdAnchor = true, at
 	return true
+}
+
+// codeZone is whether (x, y) is on a line of the open file.
+func (m *Model) codeZone(x, y int) bool {
+	z, ok := m.zoneAt(x, y)
+	return ok && strings.HasPrefix(z.id, "text:code:")
 }
 
 // codeAt is the place in the file being edited under (x, y): text:code:<line> marks a line of it.

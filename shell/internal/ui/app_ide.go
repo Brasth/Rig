@@ -594,6 +594,12 @@ func (m *Model) editFileKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 change:
+	switch key {
+	case "f12":
+		return m, m.goToDefinition()
+	case "ctrl+t":
+		return m, m.jumpBackCmd()
+	}
 	if m.ideKey(k) {
 		return m, nil
 	}
@@ -726,7 +732,7 @@ func editKeys(a *AppState) [][2]string {
 		}
 		return [][2]string{{"⏎", "ok"}, {"esc", "cancel"}}
 	}
-	return [][2]string{{"⌃s", "save"}, {"⌃z", "undo"}, {"⌃f", "find"}, {"⌃r", "replace"}, {"⌃o", "symbol"}, {"⌃/", "comment"}, {"esc", "done"}}
+	return [][2]string{{"⌃s", "save"}, {"⌃z", "undo"}, {"⌃f", "find"}, {"⌃r", "replace"}, {"F12", "definition"}, {"⌃/", "comment"}, {"esc", "done"}}
 }
 
 // inRepo is a path the explorer may make, rename or delete: relative, inside the repository, not in .git.

@@ -78,6 +78,7 @@ type AppState struct {
 	BlameLines           []blameLine
 	Gutter               map[int]byte // the open file's lines changed since the last commit
 	GutterFor            string
+	pendingAt            *jumpTo       // where the cursor goes once the file being opened is read
 	findAt               pos           // where find last stopped, while not editing
 	renameFrom           string        // the file or folder the rename question is about
 	CurLine, CurCol      int           // the editing cursor, in runes
