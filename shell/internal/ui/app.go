@@ -78,12 +78,12 @@ type AppState struct {
 	BlameLines           []blameLine
 	Gutter               map[int]byte // the open file's lines changed since the last commit
 	GutterFor            string
-	findAt               pos                 // where find last stopped, while not editing
-	renameFrom           string              // the file or folder the rename question is about
-	CurLine, CurCol      int                 // the editing cursor, in runes
-	FileCRLF             bool                // the file ends its lines with CRLF
-	FileTruncated        bool                // only its first lines were read, so it is not edited here
-	Diff                 *view.JobDiff       // the changes tab's job, its diff
+	findAt               pos           // where find last stopped, while not editing
+	renameFrom           string        // the file or folder the rename question is about
+	CurLine, CurCol      int           // the editing cursor, in runes
+	FileCRLF             bool          // the file ends its lines with CRLF
+	FileTruncated        bool          // only its first lines were read, so it is not edited here
+	Diff                 *view.JobDiff // the changes tab's job, its diff
 	DiffID               string
 	DiffFile             int
 	DiffOff              int

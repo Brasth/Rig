@@ -483,8 +483,6 @@ func sideHeads(st State, w int) string {
 	return fit(" "+st.zone("row:side:files", files)+"  "+st.zone("row:side:git", git+n), w)
 }
 
-
-
 // gitKey is the source control view's keys.
 func (m *Model) gitKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	a := m.st.App
