@@ -53,6 +53,21 @@ class TaskAndLog(unittest.TestCase):
             with self.subTest(brief=brief[:40]):
                 self.assertEqual(jobs.task_from_brief(brief, "j"), expected)
 
+    def test_scope_labels_before_the_task_are_not_the_title(self):
+        cases = {
+            "Scoped bugfix, no children/browser/Asana/server/unrelated edits/git stash. Workdir /Users/me/p. "
+            "Fix the listener type in nav.ts.": "Fix the listener type in nav.ts.",
+            "Documentation-only continuation. Workdir /Users/me/p. Write the final report.": "Write the final report.",
+            "Exact report correction only, no children/browser/server. Correct the dates in the report.": "Correct the dates in the report.",
+            "No children, browser/computer/Figma, server, git commands. Repair the seek handler.": "Repair the seek handler.",
+            "Same scoped writer continuation. No children/browser. Finish the follow-up edits.": "Finish the follow-up edits.",
+            "Task: correct factual errors in the implementation report.": "Correct factual errors in the implementation report.",
+            "Task git-manager: commit and push the content changes.": "Commit and push the content changes.",
+        }
+        for brief, expected in cases.items():
+            with self.subTest(brief=brief[:40]):
+                self.assertEqual(jobs.task_from_brief(brief, "j"), expected)
+
     def test_a_brief_that_is_all_instructions_falls_back_to_the_id(self):
         brief = "Worker only, first Rig operation rig_job_inbox. No agents/browser/computer-use."
         self.assertEqual(jobs.task_from_brief(brief, "20260908T071315Z-4994"), "20260908T071315Z-4994")
