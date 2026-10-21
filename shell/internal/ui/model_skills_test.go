@@ -11,12 +11,16 @@ import (
 	"github.com/Brasth/Rig/shell/internal/view"
 )
 
-func withParentCommands(t *testing.T, m *Model, src *fakeSource) {
+func withParentCommands(t *testing.T, m *Model, src *fakeSource, parent ...string) {
 	t.Helper()
 	src.parentCmds = &view.ParentCommands{}
 	_ = json.Unmarshal([]byte(`{"parent": "claude", "commands": [{"name": "review", "help": "Review the open diff", "kind": "skill"},
 		{"name": "git:commit", "help": "Commit with a message", "kind": "command"}, {"name": "help", "help": "theirs", "kind": "command"}]}`), src.parentCmds)
 	src.chatStatus = chatOn()
+	if len(parent) > 0 {
+		src.chatStatus.Parent = parent[0]
+		m.parentName = parent[0]
+	}
 	m.csLast, m.cmdsFor = time.Time{}, ""
 	_, cmd := m.Update(m.fetchChatStatus()()) // the status names the parent, and its commands are asked for
 	run(cmd, m)
@@ -85,7 +89,12 @@ func TestAnOlderServerLeavesRigsOwnCommands(t *testing.T) {
 func TestADollarWordListsTheParentsSkillsAsCodexDoes(t *testing.T) {
 	m, src := appModel(t)
 	withConversation(t, m, src)
-	withParentCommands(t, m, src)
+	withParentCommands(t, m, src, "codex")
+	typeText(m, "/rev")
+	if got := m.st.slashes(); len(got) != 0 {
+		t.Fatalf("codex names its skills with $, not /: %v", got)
+	}
+	m.st.Prompt = ""
 	typeText(m, "please $rev")
 	if got := m.st.slashes(); len(got) != 1 || got[0].Name != "$review" {
 		t.Fatalf("the skill, not the command: %v", got)
@@ -110,5 +119,27 @@ func TestADollarWordListsTheParentsSkillsAsCodexDoes(t *testing.T) {
 	typeText(m, "5 off")
 	if got := m.st.slashes(); got != nil {
 		t.Fatal("a space ends the word")
+	}
+}
+
+func TestEachParentsBoxNamesSkillsAsItsOwnDoes(t *testing.T) {
+	m, src := appModel(t)
+	withConversation(t, m, src)
+	withParentCommands(t, m, src) // claude
+	typeText(m, "$rev")
+	if got := m.st.slashes(); got != nil {
+		t.Fatalf("claude has no $ mentions: %v", got)
+	}
+	m.st.Prompt = ""
+	typeText(m, "/rev")
+	if got := m.st.slashes(); len(got) != 1 || got[0].Name != "/review" {
+		t.Fatalf("claude's / lists its skills: %v", got)
+	}
+	m2, src2 := appModel(t)
+	withConversation(t, m2, src2)
+	withParentCommands(t, m2, src2, "pi")
+	typeText(m2, "/skill")
+	if got := m2.st.slashes(); len(got) != 1 || got[0].Name != "/skill:review" {
+		t.Fatalf("pi calls a skill /skill:name: %v", got)
 	}
 }

@@ -963,7 +963,11 @@ func paletteItems(st State) []paletteItem {
 	skills := 0
 	for _, c := range st.ParentCommands {
 		if q != "" && skills < 4 && strings.Contains(strings.ToLower(c.Name), q) {
-			out = append(out, paletteItem{appParent(st) + " skills", c.Name, c.Help, "slash:" + c.Name})
+			name := c.Name
+			if c.Skill && Conventions[st.ChatParent].Dollar {
+				name = "$" + strings.TrimPrefix(name, "/") // codex's own way to name a skill
+			}
+			out = append(out, paletteItem{appParent(st) + " skills", name, c.Help, "slash:" + name})
 			skills++
 		}
 	}

@@ -35,6 +35,9 @@ COMMAND_DIRS = {
     "pi": [".pi/agent/prompts", ".pi/prompts"],
 }
 NATIVE = {"claude"}  # its headless mode runs /name itself
+# each parent's own box: codex mentions a skill with $name, pi and omp call one /skill:name, the others /name
+DOLLAR = {"codex"}
+SKILL_PREFIX = {"pi": "skill:", "omp": "skill:"}
 NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}$")
 LIMIT = 200
 
@@ -153,7 +156,7 @@ MENTION = re.compile(r"(?<!\S)\$([A-Za-z0-9][A-Za-z0-9_.:-]*)")
 
 def _mentions(repo, parent: str, message: str) -> str:
     """$name names a skill in the message, as codex's own box does: the parent is told where each one is."""
-    named = [m.group(1) for m in MENTION.finditer(message)]
+    named = [m.group(1) for m in MENTION.finditer(message)] if parent in DOLLAR else []
     if not named:
         return message
     skills = {item["name"]: item["path"] for item in commands(repo, parent) if item["kind"] == "skill"}
@@ -171,12 +174,14 @@ def expand(repo, parent: str, message: str) -> str:
         return message
     head, _, args = message[1:].partition(" ")
     args = args.strip()
+    prefix = SKILL_PREFIX.get(parent, "")
     for item in commands(repo, parent):
-        if item["name"] != head:
+        name = prefix + item["name"] if item["kind"] == "skill" else item["name"]
+        if name != head:
             continue
         path = Path(item["path"])
         if item["kind"] == "skill":
-            note = f"Use your {head} skill (its instructions are in {path})."
+            note = f"Use your {item['name']} skill (its instructions are in {path})."
             return note + ("\n\n" + args if args else "")
         text = _read(path)
         body = _toml_prompt(text) if path.suffix == ".toml" else _front(text)[1]
