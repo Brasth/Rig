@@ -3,6 +3,10 @@
 
 
 
+## The box edits as codex's and grok's do (2026-10-21)
+
+`←` `→` move the cursor in the reply box and typing goes in where it is, with word moves (`⌥←` `⌥→`), `⌃a` `⌃e`, Home and End, Delete, `⌃w`, `⌥⌫`, `⌥d` and `⌃u`; `↑` `↓` bring back the messages you sent, the conversation's own included, and `↓` past the newest restores your draft.
+
 ## The box names skills as each parent does (2026-10-21)
 
 The parent's skills are named in the box as its own box names them: `$name` with codex (and not under `/`), `/skill:name` with pi and omp, `/name` with claude and the others, where `$` stays plain text.

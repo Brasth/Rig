@@ -166,6 +166,7 @@ func (m *Model) appSend(text string) tea.Cmd {
 			return cmd
 		}
 	}
+	m.rememberSent(text)
 	m.st.Prompt, m.st.SlashSel, m.st.Message = "", 0, "sending…"
 	m.st.App.Tab, m.st.App.Thread = 1, ""
 	src, session, parent := m.src, m.chatID, m.parentName
@@ -204,6 +205,7 @@ func (m *Model) askStopJob(r view.Row) {
 func (m *Model) appKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	a := m.st.App
 	key := k.String()
+	m.syncCaret()
 	if a.Splash > 0 {
 		a.Splash = 0 // a key goes straight to the screen
 		if k.Type == tea.KeyCtrlC {
@@ -359,19 +361,28 @@ func (m *Model) appKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	matches := m.st.slashes()
 	asking := (m.st.Chat != nil && m.st.Chat.Ask != nil) || waitingJob(m.view) != nil
-	switch k.Type {
-	case tea.KeyLeft, tea.KeyRight:
-		if asking && m.st.Prompt == "" {
-			a.AnswerDeny = !a.AnswerDeny // the design's "← → pick answer"
-		}
+	if (k.Type == tea.KeyLeft || k.Type == tea.KeyRight) && asking && m.st.Prompt == "" {
+		a.AnswerDeny = !a.AnswerDeny // the design's "← → pick answer"
 		return m, nil
+	}
+	if m.editKey(k) {
+		return m, nil
+	}
+	switch k.Type {
 	case tea.KeyUp, tea.KeyDown:
-		if len(matches) > 0 {
-			step := 1
-			if k.Type == tea.KeyUp {
-				step = -1
-			}
+		step := 1
+		if k.Type == tea.KeyUp {
+			step = -1
+		}
+		switch {
+		case len(matches) > 0:
 			m.st.SlashSel = clampSel(clampSel(m.st.SlashSel, len(matches))+step, len(matches))
+		case m.st.Prompt == "" || m.histAt >= 0:
+			m.recall(step) // as in codex and grok: the messages sent before
+		case step < 0:
+			m.setPrompt(m.st.Prompt, 0) // a draft of your own: ↑ goes to its start, ↓ to its end
+		default:
+			m.setPrompt(m.st.Prompt, len([]rune(m.st.Prompt)))
 		}
 		return m, nil
 	case tea.KeyEnter:
@@ -389,15 +400,6 @@ func (m *Model) appKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m.answer(!deny)
 		}
 		return m, m.appSend(m.st.Prompt)
-	case tea.KeyBackspace:
-		if r := []rune(m.st.Prompt); len(r) > 0 {
-			m.st.Prompt = string(r[:len(r)-1])
-		}
-		m.st.SlashSel = 0
-		return m, nil
-	case tea.KeyCtrlU:
-		m.st.Prompt = ""
-		return m, nil
 	case tea.KeyRunes, tea.KeySpace:
 		if m.st.Prompt == "" && !k.Paste && k.Type == tea.KeyRunes && len(k.Runes) == 1 {
 			// with the box empty, the design's single keys: the answer chips, the suggestions, the tabs, help, and
@@ -424,8 +426,7 @@ func (m *Model) appKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 		}
-		m.st.Prompt += string(k.Runes)
-		m.st.SlashSel = 0
+		m.insert(string(k.Runes))
 	}
 	return m, nil
 }
