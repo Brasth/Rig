@@ -1,6 +1,10 @@
 # Release Notes
 
 
+
+## Every ADE screen checked against the design again (2026-10-21)
+
+Each terminal screen was compared with its design board and brought in line: cards and panels on a white surface with the screen faded behind overlays, the agents panel full height with its own keys and today's allowed commands, the palette, the new-helper card, the launcher (light theme, `~/code/`, `⌃n` new project, running agents per project), the first conversation (repo facts, `@` to add a file), changes, done today, ship, search (case, word, regex, path filter, `⌃r` replace after a question), a preview page (markdown, tables with `/` to filter, pictures inline in Ghostty and kitty), Settings in the design's layout with new real settings (when rig starts, ship default, tab size, which events notify you and how), the no-agent screen and the problem screens.
 ## The conversation follows the updated design; switching parent sticks (2026-10-21)
 
 The conversation screen follows the design's updated `Light-TUI-Focus`: agents shown as the design's logo tiles in Ghostty and kitty (kitty graphics Unicode placeholders, also through tmux; `RIG_LOGOS=0` turns them off) and as its letter tile elsewhere, a full-width footer under a rule (`d see changes`, `← → pick answer`, `⏎ send` on the left; `u undo`, `h hold`, `⌃p files`, `? help` on the right), answer chips picked with `← →` and sent with `⏎`, a light reply box, a change card with the files, lines and checks, and the parent's inline markdown without its markers. The changes and code screens share the footer. Fixed: after switching parent (or starting a new conversation), the next status poll brought the old parent's conversation back, so claude stayed the parent.

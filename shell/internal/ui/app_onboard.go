@@ -26,7 +26,7 @@ type Onboarding struct {
 
 // installCommands are how each parent CLI installs, shown and run (after a confirmation) on the no-agents screen.
 var installCommands = []struct{ Name, Note, Command string }{
-	{"claude", "claude code · claude pro/max", "npm install -g @anthropic-ai/claude-code"},
+	{"claude", "claude pro/max", "npm install -g @anthropic-ai/claude-code"},
 	{"codex", "chatgpt", "npm install -g @openai/codex"},
 	{"opencode", "free", "npm install -g opencode-ai"},
 }
@@ -167,20 +167,24 @@ func sandboxScreen(st State, w, h int) []string {
 // noAgentsScreen is "Let's get you an agent": nothing installed, and how to install one.
 func noAgentsScreen(st State, w, h int) []string {
 	cw := min(70, w-8)
-	body := []string{"", "", st.bold("Let's get you an agent"), st.dim("no agent found on this computer · looked for claude codex opencode grok pi omp agy"), "", ""}
+	body := []string{"", "", st.bold("Let's get you an agent") + "  " + st.faint("1 of 3"),
+		st.dim("no agent found on this computer · looked for claude codex opencode grok pi omp agy"), "", ""}
 	sel := clampSel(st.App.InstallSel, len(installCommands))
-	for i, c := range installCommands {
-		row := fmt.Sprintf("  %d  ", i+1) + st.tile(c.Name) + " " + c.Name + "  " + st.faint(c.Note)
-		if i == sel {
-			row = st.bold(fmt.Sprintf("› %d  ", i+1)) + st.tile(c.Name) + " " + st.bold(c.Name) + "  " + st.faint(c.Note)
-			if i == 0 {
-				row += "  " + st.paint(colGreen, "recommended")
-			}
-		}
-		body = append(body, row, "       "+st.faint("$ "+c.Command), "")
+	head := st.bold("› 1  install one for me") + "  " + st.paint(colGreen, "recommended")
+	if st.Styled {
+		head = tint(fit(head, cw), colSelBg)
 	}
-	body = append(body, "", st.faint("one agent is enough: it talks to you and hands work to helpers"))
-	return centered(st, rigBar(st, w, 0), body, cw, w, h, [][2]string{{"1-3", "choose"}, {"⏎", "install " + installCommands[sel].Name}, {"r", "scan again"}})
+	var agents []string
+	for i, c := range installCommands {
+		name := c.Name
+		if i == sel {
+			name = st.bold(name)
+		}
+		agents = append(agents, st.tile(c.Name)+" "+name+"  "+st.faint(c.Note))
+	}
+	body = append(body, head, "     "+strings.Join(agents, "   "), "     "+st.faint("on this computer · $ "+installCommands[sel].Command),
+		"", "", st.faint("one agent is enough: it talks to you and hands work to helpers"))
+	return centered(st, rigBar(st, w, 0), body, cw, w, h, [][2]string{{"←→", "agent"}, {"⏎", "install " + installCommands[sel].Name}, {"r", "scan again"}})
 }
 
 var signedOut = regexp.MustCompile(`(?i)not logged in|log ?in again|please (run /)?login|sign(ed)? (in|out)|unauthori[sz]ed|authentication|invalid api key|401`)
@@ -198,26 +202,30 @@ func parentSignedOut(st State) bool {
 func parentLostScreen(v *view.View, st State, w, h int) []string {
 	parent := appParent(st)
 	cw := min(70, w-8)
-	body := []string{"", "", st.paint(colRed, "● ") + st.bold(parent+" is signed out"),
-		st.dim("Nothing gets checked or applied until a parent is back"), st.faint("helpers keep working in their copies"), "", ""}
-	body = append(body, st.dim("1")+"  sign in to "+parent+" again  "+st.faint("opens "+parent+" here; sign in, then quit it"), "")
+	body := []string{"", "", st.paint(colRed, "● "+parent+" is signed out"),
+		st.bold("Nothing gets checked or applied until a parent is back"), st.dim("helpers keep working in their copies"), "", ""}
+	body = append(body, st.dim("1")+"  "+st.bold("sign in to "+parent+" again"))
 	n := 2
 	for _, other := range otherParents(st) {
-		body = append(body, st.dim(fmt.Sprint(n))+"  hand over to "+st.tile(other)+" "+other+"  "+st.faint("installed"))
+		body = append(body, st.dim(fmt.Sprint(n))+"  hand over to "+st.tile(other)+" "+other+"  "+st.faint("installed · starts a new conversation"))
 		n++
 		if n > 4 {
 			break
 		}
 	}
-	body = append(body, "", st.faint("    the new parent starts a new conversation; the queue and the helpers' work stay"))
+	body = append(body, "", st.faint("    the queue, today's applies and the helpers' work stay with the project"))
 	if jobs := activeJobs(v); len(jobs) > 0 {
 		var parts []string
 		for _, r := range jobs {
-			parts = append(parts, st.tile(r.Worker)+" "+r.Worker+" "+st.faint(strings.ToLower(r.Label)))
+			word, colour := "working", colGreen
+			if r.Ask {
+				word, colour = "waiting for a check", colFaint
+			}
+			parts = append(parts, st.tile(r.Worker)+" "+st.paint(colour, word))
 		}
-		body = append(body, "", strings.Join(parts, "   "))
+		body = append(body, "", "", strings.Join(parts, "   "))
 	}
-	bar := spread(rigBarLeft(st, v), "", st.paint(colRed, "●")+" "+st.dim(parent+" signed out")+"   ", w)
+	bar := fit(rigBarLeft(st, v)+"   "+st.paint(colRed, "● "+parent+" signed out"), w)
 	return centered(st, bar, body, cw, w, h, [][2]string{{"1-4", "choose"}, {"esc", "back"}})
 }
 
@@ -261,8 +269,20 @@ func sandboxDown(st State) bool {
 // sandboxProblemScreen is the design's "sandbox stopped": what the doctor found, and the ways out.
 func sandboxProblemScreen(v *view.View, st State, w, h int) []string {
 	cw := min(70, w-8)
-	body := []string{"", "", st.paint(colRed, "● ") + st.bold("sandbox stopped"),
-		st.dim("The dev container is not running, so agents are paused"), st.faint("your work is safe in its worktrees"), "", ""}
+	worktrees := 0
+	if st.Workspace != nil {
+		for _, sec := range st.Workspace.Brief {
+			if sec.Title == "Worktrees" {
+				worktrees = max(0, len(sec.Lines)-1) // the base checkout and one per helper
+			}
+		}
+	}
+	safe := "your work is safe"
+	if worktrees > 0 {
+		safe += fmt.Sprintf(" · %d worktrees saved", worktrees)
+	}
+	body := []string{"", "", st.paint(colRed, "● sandbox stopped"),
+		st.bold("The dev container isn't running, so agents are paused"), st.dim(safe), "", ""}
 	if st.Workspace != nil {
 		for _, sec := range st.Workspace.Sections {
 			if sec.Title != "Workspace" && sec.Title != "Doctor" && sec.Title != "Recovery" {
@@ -273,23 +293,32 @@ func sandboxProblemScreen(v *view.View, st State, w, h int) []string {
 				if t == "" {
 					continue
 				}
-				if l.Tone == "attention" || strings.HasPrefix(t, "!") {
-					body = append(body, st.paint(colRed, "✗ ")+strings.TrimPrefix(t, "! "))
-				} else {
-					body = append(body, st.paint(colGreen, "✓ ")+t)
+				bad := l.Tone == "attention" || strings.HasPrefix(t, "!")
+				name, value, _ := strings.Cut(strings.TrimPrefix(t, "! "), "  ")
+				left, right := st.paint(colGreen, "✓ ")+name, st.faint(strings.TrimSpace(value))
+				if bad {
+					left, right = st.paint(colRed, "✗ ")+name, st.paint(colRed, strings.TrimSpace(value))
 				}
+				body = append(body, left+strings.Repeat(" ", max(2, cw-2-lipgloss.Width(left)-lipgloss.Width(right)))+right)
 			}
 		}
 	}
-	body = append(body, "", "", st.dim("1")+"  start it  "+st.faint("rig env up"))
+	body = append(body, "", "", st.dim("1")+"  "+st.bold("start it")+"  "+st.faint("rig env up"))
 	if st.Workspace != nil && st.Workspace.Recovery != nil && !st.Workspace.Recovery.Ready && st.Workspace.Recovery.Safe {
 		body = append(body, st.dim("2")+"  let dc-cli fix it  "+st.faint(clean(st.Workspace.Recovery.Command)))
 	} else {
 		body = append(body, st.faint("2  let dc-cli fix it  (no safe fix proposed)"))
 	}
-	body = append(body, st.dim("3")+"  run on this machine instead  "+st.paint(colAmber, "no boundary"))
-	bar := spread(rigBarLeft(st, v), "", st.paint(colRed, "●")+" "+st.dim("sandbox stopped")+"   ", w)
-	return centered(st, bar, body, cw, w, h, [][2]string{{"1-3", "choose"}, {"esc", "back"}})
+	body = append(body, st.dim("3")+"  "+st.paint(colAmber, "run on this machine instead"))
+	if jobs := activeJobs(v); len(jobs) > 0 {
+		paused := st.faint("paused") + "  "
+		for _, r := range jobs {
+			paused += st.tile(r.Worker) + " "
+		}
+		body = append(body, "", "", paused)
+	}
+	bar := fit(rigBarLeft(st, v)+"   "+st.paint(colRed, "● sandbox stopped"), w)
+	return centered(st, bar, body, cw, w, h, [][2]string{{"1-3", "choose"}, {"l", "doctor log"}, {"esc", "back"}})
 }
 
 // onboardKey is the helpers and sandbox steps' keys.
@@ -394,9 +423,9 @@ func (m *Model) problemKey(screen, key string) (tea.Model, tea.Cmd) {
 		switch key {
 		case "1", "2", "3":
 			a.InstallSel = int(key[0] - '1')
-		case "up", "k":
+		case "up", "k", "left", "h":
 			a.InstallSel = clampSel(a.InstallSel-1, len(installCommands))
-		case "down", "j":
+		case "down", "j", "right", "l":
 			a.InstallSel = clampSel(a.InstallSel+1, len(installCommands))
 		case "r":
 			m.csLast, m.csBusy = time.Time{}, false
@@ -443,6 +472,8 @@ func (m *Model) problemKey(screen, key string) (tea.Model, tea.Cmd) {
 				s, err := src.SetSetting("sandbox.provider", "host", "repo", callTimeout)
 				return appSettingsMsg{s: s, err: err}
 			}
+		case "l":
+			return m, m.exec([]string{"sh", "-c", "rig doctor; printf '\\n⏎ goes back to rig shell '; read _"}, func(err error) tea.Msg { return shellDoneMsg{err: err} })
 		case "esc":
 			a.ProblemSeen = "sandbox"
 		}

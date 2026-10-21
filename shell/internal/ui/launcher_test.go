@@ -93,3 +93,24 @@ func TestAGitURLIsClonedThenOpened(t *testing.T) {
 		t.Fatalf("opened %q", l.Open)
 	}
 }
+
+func TestTheLauncherStartsOnTheCodeFolderAndMakesNewProjects(t *testing.T) {
+	l, base, _ := launcherFor(t)
+	code := filepath.Join(base, "code")
+	if l.input != tildePath(code)+"/" {
+		t.Fatalf("the box starts on the code folder: %q", l.input)
+	}
+	if !strings.Contains(l.View(), "⌃n new project") {
+		t.Fatal("⌃n is in the footer")
+	}
+	l.Update(tea.KeyMsg{Type: tea.KeyEnter}) // the prefill alone opens the chosen recent project
+	if l.Open == "" && l.confirm == "" {
+		t.Fatal("⏎ on the prefill opens the chosen recent one")
+	}
+	l2, _, _ := launcherFor(t)
+	l2.input = "x"
+	l2.Update(tea.KeyMsg{Type: tea.KeyCtrlN})
+	if !strings.HasSuffix(l2.input, "/") || !strings.Contains(l2.View(), "type the new project's name") {
+		t.Fatalf("⌃n starts a new project's path: %q", l2.input)
+	}
+}

@@ -496,14 +496,15 @@ func TestNoAgentShowsHowToInstallOne(t *testing.T) {
 	run(m.fetchAppSettings(), m)
 	m.st.ChatParent = ""
 	out := appScreen(m)
-	for _, want := range []string{"Let's get you an agent", "› 1  [c] claude", "npm install -g @anthropic-ai/claude-code", "2  [c] codex", "r scan again"} {
+	for _, want := range []string{"Let's get you an agent  1 of 3", "› 1  install one for me  recommended", "[c] claude  claude pro/max   [c] codex  chatgpt",
+		"on this computer · $ npm install -g @anthropic-ai/claude-code", "←→ agent", "⏎ install claude", "r scan again"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q:\n%s", want, out)
 		}
 	}
 	var ran []string
 	m.exec = func(argv []string, done func(error) tea.Msg) tea.Cmd { ran = argv; return nil }
-	press(m, "2")
+	m.Update(tea.KeyMsg{Type: tea.KeyRight})
 	press(m, "enter")
 	if m.st.Mode != ModeConfirm || !strings.Contains(m.st.Prompt, "Install codex") {
 		t.Fatalf("installing asks first: %q", m.st.Prompt)
@@ -545,7 +546,7 @@ func TestAStoppedSandboxSaysSoAndOffersTheWaysOut(t *testing.T) {
 	m.st.Workspace = &view.Workspace{Sections: []view.Section{{Title: "Workspace", Lines: []view.Line{{Text: "kind    devcontainer"},
 		{Text: "! docker is not running", Tone: "attention"}}}}}
 	out := appScreen(m)
-	for _, want := range []string{"sandbox stopped", "agents are paused", "✗ docker is not running", "✓ kind    devcontainer", "1  start it", "3  run on this machine instead"} {
+	for _, want := range []string{"sandbox stopped", "agents are paused", "✗ docker is not running", "✓ kind", "devcontainer", "1  start it", "l doctor log", "3  run on this machine instead"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q:\n%s", want, out)
 		}

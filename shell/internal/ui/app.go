@@ -720,9 +720,12 @@ func welcomeScreen(st State, w, h int) []string {
 		row := "   " + st.tile(it.Name) + "  " + it.Name
 		if i == a.WelcomeSel {
 			row = " " + st.bold("›") + " " + st.tile(it.Name) + "  " + st.bold(it.Name)
-			if it.Name == st.ChatParent {
-				row += "  " + st.faint("in use")
+			model := "auto"
+			if it.Name == st.ChatParent && st.ChatModel != "" {
+				model = st.ChatModel // the model its own settings name, as the design shows on the chosen row
 			}
+			right := st.faint(model+" model") + " "
+			row += strings.Repeat(" ", max(2, cw-2-lipgloss.Width(row)-lipgloss.Width(right))) + right
 			body = append(body, roundBox(st, []string{row}, cw, true)...)
 		} else {
 			body = append(body, row)
