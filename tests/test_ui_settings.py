@@ -13,6 +13,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 import harness  # noqa: E402
 import local_api  # noqa: E402
 import ui_settings  # noqa: E402
+import ui_theme  # noqa: E402
 
 
 class Settings(unittest.TestCase):
@@ -97,6 +98,20 @@ class Settings(unittest.TestCase):
         with self.assertRaisesRegex(ui_settings.SettingsError, "rig init"):
             ui_settings.save(self.repo, "workers.codex", True)
         self.assertFalse(self.harness.exists(), "a setting never creates the harness")
+
+    def test_the_parents_model_is_kept_as_typed_for_all_repos_or_this_one(self):
+        self.assertEqual(ui_settings.read(self.repo)["parent_models"]["claude"]["scope"], "default")
+        result = ui_settings.save(self.repo, "parent_model.claude", "Sonnet", "all")
+        self.assertEqual((result["parent_models"]["claude"]["model"], result["parent_models"]["claude"]["scope"]), ("Sonnet", "all"))
+        self.assertIn('claude = "Sonnet"', ui_theme.global_path().read_text())
+        ui_settings.save(self.repo, "parent_model.codex", "gpt-5-codex", "repo")
+        self.assertEqual(ui_settings.chosen_model(self.repo, "codex"), ("gpt-5-codex", "repo"))
+        self.assertEqual(ui_settings.read(self.repo)["parent_models"]["claude"]["suggest"], ["opus", "sonnet", "haiku"])
+        for bad in ('x"; rm -rf /', "-flag", "a b"):
+            with self.assertRaises(ui_settings.SettingsError):
+                ui_settings.save(self.repo, "parent_model.claude", bad, "all")
+        ui_settings.save(self.repo, "parent_model.claude", "default", "all")
+        self.assertEqual(ui_settings.chosen_model(self.repo, "claude"), ("", "default"))
 
     def test_over_the_api(self):
         api = local_api.Api(self.repo, "t" * 64)

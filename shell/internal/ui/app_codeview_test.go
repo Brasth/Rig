@@ -93,15 +93,20 @@ func TestAFileIsEditedAndSavedHere(t *testing.T) {
 		t.Fatalf("⌃s saves: %q", data)
 	}
 	typeText(m, "x")
-	if _, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC}); cmd != nil || !strings.Contains(m.st.Message, "esc again") {
-		t.Fatal("⌃c never quits over changes not saved: it asks, as esc does")
+	if _, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC}); cmd != nil || !strings.HasPrefix(m.st.Message, "copied") {
+		t.Fatalf("in the editor ⌃c copies the line, it never quits: %q", m.st.Message)
 	}
-	if !m.st.App.Editing {
-		t.Fatal("still editing")
+	press(m, "esc")
+	if m.st.App.Editing || !m.st.App.Dirty || !strings.Contains(m.st.Message, "not saved") {
+		t.Fatal("esc stops editing; the changes stay, not saved")
 	}
-	run(press(m, "esc"), m)
-	if m.st.App.Editing || m.st.App.Dirty {
-		t.Fatal("a second esc throws them away")
+	m.Update(tea.KeyMsg{Type: tea.KeyCtrlW})
+	if m.st.Mode != ModeConfirm {
+		t.Fatal("closing the tab asks first")
+	}
+	run(press(m, "y"), m)
+	if m.st.App.Dirty || len(m.st.App.Tabs) != 0 {
+		t.Fatal("yes throws the changes away")
 	}
 }
 

@@ -155,6 +155,18 @@ func (m *Model) scrollBy(n int) {
 	m.st.ChatUp = max(0, min(m.st.App.ChatMax, m.st.ChatUp+n))
 }
 
+// quit leaves rig shell, after a question when files edited in the code tab have changes not saved.
+func (m *Model) quit() tea.Cmd {
+	if a := m.st.App; a != nil {
+		if open := a.unsaved(); len(open) > 0 {
+			m.pendingX, m.pendingI = "quit.unsaved", ""
+			m.st.Mode, m.st.Prompt = ModeConfirm, fmt.Sprintf("Quit? %d edited files are not saved (%s).", len(open), strings.Join(open, ", "))
+			return nil
+		}
+	}
+	return tea.Quit
+}
+
 // appSend sends the box's text to the parent, or runs it as a / command.
 func (m *Model) appSend(text string) tea.Cmd {
 	text = strings.TrimSpace(text)
@@ -223,8 +235,11 @@ func (m *Model) appKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.st.Mode == ModeConfirm {
 		return m.confirmKey(k)
 	}
-	if k.Type == tea.KeyCtrlC && a.Editing && a.Dirty {
-		return m.editFileKey(tea.KeyMsg{Type: tea.KeyEsc}) // never quits over changes not saved: as esc, asks first
+	if k.Type == tea.KeyCtrlC && a.Editing && a.Tab == 3 && a.Thread == "" && a.Palette == nil && !a.Help {
+		return m.editFileKey(k) // in the editor ⌃c copies, as in an IDE
+	}
+	if k.Type == tea.KeyCtrlC && m.st.Prompt == "" {
+		return m, m.quit()
 	}
 	if k.Type == tea.KeyCtrlC {
 		if m.st.Prompt != "" {
@@ -299,7 +314,7 @@ func (m *Model) appKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	}
-	if a.Tab == 3 && a.Thread == "" && (a.Editing || a.TreeFocus) {
+	if a.Tab == 3 && a.Thread == "" && (a.Editing || a.TreeFocus || a.CodeAsk != nil) {
 		return m.appTabKey(k) // editing a file, or in the explorer: every key is theirs
 	}
 	if k.Type == tea.KeyRunes && (k.Paste || len(k.Runes) > 1) {
@@ -454,6 +469,17 @@ func (m *Model) appKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m *Model) appTabKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	a := m.st.App
 	key := k.String()
+	if a.Tab == 3 {
+		// the editor, the explorer and the code tab's questions have every key, digits too
+		switch {
+		case a.CodeAsk != nil && !a.Editing && !a.TreeFocus:
+			return m.askKey(k)
+		case a.Editing:
+			return m.editFileKey(k)
+		case a.TreeFocus:
+			return m.treeKey(k)
+		}
+	}
 	if a.Tab == 2 && a.Commenting {
 		return m.commentKey(k)
 	}
@@ -465,7 +491,7 @@ func (m *Model) appTabKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		a.Tab, a.Selecting = int(key[0]-'0'), false
 		return m, tea.Batch(m.fetchDock(true), m.fetchDiff(true), m.fetchChanged(), m.loadFiles())
 	case "q":
-		return m, tea.Quit
+		return m, m.quit()
 	case "?":
 		a.Help = true
 		return m, nil
@@ -528,12 +554,6 @@ func (m *Model) appTabKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	// the code tab
-	switch {
-	case a.Editing:
-		return m.editFileKey(k)
-	case a.TreeFocus:
-		return m.treeKey(k)
-	}
 	if (key == "u" || key == "h") && !a.Selecting && m.quickApply(key, false) {
 		return m, nil
 	}
@@ -573,7 +593,7 @@ func (m *Model) appTabKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case "/":
 		if a.File != "" {
-			a.Finding, a.Find = true, "" // in a table, the rows that hold it
+			a.Finding, a.Find, a.findAt = true, "", pos{} // in a table, the rows that hold it
 		}
 	case "?":
 		if a.Preview && previewKind(a.File) != "" {
@@ -586,6 +606,22 @@ func (m *Model) appTabKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "ctrl+b":
 		m.focusTree()
 		return m, m.loadFiles()
+	case "ctrl+s":
+		if a.Dirty {
+			m.saveFile()
+		}
+	case "n", "N":
+		if a.Find != "" {
+			m.findNext(a.Find, key == "N")
+		}
+	case "ctrl+g":
+		if a.File != "" && a.FileLines != nil {
+			a.CodeAsk = &codeAsk{kind: "goto", label: "go to line"}
+		}
+	case "ctrl+pgup", "[":
+		return m, m.switchTab(-1)
+	case "ctrl+pgdown", "]":
+		return m, m.switchTab(1)
 	case "ctrl+w":
 		return m, m.closeTab()
 	case "e":
@@ -1030,18 +1066,23 @@ func (m *Model) runPalette(it paletteItem, query string) tea.Cmd {
 		}
 		m.st.Prompt += "@" + strings.TrimPrefix(it.Action, "attach:") + " "
 		return nil
+	case strings.HasPrefix(it.Action, "model:"):
+		return m.setModel(strings.TrimPrefix(it.Action, "model:"))
 	case strings.HasPrefix(it.Action, "slash:"):
 		m.st.Prompt, m.st.SlashSel, a.Tab, a.Thread = strings.TrimPrefix(it.Action, "slash:")+" ", 0, 1, ""
 		return nil
 	case strings.HasPrefix(it.Action, "file:"):
 		rel := strings.TrimPrefix(it.Action, "file:")
-		if a.Dirty && rel != a.File {
-			m.st.Message = filepath.Base(a.File) + " has unsaved changes: ⌃s saves them, esc in it discards them"
-			return nil
+		if rel != a.File {
+			m.stashBuffer() // its unsaved changes wait in its tab
 		}
-		a.Tabs, a.Editing, a.Dirty, a.TreeFocus = addTab(a.Tabs, rel), false, false, false
+		a.Tabs, a.Editing, a.Dirty, a.TreeFocus, a.CodeAsk, a.EdSel = addTab(a.Tabs, rel), false, false, false, nil, false
 		a.Tab, a.File, a.FileLines, a.FileErr, a.FileOff, a.Selecting, a.Find = 3, rel, nil, "", 0, false, ""
 		a.Preview = previewKind(rel) != ""
+		if m.restoreBuffer(rel) {
+			a.Preview = false // its unsaved changes, as they were left
+			return m.fetchChanged()
+		}
 		return tea.Batch(m.openFile(rel), m.fetchChanged())
 	}
 	switch it.Action {
@@ -1075,6 +1116,9 @@ func (m *Model) runPalette(it paletteItem, query string) tea.Cmd {
 		m.st.Mode, m.st.Prompt = ModeConfirm, "Start this project's container (rig env up)?"
 	case "panel":
 		a.Panel = true
+	case "model":
+		a.Settings, a.Palette = nil, &Palette{Model: true}
+		return m.fetchAppSettings()
 	case "settings":
 		return m.openSettings("general")
 	case "today":
@@ -1094,7 +1138,7 @@ func (m *Model) runPalette(it paletteItem, query string) tea.Cmd {
 	case "help":
 		a.Help = true
 	case "quit":
-		return tea.Quit
+		return m.quit()
 	}
 	return nil
 }

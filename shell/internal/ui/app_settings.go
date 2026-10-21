@@ -40,6 +40,7 @@ type setRow struct {
 	Install string // the command that installs a missing agent (i)
 	Stacked bool   // the label on its own line and the choices under it, as the design draws the theme
 	Pick    string // the value ←→ has picked and ⏎ would apply
+	Action  string // ⏎ (or a click) runs this palette action: the row opens a picker of its own
 	At      int    // its place in the section, for the mouse
 }
 
@@ -77,6 +78,7 @@ func settingRows(st State, section string) []setRow {
 			{Label: "Theme", Key: "ui.theme", Options: themes, Value: st.Theme, Scoped: true, Stacked: true},
 			{Label: "Default parent", Key: "parent", Options: append([]string(nil), s.Installed...), Value: parent, Group: true,
 				Right: st.tile(parent) + " " + parent + st.faint(" · "+model)},
+			{Label: parent + "'s model", Action: "model", Right: modelRight(st, parent)},
 			{Label: "When rig starts", Key: "ui.start", Options: []string{"last", "picker"}, Names: []string{"last project", "project picker"}, Value: s.Start,
 				Group: true},
 			func() setRow {
@@ -479,6 +481,27 @@ func settingLine(st State, r setRow, selected bool, cw int) string {
 	return left + strings.Repeat(" ", max(2, cw-lipgloss.Width(left)-lipgloss.Width(right))) + right
 }
 
+// modelRight is the model row's value: the model in use and where it was chosen, and ⏎ to change it.
+func modelRight(st State, parent string) string {
+	model, where := st.ChatModel, "its own setting"
+	if s := st.AppSettings; s != nil {
+		if pm, ok := s.ParentModels[parent]; ok {
+			switch {
+			case pm.Model != "" && pm.Scope == "repo":
+				model, where = pm.Model, "this repo"
+			case pm.Model != "":
+				model, where = pm.Model, "all repos"
+			case pm.Own != "":
+				model = pm.Own
+			}
+		}
+	}
+	if model == "" {
+		model = "auto"
+	}
+	return model + st.faint(" · "+where+"  ⏎ change")
+}
+
 // tomlLines is the toml section: the harness itself as the design shows it (its tables in the accent colour), whether
 // it is valid, and how to edit it.
 func tomlLines(st State, cw int) []string {
@@ -590,6 +613,9 @@ func (m *Model) settingsKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		r := rows[clampSel(sc.Row, len(rows))]
+		if r.Action != "" {
+			return m, m.runPalette(paletteItem{Action: r.Action}, "")
+		}
 		if r.Key == "" || r.Key == "approvals" || len(r.Options) < 2 {
 			return m, nil
 		}

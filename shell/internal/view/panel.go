@@ -88,10 +88,12 @@ type ChatStatus struct {
 	Available []string `json:"available"`
 	Parent    string   `json:"parent"` // who answers a new conversation; empty when no parent CLI is installed
 	// Configured is the project's own parent (.rig/harness.toml); empty means none was chosen, so the board offers its picker.
-	Configured string   `json:"configured"`
-	Model      string   `json:"model"`   // the parent CLI's own model setting, short ("opus"); empty when it names none
-	Parents    []string `json:"parents"` // every parent the chat can run
-	Sessions   []struct {
+	Configured string `json:"configured"`
+	Model      string `json:"model"` // the model chosen for the parent, else its CLI's own setting, short ("opus")
+	// ModelChosen: Model was chosen in rig shell (/model), not taken from the CLI's settings.
+	ModelChosen bool     `json:"model_chosen"`
+	Parents     []string `json:"parents"` // every parent the chat can run
+	Sessions    []struct {
 		ID     string `json:"id"`
 		Parent string `json:"parent"`
 		State  string `json:"state"`
@@ -148,14 +150,22 @@ type AppSettings struct {
 		Parent bool   `json:"parent"`
 		Model  string `json:"model"`
 	} `json:"routing_table"`
-	Models      map[string]string `json:"models"`
-	RunsToday   int               `json:"runs_today"`
-	RigVersion  string            `json:"rig_version"`
-	DCVersion   string            `json:"dc_version"`
-	GH          bool              `json:"gh"`
-	GHUser      string            `json:"gh_user"`
-	CloneDir    string            `json:"clone_dir"`
-	SignCommits bool              `json:"sign_commits"`
+	Models map[string]string `json:"models"`
+	// ParentModels is the model each parent talks with in the conversation: chosen here (for all repos or this one),
+	// else its own setting; and the models to offer for it.
+	ParentModels map[string]struct {
+		Model   string   `json:"model"`
+		Scope   string   `json:"scope"`
+		Own     string   `json:"own"`
+		Suggest []string `json:"suggest"`
+	} `json:"parent_models"`
+	RunsToday   int    `json:"runs_today"`
+	RigVersion  string `json:"rig_version"`
+	DCVersion   string `json:"dc_version"`
+	GH          bool   `json:"gh"`
+	GHUser      string `json:"gh_user"`
+	CloneDir    string `json:"clone_dir"`
+	SignCommits bool   `json:"sign_commits"`
 }
 
 // Today is applies.today: the helpers' work applied, undone or held, and commands allowed, newest first.

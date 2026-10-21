@@ -372,6 +372,9 @@ func codeTabs(st State, w int) string {
 		if who := a.Changed[f]; who != "" {
 			name += st.paint(agentColor(who), "●") + " "
 		}
+		if (f == a.File && a.Dirty) || a.Bufs[f] != nil {
+			name = strings.TrimSuffix(name, " ") + " " + st.paint(colText, "◆") + " " // not saved
+		}
 		if f == a.File {
 			if st.Styled {
 				name = tint(lipgloss.NewStyle().Bold(true).Underline(true).Render(" "+filepath.Base(f))+" "+
@@ -436,6 +439,17 @@ func codeRows(st State, w, room int) []string {
 		} else {
 			text = highlight(st, text)
 		}
+		if from, to, ok := a.selRange(); ok && a.Editing && i >= from.l && i <= to.l {
+			// the selection: from its start on its first line, to its end on its last, a cell past a line it runs on from
+			d0, d1 := 0, ansi.StringWidth(text)+1
+			if i == from.l {
+				d0 = displayCol(a.FileLines[i], from.c, tabSize(st))
+			}
+			if i == to.l {
+				d1 = displayCol(a.FileLines[i], to.c, tabSize(st))
+			}
+			text = selectCells(st, text, d0, d1)
+		}
 		if a.Editing && i == a.CurLine {
 			text = withCursor(st, text, displayCol(a.FileLines[i], a.CurCol, tabSize(st)))
 		}
@@ -471,6 +485,24 @@ func displayCol(line string, col, tab int) int {
 	return ansi.StringWidth(strings.ReplaceAll(string(r[:col]), "\t", strings.Repeat(" ", tab)))
 }
 
+// selectCells lights cells d0 to d1 of a coloured line as the editor's selection.
+func selectCells(st State, line string, d0, d1 int) string {
+	if d1 <= d0 {
+		return line
+	}
+	if pad := d1 - ansi.StringWidth(line); pad > 0 {
+		line += strings.Repeat(" ", pad)
+	}
+	if !st.Styled {
+		return line
+	}
+	bg := "#c7d2fe"
+	if !lightGround() {
+		bg = "#3f3f8f"
+	}
+	return ansi.Truncate(line, d0, "") + tint(ansi.Cut(line, d0, d1), bg) + "\x1b[49m" + ansi.TruncateLeft(line, d1, "")
+}
+
 // withCursor draws the editing cursor, a block, at cell col of a coloured line.
 func withCursor(st State, line string, col int) string {
 	if !st.Styled {
@@ -490,10 +522,10 @@ func codeScreen(v *view.View, st State, w, h int) ([]string, [][2]string) {
 	a := st.App
 	keys := [][2]string{{"⌃b", "tree"}, {"/", "find"}, {"v", "select"}, {"e", "edit"}, {"E", "$EDITOR"}}
 	switch {
+	case a.CodeAsk != nil || a.Editing:
+		keys = editKeys(a)
 	case a.TreeFocus:
-		keys = [][2]string{{"↑↓", "move"}, {"⏎", "open"}, {"←→", "fold"}, {"/", "filter"}, {"esc", "back"}}
-	case a.Editing:
-		keys = [][2]string{{"⌃s", "save"}, {"esc", "done"}, {"E", "$EDITOR"}}
+		keys = [][2]string{{"↑↓", "move"}, {"⏎", "open"}, {"←→", "fold"}, {"/", "filter"}, {"n", "new"}, {"r", "rename"}, {"d", "delete"}, {"esc", "back"}}
 	}
 	treeW := 0
 	if w >= 90 {
@@ -518,6 +550,11 @@ func codeScreen(v *view.View, st State, w, h int) ([]string, [][2]string) {
 	ed = ed[:h-2]
 	bottom := ""
 	switch {
+	case a.CodeAsk != nil:
+		bottom = "      " + st.dim(a.CodeAsk.label+" ›") + " " + a.CodeAsk.text + "▏"
+		if a.CodeAsk.kind == "find" {
+			bottom += "   " + st.faint("⏎ next · esc close")
+		}
 	case a.Finding:
 		bottom = "      " + st.dim("/") + " " + a.Find + "▏"
 	case a.Selecting:

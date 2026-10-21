@@ -7,7 +7,6 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-	"unicode"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -83,6 +82,9 @@ func (m *Model) openTree(path string, dir bool) tea.Cmd {
 // treeKey is the explorer's keys after ⌃b: ↑↓ move, ⏎ opens, ←→ fold, / filters, esc goes back to the code.
 func (m *Model) treeKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	a := m.st.App
+	if a.CodeAsk != nil {
+		return m.askKey(k)
+	}
 	rows := treeRows(a)
 	if a.TreeFiltering {
 		switch k.Type {
@@ -111,6 +113,33 @@ func (m *Model) treeKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		a.TreeSel = clampSel(sel+15, len(rows))
 	case "/":
 		a.TreeFiltering = true
+	case "n", "r", "d":
+		// a new file where the explorer is, or the chosen one renamed or deleted
+		path := ""
+		if len(rows) > 0 {
+			path = rows[sel].path
+		}
+		switch k.String() {
+		case "n":
+			dir := path
+			if len(rows) > 0 && !rows[sel].dir {
+				dir = filepath.Dir(path)
+			}
+			text := ""
+			if dir != "" && dir != "." {
+				text = dir + "/"
+			}
+			a.CodeAsk = &codeAsk{kind: "new", label: "new file", text: text}
+		case "r":
+			if path != "" {
+				a.renameFrom, a.CodeAsk = path, &codeAsk{kind: "rename", label: "rename to", text: path}
+			}
+		case "d":
+			if path != "" && !rows[sel].dir {
+				m.pendingX, m.pendingI = "file.delete", path
+				m.st.Mode, m.st.Prompt = ModeConfirm, "Delete "+path+"? It is removed from the repository folder."
+			}
+		}
 	case "left", "h", "right", "l", "enter", " ":
 		if len(rows) == 0 {
 			return m, nil
@@ -160,10 +189,12 @@ func (m *Model) focusTree() {
 // closeTab closes the open file's tab (⌃w) and opens the one beside it.
 func (m *Model) closeTab() tea.Cmd {
 	a := m.st.App
-	if a.Dirty {
-		m.st.Message = filepath.Base(a.File) + " has unsaved changes: ⌃s saves them, esc in it discards them"
+	if a.Dirty && m.pendingX != "tab.discard" {
+		m.pendingX, m.pendingI = "tab.discard", a.File
+		m.st.Mode, m.st.Prompt = ModeConfirm, "Close "+filepath.Base(a.File)+" without saving? Its changes are thrown away."
 		return nil
 	}
+	a.Dirty = false
 	at := -1
 	for i, t := range a.Tabs {
 		if t == a.File {
@@ -195,8 +226,10 @@ func (m *Model) startEdit() {
 		return
 	}
 	a.Editing, a.Selecting, a.Finding = true, false, false
+	if a.Dirty {
+		return // back to the changes not saved, the cursor where it was
+	}
 	a.CurLine, a.CurCol = min(max(a.FileOff, 0), len(a.FileLines)-1), 0
-	a.editEsc = false
 }
 
 // keepCursorShown scrolls the file so the editing cursor is on screen.
@@ -227,7 +260,7 @@ func (m *Model) saveFile() {
 		m.st.Message = "Could not save " + a.File + ": " + err.Error()
 		return
 	}
-	a.Dirty = false
+	a.Dirty, a.SavedID = false, linesID(a.FileLines)
 	m.st.Message = "saved " + a.File
 }
 
@@ -240,125 +273,4 @@ func indentUnit(st State, lines []string) string {
 	n := 2
 	fmt.Sscanf(in, "Spaces: %d", &n)
 	return strings.Repeat(" ", max(1, n))
-}
-
-// editFileKey edits the open file: the arrows, Home and End move; typing, ⏎, ⇥, ⌫ and Delete change it; ⌃s saves;
-// esc stops editing (a second esc throws away what is not saved).
-func (m *Model) editFileKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
-	a := m.st.App
-	lines := a.FileLines
-	line := []rune(lines[a.CurLine])
-	a.CurCol = min(a.CurCol, len(line))
-	set := func(l int, text []rune) {
-		lines[l] = string(text)
-		a.Dirty = true
-	}
-	key := k.String()
-	if key != "esc" {
-		a.editEsc = false
-	}
-	switch key {
-	case "ctrl+s":
-		m.saveFile()
-	case "esc":
-		if a.Dirty && !a.editEsc {
-			a.editEsc = true
-			m.st.Message = "unsaved changes: ⌃s saves them, esc again throws them away"
-			return m, nil
-		}
-		a.Editing = false
-		if a.Dirty {
-			a.Dirty = false
-			return m, m.openFile(a.File) // thrown away: the file as it is on disk
-		}
-	case "up":
-		a.CurLine = max(0, a.CurLine-1)
-	case "down":
-		a.CurLine = min(len(lines)-1, a.CurLine+1)
-	case "pgup":
-		a.CurLine = max(0, a.CurLine-20)
-	case "pgdown":
-		a.CurLine = min(len(lines)-1, a.CurLine+20)
-	case "left":
-		if a.CurCol > 0 {
-			a.CurCol--
-		} else if a.CurLine > 0 {
-			a.CurLine--
-			a.CurCol = len([]rune(lines[a.CurLine]))
-		}
-	case "right":
-		if a.CurCol < len(line) {
-			a.CurCol++
-		} else if a.CurLine < len(lines)-1 {
-			a.CurLine, a.CurCol = a.CurLine+1, 0
-		}
-	case "home", "ctrl+a":
-		a.CurCol = 0
-	case "end", "ctrl+e":
-		a.CurCol = len(line)
-	case "alt+left", "ctrl+left":
-		a.CurCol = wordLeft(line, a.CurCol)
-	case "alt+right", "ctrl+right":
-		a.CurCol = wordRight(line, a.CurCol)
-	case "enter":
-		var lead []rune
-		for _, r := range line {
-			if r != ' ' && r != '\t' {
-				break
-			}
-			lead = append(lead, r)
-		}
-		rest := append(append([]rune{}, lead...), line[a.CurCol:]...)
-		set(a.CurLine, line[:a.CurCol])
-		a.FileLines = append(lines[:a.CurLine+1], append([]string{string(rest)}, lines[a.CurLine+1:]...)...)
-		a.CurLine, a.CurCol = a.CurLine+1, len(lead)
-	case "backspace":
-		switch {
-		case a.CurCol > 0:
-			set(a.CurLine, append(line[:a.CurCol-1:a.CurCol-1], line[a.CurCol:]...))
-			a.CurCol--
-		case a.CurLine > 0:
-			prev := []rune(lines[a.CurLine-1])
-			set(a.CurLine-1, append(prev, line...))
-			a.FileLines = append(lines[:a.CurLine], lines[a.CurLine+1:]...)
-			a.CurLine, a.CurCol = a.CurLine-1, len(prev)
-		}
-	case "delete":
-		switch {
-		case a.CurCol < len(line):
-			set(a.CurLine, append(line[:a.CurCol:a.CurCol], line[a.CurCol+1:]...))
-		case a.CurLine < len(lines)-1:
-			set(a.CurLine, append(line, []rune(lines[a.CurLine+1])...))
-			a.FileLines = append(lines[:a.CurLine+1], lines[a.CurLine+2:]...)
-		}
-	case "tab":
-		unit := []rune(indentUnit(m.st, lines))
-		set(a.CurLine, append(line[:a.CurCol:a.CurCol], append(unit, line[a.CurCol:]...)...))
-		a.CurCol += len(unit)
-	default:
-		if k.Type == tea.KeyRunes || k.Type == tea.KeySpace {
-			text := []rune(strings.ReplaceAll(string(k.Runes), "\r", ""))
-			if strings.ContainsRune(string(text), '\n') {
-				// a paste of several lines: each becomes a line of the file
-				parts := strings.Split(string(text), "\n")
-				head, tail := string(line[:a.CurCol])+parts[0], parts[len(parts)-1]+string(line[a.CurCol:])
-				add := append([]string{head}, parts[1:len(parts)-1]...)
-				add = append(add, tail)
-				a.FileLines = append(lines[:a.CurLine], append(add, lines[a.CurLine+1:]...)...)
-				a.CurLine += len(parts) - 1
-				a.CurCol = len([]rune(parts[len(parts)-1]))
-				a.Dirty = true
-				break
-			}
-			for _, r := range text {
-				if !unicode.IsPrint(r) && r != '\t' {
-					return m, nil
-				}
-			}
-			set(a.CurLine, append(line[:a.CurCol:a.CurCol], append(text, line[a.CurCol:]...)...))
-			a.CurCol += len(text)
-		}
-	}
-	m.keepCursorShown()
-	return m, nil
 }

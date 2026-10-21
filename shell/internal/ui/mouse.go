@@ -202,6 +202,19 @@ func (m *Model) mouse(e tea.MouseMsg) (tea.Model, tea.Cmd) {
 			m.st.Message = ""
 		}
 		return m, nil
+	case e.Action == tea.MouseActionMotion && e.Button == tea.MouseButtonLeft && m.codeDrag:
+		if at, ok := m.codeAt(e.X, e.Y); ok {
+			a := m.st.App
+			a.EdSel = true
+			a.setCursor(at)
+			if a.EdAnchor == a.cursor() {
+				a.EdSel = false
+			}
+		}
+		return m, nil
+	case e.Action == tea.MouseActionRelease && m.codeDrag:
+		m.codeDrag = false
+		return m, nil
 	case e.Action == tea.MouseActionMotion && e.Button == tea.MouseButtonLeft && m.boxDrag:
 		if at, ok := m.boxAt(e.X, e.Y); ok {
 			if at >= m.boxFrom {
@@ -307,8 +320,40 @@ func (m *Model) textPress(x, y int) bool {
 	if err != nil || line < 0 || line >= len(a.FileLines) {
 		return false
 	}
-	a.CurLine, a.CurCol = line, runeAtCell(a.FileLines[line], x-z.x0, tabSize(m.st))
+	at := pos{line, runeAtCell(a.FileLines[line], x-z.x0, tabSize(m.st))}
+	m.moveTo(at, false)
+	if double {
+		r := []rune(a.FileLines[line])
+		from, to := at.c, at.c
+		word := func(c rune) bool { return unicode.IsLetter(c) || unicode.IsDigit(c) || c == '_' }
+		for from > 0 && word(r[from-1]) {
+			from--
+		}
+		for to < len(r) && word(r[to]) {
+			to++
+		}
+		if to > from {
+			a.EdSel, a.EdAnchor = true, pos{line, from}
+			a.setCursor(pos{line, to})
+		}
+		return true
+	}
+	m.codeDrag, a.EdAnchor = true, at
 	return true
+}
+
+// codeAt is the place in the file being edited under (x, y): text:code:<line> marks a line of it.
+func (m *Model) codeAt(x, y int) (pos, bool) {
+	a := m.st.App
+	z, ok := m.zoneAt(x, y)
+	if !ok || !strings.HasPrefix(z.id, "text:code:") {
+		return pos{}, false
+	}
+	line, err := strconv.Atoi(strings.TrimPrefix(z.id, "text:code:"))
+	if err != nil || line < 0 || line >= len(a.FileLines) {
+		return pos{}, false
+	}
+	return pos{line, runeAtCell(a.FileLines[line], x-z.x0, tabSize(m.st))}, true
 }
 
 // runeAtCell is the rune of a line drawn at cell col, with its tabs as spaces.
@@ -416,6 +461,15 @@ func (m *Model) wheel(up bool) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	if !list && a.Tab == 3 && a.Preview && previewKind(a.File) != "" {
+		return m, nil
+	}
+	if !list && a.Tab == 3 && !a.TreeFocus && a.File != "" && a.FileLines != nil {
+		// the wheel scrolls the file and leaves the cursor where it is, as in an IDE
+		if up {
+			a.FileOff = max(0, a.FileOff-3)
+		} else {
+			a.FileOff = min(max(0, len(a.FileLines)-5), a.FileOff+3)
+		}
 		return m, nil
 	}
 	k := tea.KeyMsg{Type: tea.KeyDown}
@@ -588,6 +642,8 @@ func (m *Model) clickRow(list, at string) (tea.Model, tea.Cmd) {
 		}
 	case "installagent":
 		a.InstallSel = i
+	case "open":
+		return m, m.runPalette(paletteItem{Action: at}, "") // the top bar's parent and settings
 	case "answer":
 		return m.answer(at == "allow")
 	case "suggest":

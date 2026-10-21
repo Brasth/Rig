@@ -246,6 +246,20 @@ class Turns(Base):
         self.assertEqual(first["argv"], ["exec", "--json", "go"])
         self.assertEqual(second["argv"], ["exec", "--json", "resume", "native-codex-1", "again"])
 
+    def test_the_chosen_model_goes_to_the_parents_own_flag(self):
+        import ui_settings
+        with mock.patch.dict(os.environ, {"RIG_HOME": str(self.base / "rig-home")}):
+            ui_settings.save(self.repo, "parent_model.codex", "gpt-5-codex", "all")
+            stand_in(self.bin, "codex", CODEX_STREAM)
+            started = rig_chat.send(self.repo, "go", parent="codex")
+            self.wait_idle(started["session"])
+            self.assertEqual(self.calls()[0]["argv"], ["exec", "--json", "-m", "gpt-5-codex", "go"])
+            ui_settings.save(self.repo, "parent_model.claude", "sonnet", "all")
+            self.assertEqual((rig_chat.status(self.repo)["model"], rig_chat.status(self.repo)["model_chosen"]), ("sonnet", True),
+                             "the project's parent is claude here")
+        self.assertEqual(rig_chat.argv_claude("hi", "", {"model": "sonnet"})[6:8], ["--model", "sonnet"])
+        self.assertNotIn("--model", rig_chat.argv_claude("hi", "", {}))
+
     def test_a_parents_own_command_is_expanded_for_its_headless_mode(self):
         home = self.base / "home"
         (home / ".codex/prompts").mkdir(parents=True)

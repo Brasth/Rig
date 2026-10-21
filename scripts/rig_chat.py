@@ -45,31 +45,37 @@ class ChatError(ValueError):
 # Each parent's headless mode, as Rig's worker launcher already runs it (scripts/worker_commands.py), minus the
 # permission flags Rig gives its workers: the parent keeps the user's own settings. ``turn`` carries the repository,
 # a file holding the message, and the claude permission server. ``resumes``: the CLI continues its own session.
+def _model(turn: dict, flag: str = "--model") -> list[str]:
+    """The model chosen for the parent (ui_settings parent_model), as its CLI's own flag; nothing when none is."""
+    return [flag, turn["model"]] if turn.get("model") else []
+
+
 def argv_claude(message: str, native: str, turn: dict) -> list[str]:
     asks = ["--mcp-config", turn["ask_mcp"], "--permission-prompt-tool", "mcp__rig-ask__permission_prompt"] if turn.get("ask_mcp") else []
-    return ["claude", "-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", *asks, *(["--resume", native] if native else []), "--", message]
+    return ["claude", "-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", *_model(turn), *asks,
+            *(["--resume", native] if native else []), "--", message]
 
 
 def argv_codex(message: str, native: str, turn: dict) -> list[str]:
-    return ["codex", "exec", "--json", *(["resume", native] if native else []), message]
+    return ["codex", "exec", "--json", *_model(turn, "-m"), *(["resume", native] if native else []), message]
 
 
 def argv_grok(message: str, native: str, turn: dict) -> list[str]:
     session = ["-r", native] if native else ["--session-id", turn["new_id"]]
-    return ["grok", "--no-auto-update", *session, "--prompt-file", turn["message_file"], "--cwd", turn["repo"],
+    return ["grok", "--no-auto-update", *_model(turn), *session, "--prompt-file", turn["message_file"], "--cwd", turn["repo"],
             "--output-format", "streaming-json"]
 
 
 def argv_opencode(message: str, native: str, turn: dict) -> list[str]:
-    return ["opencode", "run", "--format", "json", "--dir", turn["repo"], *(["--session", native] if native else []), message]
+    return ["opencode", "run", "--format", "json", *_model(turn), "--dir", turn["repo"], *(["--session", native] if native else []), message]
 
 
 def argv_omp(message: str, native: str, turn: dict) -> list[str]:
-    return ["omp", "-p", "--mode", "json", "--cwd", turn["repo"], message]
+    return ["omp", "-p", "--mode", "json", *_model(turn), "--cwd", turn["repo"], message]
 
 
 def argv_pi(message: str, native: str, turn: dict) -> list[str]:
-    return ["pi", "-p", "--mode", "json", message]
+    return ["pi", "-p", "--mode", "json", *_model(turn), message]
 
 
 def argv_agy(message: str, native: str, turn: dict) -> list[str]:
@@ -321,8 +327,10 @@ def status(repo) -> dict:
     import harness
     configured = harness.parse_harness(harness.harness_path(Path(repo)))["parent"]
     parent = default_parent(repo)
+    import ui_settings
+    chosen, _ = ui_settings.chosen_model(repo, parent)
     result = {"enabled": on, "parents": sorted(HEADLESS), "available": available, "sessions": [], "parent": parent,
-              "configured": configured, "model": parent_model(parent)}
+              "configured": configured, "model": chosen or parent_model(parent), "model_chosen": bool(chosen)}
     if on:
         result["sessions"] = [{"id": s["id"], "parent": s["parent"], "state": s["state"], "turns": s.get("turns", 0)} for s in sessions(repo)[:20]]
     return result
@@ -618,7 +626,7 @@ def run_codex_server(repo: Path, session: str, message: str, meta: dict, folder:
         if native:
             call = {"name": "codex-reply", "arguments": {"conversationId": native, "threadId": native, "prompt": message}}
         else:
-            call = {"name": "codex", "arguments": {"prompt": message, "cwd": str(repo)}}
+            call = {"name": "codex", "arguments": {"prompt": message, "cwd": str(repo), **({"model": meta["model"]} if meta.get("model") else {})}}
         send({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": call})
         written, error = 0, False
         streamed = ""
@@ -698,7 +706,10 @@ def run_turn(repo, session: str) -> int:
     if parent not in RESUMES:
         message = _with_context(repo, session, message)
     (folder / "message.txt").write_text(message)
-    turn = {"repo": str(repo), "message_file": str(folder / "message.txt"), "new_id": str(uuid.uuid4())}
+    import ui_settings
+    turn = {"repo": str(repo), "message_file": str(folder / "message.txt"), "new_id": str(uuid.uuid4()),
+            "model": ui_settings.chosen_model(repo, parent)[0]}
+    meta["model"] = turn["model"]
     if parent in ASKS:
         _write_json(folder / "meta.json", {"status": "running"})
         turn["ask_mcp"] = _ask_server(folder)
