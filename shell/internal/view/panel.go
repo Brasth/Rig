@@ -102,14 +102,19 @@ type ChatStatus struct {
 	// ModelChosen: Model was chosen in rig shell (/model), not taken from the CLI's settings.
 	ModelChosen bool `json:"model_chosen"`
 	// Effort is the reasoning level chosen for the parent (/model, /effort); empty means its CLI's own setting.
-	Effort   string   `json:"effort"`
-	Parents  []string `json:"parents"` // every parent the chat can run
-	Sessions []struct {
-		ID     string `json:"id"`
-		Parent string `json:"parent"`
-		State  string `json:"state"`
-		Turns  int    `json:"turns"`
-	} `json:"sessions"`
+	Effort   string        `json:"effort"`
+	Parents  []string      `json:"parents"` // every parent the chat can run
+	Sessions []ChatSession `json:"sessions"`
+}
+
+// ChatSession is one conversation in chat.status: what it was about and when it was last used, for /resume.
+type ChatSession struct {
+	ID      string  `json:"id"`
+	Parent  string  `json:"parent"`
+	State   string  `json:"state"`
+	Turns   int     `json:"turns"`
+	Title   string  `json:"title"`   // its first message
+	Updated float64 `json:"updated"` // when it was last used, as unix seconds
 }
 
 // JobProblems is job.problems: what a job's failed checks found, as an IDE's Problems view lists them.

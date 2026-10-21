@@ -79,14 +79,15 @@ type State struct {
 	DockEvidence   *view.Evidence // the selected job's evidence in the Session screen's dock
 	DockID         string
 	DockE          string
-	Styled         bool      // apply colour and reverse video to list rows; golden tests leave it off
-	ChatModel      string    // the parent's model, for the title "Parent · claude opus"
-	ChatEffort     string    // the reasoning level chosen for the parent, shown after the model
-	Theme          string    // the colour theme in use; empty is the default, rig
-	ThemeScope     string    // where it is kept: "all" repos, this "repo", "default" or "this board" (rig shell --theme)
-	Focus          string    // the Session screen's pane with the keyboard: "" (the jobs, as the mockup opens), "parent" or "workspace"
-	Picker         *Picker   // the parent picker, while it is open
-	App            *AppState // the app (the design's ADE screens); nil while the board shows
+	Styled         bool               // apply colour and reverse video to list rows; golden tests leave it off
+	ChatModel      string             // the parent's model, for the title "Parent · claude opus"
+	ChatEffort     string             // the reasoning level chosen for the parent, shown after the model
+	ChatSessions   []view.ChatSession // the conversations of this repository, the one used last first, for /resume
+	Theme          string             // the colour theme in use; empty is the default, rig
+	ThemeScope     string             // where it is kept: "all" repos, this "repo", "default" or "this board" (rig shell --theme)
+	Focus          string             // the Session screen's pane with the keyboard: "" (the jobs, as the mockup opens), "parent" or "workspace"
+	Picker         *Picker            // the parent picker, while it is open
+	App            *AppState          // the app (the design's ADE screens); nil while the board shows
 	AppSettings    *view.AppSettings
 	Today          *view.Today      // what helpers applied today
 	Ship           *view.ShipStatus // what is ahead of the upstream branch
@@ -139,6 +140,7 @@ var SlashCommands = []SlashCommand{
 	{"/review", " [FOCUS]", "the parent reviews the current changes", false, false},
 	{"/security-review", " [FOCUS]", "the parent reviews them for security problems", false, false},
 	{"/clear", "", "start a new conversation", false, false},
+	{"/resume", "", "open an earlier conversation again", false, false},
 	{"/model", "", "the model the parent talks with (or /model NAME [LEVEL])", false, false},
 	{"/effort", " LEVEL", "how much the parent reasons: low, medium, high…", false, false},
 	{"/quit", "", "leave rig shell", false, false},

@@ -346,6 +346,34 @@ def sessions(repo) -> list[dict]:
     return sorted(rows, key=lambda row: row.get("created", ""), reverse=True)
 
 
+def _title(repo, session: str) -> str:
+    """What a conversation was about: its first message, on one line."""
+    path = chat_dir(repo) / f"{session}.jsonl"
+    try:
+        with path.open(errors="replace") as stream:
+            for line in stream:
+                try:
+                    row = json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(row, dict) and row.get("role") == "user" and isinstance(row.get("text"), str):
+                    return " ".join(row["text"].split())[:100]
+    except OSError:
+        pass
+    return ""
+
+
+def _updated(repo, session: str) -> float:
+    """When the conversation was last used: its transcript or its state file, whichever was written last."""
+    stamps = []
+    for path in (chat_dir(repo) / f"{session}.jsonl", _meta_path(repo, session)):
+        try:
+            stamps.append(path.stat().st_mtime)
+        except OSError:
+            pass
+    return max(stamps) if stamps else 0.0
+
+
 def new_session(repo, parent: str) -> dict:
     folder = chat_dir(repo)
     folder.mkdir(parents=True, exist_ok=True)
@@ -454,7 +482,9 @@ def status(repo) -> dict:
     result = {"enabled": on, "parents": sorted(HEADLESS), "available": available, "sessions": [], "parent": parent,
               "configured": configured, "model": chosen or parent_model(parent), "model_chosen": bool(chosen), "effort": effort}
     if on:
-        result["sessions"] = [{"id": s["id"], "parent": s["parent"], "state": s["state"], "turns": s.get("turns", 0)} for s in sessions(repo)[:20]]
+        rows = [{"id": s["id"], "parent": s["parent"], "state": s["state"], "turns": s.get("turns", 0),
+                 "title": _title(repo, s["id"]), "updated": _updated(repo, s["id"])} for s in sessions(repo)[:60]]
+        result["sessions"] = sorted(rows, key=lambda row: row["updated"], reverse=True)  # the one used last first, for /resume
     return result
 
 

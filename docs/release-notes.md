@@ -3,6 +3,10 @@
 
 
 
+## /resume, and a queue for what you type while the parent works (2026-10-21)
+
+`/resume` lists the repository's earlier conversations (first message, parent, turns, age) and opens one again with its own parent; `chat.status` now carries each one's title and last-used time, newest use first. A message typed while the parent is working waits behind the turn (`↳ next`) and is sent when it ends well; `↑` takes it back, and a failed or stopped turn returns the queue to the box.
+
 ## What each turn changed, shown under the answer (2026-10-21)
 
 When a parent's turn ends, every file it changed is shown as a diff under its answer: counts, and the changed lines in red and green. It works the same for every parent, because Rig compares the working tree before and after the turn.

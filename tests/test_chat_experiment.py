@@ -409,6 +409,24 @@ class Turns(Base):
         self.assertTrue(shown[-1].startswith("… ") and shown[-1].endswith("more lines"))
         self.assertEqual((files[0]["added"], files[0]["deleted"]), (200, 0))
 
+    def test_status_lists_conversations_with_what_they_were_about_and_the_one_used_last_first(self):
+        stand_in(self.bin, "claude", CLAUDE_STREAM)
+        first = rig_chat.send(self.repo, "Add rate limiting\nto POST /login")
+        self.wait_idle(first["session"])
+        second = rig_chat.send(self.repo, "/init")
+        self.wait_idle(second["session"])
+        rows = rig_chat.status(self.repo)["sessions"]
+        self.assertEqual([r["id"] for r in rows], [second["session"], first["session"]])
+        self.assertEqual(rows[1]["title"], "Add rate limiting to POST /login", "the first message, on one line")
+        self.assertEqual(rows[0]["title"], "/init")
+        self.assertGreater(rows[0]["updated"], 0)
+        again = rig_chat.send(self.repo, "and a test", first["session"])
+        self.wait_idle(first["session"])
+        rows = rig_chat.status(self.repo)["sessions"]
+        self.assertEqual(rows[0]["id"], first["session"], "using an old conversation again puts it first")
+        self.assertEqual(rows[0]["turns"], 2)
+        self.assertEqual(again["session"], first["session"])
+
     def test_tools_and_what_they_answered_are_shown(self):
         claude = lambda event: rig_chat.decode_event("claude", event)["entries"]
         use = {"type": "assistant", "message": {"content": [

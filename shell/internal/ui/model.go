@@ -535,6 +535,14 @@ func (m *Model) runSlash(text string) (tea.Cmd, bool) {
 		}
 		m.st.Mode, m.st.InputLabel, m.inputFor = ModeNormal, "", ""
 		return m.act("queue.add", map[string]any{"text": rest, "idempotency_key": m.draftKey}, true), true
+	case "/resume":
+		clear()
+		m.st.Mode, m.st.InputLabel, m.inputFor = ModeNormal, "", ""
+		if !m.appOn() {
+			m.st.Message = "/resume is in the app: rig shell"
+			return nil, true
+		}
+		return m.openResume(), true
 	case "/memory":
 		clear()
 		m.st.Mode, m.st.InputLabel, m.inputFor = ModeNormal, "", ""
@@ -1009,6 +1017,7 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.st.ChatOn = true
 		m.chatStat = msg.status
+		m.st.ChatSessions = msg.status.Sessions
 		m.st.ChatParent, m.st.ChatModel, m.st.ChatEffort = msg.status.Parent, msg.status.Model, msg.status.Effort
 		if m.parentName != "" && m.parentName != msg.status.Parent {
 			m.st.ChatParent, m.st.ChatModel, m.st.ChatEffort = m.parentName, "", "" // its model is in its own settings, not read for this one
@@ -1117,7 +1126,7 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.st.Chat, m.st.ChatE = msg.chat, ""
 		if m.appOn() {
 			m.rememberChat()
-			return m, tea.Batch(m.spin(), m.bell())
+			return m, tea.Batch(m.spin(), m.bell(), m.drainOutbox())
 		}
 		return m, m.spin()
 	case splashTickMsg:
@@ -1272,10 +1281,16 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		_ = was
 	case chatSentMsg:
+		if m.appOn() {
+			m.st.App.Sending = false
+		}
 		if msg.err == nil && msg.started == nil {
 			msg.err = errors.New("the server sent no session")
 		}
 		if msg.err != nil {
+			if m.appOn() {
+				m.takeBackOutbox("the send failed") // what was waiting behind it comes back to the box too
+			}
 			m.st.InputLabel, m.inputFor = "chat", "chat"
 			m.st.Mode = ModeInput // keep the draft, as a failed enqueue does
 			m.st.Prompt = msg.sent
@@ -1299,6 +1314,9 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.st.Message = "Stop failed: " + msg.err.Error()
 		} else {
 			m.st.Message = "turn stopped"
+			if m.appOn() {
+				m.takeBackOutbox("the turn was stopped")
+			}
 		}
 		m.chLast = time.Time{}
 		return m, m.fetchChat(true)
