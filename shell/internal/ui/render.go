@@ -73,6 +73,7 @@ type State struct {
 	ThemeScope   string    // where it is kept: "all" repos, this "repo", "default" or "this board" (rig shell --theme)
 	Focus        string    // the Session screen's pane with the keyboard: "" (the jobs, as the mockup opens), "parent" or "workspace"
 	Picker       *Picker   // the parent picker, while it is open
+	App          *AppState // the app (the design's ADE screens); nil while the board shows
 	SlashSel     int       // the chosen line of the / command list
 	Now          time.Time // the clock, for the working spinner and its elapsed time; zero in golden tests
 }

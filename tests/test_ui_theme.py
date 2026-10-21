@@ -75,6 +75,10 @@ class Theme(unittest.TestCase):
         with self.assertRaisesRegex(rig_shell.ShellError, "--theme is one of"):
             rig_shell.board_env(self.repo, "", "neon")
 
+    def test_rig_shell_opens_the_app_unless_the_board_is_asked_for(self):
+        self.assertIn("RIG_SHELL_LAYOUT=app", rig_shell.board_env(self.repo))
+        self.assertNotIn("RIG_SHELL_LAYOUT=app", rig_shell.board_env(self.repo, layout="board"))
+
 
 if __name__ == "__main__":
     unittest.main()

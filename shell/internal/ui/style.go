@@ -23,11 +23,12 @@ var (
 	colText   = "255" // #eeeeee
 	colSelBg  = "235" // #262626  selected row
 	colGround = "233" // #121212
+	colFaint  = "243" // #767676  hints and keys' labels (the design's grey)
 )
 
 // Theme is one palette: ground and text, secondary text, rules, and the four state colours.
 type Theme struct {
-	Ground, Text, Muted, Border, SelBg, Accent, Amber, Green, Red string
+	Ground, Text, Muted, Border, SelBg, Accent, Amber, Green, Red, Faint string
 }
 
 // Themes are the board's palettes by name, in the order the Settings tab offers them.
@@ -35,12 +36,12 @@ var Themes = []struct {
 	Name  string
 	Theme Theme
 }{
-	{"rig", Theme{"233", "255", "249", "60", "235", "111", "179", "114", "210"}},
+	{"rig", Theme{"233", "255", "249", "60", "235", "111", "179", "114", "210", "243"}},
 	// the design's terminal boards: #fafafa window, #18181b text, indigo accent
-	{"light", Theme{"#fafafa", "#18181b", "#52525b", "#d4d4d8", "#f0f0f2", "#4f46e5", "#9a5a06", "#15803d", "#b91c1c"}},
-	{"dark", Theme{"#15161a", "#ececf1", "#a2a4b0", "#3a3c46", "#1f2026", "#8b8cff", "#f5c66b", "#62e09c", "#ff7b7b"}},
-	{"material", Theme{"#1d1b20", "#e6e0e9", "#cac4d0", "#605d66", "#2b2930", "#d0bcff", "#ffd68c", "#a8e2b2", "#ffb4ab"}},
-	{"dracula", Theme{"#282a36", "#f8f8f2", "#c5c8d6", "#6272a4", "#343746", "#8be9fd", "#f1fa8c", "#50fa7b", "#ff5555"}},
+	{"light", Theme{"#fafafa", "#18181b", "#52525b", "#d4d4d8", "#f0f0f2", "#4f46e5", "#9a5a06", "#15803d", "#b91c1c", "#a1a1aa"}},
+	{"dark", Theme{"#15161a", "#ececf1", "#a2a4b0", "#3a3c46", "#1f2026", "#8b8cff", "#f5c66b", "#62e09c", "#ff7b7b", "#6b6e7b"}},
+	{"material", Theme{"#1d1b20", "#e6e0e9", "#cac4d0", "#605d66", "#2b2930", "#d0bcff", "#ffd68c", "#a8e2b2", "#ffb4ab", "#938f99"}},
+	{"dracula", Theme{"#282a36", "#f8f8f2", "#c5c8d6", "#6272a4", "#343746", "#8be9fd", "#f1fa8c", "#50fa7b", "#ff5555", "#7c86b8"}},
 }
 
 // ThemeNames lists the theme names in order.
@@ -58,7 +59,7 @@ func ApplyTheme(name string) bool {
 		if t.Name == name {
 			p := t.Theme
 			colGround, colText, colMuted, colBorder, colSelBg = p.Ground, p.Text, p.Muted, p.Border, p.SelBg
-			colAccent, colAmber, colGreen, colRed = p.Accent, p.Amber, p.Green, p.Red
+			colAccent, colAmber, colGreen, colRed, colFaint = p.Accent, p.Amber, p.Green, p.Red, p.Faint
 			return true
 		}
 	}

@@ -174,11 +174,14 @@ def check_parent_name(parent: str) -> None:
         raise ShellError(f"parent {parent!r} cannot run in the board; use one of {', '.join(PANE_PARENTS)}")
 
 
-def board_env(repo: Path, parent: str = "", theme: str = "") -> list[str]:
+def board_env(repo: Path, parent: str = "", theme: str = "", layout: str = "app") -> list[str]:
     """What the full-window board needs to open as the design's Session screen, with the conversation with the
     parent in its middle column (the chat, on for this board). ``parent`` is a name from PANE_PARENTS; ``theme`` draws
-    this board in one of ui_theme.THEMES without saving it."""
+    this board in one of ui_theme.THEMES without saving it. ``layout`` "app" is the design's screens (one conversation,
+    the agents panel on Tab, Ctrl-K), "board" the jobs board with the conversation in its middle column."""
     pairs = ["RIG_SHELL_START=Session", "RIG_EXPERIMENT_CHAT=1"]
+    if layout == "app":
+        pairs.append("RIG_SHELL_LAYOUT=app")
     if parent:
         pairs.append(f"RIG_SHELL_PARENT={parent}")
     if theme:
@@ -189,12 +192,13 @@ def board_env(repo: Path, parent: str = "", theme: str = "") -> list[str]:
     return pairs
 
 
-def board_plan(repo: Path, shell_bin: str, parent: str = "", *, width: int = 200, height: int = 50, theme: str = "") -> list[list[str]]:
+def board_plan(repo: Path, shell_bin: str, parent: str = "", *, width: int = 200, height: int = 50, theme: str = "",
+               layout: str = "app") -> list[list[str]]:
     """The default layout: one tmux window holding the board, which is the whole design screen (workspace, the
     parent in its middle column, jobs, evidence). tmux only hosts it, so the session survives a detach."""
     repo = Path(repo).resolve()
     session = session_name(repo)
-    board = shlex.join(pane_env(repo) + board_env(repo, parent, theme) + [shell_bin, "--repo", str(repo)])
+    board = shlex.join(pane_env(repo) + board_env(repo, parent, theme, layout) + [shell_bin, "--repo", str(repo)])
     return [
         ["new-session", "-d", "-s", session, "-n", "rig", "-x", str(width), "-y", str(height), "-c", str(repo), board],
         ["set-option", "-t", session, "status", "off"],
@@ -218,10 +222,10 @@ def layout_steps(repo: Path, layout: str, parent: str, parent_cmd: str, *, width
     if parent_cmd:
         raise ShellError("--parent-cmd runs an arbitrary command, which only the split layout's own pane can do; "
                          "use --layout split, or --parent NAME")
-    return board_plan(repo, shell_binary(), parent, width=width, height=height, theme=theme)
+    return board_plan(repo, shell_binary(), parent, width=width, height=height, theme=theme, layout=layout)
 
 
-def start(repo: Path, *, parent: str = "", parent_cmd: str = "", attach: bool = True, layout: str = "board", theme: str = "") -> str:
+def start(repo: Path, *, parent: str = "", parent_cmd: str = "", attach: bool = True, layout: str = "app", theme: str = "") -> str:
     repo = Path(repo).resolve()
     harness.assert_project_enabled(repo)
     binary = tmux_binary()
@@ -332,8 +336,9 @@ def main(argv=None) -> int:
     parser.add_argument("--detach", action="store_true", help="create the session without attaching")
     parser.add_argument("--no-tmux", action="store_true",
                         help="run the same board in this terminal without tmux (no detach)")
-    parser.add_argument("--layout", choices=["board", "split"], default="board",
-                        help="board: the design's one screen, parent in its middle column (default); "
+    parser.add_argument("--layout", choices=["app", "board", "split"], default="app",
+                        help="app: the design's screens, one conversation with the agents panel on Tab (default); "
+                             "board: the jobs board, the parent in its middle column; "
                              "split: the parent in its own native tmux pane beside a narrow board and a log pane")
     args = parser.parse_args(argv)
     try:
@@ -349,7 +354,7 @@ def main(argv=None) -> int:
                 raise ShellError("--parent-cmd needs the split layout's tmux pane; use --parent NAME without tmux")
             check_parent_name(args.parent)  # a bad --parent fails here, before the screen is taken over
             command = [shell_binary(), "--repo", str(repo)]
-            extra = board_env(repo, args.parent, args.theme)
+            extra = board_env(repo, args.parent, args.theme, args.layout)
             if args.command == "print":
                 print(shlex.join(pane_env(repo) + extra + command))
                 return 0

@@ -167,6 +167,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	noEnsure := fs.Bool("no-ensure", false, "do not start the API server when it is not running")
 	rigBin := fs.String("rig", os.Getenv("RIG_BIN"), "path to the rig CLI used to start the API server")
 	showVersion := fs.Bool("version", false, "print the version and exit")
+	layout := fs.String("layout", os.Getenv("RIG_SHELL_LAYOUT"), "app: the design's screens (what rig shell opens); board: the jobs board (the default here)")
 	theme := fs.String("theme", os.Getenv("RIG_SHELL_THEME"), "draw this board in a theme without saving it: "+strings.Join(ui.ThemeNames(), ", "))
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -212,6 +213,14 @@ func run(args []string, stdout, stderr io.Writer) int {
 		model.SetTab(from) // set by `rig shell`; an unknown value is ignored
 	}
 	model.SetParent(os.Getenv("RIG_SHELL_PARENT")) // from `rig shell --parent`; empty means the project's own
+	switch *layout {
+	case "app":
+		model.SetApp(*repo)
+	case "", "board":
+	default:
+		fmt.Fprintln(stderr, "rig-shell: --layout must be app or board")
+		return 2
+	}
 	if *theme != "" {
 		model.SetTheme(*theme)
 	}

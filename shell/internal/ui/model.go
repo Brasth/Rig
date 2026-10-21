@@ -205,9 +205,11 @@ type Model struct {
 	pendingI   string // id for a confirmed stop
 	pickerSeen bool   // the picker opened by itself once, for a project with no parent
 	framed     bool   // the window has room for the mockup's border around the board
-	themeFixed bool   // rig shell --theme chose the theme for this board; the saved one is not loaded
-	messaging  bool   // m was pressed under a request: a and d type again until the message is sent
-	spinning   bool   // the spinner's tick is scheduled
+	winW, winH int    // the window; the app uses all of it
+	seenJobs   map[string]bool
+	themeFixed bool // rig shell --theme chose the theme for this board; the saved one is not loaded
+	messaging  bool // m was pressed under a request: a and d type again until the message is sent
+	spinning   bool // the spinner's tick is scheduled
 	chatStat   *view.ChatStatus
 }
 
@@ -534,7 +536,7 @@ func (m *Model) spin() tea.Cmd {
 }
 
 // showsWorkspace: the workspace panel is on screen (the Env tab, or the Session screen's left column).
-func (m *Model) showsWorkspace() bool { return m.st.Tab == EnvTab || m.composite() }
+func (m *Model) showsWorkspace() bool { return m.st.Tab == EnvTab || m.composite() || m.appOn() }
 
 // listTab is the tab whose rows the keyboard moves through: the Session screen shows the Jobs list.
 func (m *Model) listTab() string {
@@ -555,7 +557,7 @@ type dockMsg struct {
 // selection changes, and at most every workspaceEvery after that.
 func (m *Model) fetchDock(force bool) tea.Cmd {
 	id := m.selectedJobID()
-	if !m.composite() || id == "" || m.dkBusy {
+	if !(m.composite() || (m.appOn() && m.st.App.Tab == 2)) || id == "" || m.dkBusy {
 		return nil
 	}
 	if id == m.st.DockID && !force && m.now().Sub(m.dkLast) < workspaceEvery {
@@ -599,11 +601,15 @@ func (m *Model) selectedJobID() string {
 
 // fetchLog follows the selected job's log, only while the Logs tab is showing.
 func (m *Model) fetchLog(force bool) tea.Cmd {
-	if m.st.Tab != LogsTab || m.lgBusy || (!force && m.now().Sub(m.lgLast) < logEvery) {
+	thread := m.appOn() && m.st.App.Thread != ""
+	if !(m.st.Tab == LogsTab || thread) || m.lgBusy || (!force && m.now().Sub(m.lgLast) < logEvery) {
 		return nil
 	}
 	m.lgBusy = true
 	src, id := m.src, m.selectedJobID()
+	if thread {
+		id = m.st.App.Thread
+	}
 	return func() tea.Msg {
 		l, err := src.Log(id, logFetchRows, callTimeout)
 		return logMsg{log: l, err: err, at: time.Now()}
@@ -629,7 +635,7 @@ func (m *Model) fetchChat(force bool) tea.Cmd {
 	if m.st.Chat != nil && m.st.Chat.State == "running" {
 		every = chatLiveEvery
 	}
-	if !(m.st.Tab == ChatTab || m.chatInSession()) || m.chBusy || m.chatID == "" || (!force && m.now().Sub(m.chLast) < every) {
+	if !(m.st.Tab == ChatTab || m.chatInSession() || m.appOn()) || m.chBusy || m.chatID == "" || (!force && m.now().Sub(m.chLast) < every) {
 		return nil
 	}
 	m.chBusy = true
@@ -794,6 +800,9 @@ func (m *Model) reselect() {
 
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	model, cmd := m.update(msg)
+	if m.appOn() {
+		return model, cmd
+	}
 	m.autoFocus()
 	return model, cmd
 }
@@ -802,6 +811,7 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		// the board fills the window inside the mockup's thin border; the side columns keep their widths and the chat grows
+		m.winW, m.winH = msg.Width, msg.Height
 		m.w, m.h, m.framed = msg.Width, msg.Height, false
 		if msg.Width >= sessionMinW+2 && msg.Height >= sessionMinH+2 {
 			m.w, m.h, m.framed = msg.Width-2, msg.Height-2, true
@@ -852,7 +862,11 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if !m.pickerSeen && msg.status.Configured == "" && m.parentName == "" && m.st.Tab == SessionTab {
 			m.pickerSeen = true // the first time only: a project with no parent of its own chooses one here
-			m.openPicker()
+			if m.appOn() {
+				m.openWelcome()
+			} else {
+				m.openPicker()
+			}
 		}
 		if m.chatID == "" && len(msg.status.Sessions) > 0 {
 			m.chatID = msg.status.Sessions[0].ID
@@ -865,6 +879,17 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.st.Chat, m.st.ChatE = msg.chat, ""
 		return m, m.spin()
+	case filesMsg:
+		if m.appOn() {
+			m.st.App.Files = msg.files
+		}
+	case fileMsg:
+		if m.appOn() && msg.path == m.st.App.File {
+			m.st.App.FileLines, m.st.App.FileErr = msg.lines, ""
+			if msg.err != nil {
+				m.st.App.FileErr = msg.err.Error()
+			}
+		}
 	case themeMsg:
 		switch {
 		case msg.err != nil && msg.saved:
@@ -875,6 +900,8 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.st.ThemeScope = msg.reply.Scope
 			where := map[string]string{"repo": "this repo (.rig/harness.toml)", "all": "all repos (~/.rig/config.toml)"}[msg.reply.Scope]
 			m.st.Message = "theme " + msg.reply.Theme + " for " + where
+		case m.appOn() && msg.reply.Scope == "default":
+			m.st.ThemeScope = "default" // nothing saved: the app keeps the design's light
 		case !m.themeFixed && ApplyTheme(msg.reply.Theme):
 			m.st.Theme, m.st.ThemeScope = msg.reply.Theme, msg.reply.Scope
 		}
@@ -1018,6 +1045,7 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.st.Stale, m.lastOK = "", msg.at
 		m.view = &msg.snap.View
 		m.reselect()
+		m.noticeNewJobs()
 	case actionMsg:
 		switch {
 		case msg.err != nil && msg.enqueue:
@@ -1048,6 +1076,9 @@ func firstLine(s string) string {
 }
 
 func (m *Model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.appOn() {
+		return m.appKey(k)
+	}
 	// While typing into the pane every key belongs to its program, Ctrl-C included, except the one way back.
 	if m.paneFocus && m.pane != nil && m.st.Tab == SessionTab {
 		if k.Type == tea.KeyCtrlCloseBracket {
@@ -1594,6 +1625,13 @@ func (m *Model) answerAsk(key string) (tea.Model, tea.Cmd) {
 func (m *Model) View() string {
 	m.syncPane()
 	m.st.Now = m.now()
+	if m.appOn() {
+		w, h := m.winW, m.winH
+		if w == 0 {
+			w, h = m.w, m.h
+		}
+		return strings.Join(Paint(AppFrame(m.view, m.st, w, h)), "\n")
+	}
 	lines := Decorate(RenderLines(m.view, m.st, m.w, m.h))
 	if m.framed {
 		lines = Border(lines, m.w)

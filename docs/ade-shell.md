@@ -22,6 +22,23 @@ An optional terminal layout for working with a parent agent while Rig runs worke
 
 `rig shell` needs tmux 3.3+ (not with `--no-tmux`) and a built `rig-shell`; the split layout also needs the parent CLI on `PATH` (`codex`, `grok`, `claude`, `opencode`, `omp`, `pi` or `agy`), while the board layout reports a missing one on screen. It uses its own tmux server unless you are already inside tmux, never binds the F8/F9 companion popups, and reuses the session if one exists for the repository.
 
+## The app (rig shell's default)
+
+`rig shell` opens the design's ADE screens: one conversation with the parent in the middle of the window, as codex and grok draw theirs, in the design's light theme unless you saved another (Settings › Theme, `/theme`). The board below is still there: `rig shell --layout board`, or `⌃k` › the board.
+
+- **Top bar:** the mark, the repo and branch, the parent; the three tabs `1 conversation`, `2 changes`, `3 code`; how many helpers are working, `⌃k` and `⇥ panel`.
+- **First conversation:** "What should we work on in my-repo?", the ask box, and four suggestions (`1`-`4` send one).
+- **Conversation:** what you asked as a bubble on the right, the parent's answer under it (streamed as it is written, with a spinner and the elapsed time), a card for each helper's work the parent accepted, and a request waiting on you (the parent's own, or a helper's "codex asks, via claude") with the answer chips: `1` allows, `2` denies, or type. The reply box at the bottom always has the keyboard; `/` lists the commands.
+- **Agents panel (`⇥`):** done today, the agents (the parent, then each helper with what it is doing; `↑↓` chooses), the queue, and the sandbox. `⏎` watches a helper's thread (its log, followed), `s` stops it after a confirmation.
+- **Commands (`⌃k`):** type to ask the parent, open a file by name (it opens in the code tab), or run a command: switch parent, new conversation, queue a task, change theme, start the sandbox, the board, help, quit.
+- **Who do you want to talk to?** A project with no parent of its own opens this first: the installed parents, `↑↓` and `⏎` to save the choice in `.rig/harness.toml`. `⌃k` › switch parent opens it again.
+- **A helper started:** when the parent starts a helper, a card says so once ("claude started codex"), with the task, its worktree and what it is doing; `⏎` watches its thread, `s` stops it.
+- **Changes (`2`):** the selected helper's diff, checks, contract and ports; `↑↓` moves between helpers. **Code (`3`):** the file `⌃k` opened, with line numbers.
+
+With the box empty, `2` and `3` switch tabs, `?` lists every key, and `1` and `2` answer a waiting request first. `Esc` clears the box or closes what is open; `Ctrl-C` clears the box, then quits.
+
+Not built yet from the design: the code tab's tree and editor, search, file previews, done today with undo and hold, ship, the onboarding steps (helpers, sandbox, opening a repo, installing an agent), the problem screens, and Settings' sections. The pro and paid screens and sign-in are left out on purpose.
+
 ## The board
 
 Tabs, as in the design mockup: **Session, Jobs, Queue, Workflows, Env, Settings**. Every state shows a glyph and a word, and labels, ordering and counts come from the same code as `rig tui`, so the two never disagree. The Jobs list is attention first, with a "Finished" line before the finished jobs. Colours are the mockup's palette (xterm-256, so any 256-colour terminal shows the same thing); the selected row is a dark bar.
