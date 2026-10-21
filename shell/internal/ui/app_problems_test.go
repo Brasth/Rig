@@ -58,7 +58,7 @@ func TestAKeyMovedInSettingsIsTheOneThatWorks(t *testing.T) {
 		t.Fatal("⌥f finds in the conversation once moved there")
 	}
 	rows := settingRows(m.st, "keys")
-	if len(rows) != 5 || rows[4].Value != "alt+t" || rows[4].Names[2] != "⌥t" {
-		t.Fatalf("Settings › Keys shows the chords: %+v", rows[4])
+	if len(rows) != 6 || rows[5].Value != "alt+t" || rows[5].Names[2] != "⌥t" {
+		t.Fatalf("Settings › Keys shows the chords: %+v", rows[5])
 	}
 }

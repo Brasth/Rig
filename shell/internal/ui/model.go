@@ -1008,6 +1008,16 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.appOn() && msg.err == nil && msg.p != nil {
 			m.st.App.Problems = msg.p
 		}
+	case formatMsg:
+		return m, m.afterFormat(msg)
+	case gitLogMsg:
+		if m.appOn() {
+			m.st.App.FileLog, m.st.App.FileLogFor = append([]gitCommit{}, msg.commits...), msg.file
+		}
+	case symIndexMsg:
+		if m.appOn() {
+			m.st.App.SymIndex = &symIndex{at: m.now(), items: msg.items}
+		}
 	case hoverMsg:
 		if m.appOn() && msg.key == m.hoverKey && msg.info != nil {
 			m.st.App.Hover = msg.info
@@ -1048,7 +1058,7 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case gitDiffMsg:
 		if m.appOn() {
-			if old := m.st.App.GitDiff; old != nil && msg.view != nil && old.path == msg.view.path && old.staged == msg.view.staged {
+			if old := m.st.App.GitDiff; old != nil && msg.view != nil && old.path == msg.view.path && old.staged == msg.view.staged && old.commit == msg.view.commit {
 				msg.view.off, msg.view.hunk = old.off, old.hunk // a refresh keeps the place
 			}
 			m.st.App.GitDiff = msg.view

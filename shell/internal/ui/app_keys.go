@@ -633,7 +633,19 @@ func (m *Model) appTabKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	lo := func() int { return min(a.SelFrom, a.SelTo) }
 	hi := func() int { return max(a.SelFrom, a.SelTo) }
+	if a.File != "" && isKey(k, bound(m.st, "references", "f7")) {
+		return m, m.findReferences()
+	}
 	switch key {
+	case "f9":
+		return m, m.runTestAtCursor()
+	case "alt+F":
+		if a.File != "" && a.FileLines != nil {
+			m.startEdit()
+			return m, m.formatDocument(false)
+		}
+	case "l":
+		return m, m.openLog()
 	case "up", "k":
 		if a.Selecting {
 			a.SelTo = max(0, a.SelTo-1)
@@ -709,6 +721,11 @@ func (m *Model) appTabKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.toggleOutline()
 	case "g":
 		return m, m.openGit()
+	case "alt+z":
+		a.Wrap = !a.Wrap
+		if a.Wrap {
+			m.st.Message = "long lines wrap while reading (⌥z again keeps them on one row)"
+		}
 	case "b":
 		if a.File != "" && a.FileLines != nil && previewKind(a.File) != "binary" {
 			a.Blame = !a.Blame
@@ -1149,6 +1166,9 @@ func (m *Model) paletteKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case tea.KeyRunes, tea.KeySpace:
 		p.Query += string(k.Runes)
 		p.Sel = 0
+		if strings.HasPrefix(p.Query, "#") {
+			return m, m.indexCmd()
+		}
 	case tea.KeyEnter:
 		if len(items) == 0 {
 			return m, nil
@@ -1172,6 +1192,25 @@ func (m *Model) runPalette(it paletteItem, query string) tea.Cmd {
 		return nil
 	case strings.HasPrefix(it.Action, "problem:"):
 		return m.openProblem(strings.TrimPrefix(it.Action, "problem:"))
+	case strings.HasPrefix(it.Action, "at:"):
+		return m.openRef(strings.TrimPrefix(it.Action, "at:"))
+	case strings.HasPrefix(it.Action, "run:"):
+		return m.runInTerminal(strings.TrimPrefix(it.Action, "run:"))
+	case strings.HasPrefix(it.Action, "commit:"):
+		return m.openCommit(strings.TrimPrefix(it.Action, "commit:"))
+	case it.Action == "tasks":
+		return m.openTasks()
+	case it.Action == "test":
+		return m.runTestAtCursor()
+	case it.Action == "format":
+		if !a.Editing && a.File != "" {
+			m.startEdit()
+		}
+		return m.formatDocument(false)
+	case it.Action == "history":
+		return m.openLog()
+	case it.Action == "references":
+		return m.findReferences()
 	case it.Action == "problems":
 		a.Palette = &Palette{Problems: true}
 		return m.fetchProblems(true)
@@ -1194,7 +1233,8 @@ func (m *Model) runPalette(it paletteItem, query string) tea.Cmd {
 			m.stashBuffer() // its unsaved changes wait in its tab
 		}
 		a.Tabs, a.Editing, a.Dirty, a.TreeFocus, a.CodeAsk, a.EdSel = addTab(a.Tabs, rel), false, false, false, nil, false
-		a.GitDiff, a.Extra = nil, nil
+		a.GitDiff, a.Extra, a.Complete, a.ColOff = nil, nil, nil, 0
+		a.rememberOpened(rel)
 		if a.Conflict != nil && a.Conflict.path != rel {
 			a.Conflict = nil
 		}

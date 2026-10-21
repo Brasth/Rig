@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Build the optional rig-shell binary from a Rig source tree into RIG_HOME/bin.
+"""Put the rig-shell binary from a Rig source tree into RIG_HOME/bin, without making anyone build it.
 
-Best effort, like the other optional components: a missing Go toolchain or a
-failed build never fails setup, and a previous working binary is kept when a new
-build fails. The binary is stamped with the source commit so rig doctor can tell
-when it no longer matches the installed core.
+The source tree ships prebuilt binaries (prebuilt/, see shell_dist.py). One that matches the tree's shell sources is
+used as it is; otherwise the shell is built with Go when Go is here, and when it is not (or the build fails) the
+prebuilt one is used, or the one the repository serves. Best effort, like the other optional components: nothing here
+fails setup, and a previous working binary is kept when a new one cannot be had.
 """
 from __future__ import annotations
 
@@ -17,6 +17,9 @@ import tempfile
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
+
+import shell_dist  # noqa: E402
 
 
 def rig_home() -> Path:
@@ -63,6 +66,23 @@ def build(src: Path, home: Path, *, timeout: float = 600) -> tuple[bool, str]:
             os.unlink(temporary)
 
 
+def provision(src: Path, home: Path) -> tuple[bool, str]:
+    """The prebuilt shell when it is current, else a Go build, else whatever prebuilt shell can be had."""
+    prebuilt = src / "prebuilt"
+    if (src / "shell" / "go.mod").is_file() and shell_dist.read_stamp(prebuilt) == shell_dist.source_stamp(src):
+        ok, message = shell_dist.from_tree(src, home)
+        if ok:
+            return ok, message
+    ok, message = build(src, home)
+    if ok:
+        return ok, message
+    for attempt in (lambda: shell_dist.from_tree(src, home), lambda: shell_dist.download(home)):
+        done, note = attempt()
+        if done:
+            return True, note
+    return False, message
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="Build rig-shell into RIG_HOME/bin")
     group = parser.add_mutually_exclusive_group()
@@ -76,7 +96,7 @@ def main(argv=None) -> int:
     if os.environ.get("RIG_SKIP_SHELL_BUILD") == "1" and not args.shell:
         print("rig-shell setup: skipped (RIG_SKIP_SHELL_BUILD=1)")
         return 0
-    ok, message = build(Path(args.src), rig_home())
+    ok, message = provision(Path(args.src), rig_home())
     print(("rig-shell setup: " if ok else "rig-shell setup: skipped, ") + message)
     # Setup treats this component as optional; an explicit --shell is a request.
     return 0 if ok or not args.shell else 1

@@ -35,6 +35,10 @@ class ShellError(ValueError):
     """The shell cannot be started; the message says what to do."""
 
 
+class ShellMissing(ShellError):
+    """rig-shell is not installed and could not be set up on this machine."""
+
+
 def tmux_binary() -> str:
     binary = shutil.which("tmux")
     if not binary:
@@ -50,8 +54,8 @@ def tmux_binary() -> str:
     return binary
 
 
-def shell_binary() -> str:
-    """The rig-shell executable: env override, installed copy, PATH, then a local build."""
+def found_binary() -> str:
+    """The rig-shell executable that is already here: env override, installed copy, PATH, a local build."""
     candidates = [os.environ.get("RIG_SHELL_BIN", ""),
                   str(Path(os.environ.get("RIG_HOME") or Path.home() / ".rig") / "bin" / "rig-shell"),
                   shutil.which("rig-shell") or "",
@@ -59,7 +63,36 @@ def shell_binary() -> str:
     for path in candidates:
         if path and os.path.isfile(path) and os.access(path, os.X_OK):
             return path
-    raise ShellError("rig-shell is not built; run: (cd shell && go build -o bin/rig-shell ./cmd/rig-shell)")
+    return ""
+
+
+def set_up_binary() -> bool:
+    """Get rig-shell onto this machine, once: the prebuilt one from the source tree or the repository, else a Go
+    build. Nobody has to build anything; this is what a missing binary does at launch."""
+    installer = HERE / "install-shell.py"
+    if not installer.is_file():
+        return False
+    src = os.environ.get("RIG_SRC") or str(ROOT)
+    print("rig shell: setting up the shell (one time)…", file=sys.stderr, flush=True)
+    done = subprocess.run([sys.executable, str(installer), "--shell", "--src", src], stdin=subprocess.DEVNULL,
+                          capture_output=True, text=True, timeout=900)
+    note = (done.stdout.strip().splitlines() or [""])[-1]
+    if note:
+        print("rig shell: " + note, file=sys.stderr, flush=True)
+    return done.returncode == 0
+
+
+def shell_binary() -> str:
+    """The rig-shell executable. A missing one is set up here and now, so install and update never need a build."""
+    path = found_binary()
+    if path:
+        return path
+    if set_up_binary():
+        path = found_binary()
+        if path:
+            return path
+    raise ShellMissing("rig-shell could not be set up on this machine (no prebuilt one for it, no download, no Go); "
+                       "rig tui is the board without it")
 
 
 def core_version() -> str:
@@ -73,9 +106,8 @@ def core_version() -> str:
 
 def shell_status() -> dict:
     """Is rig-shell present, and was it built from the same commit as the installed core?"""
-    try:
-        path = shell_binary()
-    except ShellError:
+    path = found_binary()  # a status report never installs anything
+    if not path:
         return {"found": False, "path": "", "version": "", "core": core_version(), "state": "missing"}
     try:
         out = subprocess.run([path, "--version"], capture_output=True, text=True, timeout=5, stdin=subprocess.DEVNULL).stdout.split()
@@ -85,6 +117,8 @@ def shell_status() -> dict:
     core = core_version()
     if not version:
         state = "unreadable"
+    elif version.startswith("src-"):
+        state = "prebuilt"  # shipped prebuilt: stamped with its sources, which the installed core cannot compare
     elif version == "dev" or not core:
         state = "unverified"  # a local build or a runtime with no recorded commit
     else:
@@ -432,6 +466,14 @@ def main(argv=None) -> int:
                         theme=args.theme)
         print(f"rig shell: session {session} is ready (attach with: tmux {' '.join(server_args())} attach -t {session})".replace("  ", " "))
         return 0
+    except ShellMissing as error:
+        # nothing can run the Go shell here: the Python board still works, so open it instead of stopping
+        print(f"rig shell: {error}", file=sys.stderr)
+        if args.command == "start" and not args.detach and sys.stdin.isatty() and sys.stdout.isatty():
+            print("rig shell: opening rig tui instead", file=sys.stderr, flush=True)
+            command = [rig_binary(), "tui"]
+            os.execvp(command[0], command)
+        return 1
     except (ShellError, ValueError, SystemExit) as error:
         print(f"rig shell: {error}", file=sys.stderr)
         return 1

@@ -310,6 +310,9 @@ func (m *Model) goToDefinition() tea.Cmd {
 		m.st.Message = "no name at the cursor"
 		return nil
 	}
+	if definedAt(line, name, definitionRe(name)) >= 0 {
+		return m.findReferences() // on the definition itself: its uses, as an IDE's go to definition lists them
+	}
 	m.st.Message = "looking for " + name + "…"
 	return func() tea.Msg {
 		re := definitionRe(name)

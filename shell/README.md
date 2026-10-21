@@ -5,6 +5,9 @@ everything through the local API (`docs/local-api.md`) and never opens `.rig`
 files. Labels, tones, glyphs, ordering and counts come from the server
 (`scripts/board_view.py`), so this program only renders.
 
+Users never build this: `prebuilt/` at the repository root holds the binaries (see `docs/ade-shell.md`,
+"Building and versions"). After changing the shell, refresh them with `python3 scripts/shell_dist.py build`.
+
 ```sh
 cd shell
 go build -o bin/rig-shell ./cmd/rig-shell   # needs Go 1.24+

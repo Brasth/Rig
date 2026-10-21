@@ -178,10 +178,11 @@ type AppSettings struct {
 	Global            string            `json:"global"`
 	Editor            string            `json:"editor"`
 	Shell             string            `json:"shell"`
-	Start             string            `json:"start"`    // what rig shell opens outside a project: last or picker
-	Ship              string            `json:"ship"`     // what ship offers first: pr or push
-	TabSize           int               `json:"tab_size"` // the code view's tab width
-	Keys              map[string]string `json:"keys"`     // the editor's keys that can be moved: next_occurrence, find_in_chat, terminal, rename, definition
+	Start             string            `json:"start"`          // what rig shell opens outside a project: last or picker
+	Ship              string            `json:"ship"`           // what ship offers first: pr or push
+	TabSize           int               `json:"tab_size"`       // the code view's tab width
+	FormatOnSave      bool              `json:"format_on_save"` // ⌃s runs the file's formatter first
+	Keys              map[string]string `json:"keys"`           // the editor's keys that can be moved: next_occurrence, find_in_chat, terminal, rename, definition, references
 	NotifyNeeds       bool              `json:"notify_needs"`
 	NotifyApplied     bool              `json:"notify_applied"`
 	Desktop           bool              `json:"desktop"` // a desktop notice through the terminal, as well as or instead of the bell

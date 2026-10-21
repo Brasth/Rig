@@ -26,6 +26,29 @@ def tree(path):
             if p.is_file() or p.is_symlink()}
 
 
+class ShellRefresh(unittest.TestCase):
+    """After an update the shell that goes with it is put in place from the new source, never built by the user."""
+
+    def test_refresh_runs_the_installed_installer_on_the_new_source_and_never_fails_the_update(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw) / '.rig'
+            (root / 'scripts').mkdir(parents=True)
+            source = Path(raw) / 'source'
+            update.refresh_shell(root, source)  # no installer yet: nothing happens
+            (root / 'scripts' / 'install-shell.py').write_text('')
+            done = subprocess.CompletedProcess([], 0, stdout='rig-shell setup: installed the prebuilt x\n', stderr='')
+            with patch.object(update.subprocess, 'run', return_value=done) as run:
+                update.refresh_shell(root, source)
+            argv = run.call_args.args[0]
+            self.assertEqual(argv[1:], [str(root / 'scripts' / 'install-shell.py'), '--src', str(source)])
+            self.assertEqual(run.call_args.kwargs['env']['RIG_HOME'], str(root))
+            with patch.object(update.subprocess, 'run', side_effect=OSError('boom')):
+                update.refresh_shell(root, source)  # an error is swallowed
+            with patch.dict(os.environ, {'RIG_SKIP_SHELL_BUILD': '1'}), patch.object(update.subprocess, 'run') as run:
+                update.refresh_shell(root, source)
+            run.assert_not_called()
+
+
 class SafeUpdate(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()

@@ -393,7 +393,7 @@ func (m *Model) textPress(x, y int, shift bool) bool {
 			return false
 		}
 	}
-	at := pos{line, runeAtCell(a.FileLines[line], x-z.x0, tabSize(m.st))}
+	at := pos{line, runeAtCell(a.FileLines[line], x-z.x0+a.ColOff, tabSize(m.st))}
 	m.moveTo(at, shift) // with Shift, the selection runs from where the cursor was
 	if m.clicks >= 3 {
 		// a third click selects the line
@@ -446,7 +446,11 @@ func (m *Model) codeAt(x, y int) (pos, bool) {
 	if err != nil || line < 0 || line >= len(a.FileLines) {
 		return pos{}, false
 	}
-	return pos{line, runeAtCell(a.FileLines[line], x-z.x0, tabSize(m.st))}, true
+	off := 0
+	if a.Editing {
+		off = a.ColOff
+	}
+	return pos{line, runeAtCell(a.FileLines[line], x-z.x0+off, tabSize(m.st))}, true
 }
 
 // runeAtCell is the rune of a line drawn at cell col, with its tabs as spaces.
@@ -805,7 +809,7 @@ func (m *Model) clickRow(list, at string) (tea.Model, tea.Cmd) {
 		again := a.TreeFocus && a.GitView && a.GitSel == i
 		a.GitView, a.TreeFocus, a.GitSel = true, true, i
 		if rows[i].kind == "commit" {
-			return m, nil
+			return m, m.fetchCommitDiff(rows[i].c.hash, "")
 		}
 		if rows[i].file.code == 'U' {
 			a.TreeFocus = false

@@ -275,6 +275,37 @@ func (m *Model) keepCursorShown() {
 	if a.CurLine >= a.FileOff+room {
 		a.FileOff = a.CurLine - room + 1
 	}
+	// and across: the cells scrolled off the left keep the cursor's column in view
+	if !a.Editing || a.CurLine >= len(a.FileLines) {
+		a.ColOff = 0
+		return
+	}
+	dc, tw := displayCol(a.FileLines[a.CurLine], a.CurCol, tabSize(m.st)), m.codeTextWidth()
+	if dc < tw {
+		a.ColOff = 0 // the line's start fits: back to it
+	} else if dc < a.ColOff {
+		a.ColOff = dc
+	}
+	if dc >= a.ColOff+tw {
+		a.ColOff = dc - tw + 1
+	}
+}
+
+// codeTextWidth is how many cells of a line the editor shows: the column less the gutter and the line numbers.
+func (m *Model) codeTextWidth() int {
+	a := m.st.App
+	w := m.winW
+	if w == 0 {
+		w = m.w
+	}
+	if w >= 90 {
+		w -= explorerWidth
+	}
+	gutter := 1
+	if a.Blame && a.BlameFor == a.File {
+		gutter += blameWidth
+	}
+	return max(10, w-gutter-6)
 }
 
 // saveFile writes the edited file back, with the line endings it had.
