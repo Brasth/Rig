@@ -577,6 +577,14 @@ func (m *Model) runSlash(text string) (tea.Cmd, bool) {
 		clear()
 		m.chatID, m.st.Chat, m.st.ChatUp, m.chatAdopted = "", nil, 0, true
 		m.st.Message = "new conversation: the next message starts it"
+	case "/notes":
+		clear()
+		m.st.Mode, m.st.InputLabel, m.inputFor = ModeNormal, "", ""
+		if !m.appOn() {
+			m.st.Message = "/notes is in the app: rig shell"
+			return nil, true
+		}
+		return m.openNotes(), true
 	case "/steer", "/now":
 		clear()
 		m.st.Mode, m.st.InputLabel, m.inputFor = ModeNormal, "", ""

@@ -136,6 +136,8 @@ var SlashCommands = []SlashCommand{
 	{"/context", "", "how full the parent's context is", false, false},
 	{"/mcp", "", "the MCP servers the parent has", false, false},
 	{"/memory", "", "open CLAUDE.md or AGENTS.md to edit", false, false},
+	{"/remember", " NOTE", "keep NOTE in .rig/notes.md: it goes with every conversation's first message", false, false},
+	{"/notes", "", "open the notes the parent is told (.rig/notes.md)", false, false},
 	{"/init", "", "the parent writes CLAUDE.md or AGENTS.md for this project", false, false},
 	{"/review", " [FOCUS]", "the parent reviews the current changes", false, false},
 	{"/security-review", " [FOCUS]", "the parent reviews them for security problems", false, false},

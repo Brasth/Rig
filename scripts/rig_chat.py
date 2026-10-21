@@ -828,6 +828,15 @@ def send(repo, message: str, session: str = "", parent: str = "") -> dict:
             note += " (" + meta["parent"] + "'s headless mode does not ask for permission at all)"
         append(repo, meta["id"], "system", note)
         return {"session": meta["id"], "parent": meta["parent"], "state": meta["state"], "turn": meta.get("turns", 0), "mode": now}
+    kept = REMEMBER_COMMAND.fullmatch(message)
+    if kept:
+        result = remember(repo, kept.group(1) or "")
+        append(repo, meta["id"], "system", f"kept in {NOTES_FILE} ({result['lines']} notes): it goes with every conversation's first message")
+        return {"session": meta["id"], "parent": meta["parent"], "state": meta["state"], "turn": meta.get("turns", 0), "notes": result["lines"]}
+    if NOTES_COMMAND.fullmatch(message):
+        text = notes(repo)
+        append(repo, meta["id"], "system", (NOTES_FILE + ":\n" + text) if text else f"no notes yet: /remember NOTE keeps one in {NOTES_FILE}")
+        return {"session": meta["id"], "parent": meta["parent"], "state": meta["state"], "turn": meta.get("turns", 0)}
     exported = EXPORT_COMMAND.fullmatch(message)
     if exported:
         result = export(repo, meta["id"], (exported.group(1) or "").strip())
@@ -1408,6 +1417,47 @@ def _mentions(repo, parent: str, message: str) -> str:
     return message + ("\n\n" + "\n\n".join(blocks) if blocks else "")
 
 
+NOTES_FILE = ".rig/notes.md"
+NOTES_CHARS = 4000
+REMEMBER_COMMAND = re.compile(r"/remember(?:\s+(.*))?", re.S)
+NOTES_COMMAND = re.compile(r"/notes\s*")
+
+
+def notes_path(repo) -> Path:
+    return Path(repo).resolve() / NOTES_FILE
+
+
+def notes(repo) -> str:
+    """What the user keeps in .rig/notes.md for every conversation: project facts, conventions, things not to touch."""
+    try:
+        text = notes_path(repo).read_text(errors="replace").strip()
+    except OSError:
+        return ""
+    return text[:NOTES_CHARS] + ("\n…" if len(text) > NOTES_CHARS else "")
+
+
+def remember(repo, text: str) -> dict:
+    """Add a line to the notes; they go with the first message of every conversation from now on."""
+    text = " ".join(str(text or "").split())
+    if not text:
+        raise ChatError("/remember NOTE keeps NOTE for every conversation; /notes opens them")
+    path = notes_path(repo)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    had = path.read_text(errors="replace") if path.is_file() else ""
+    with path.open("a") as stream:
+        stream.write(("" if not had or had.endswith("\n") else "\n") + "- " + text + "\n")
+    return {"path": NOTES_FILE, "lines": sum(1 for l in path.read_text(errors="replace").splitlines() if l.strip())}
+
+
+def _with_notes(repo, meta: dict, message: str) -> str:
+    """The notes go with a parent's first message: once per native session for the parents that resume their own, with
+    every message for the others (which get the conversation with every message too)."""
+    text = notes(repo)
+    if not text or (meta["parent"] in RESUMES and meta.get("native")):
+        return message
+    return "[Project notes the user keeps in " + NOTES_FILE + "]\n" + text + "\n\n" + message
+
+
 def _last_user(repo, session: str) -> str:
     """What the last message said, on one line, to name a turn by."""
     try:
@@ -1546,6 +1596,7 @@ def run_turn(repo, session: str) -> int:
     import parent_commands
     message = parent_commands.expand(repo, parent, message)  # /name: the parent's own skill or command
     message = _mentions(repo, parent, message)  # @file and @file:10-40: what they name goes with the message
+    message = _with_notes(repo, meta, message)  # .rig/notes.md, with the parent's first message
     if parent not in RESUMES:
         message = _with_context(repo, session, message)
     elif meta.get("context_from") is not None:

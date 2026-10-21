@@ -593,6 +593,35 @@ class Turns(Base):
             with self.assertRaisesRegex(rig_chat.ChatError, "inside the project"):
                 rig_chat.export(self.repo, session, bad)
 
+    def test_notes_go_with_the_parents_first_message_and_remember_adds_one(self):
+        stand_in(self.bin, "claude", CLAUDE_STREAM)
+        first = rig_chat.send(self.repo, "/remember never touch vendor/")
+        session = first["session"]
+        self.assertEqual(first["notes"], 1)
+        rig_chat.send(self.repo, "/remember   tests run with   make test ", session)
+        self.assertEqual((self.repo / ".rig" / "notes.md").read_text(), "- never touch vendor/\n- tests run with make test\n")
+        rig_chat.send(self.repo, "/notes", session)
+        self.assertIn("- tests run with make test", rig_chat.transcript(self.repo, session)["entries"][-1]["text"])
+        self.assertEqual(len(self.calls()), 0, "the commands start no turn")
+        rig_chat.send(self.repo, "first real question", session)
+        self.wait_idle(session)
+        rig_chat.send(self.repo, "second", session)
+        self.wait_idle(session)
+        first_sent, second_sent = self.calls()[0]["argv"][-1], self.calls()[1]["argv"][-1]
+        self.assertTrue(first_sent.startswith("[Project notes the user keeps in .rig/notes.md]\n- never touch vendor/"), first_sent)
+        self.assertTrue(first_sent.endswith("first real question"))
+        self.assertNotIn("Project notes", second_sent, "claude resumes its own session: told once")
+        # a parent that cannot resume gets them each time; a fork or a compacted successor starts fresh and gets them again
+        stand_in(self.bin, "pi", CLAUDE_STREAM)
+        other = rig_chat.send(self.repo, "hi", parent="pi")["session"]
+        self.wait_idle(other)
+        rig_chat.send(self.repo, "again", other)
+        self.wait_idle(other)
+        for call in self.calls()[2:4]:
+            self.assertIn("Project notes", call["argv"][-1])
+        with self.assertRaisesRegex(rig_chat.ChatError, "/remember NOTE"):
+            rig_chat.send(self.repo, "/remember", session)
+
     def test_a_long_patch_and_many_files_are_cut_short(self):
         files = rig_chat.turn_changes(self.repo, "", "x")
         self.assertEqual(files, [], "no trees, no changes")

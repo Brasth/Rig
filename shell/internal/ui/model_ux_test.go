@@ -115,6 +115,7 @@ func TestSlashListsTheCommandsAndRunsTheChosenOne(t *testing.T) {
 		t.Errorf("the menu shows its first rows:\n%s", out)
 	}
 	typeText(m, "n")
+	typeText(m, "e")
 	if got := m.st.slashes(); len(got) != 1 || got[0].Name != "/new" {
 		t.Fatalf("typing narrows the list: %v", got)
 	}
