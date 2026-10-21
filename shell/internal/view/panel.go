@@ -119,10 +119,11 @@ type JobThread struct {
 	Running bool   `json:"running"`
 	Ending  string `json:"ending"`
 	Entries []struct {
-		Who  string `json:"who"`
-		Kind string `json:"kind"` // brief, activity, message, ask, result
-		Text string `json:"text"`
-		At   string `json:"at"`
+		Who    string `json:"who"`
+		Kind   string `json:"kind"` // brief, activity, message, ask, result
+		Text   string `json:"text"`
+		At     string `json:"at"`
+		Unread bool   `json:"unread"` // a message the helper has not read yet
 	} `json:"entries"`
 }
 

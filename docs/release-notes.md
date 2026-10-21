@@ -3,6 +3,10 @@
 
 
 
+## Pause a helper, stage one hunk, and the thread keeps every message (2026-10-21)
+
+`p` in the agents panel or a helper's thread pauses the helper (SIGSTOP to its process group; the board shows Paused) and `p` again lets it go on; a stop wakes a paused helper first (new API method `job.pause`). In a file's diff in the git view, `]` `[` choose a hunk and `h` stages it alone (or unstages it from the staged diff). A helper's thread now keeps every message the parent sent it, not only the one still unread (`messages.jsonl` in the job's folder).
+
 ## Pull, switch branch and buttons in the git view; inline blame (2026-10-21)
 
 The git view has a commit message box and `✓ Commit`, `↓ Pull` and `↑ Push` buttons. `P` (or the button) pulls, and a click on the branch (or `b`) lists the branches to switch to, or makes a new one from a typed name. The line the cursor is on ends with its blame, faint, as GitLens shows it: who changed it, when, and the commit.

@@ -1273,6 +1273,7 @@ def load_job(job_path: Path, *, include_activity: bool = True) -> dict | None:
         "doing_updated_at": str(obj.get("doing_updated_at") or ""),
         "ask": pending_ask,
         "inbox": pending_inbox,
+        "paused": (job_path / "paused").is_file() and status == "running",
         "activities": activities,
         "dir": str(job_path),
         "log": str(log_path),
@@ -1460,6 +1461,8 @@ def write_cancel_flag(job_dir: Path, reason: str) -> None:
 
 
 def cancel_target(target: dict, reason: str = "parent", *, return_details=False):
+    import job_pause
+    job_pause.resume_before_stop(target["path"])  # a paused worker cannot handle the stop until it runs again
     result = cancellation.publish(target, reason)
     jid = target["job_id"]
     if result["state"] == "already-terminal":

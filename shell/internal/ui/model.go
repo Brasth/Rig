@@ -1025,6 +1025,9 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case gitDiffMsg:
 		if m.appOn() {
+			if old := m.st.App.GitDiff; old != nil && msg.view != nil && old.path == msg.view.path && old.staged == msg.view.staged {
+				msg.view.off, msg.view.hunk = old.off, old.hunk // a refresh keeps the place
+			}
 			m.st.App.GitDiff = msg.view
 		}
 	case modelsMsg:

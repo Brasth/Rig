@@ -53,6 +53,53 @@ type gitDiffView struct {
 	staged bool
 	file   DiffFile
 	off    int
+	raw    string // the diff as git wrote it: a hunk of it is staged or unstaged on its own
+	hunk   int    // the chosen hunk (from 0)
+}
+
+// hunks splits a file's raw diff into its header and each hunk's text, as git apply takes them.
+func hunks(raw string) (head string, parts []string) {
+	var cur []string
+	flush := func() {
+		if cur != nil {
+			parts = append(parts, strings.Join(cur, "\n")+"\n")
+		}
+		cur = nil
+	}
+	var headLines []string
+	for _, l := range strings.Split(strings.TrimRight(raw, "\n"), "\n") {
+		switch {
+		case strings.HasPrefix(l, "@@"):
+			flush()
+			cur = []string{l}
+		case cur != nil:
+			cur = append(cur, l)
+		default:
+			headLines = append(headLines, l)
+		}
+	}
+	flush()
+	return strings.Join(headLines, "\n") + "\n", parts
+}
+
+// hunkPatch is a patch with one hunk of the file's diff, for git apply.
+func hunkPatch(raw string, i int) string {
+	head, parts := hunks(raw)
+	if i < 0 || i >= len(parts) {
+		return ""
+	}
+	return head + parts[i]
+}
+
+// hunkOf is which hunk (from 0) line i of the parsed diff is in.
+func hunkOf(lines []DiffLine, i int) int {
+	n := -1
+	for j := 0; j <= i && j < len(lines); j++ {
+		if lines[j].Kind == '@' {
+			n++
+		}
+	}
+	return n
 }
 
 type gitStatusMsg struct{ state *gitState }
@@ -312,7 +359,7 @@ func (m *Model) fetchGitDiff(path string, staged bool) tea.Cmd {
 			// a new file: all of it
 			out, _ = gitOut(repo, "diff", "--no-color", "--no-index", "--", "/dev/null", path)
 		}
-		view := &gitDiffView{path: path, staged: staged}
+		view := &gitDiffView{path: path, staged: staged, raw: out}
 		if files := ParseDiff(out); len(files) > 0 {
 			view.file = files[0]
 		}
@@ -520,6 +567,20 @@ func (m *Model) gitKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		r = &rows[sel]
 	}
 	switch k.String() {
+	case "]", "[":
+		if d := a.GitDiff; d != nil {
+			_, parts := hunks(d.raw)
+			if k.String() == "]" {
+				d.hunk = min(d.hunk+1, max(0, len(parts)-1))
+			} else {
+				d.hunk = max(0, d.hunk-1)
+			}
+			d.off = hunkRow(d) // the chosen hunk in view
+		}
+	case "h":
+		if d := a.GitDiff; d != nil {
+			return m, m.stageHunk(d)
+		}
 	case "pgdown":
 		if a.GitDiff != nil {
 			a.GitDiff.off += 15
@@ -676,6 +737,54 @@ func (m *Model) switchBranch(name string, create bool) tea.Cmd {
 	return m.gitAct("on "+name, func(repo string) error { _, err := gitOut(repo, "switch", name); return err })
 }
 
+// hunkRow is the row of the diff's body the chosen hunk starts on, to scroll it into view.
+func hunkRow(d *gitDiffView) int {
+	row, n := 0, -1
+	for i, l := range d.file.Lines {
+		if l.Kind == '@' {
+			n++
+			if n == d.hunk {
+				return max(0, row-1)
+			}
+			if i > 0 {
+				row++ // the ⋯ between hunks
+			}
+			continue
+		}
+		row++
+	}
+	return 0
+}
+
+// stageHunk stages the chosen hunk of a file's changes, or unstages it from the staged ones (h in the diff).
+func (m *Model) stageHunk(d *gitDiffView) tea.Cmd {
+	patch := hunkPatch(d.raw, d.hunk)
+	if patch == "" {
+		m.st.Message = "no hunk chosen: ] and [ move between them"
+		return nil
+	}
+	if strings.Contains(d.raw, "--- /dev/null") {
+		return m.toggleStage(gitRow{kind: map[bool]string{true: "staged", false: "change"}[d.staged], file: gitFile{path: d.path}}) // a new file: all of it
+	}
+	note := fmt.Sprintf("staged hunk %d of %s", d.hunk+1, d.path)
+	args := []string{"apply", "--cached", "--unidiff-zero", "--recount"}
+	if d.staged {
+		note = fmt.Sprintf("unstaged hunk %d of %s", d.hunk+1, d.path)
+		args = append(args, "--reverse")
+	}
+	return m.gitAct(note, func(repo string) error {
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, "git", append([]string{"-C", repo}, args...)...)
+		cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+		cmd.Stdin = strings.NewReader(patch)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("%s", strings.TrimSpace(string(out)))
+		}
+		return nil
+	})
+}
+
 // toggleStage stages a change, or unstages a staged one.
 func (m *Model) toggleStage(r gitRow) tea.Cmd {
 	path := r.file.path
@@ -789,8 +898,19 @@ func gitDiffRows(st State, w, room int) []string {
 	}
 	add, del := tints()
 	var body []string
+	_, parts := hunks(d.raw)
+	if len(parts) > 1 {
+		verb := "stages"
+		if d.staged {
+			verb = "unstages"
+		}
+		out[0] += "   " + st.faint(fmt.Sprintf("hunk %d of %d · ] [ choose · h %s it", d.hunk+1, len(parts), verb))
+	}
+	in, n := -1, -1
 	for i, l := range d.file.Lines {
 		if l.Kind == '@' {
+			n++
+			in = n
 			if i > 0 {
 				body = append(body, st.faint("   ⋯"))
 			}
@@ -809,7 +929,11 @@ func gitDiffRows(st State, w, room int) []string {
 		} else if st.Styled {
 			text = st.dim(text)
 		}
-		body = append(body, "  "+text)
+		edge := "  "
+		if in == d.hunk && len(parts) > 1 {
+			edge = st.paint(colAccent, "▎") + " " // the chosen hunk
+		}
+		body = append(body, edge+text)
 	}
 	off := max(0, min(d.off, len(body)-(room-len(out))))
 	body = body[off:]

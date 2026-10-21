@@ -217,6 +217,17 @@ func (m *Model) askStopJob(r view.Row) {
 	m.st.Mode, m.st.Prompt = ModeConfirm, "Stop "+r.ID+" "+clean(r.Title)+"?"
 }
 
+// togglePause pauses a helper at work, or lets a paused one go on (the design's p pause).
+func (m *Model) togglePause(r view.Row) tea.Cmd {
+	on := r.Label != "Paused"
+	if on {
+		m.st.Message = "pausing " + r.ID
+	} else {
+		m.st.Message = r.ID + " goes on"
+	}
+	return m.act("job.pause", map[string]any{"id": r.ID, "on": on}, false)
+}
+
 // appKey is the app's keyboard. The box has the keyboard on the conversation, as in codex; overlays take it while open.
 func (m *Model) appKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	a := m.st.App
@@ -314,6 +325,10 @@ func (m *Model) appKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if sel := clampSel(a.PanelSel, len(jobs)); sel < len(activeJobs(m.view)) {
 				m.askStopJob(jobs[sel]) // a finished helper has nothing to stop
 			}
+		case "p":
+			if sel := clampSel(a.PanelSel, len(jobs)); sel < len(activeJobs(m.view)) {
+				return m, m.togglePause(jobs[sel])
+			}
 		case "u":
 			if done := appliedCards(m.view, m.st); len(done) > 0 && m.st.Today != nil {
 				m.askApply("applies.undo", done[0].ID, "Undo "+clean(done[0].Title)+"? It reverts its merge.")
@@ -393,11 +408,15 @@ func (m *Model) appKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.st.LogUp = 0 // the thread follows its newest lines again
 		return m, nil
 	}
-	if a.Thread != "" && key == "s" {
+	if a.Thread != "" && (key == "s" || key == "p") {
 		for _, r := range m.view.Rows("Jobs") {
-			if r.ID == a.Thread {
-				m.askStopJob(r)
+			if r.ID != a.Thread {
+				continue
 			}
+			if key == "p" {
+				return m, m.togglePause(r)
+			}
+			m.askStopJob(r)
 		}
 		return m, nil
 	}

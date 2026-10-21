@@ -617,7 +617,7 @@ func codeScreen(v *view.View, st State, w, h int) ([]string, [][2]string) {
 	a := st.App
 	keys := [][2]string{{"⌃b", "tree"}, {"g", "git"}, {"b", "blame"}, {"/", "find"}, {"v", "select"}, {"e", "edit"}, {"E", "$EDITOR"}}
 	if a.GitDiff != nil {
-		keys = [][2]string{{"g", "git"}, {"esc", "close diff"}}
+		keys = [][2]string{{"] [", "hunk"}, {"h", "stage hunk"}, {"g", "git"}, {"esc", "close diff"}}
 	}
 	switch {
 	case a.CodeAsk != nil || a.Editing:

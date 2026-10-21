@@ -34,6 +34,9 @@ def _read_json(path: Path) -> dict | None:
     return obj if isinstance(obj, dict) else None
 
 
+MESSAGES_NAME = "messages.jsonl"
+
+
 def write_inbox(job_dir: Path, text: str) -> dict:
     line = " ".join(str(text).split())
     if not line:
@@ -42,7 +45,29 @@ def write_inbox(job_dir: Path, text: str) -> dict:
         line = line[:1999] + "…"
     obj = {"text": line, "sent_at": iso_now()}
     _write_json(inbox_path(job_dir), obj)
+    # a copy stays in the job's folder: the thread shows every message the parent sent, read or not
+    try:
+        with (Path(job_dir) / MESSAGES_NAME).open("a") as stream:
+            stream.write(json.dumps(obj) + "\n")
+    except OSError:
+        pass
     return obj
+
+
+def messages(job_dir: Path) -> list[dict]:
+    """Every message the parent sent this job, oldest first."""
+    out = []
+    try:
+        for line in (Path(job_dir) / MESSAGES_NAME).read_text().splitlines():
+            try:
+                obj = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(obj, dict) and isinstance(obj.get("text"), str):
+                out.append(obj)
+    except OSError:
+        pass
+    return out
 
 
 def load_inbox(job_dir: Path) -> dict | None:

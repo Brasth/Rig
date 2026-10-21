@@ -973,6 +973,9 @@ func agentsPanel(v *view.View, st State, pw, h int, float bool) []string {
 		if i >= working {
 			activity = "      " + finishedWord(st, r)
 		}
+		if r.Label == "Paused" {
+			activity = "      " + st.faint("paused · p lets it go on")
+		}
 		group := []string{top, activity}
 		if i == sel {
 			group = roundBox(st, group, iw, true)
@@ -1021,7 +1024,7 @@ func agentsPanel(v *view.View, st State, pw, h int, float bool) []string {
 	if float {
 		shut = "close"
 	}
-	keys := st.hint([2]string{"⏎", "watch thread"}) + "   " + st.hint([2]string{"s", "stop"}) + "   " + st.hint([2]string{"⇥", shut})
+	keys := st.hint([2]string{"⏎", "thread"}) + "   " + st.hint([2]string{"p", "pause"}) + "   " + st.hint([2]string{"s", "stop"}) + "   " + st.hint([2]string{"⇥", shut})
 	room := h - len(foot) - 2
 	if float {
 		room -= 2
@@ -1316,7 +1319,7 @@ func threadBody(st State, w, h int) ([]string, [][2]string) {
 		}
 		keys := [][2]string{{"esc", "back"}, {"⇥", "agents"}}
 		if t.Running {
-			keys = [][2]string{{"esc", "back"}, {"s", "stop"}, {"⇥", "agents"}}
+			keys = [][2]string{{"esc", "back"}, {"p", "pause"}, {"s", "stop"}, {"⇥", "agents"}}
 		}
 		if st.LogUp > 0 {
 			keys = append([][2]string{{"G", "newest"}}, keys...)
@@ -1377,7 +1380,11 @@ func threadLines(st State, t *view.JobThread, cw int) []string {
 			who(e.Who, "→ "+t.Worker+" · the task")
 			wrap(e.Text, plain, "      ")
 		case "message":
-			who(e.Who, "→ "+t.Worker+" · not read yet")
+			note := "→ " + t.Worker
+			if e.Unread {
+				note += " · not read yet"
+			}
+			who(e.Who, note)
 			wrap(e.Text, plain, "      ")
 		case "ask":
 			who(e.Who, "asks "+t.Parent)
