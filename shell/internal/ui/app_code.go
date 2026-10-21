@@ -102,8 +102,8 @@ func splitHints(st State, left, right [][2]string, w int) string {
 func changesScreen(v *view.View, st State, w, h int) ([]string, string) {
 	a := st.App
 	rows := v.Rows("Jobs")
-	foot := splitHints(st, [][2]string{{"[ ]", "file"}, {"←→", "job"}, {"c", "comment"}, {"esc", "back"}},
-		[][2]string{{"u", "undo"}, {"h", "hold"}, {"⌃k", "files"}, {"?", "help"}}, w)
+	foot := splitHints(st, [][2]string{{"]", "next file"}, {"c", "comment"}, {"esc", "back"}},
+		AppRightKeys, w)
 	if len(rows) == 0 {
 		lines := []string{"", center(st.dim("No changes yet. When a helper finishes, what it changed shows here."), w)}
 		for len(lines) < h {
@@ -136,9 +136,9 @@ func changesScreen(v *view.View, st State, w, h int) ([]string, string) {
 		}
 		names = append(names, name)
 	}
-	left := "   " + st.dot(worker) + "  " + st.bold(clean(r.Title)) + "  " + st.faint(fmt.Sprintf("%s · %d files", worker, len(files)))
+	left := "   " + st.tile(worker) + "  " + st.bold(clean(r.Title)) + "  " + st.faint(fmt.Sprintf("%s · %d files", worker, len(files)))
 	lines := []string{spread(left, "", strings.Join(names, "   ")+"   ", w), fit("", w)}
-	cw := min(100, w-8)
+	cw := min(96, w-8)
 	x := (w - cw) / 2
 	var body []string
 	switch {
@@ -158,9 +158,11 @@ func changesScreen(v *view.View, st State, w, h int) ([]string, string) {
 		}
 		body = append(body, head, "")
 		add, del := tints()
-		for _, l := range f.Lines {
+		for i, l := range f.Lines {
 			if l.Kind == '@' {
-				body = append(body, st.faint("   ⋯"))
+				if i > 0 {
+					body = append(body, st.faint("   ⋯")) // between hunks; the file's first one needs no mark
+				}
 				continue
 			}
 			mark, colour, bg := " ", colText, ""
@@ -210,15 +212,12 @@ func changesScreen(v *view.View, st State, w, h int) ([]string, string) {
 			}
 			var parts []string
 			for _, l := range sec.Lines {
-				t := strings.TrimSpace(sanitize(l.Text))
-				colour := colGreen
-				if l.Tone == "attention" || strings.HasPrefix(t, "!") {
-					colour = colAmber
+				if part := checkWord(st, l.Text); part != "" {
+					parts = append(parts, part)
 				}
-				parts = append(parts, st.paint(colour, strings.TrimPrefix(t, "! ")))
 			}
 			if len(parts) > 0 {
-				tail = append(tail, "", strings.Join(parts, "   ")+"   "+st.faint(appParent(st)+" checks it before it applies"))
+				tail = append(tail, "", strings.Join(parts, "   ")+"   "+st.dim(appParent(st)+" applies it after"))
 			}
 		}
 	}
@@ -325,7 +324,7 @@ func highlight(st State, line string) string {
 func codeScreen(st State, w, h int) ([]string, string) {
 	a := st.App
 	foot := splitHints(st, [][2]string{{"/", "find"}, {"v", "select"}, {"e", "open in $EDITOR"}, {"esc", "back"}},
-		[][2]string{{"↑↓", "scroll"}, {"⌃k", "files"}, {"?", "help"}}, w)
+		AppRightKeys, w)
 	if a.File == "" {
 		lines := []string{"", center(st.dim("Open a file with ⌃k: type part of its name."), w)}
 		for len(lines) < h {
@@ -362,7 +361,7 @@ func codeScreen(st State, w, h int) ([]string, string) {
 		}
 		code = append(code, "")
 		for i := off; i < len(a.FileLines) && len(code) < room+1; i++ {
-			text := sanitize(a.FileLines[i])
+			text := sanitize(strings.ReplaceAll(a.FileLines[i], "\t", strings.Repeat(" ", tabSize(st))))
 			if a.Find != "" {
 				text = mark(st, text, a.Find)
 			} else {
@@ -517,21 +516,26 @@ func previewKind(path string) string {
 // previewLines is the design's file preview: rendered markdown, a table, or how to open what a terminal cannot show.
 func previewLines(st State, a *AppState, w, h int) []string {
 	out := []string{""}
+	name := st.bold(filepath.Base(a.File))
 	switch previewKind(a.File) {
 	case "markdown":
-		out = append(out, st.faint(filepath.Base(a.File)+"  rendered · s source"), "")
-		for _, raw := range a.FileLines {
+		out = append(out, name+"  "+st.faint("rendered · s source"), "")
+		for i, raw := range a.FileLines {
 			line := strings.TrimRight(raw, " ")
 			switch {
+			case strings.HasPrefix(line, "# "):
+				out = append(out, st.bold(strings.TrimSpace(line[2:])))
 			case strings.HasPrefix(line, "#"):
-				out = append(out, st.bold(strings.TrimSpace(strings.TrimLeft(line, "#"))))
+				out = append(out, st.bold(line)) // the design keeps the marks of a sub-heading
 			case strings.HasPrefix(strings.TrimSpace(line), "- "), strings.HasPrefix(strings.TrimSpace(line), "* "):
-				out = append(out, "  • "+strings.TrimSpace(strings.TrimSpace(line)[2:]))
+				out = append(out, "  • "+inlineCode(st, strings.TrimSpace(strings.TrimSpace(line)[2:])))
 			case strings.HasPrefix(line, "```"):
 				out = append(out, st.faint("  ────"))
+			case line == "" && i > 0 && strings.HasPrefix(a.FileLines[i-1], "# "):
+				// the design runs a title's first paragraph on under it
 			default:
 				for _, l := range wrap(line, w-2, "") {
-					out = append(out, st.dim(l))
+					out = append(out, inlineCode(st, l))
 				}
 			}
 		}
@@ -543,29 +547,49 @@ func previewLines(st State, a *AppState, w, h int) []string {
 		r := csv.NewReader(strings.NewReader(strings.Join(a.FileLines, "\n")))
 		r.Comma, r.FieldsPerRecord, r.LazyQuotes = sep, -1, true
 		rows, _ := r.ReadAll()
-		out = append(out, st.faint(fmt.Sprintf("%s  %d rows · table · s source", filepath.Base(a.File), max(0, len(rows)-1))), "")
-		widths := []int{}
-		for _, row := range rows[:min(len(rows), 200)] {
+		head := name + "  " + st.faint(fmt.Sprintf("%s rows · table", thousands(max(0, len(rows)-1))))
+		if a.Find != "" {
+			head += st.faint("  · rows with ") + a.Find
+		}
+		out = append(out, head, "")
+		widths, numeric := []int{}, []bool{}
+		for n, row := range rows[:min(len(rows), 200)] {
 			for i, c := range row {
 				for len(widths) <= i {
-					widths = append(widths, 0)
+					widths, numeric = append(widths, 0), append(numeric, n > 0)
 				}
 				widths[i] = min(24, max(widths[i], lipgloss.Width(c)))
+				if n > 0 && strings.Trim(c, "0123456789.,-−+ ") != "" {
+					numeric[i] = false
+				}
 			}
 		}
 		for n, row := range rows {
+			if n > 0 && a.Find != "" && !strings.Contains(strings.ToLower(strings.Join(row, " ")), strings.ToLower(a.Find)) {
+				continue
+			}
 			var cells []string
 			for i, c := range row {
-				cells = append(cells, fit(c, widths[i]))
+				if numeric[i] && n > 0 {
+					cells = append(cells, strings.Repeat(" ", max(0, widths[i]-lipgloss.Width(c)))+fit(c, widths[i]))
+				} else {
+					cells = append(cells, fit(c, widths[i]))
+				}
 			}
 			line := strings.Join(cells, "  ")
 			if n == 0 {
-				line = st.bold(line)
+				line = st.faint(line)
 			}
 			out = append(out, line)
 		}
 	case "binary":
-		out = append(out, st.bold(filepath.Base(a.File)), "", st.dim("A terminal cannot show this file. o opens it in your default app."))
+		if a.ImageCols > 0 {
+			out = append(out, name+"  "+st.faint("shown inline · o opens it in your default app"), "")
+			out = append(out, imageRows(previewImageID, a.ImageCols, a.ImageRows)...)
+		} else {
+			out = append(out, name+"  "+st.faint("o opens it in your default app"), "",
+				st.dim("Ghostty and kitty show pictures here; this terminal cannot."))
+		}
 	}
 	if off := min(a.FileOff, max(0, len(out)-h)); off > 0 {
 		out = out[off:]
@@ -573,12 +597,40 @@ func previewLines(st State, a *AppState, w, h int) []string {
 	return out
 }
 
+var codeSpan = regexp.MustCompile("`([^`]+)`")
+
+// inlineCode shows a markdown line's `code` on the raised grey, without its backticks.
+func inlineCode(st State, line string) string {
+	return codeSpan.ReplaceAllStringFunc(line, func(m string) string {
+		return tintIf(st, " "+m[1:len(m)-1]+" ", colSelBg)
+	})
+}
+
+// thousands writes n with commas: 12,480.
+func thousands(n int) string {
+	s := fmt.Sprint(n)
+	for i := len(s) - 3; i > 0; i -= 3 {
+		s = s[:i] + "," + s[i:]
+	}
+	return s
+}
+
 // SearchState is the design's search: the query, its results grouped by file, and the chosen one.
 type SearchState struct {
 	Query   string
 	Results []SearchHit
 	Sel     int
-	Ran     string // the query the results are for
+	Ran     string // the query and options the results are for
+	// the design's aa ab .* src/** in the box: match case, whole words, a regular expression, and the files searched
+	Case, Word, Regex bool
+	Scope             string
+	EditScope         bool    // typing goes to the files searched
+	Replace           *string // ⌃r: what to put in place of the matches, while it is being typed
+}
+
+// key is what the results must be for: the query with its options.
+func (s *SearchState) key() string {
+	return fmt.Sprintf("%s\x00%v%v%v\x00%s", s.Query, s.Case, s.Word, s.Regex, s.Scope)
 }
 
 // SearchHit is one matching line.
@@ -592,38 +644,86 @@ type SearchHit struct {
 func searchScreen(st State, w, h int) ([]string, string) {
 	s := st.App.Search
 	cw := min(appColumn, w-8)
-	foot := keyHints(st, [][2]string{{"↑↓", "result"}, {"⏎", "open"}, {"⇥", "ask " + appParent(st)}, {"esc", "back"}}, w)
-	box := roundBox(st, []string{" " + st.faint("/") + " " + s.Query + "▏"}, cw, true)
-	lines := append([]string{"", ""}, box...)
-	files := map[string]bool{}
+	foot := keyHints(st, [][2]string{{"↑↓", "result"}, {"⏎", "open"}, {"⇥", "ask " + appParent(st)}, {"⌃r", "replace"}, {"esc", "back"}}, w)
+	opt := func(label string, on bool) string {
+		if on {
+			return st.bold(label)
+		}
+		return st.faint(label)
+	}
+	scope := s.Scope
+	if s.EditScope {
+		scope += "▏"
+	} else if scope == "" {
+		scope = "**"
+	}
+	query := s.Query
+	if !s.EditScope {
+		query += "▏"
+	}
+	left := " " + st.faint("/") + " " + query
+	right := opt("aa", s.Case) + "   " + opt("ab", s.Word) + "   " + opt(".*", s.Regex) + "   " + st.paint(colFaint, scope) + "  "
+	if s.EditScope {
+		right = opt("aa", s.Case) + "   " + opt("ab", s.Word) + "   " + opt(".*", s.Regex) + "   " + scope + "  "
+	}
+	box := roundBox(st, []string{left + strings.Repeat(" ", max(2, cw-2-lipgloss.Width(left)-lipgloss.Width(right))) + right}, cw, true)
+	lines := append([]string{""}, box...)
+	files := map[string]int{}
+	var order []string
 	for _, r := range s.Results {
-		files[r.Path] = true
+		if files[r.Path] == 0 {
+			order = append(order, r.Path)
+		}
+		files[r.Path]++
 	}
 	switch {
+	case s.Replace != nil:
+		lines = append(lines, st.paint(colAccent, "replace "+s.Query+" with › ")+*s.Replace+"▏"+st.faint("   ⏎ replaces in "+fmt.Sprint(len(order))+" files · esc cancels"))
 	case s.Query == "":
-		lines = append(lines, st.faint("type to search the repository · ⇥ asks "+appParent(st)+" instead"))
-	case s.Ran != s.Query:
+		lines = append(lines, st.faint("type to search the repository · tab: ask "+appParent(st)+" instead"))
+	case s.Ran != s.key():
 		lines = append(lines, st.faint("searching…"))
 	default:
-		lines = append(lines, st.faint(fmt.Sprintf("%d results in %d files · ⇥ asks %s instead", len(s.Results), len(files), appParent(st))))
+		lines = append(lines, st.faint(fmt.Sprintf("%d results in %d files · tab: ask %s instead", len(s.Results), len(order), appParent(st))))
 	}
 	lines = append(lines, "")
-	prev := ""
 	sel := clampSel(s.Sel, len(s.Results))
+	// the design shows the first files' lines and folds the rest to a count; the chosen result's file is always open
+	open := map[string]bool{}
+	for i, f := range order {
+		if i < 2 {
+			open[f] = true
+		}
+	}
+	if len(s.Results) > 0 {
+		open[s.Results[sel].Path] = true
+	}
+	prev := ""
 	for i, r := range s.Results {
 		if len(lines) >= h-1 {
 			break
 		}
 		if r.Path != prev {
-			if prev != "" {
+			if prev != "" && open[prev] {
 				lines = append(lines, "")
 			}
 			who := ""
 			if c := st.App.Changed[r.Path]; c != "" {
 				who = "  " + st.paint(agentColor(c), "● "+c)
 			}
-			lines = append(lines, st.bold(r.Path)+who)
+			head := st.bold(r.Path) + who
+			if !open[r.Path] {
+				count := fmt.Sprintf("%d matches", files[r.Path])
+				if files[r.Path] == 1 {
+					count = "1 match"
+				}
+				head += "  " + st.faint(count)
+			}
+			lines = append(lines, head)
 			prev = r.Path
+		}
+		if !open[r.Path] {
+			continue
 		}
 		row := "   " + st.faint(fmt.Sprintf("%-4d", r.Line)) + " " + mark(st, fit(sanitize(strings.TrimSpace(r.Text)), cw-10), s.Query)
 		if i == sel {
@@ -639,4 +739,29 @@ func searchScreen(st State, w, h int) ([]string, string) {
 		lines = append(lines, "")
 	}
 	return indentAll(lines[:h], (w-cw)/2, w), foot
+}
+
+var checkLine = regexp.MustCompile(`^[●!]?\s*(\S+)\s+exit\s+(\S+)`)
+
+// checkWord is one check as the design words it: "● tests pass", "● lint running", "● unit failed".
+func checkWord(st State, text string) string {
+	m := checkLine.FindStringSubmatch(strings.TrimSpace(sanitize(text)))
+	if m == nil {
+		return ""
+	}
+	switch m[2] {
+	case "0":
+		return st.paint(colGreen, "● "+m[1]+" pass")
+	case "running":
+		return st.paint(colAccent, "● "+m[1]+" running")
+	}
+	return st.paint(colRed, "● "+m[1]+" failed")
+}
+
+// tabSize is the code view's tab width from Settings › Editor; 4 until it is known.
+func tabSize(st State) int {
+	if st.AppSettings != nil && st.AppSettings.TabSize > 0 {
+		return st.AppSettings.TabSize
+	}
+	return 4
 }

@@ -28,6 +28,7 @@ const (
 
 // State is everything Render needs besides the view. It holds no I/O.
 type State struct {
+	Logos        bool // agents drawn as their logo tiles with kitty's image placeholders (gfx.go)
 	Tab          string
 	Selected     map[string]int
 	Offsets      map[string]int

@@ -60,6 +60,32 @@ class Settings(unittest.TestCase):
         ui_settings.save(self.repo, "ui.bell", "false", "repo")
         self.assertEqual((ui_settings.read(self.repo)["bell"], ui_settings.read(self.repo)["bell_scope"]), (False, "repo"))
 
+    def test_the_boards_own_preferences(self):
+        view = ui_settings.read(self.repo)
+        self.assertEqual((view["start"], view["ship"], view["tab_size"], view["notify_needs"], view["notify_applied"], view["desktop"]),
+                         ("picker", "pr", 4, True, False, False))
+        ui_settings.save(self.repo, "ui.start", "last", "all")
+        ui_settings.save(self.repo, "ui.ship", "push", "all")
+        ui_settings.save(self.repo, "ui.tab_size", "2", "all")
+        ui_settings.save(self.repo, "ui.notify_applied", "true", "repo")
+        view = ui_settings.read(self.repo)
+        self.assertEqual((view["start"], view["ship"], view["tab_size"], view["notify_applied"]), ("last", "push", 2, True))
+        with self.assertRaises(ui_settings.SettingsError):
+            ui_settings.save(self.repo, "ui.start", "last", "repo")  # where rig shell starts is yours, not a repo's
+        self.assertEqual([r["task"] for r in view["routing_table"]][:2], ["plan and review", "features"])
+        self.assertEqual(view["clone_dir"], (os.environ.get("RIG_CODE_DIR") or str(Path.home() / "code")).replace(str(Path.home()), "~"))
+
+    def test_rig_shell_opens_the_last_project_when_asked(self):
+        import json
+        import rig_shell
+        home = Path(os.environ["RIG_HOME"])
+        home.mkdir(parents=True, exist_ok=True)
+        (home / "recent.json").write_text(json.dumps([{"path": str(self.repo / "gone")}, {"path": str(self.repo)}]))
+        self.assertEqual(rig_shell.start_setting(), "picker")
+        ui_settings.save(self.repo, "ui.start", "last", "all")
+        self.assertEqual(rig_shell.start_setting(), "last")
+        self.assertEqual(rig_shell.last_project(), self.repo, "the newest one still set up")
+
     def test_refusals(self):
         for key, value, scope, message in (("billing.budget", "20", "repo", "not a setting"),
                                            ("queue.max_running", "99", "repo", "one of"),

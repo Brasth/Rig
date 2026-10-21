@@ -200,27 +200,30 @@ type Model struct {
 	chatID     string // the session the Chat tab follows; empty until one exists
 	inputFor   string // "chat" while the input line is a chat message, else enqueue
 	// exec hands the terminal to a command and returns when it exits; tests replace it.
-	exec       func(argv []string, done func(error) tea.Msg) tea.Cmd
-	lastOK     time.Time
-	now        func() time.Time
-	newKey     func() string
-	selID      map[string]string
-	draftKey   string
-	pendingX   string // method for a confirmed stop: job.cancel or queue.cancel
-	pendingI   string // id for a confirmed stop
-	pickerSeen bool   // the picker opened by itself once, for a project with no parent
-	framed     bool   // the window has room for the mockup's border around the board
-	winW, winH int    // the window; the app uses all of it
-	dfBusy     bool
-	dfLast     time.Time
-	lastAsk    string // the request the bell last rang for
-	tdLast     time.Time
-	ringer     func() // rings the terminal bell; tests replace it
-	seenJobs   map[string]bool
-	themeFixed bool // rig shell --theme chose the theme for this board; the saved one is not loaded
-	messaging  bool // m was pressed under a request: a and d type again until the message is sent
-	spinning   bool // the spinner's tick is scheduled
-	chatStat   *view.ChatStatus
+	exec        func(argv []string, done func(error) tea.Msg) tea.Cmd
+	lastOK      time.Time
+	now         func() time.Time
+	newKey      func() string
+	selID       map[string]string
+	draftKey    string
+	pendingX    string // method for a confirmed stop: job.cancel or queue.cancel
+	pendingI    string // id for a confirmed stop
+	pickerSeen  bool   // the picker opened by itself once, for a project with no parent
+	chatAdopted bool   // a conversation was picked up, or one was left on purpose: none is picked up again
+	framed      bool   // the window has room for the mockup's border around the board
+	winW, winH  int    // the window; the app uses all of it
+	dfBusy      bool
+	dfLast      time.Time
+	lastAsk     string // the request the bell last rang for
+	tdLast      time.Time
+	ringer      func()                   // rings the terminal bell; tests replace it
+	notifier    func(title, text string) // a desktop notice through the terminal (OSC 9 and 777); tests replace it
+	seenApplied map[string]bool          // the applied work done today already known, so only new applies notify
+	seenJobs    map[string]bool
+	themeFixed  bool // rig shell --theme chose the theme for this board; the saved one is not loaded
+	messaging   bool // m was pressed under a request: a and d type again until the message is sent
+	spinning    bool // the spinner's tick is scheduled
+	chatStat    *view.ChatStatus
 }
 
 // NewModel returns a model that polls src.
@@ -496,7 +499,7 @@ func (m *Model) runSlash(text string) (tea.Cmd, bool) {
 		return m.act("queue.add", map[string]any{"text": rest, "idempotency_key": m.draftKey}, true), true
 	case "/new":
 		clear()
-		m.chatID, m.st.Chat, m.st.ChatUp = "", nil, 0
+		m.chatID, m.st.Chat, m.st.ChatUp, m.chatAdopted = "", nil, 0, true
 		m.st.Message = "new conversation: the next message starts it"
 	case "/stop":
 		clear()
@@ -834,6 +837,9 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		// the board fills the window inside the mockup's thin border; the side columns keep their widths and the chat grows
 		m.winW, m.winH = msg.Width, msg.Height
+		if m.st.Logos {
+			ResendLogos() // a resize may be tmux re-attaching to another terminal, which has not seen the tiles
+		}
 		m.w, m.h, m.framed = msg.Width, msg.Height, false
 		if msg.Width >= sessionMinW+2 && msg.Height >= sessionMinH+2 {
 			m.w, m.h, m.framed = msg.Width-2, msg.Height-2, true
@@ -891,14 +897,24 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.openPicker()
 			}
 		}
-		if m.chatID == "" && len(msg.status.Sessions) > 0 {
-			m.chatID = msg.status.Sessions[0].ID
+		// When rig shell opens, pick up the newest conversation with the parent in use. Only then: after a switch of
+		// parent or a new conversation, an old one must not come back.
+		if m.chatID == "" && !m.chatAdopted {
+			for _, s := range msg.status.Sessions {
+				if s.Parent == m.st.ChatParent {
+					m.chatID, m.chatAdopted = s.ID, true
+					break
+				}
+			}
 		}
 	case chatMsg:
 		m.chBusy, m.chLast = false, m.now()
 		if msg.err != nil {
 			m.st.ChatE = msg.err.Error()
 			return m, nil
+		}
+		if msg.chat != nil && msg.chat.Session != "" && msg.chat.Session != m.chatID {
+			return m, nil // the conversation was left (a switch of parent, a new one) while this was on its way
 		}
 		m.st.Chat, m.st.ChatE = msg.chat, ""
 		if m.appOn() {
@@ -909,6 +925,7 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.tdLast = m.now()
 		if msg.err == nil {
 			m.st.Today = msg.t
+			return m, m.notifyApplied(msg.t)
 		}
 	case shipMsg:
 		m.st.Ship, m.st.ShipE = msg.s, ""
@@ -961,7 +978,7 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.st.App.Changed = msg.files
 		}
 	case searchMsg:
-		if m.appOn() && m.st.App.Search != nil && m.st.App.Search.Query == msg.query {
+		if m.appOn() && m.st.App.Search != nil && m.st.App.Search.key() == msg.query {
 			m.st.App.Search.Results, m.st.App.Search.Ran = msg.hits, msg.query
 		}
 	case reopenMsg:
@@ -974,9 +991,21 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case fileMsg:
 		if m.appOn() && msg.path == m.st.App.File {
-			m.st.App.FileLines, m.st.App.FileErr = msg.lines, ""
+			a := m.st.App
+			a.FileLines, a.FileErr, a.ImageCols, a.ImageRows = msg.lines, "", 0, 0
 			if msg.err != nil {
-				m.st.App.FileErr = msg.err.Error()
+				a.FileErr = msg.err.Error()
+			}
+			if msg.image != nil && m.st.Logos && msg.w > 0 && msg.h > 0 {
+				// shown inline: as wide as the column allows, as tall as its shape needs (a cell is about twice as tall as wide)
+				cols := min(84, m.w-8, msg.w/8+1)
+				rows := max(1, cols*msg.h/msg.w/2)
+				if limit := max(4, m.h-10); rows > limit {
+					rows, cols = limit, max(1, limit*2*msg.w/msg.h)
+				}
+				if SendImage(msg.image, cols, rows) {
+					a.ImageCols, a.ImageRows = cols, rows
+				}
 			}
 		}
 	case themeMsg:
@@ -1002,12 +1031,13 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.st.Message = "Could not save the parent: " + msg.err.Error()
 			return m, nil
 		}
+		was := appParent(m.st)
 		m.parentName, m.st.ChatParent, m.st.ChatModel = msg.name, msg.name, ""
 		if m.chatStat != nil {
 			m.chatStat.Configured = msg.name
 		}
-		if m.st.Chat != nil && m.st.Chat.Parent != msg.name {
-			m.chatID, m.st.Chat, m.st.ChatUp = "", nil, 0 // another CLI cannot resume this one's session
+		if was != msg.name || (m.st.Chat != nil && m.st.Chat.Parent != msg.name) {
+			m.chatID, m.st.Chat, m.st.ChatUp, m.chatAdopted = "", nil, 0, true // another CLI cannot resume this one's session
 		}
 		m.st.Message = "parent: " + msg.name + " (saved in .rig/harness.toml)"
 	case chatSentMsg:
@@ -1360,7 +1390,7 @@ func (m *Model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.st.LogUp, m.st.ChatUp = 0, 0
 	case "N":
 		if m.st.Tab == ChatTab || m.chatInSession() {
-			m.chatID, m.st.Chat, m.st.ChatUp = "", nil, 0
+			m.chatID, m.st.Chat, m.st.ChatUp, m.chatAdopted = "", nil, 0, true
 			m.st.Message = "next message starts a new session"
 		}
 	case "s":
@@ -1542,6 +1572,16 @@ func (m *Model) confirmKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m, m.applyThenTell(method, map[string]any{"id": id}, "undone "+id, m.undoNote(id))
 			}
 			return m, m.applyAct(method, map[string]any{"id": id}, "applied again "+id)
+		case "applies.hold":
+			return m, m.applyAct("applies.hold", map[string]any{"id": id, "on": true}, "holding "+id)
+		case "applies.hold-all":
+			return m, m.holdAll()
+		case "search.replace":
+			if m.st.App != nil && m.st.App.Search != nil {
+				cmd := m.replaceAll(id)
+				m.st.App.Search.Replace = nil
+				return m, tea.Sequence(cmd, m.runSearch())
+			}
 		case "ship.push":
 			return m, m.applyAct("ship.run", map[string]any{"mode": "push"}, "pushed")
 		case "ship.pr":
@@ -1553,6 +1593,10 @@ func (m *Model) confirmKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		if method == "settings.set" {
 			return m, m.saveConfirmed(id)
+		}
+		if method == "env.down" {
+			m.st.Message = "stopping the container (rig env down)"
+			return m, m.exec([]string{"rig", "env", "down"}, func(err error) tea.Msg { return shellDoneMsg{err: err} })
 		}
 		if method == "env.up" {
 			m.st.Message = "starting the container (rig env up)"

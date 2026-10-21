@@ -49,9 +49,9 @@ func TestTheAppOpensOnTheFirstConversationInTheDesignsLight(t *testing.T) {
 		t.Fatalf("the design's default theme: %q", m.st.Theme)
 	}
 	out := appScreen(m)
-	for _, want := range []string{"r•••   my-repo", "1 [conversation]", "2 changes", "3 code", "working", "⌃k", "⇥ panel",
+	for _, want := range []string{"r•••   my-repo",
 		"What should we work on in my-repo?", "ask claude anything about my-repo", "1  explain this codebase", "4  review the open changes",
-		"⏎ send    1-4 suggestion    ⌃k commands"} {
+		"⏎ send    1-4 suggestion    @ add file    ⌃k commands    ? more"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q:\n%s", want, out)
 		}
@@ -61,14 +61,17 @@ func TestTheAppOpensOnTheFirstConversationInTheDesignsLight(t *testing.T) {
 	if len(src.chatSent) != 1 || src.chatSent[0][0] != "explain this codebase" {
 		t.Fatalf("a digit sends its suggestion: %v", src.chatSent)
 	}
+	if strings.Contains(strings.Split(out, "\n")[0], "conversation") {
+		t.Fatal("the first conversation's top bar is the mark and the repo only, as the design draws it")
+	}
 }
 
 func TestTheConversationScreenAndTheReplyBox(t *testing.T) {
 	m, src := appModel(t)
 	withConversation(t, m, src)
 	out := appScreen(m)
-	for _, want := range []string{"●  Add rate limiting to POST /login", "claude · ready", "I put a sliding-window limiter",
-		"Settings loader", "claude asks, via claude", "npm i -D supertest", "[1  allow]", "2 deny", "or type", "› ▏Reply to claude"} {
+	for _, want := range []string{"[c]  Add rate limiting to POST /login", "claude · ready", "I put a sliding-window limiter",
+		"Settings loader", "claude asks, via claude", "npm i -D supertest", "[allow]", " deny ", "or type", "› ▏Reply to claude"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q:\n%s", want, out)
 		}
@@ -96,9 +99,12 @@ func TestTheConversationScreenAndTheReplyBox(t *testing.T) {
 func TestTabOpensTheAgentsPanel(t *testing.T) {
 	m, src := appModel(t)
 	withConversation(t, m, src)
+	src.today = sampleToday()
+	run(m.fetchToday(), m)
 	press(m, "tab")
 	out := appScreen(m)
-	for _, want := range []string{"Done today", "Settings loader", "Agents", "started by claude", "parent · in the conversation",
+	for _, want := range []string{"Done today", "1 · all ›", "Rate limit POST /login", "claude · applied by claude", "Agents", "started by claude",
+		"parent · in the convers", "claude allowed 1 command today",
 		"codex", "Rate limit POST /login", "Queue", "claude picks next", "1  Add /logout audit", "⏎ watch thread", "⇥ close"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q:\n%s", want, out)
@@ -176,7 +182,7 @@ func TestAProjectWithNoParentIsAskedWhoToTalkTo(t *testing.T) {
 		t.Fatal("the welcome screen opens by itself")
 	}
 	out := appScreen(m)
-	for _, want := range []string{"Who do you want to talk to?", "It plans, hands work to helpers and checks it.", "› ●  claude", "codex",
+	for _, want := range []string{"Who do you want to talk to?", "It plans, hands work to helpers and checks it.", "› [c]  claude", "codex",
 		"not installed", "↑↓ choose    ⏎ continue    esc skip"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q:\n%s", want, out)
@@ -262,7 +268,7 @@ func TestTheChangesTabShowsTheHelpersDiff(t *testing.T) {
 	out := appScreen(m)
 	for _, want := range []string{"2 [changes]", "Add supertest dev dep", "claude · 2 files", "login.ts", "login.test.ts",
 		"src/routes/login.ts   +3 −1", "  13   export const router = Router()", "  15 − router.post('/login', async (req, res) => {",
-		"  16 +   rateLimit({ windowMs: 60_000, max: 5 }),", "[ ] file", "c comment"} {
+		"  16 +   rateLimit({ windowMs: 60_000, max: 5 }),", "] next file", "c comment"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q:\n%s", want, out)
 		}
@@ -323,7 +329,7 @@ func TestSearchFindsTextAcrossTheRepository(t *testing.T) {
 	withConversation(t, m, src)
 	m.Update(tea.KeyMsg{Type: tea.KeyCtrlF})
 	m.st.App.Search.Query = "rateLimit"
-	m.Update(searchMsg{query: "rateLimit", hits: []SearchHit{{"src/middleware/limit.ts", 4, "export const rateLimit = (opts = {}) => {"},
+	m.Update(searchMsg{query: m.st.App.Search.key(), hits: []SearchHit{{"src/middleware/limit.ts", 4, "export const rateLimit = (opts = {}) => {"},
 		{"src/routes/login.ts", 2, "import { rateLimit } from '../middleware/limit'"}}})
 	out := appScreen(m)
 	for _, want := range []string{"/ rateLimit▏", "2 results in 2 files", "src/middleware/limit.ts", "4    export const [rateLimit]", "src/routes/login.ts",
@@ -362,7 +368,7 @@ func TestMarkdownAndTablesArePreviewed(t *testing.T) {
 }
 
 func sampleSettings() *view.AppSettings {
-	return &view.AppSettings{Theme: "light", ThemeScope: "default", Themes: ThemeNames(), BellScope: "default", Parent: "claude",
+	return &view.AppSettings{Theme: "light", ThemeScope: "default", Themes: ThemeNames(), BellScope: "default", Parent: "claude", Start: "last", Ship: "pr", TabSize: 4,
 		Enabled: true, Workers: map[string]bool{"claude": true, "codex": true, "grok": false}, Installed: []string{"claude", "codex"},
 		MaxRunning: 3, Objective: "balanced", RoutingMode: "smart", Sandbox: "host", Worktrees: "off", WorktreeContainer: "shared",
 		Harness: ".rig/harness.toml", HarnessText: "parent = \"claude\"\n\n[project]\nenabled = true\n", Global: "~/.rig/config.toml"}
@@ -373,8 +379,9 @@ func TestSettingsChangeRealSettingsWhereTheyAreKept(t *testing.T) {
 	src.appSettings = sampleSettings()
 	run(m.runPalette(paletteItem{Action: "settings"}, ""), m)
 	out := appScreen(m)
-	for _, want := range []string{"←  Settings   [all repos]", "[general]", "agents", "routing", "toml", "› Theme", "[light]", "dracula",
-		"Default parent", "Rig in this repo", "off keeps history and memory", "←→ change    ⇥ section    g all repos / this repo"} {
+	for _, want := range []string{"←  Settings   [all repos]", "[general]", "agents", "routing", "toml", "Theme", "› [light]", "dracula", "all repos",
+		"Default parent", "[c] claude · auto", "When rig starts", "[last project]", "Rig in this repo", "on", "off keeps history and memory", "Updates",
+		"←→ change    ⇥ section    g all repos / this repo"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q:\n%s", want, out)
 		}
@@ -400,7 +407,7 @@ func TestSettingsChangeRealSettingsWhereTheyAreKept(t *testing.T) {
 		t.Fatalf("← fewer at the same time: %v", src.settingsSaved)
 	}
 	press(m, "shift+tab") // back to general
-	press(m, "down", "down")
+	press(m, "down", "down", "down")
 	run(press(m, "right"), m)
 	if m.st.Mode != ModeConfirm || !strings.Contains(m.st.Prompt, "Turn Rig off") {
 		t.Fatalf("turning Rig off asks first: %q", m.st.Prompt)
@@ -410,7 +417,7 @@ func TestSettingsChangeRealSettingsWhereTheyAreKept(t *testing.T) {
 		t.Fatalf("saved %v", src.settingsSaved)
 	}
 	m.st.App.Settings.Section = len(SettingsSections) - 1
-	if out := appScreen(m); !strings.Contains(out, "[toml]") || !strings.Contains(out, "  1  parent = \"claude\"") || !strings.Contains(out, "✓ valid") {
+	if out := appScreen(m); !strings.Contains(out, "[toml]") || !strings.Contains(out, "parent = \"claude\"") || !strings.Contains(out, "✓ valid") {
 		t.Fatalf("the toml section:\n%s", out)
 	}
 	press(m, "esc")
@@ -424,7 +431,7 @@ func TestTheBellRingsOnceForANewRequest(t *testing.T) {
 	rings := 0
 	m.ringer = func() { rings++ }
 	src.appSettings = sampleSettings()
-	src.appSettings.Bell = true
+	src.appSettings.Bell, src.appSettings.NotifyNeeds = true, true
 	run(m.fetchAppSettings(), m)
 	run(m.bell(), m)
 	run(m.bell(), m)
@@ -489,14 +496,15 @@ func TestNoAgentShowsHowToInstallOne(t *testing.T) {
 	run(m.fetchAppSettings(), m)
 	m.st.ChatParent = ""
 	out := appScreen(m)
-	for _, want := range []string{"Let's get you an agent", "› 1  ● claude", "npm install -g @anthropic-ai/claude-code", "2  ● codex", "r scan again"} {
+	for _, want := range []string{"Let's get you an agent  1 of 3", "› 1  install one for me  recommended", "[c] claude  claude pro/max   [c] codex  chatgpt",
+		"on this computer · $ npm install -g @anthropic-ai/claude-code", "←→ agent", "⏎ install claude", "r scan again"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q:\n%s", want, out)
 		}
 	}
 	var ran []string
 	m.exec = func(argv []string, done func(error) tea.Msg) tea.Cmd { ran = argv; return nil }
-	press(m, "2")
+	m.Update(tea.KeyMsg{Type: tea.KeyRight})
 	press(m, "enter")
 	if m.st.Mode != ModeConfirm || !strings.Contains(m.st.Prompt, "Install codex") {
 		t.Fatalf("installing asks first: %q", m.st.Prompt)
@@ -515,7 +523,7 @@ func TestASignedOutParentCanBeReplaced(t *testing.T) {
 	m.openPicker()
 	m.st.Picker.Items = []PickItem{{Name: "claude", Installed: true}, {Name: "codex", Installed: true}}
 	out := appScreen(m)
-	for _, want := range []string{"claude is signed out", "Nothing gets checked or applied until a parent is back", "1  sign in to claude again", "2  hand over to ● codex"} {
+	for _, want := range []string{"claude is signed out", "Nothing gets checked or applied until a parent is back", "1  sign in to claude again", "2  hand over to [c] codex"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q:\n%s", want, out)
 		}
@@ -538,7 +546,7 @@ func TestAStoppedSandboxSaysSoAndOffersTheWaysOut(t *testing.T) {
 	m.st.Workspace = &view.Workspace{Sections: []view.Section{{Title: "Workspace", Lines: []view.Line{{Text: "kind    devcontainer"},
 		{Text: "! docker is not running", Tone: "attention"}}}}}
 	out := appScreen(m)
-	for _, want := range []string{"sandbox stopped", "agents are paused", "✗ docker is not running", "✓ kind    devcontainer", "1  start it", "3  run on this machine instead"} {
+	for _, want := range []string{"sandbox stopped", "agents are paused", "✗ docker is not running", "✓ kind", "devcontainer", "1  start it", "l doctor log", "3  run on this machine instead"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q:\n%s", want, out)
 		}
@@ -669,5 +677,145 @@ func TestShipPushesOrOpensAPullRequestAfterAQuestion(t *testing.T) {
 	run(press(m, "y"), m)
 	if last := src.calls[len(src.calls)-1]; last.params["mode"] != "push" {
 		t.Fatalf("push: %v", src.calls)
+	}
+}
+
+func TestTheConversationFooterAndAnswerChipsAreTheDesigns(t *testing.T) {
+	m, src := appModel(t)
+	withConversation(t, m, src)
+	lines := strings.Split(appScreen(m), "\n")
+	foot := lines[len(lines)-1]
+	for _, want := range []string{"d see changes", "← → pick answer", "⏎ send", "u undo   h hold   ⌃p files   ? help"} {
+		if !strings.Contains(foot, want) {
+			t.Errorf("footer missing %q: %q", want, foot)
+		}
+	}
+	if !strings.HasPrefix(lines[len(lines)-2], "────") {
+		t.Errorf("a rule above the footer: %q", lines[len(lines)-2])
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyRight})
+	if !strings.Contains(appScreen(m), " allow    [deny]") {
+		t.Fatalf("→ picks deny:\n%s", appScreen(m))
+	}
+	run(press(m, "enter"), m)
+	if last := src.calls[len(src.calls)-1]; last.method != "job.deny" || last.params["id"] != "job-7f2" {
+		t.Fatalf("⏎ sends the picked answer: %v", src.calls)
+	}
+}
+
+func TestHoldAndUndoFromTheReplyBoxAskFirstAndNeverEatTyping(t *testing.T) {
+	m, src := appModel(t)
+	withConversation(t, m, src)
+	for i := range m.view.Jobs {
+		m.view.Jobs[i].Ask = false
+	}
+	src.today = sampleToday()
+	run(m.fetchToday(), m)
+	press(m, "h")
+	if m.st.Mode != ModeConfirm || !strings.Contains(m.st.Prompt, "Hold ") || !strings.Contains(appScreen(m), "⏎ yes    esc no") {
+		t.Fatalf("h asks first: %q", m.st.Prompt)
+	}
+	press(m, "o")
+	if m.st.Mode == ModeConfirm || m.st.Prompt != "ho" {
+		t.Fatalf("typing on cancels and keeps the letters: %q", m.st.Prompt)
+	}
+	calls := len(src.calls)
+	m.st.Prompt = ""
+	press(m, "h")
+	run(press(m, "enter"), m)
+	if len(src.calls) != calls+1 || src.calls[calls].method != "applies.hold" || src.calls[calls].params["on"] != true {
+		t.Fatalf("⏎ holds: %v", src.calls[calls:])
+	}
+	press(m, "d")
+	if m.st.App.Tab != 2 {
+		t.Fatalf("d sees the changes: tab %d", m.st.App.Tab)
+	}
+}
+
+func TestTheParentsMarkdownMarkersAreNotShownRaw(t *testing.T) {
+	if got := plainMarkdown("on `feature/x` with **care**"); got != "on feature/x with care" {
+		t.Fatalf("%q", got)
+	}
+}
+
+func TestChecksAreWordedAsTheDesignDoes(t *testing.T) {
+	st := State{}
+	for in, want := range map[string]string{"● unit  exit 0  devcontainer": "● unit pass", "! lint  exit 1  host": "● lint failed",
+		"● tests  exit running  host": "● tests running", "no checks run": ""} {
+		if got := checkWord(st, in); got != want {
+			t.Errorf("%q: %q", in, got)
+		}
+	}
+}
+
+func TestSearchOptionsAndReplaceAskFirst(t *testing.T) {
+	m, src := appModel(t)
+	withConversation(t, m, src)
+	path := filepath.Join(m.st.App.Repo, "limit.ts")
+	_ = os.WriteFile(path, []byte("const rateLimit = 1\nuse(rateLimit)\nrateLimiter()\n"), 0o644)
+	m.Update(tea.KeyMsg{Type: tea.KeyCtrlF})
+	s := m.st.App.Search
+	s.Query = "rateLimit"
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("w"), Alt: true})
+	if !s.Word {
+		t.Fatal("alt+w matches whole words")
+	}
+	m.Update(searchMsg{query: s.key(), hits: []SearchHit{{"limit.ts", 1, "const rateLimit = 1"}, {"limit.ts", 2, "use(rateLimit)"}}})
+	out := appScreen(m)
+	for _, want := range []string{"› search", "/ rateLimit▏", "aa   ab   .*   **", "2 results in 1 files · tab: ask claude instead", "⌃r replace"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q:\n%s", want, out)
+		}
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyCtrlR})
+	for _, r := range "limitRate" {
+		m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if m.st.Mode != ModeConfirm || !strings.Contains(m.st.Prompt, `Replace 2 matches of "rateLimit" in 1 files with "limitRate"?`) {
+		t.Fatalf("asks first: %q", m.st.Prompt)
+	}
+	if msg := m.replaceAll("limitRate")(); msg.(appliedMsg).err != nil {
+		t.Fatal(msg.(appliedMsg).err)
+	}
+	if data, _ := os.ReadFile(path); string(data) != "const limitRate = 1\nuse(limitRate)\nrateLimiter()\n" {
+		t.Fatalf("only the matches, whole words: %q", data)
+	}
+}
+
+func TestNotificationsGoWhereSettingsSay(t *testing.T) {
+	m, src := appModel(t)
+	rings := 0
+	var notices []string
+	m.ringer = func() { rings++ }
+	m.notifier = func(title, text string) { notices = append(notices, text) }
+	src.appSettings = sampleSettings()
+	src.appSettings.NotifyNeeds, src.appSettings.Desktop = true, true
+	run(m.fetchAppSettings(), m)
+	run(m.bell(), m)
+	if rings != 0 || len(notices) != 1 || !strings.Contains(notices[0], "claude needs you") {
+		t.Fatalf("a desktop notice, no bell: %d %v", rings, notices)
+	}
+	src.today = sampleToday()
+	run(m.fetchToday(), m) // what is already applied does not notify
+	m.st.AppSettings.NotifyApplied = true
+	today := sampleToday()
+	today.Rows[1].JobID, today.Rows[1].State = "job-new", "applied"
+	src.today = today
+	_, cmd := m.Update(todayMsg{t: today})
+	run(cmd, m)
+	if len(notices) != 2 || notices[1] != "claude applied Add index to session store" {
+		t.Fatalf("a new apply notifies: %v", notices)
+	}
+}
+
+func TestThePreviewPageKeepsItsKeysAtTheFoot(t *testing.T) {
+	m, src := appModel(t)
+	withConversation(t, m, src)
+	_ = os.WriteFile(filepath.Join(m.st.App.Repo, "README.md"), []byte("# my-repo\n"), 0o644)
+	run(m.runPalette(paletteItem{Action: "file:README.md"}, ""), m)
+	lines := strings.Split(appScreen(m), "\n")
+	if len(lines) != 36 || !strings.Contains(lines[35], "⇥ next file") || !strings.Contains(lines[1]+lines[0], "› preview") {
+		t.Fatalf("the keys on the last line:\n%s", strings.Join(lines, "\n"))
 	}
 }

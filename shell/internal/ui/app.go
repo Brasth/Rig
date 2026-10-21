@@ -2,7 +2,9 @@ package ui
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
@@ -17,47 +19,53 @@ import (
 // AppState is the app's own state; nil means the board is showing.
 type AppState struct {
 	Repo, Branch string
-	Tab          int  // 1 conversation, 2 changes, 3 code
-	Panel        bool // the agents panel (Tab)
-	PanelSel     int  // the selected agent in the panel
-	Palette      *Palette
-	Welcome      bool // the "Who do you want to talk to?" screen
-	WelcomeSel   int
-	NewJob       *view.Row // a helper the parent has just started, shown once
-	Help         bool
-	Thread       string   // the job whose thread (its log) is open, from the panel
-	Files        []string // the repository's tracked files, for Ctrl-K
-	File         string   // the file the code tab shows
-	FileLines    []string
-	FileErr      string
-	FileOff      int
-	Preview      bool // the file is previewed (markdown rendered, a csv as a table) instead of shown as source
-	Selecting    bool // v: lines are being selected to ask the parent about
-	SelFrom      int
-	SelTo        int
-	Finding      bool // /: typing a word to find in the file
-	Find         string
-	Changed      map[string]string // the files each active helper is changing, by path, to its worker
-	Diff         *view.JobDiff     // the changes tab's job, its diff
-	DiffID       string
-	DiffFile     int
-	DiffOff      int
-	Comments     map[string][]string // what you said to each helper from the changes tab
-	Commenting   bool
-	Search       *SearchState
-	Settings     *SettingsScreen
-	Onboard      *Onboarding // the first-run steps after the parent: helpers, then where agents work
-	FirstRun     bool        // the welcome screen opened by itself: the other steps follow it
-	InstallSel   int         // the no-agents screen's choice
-	ProblemSeen  string      // a problem screen you closed with esc, not shown again for the same problem
-	History      *HistoryState
-	ShipScreen   *ShipState
+	Facts        string // what the first-conversation screen says about the repo: its stack, files, dev container
+	// ImageCols and ImageRows are the cells a previewed picture was sent to the terminal for (gfx.go); 0 when it was not
+	ImageCols, ImageRows int
+	Tab                  int  // 1 conversation, 2 changes, 3 code
+	Panel                bool // the agents panel (Tab)
+	PanelSel             int  // the selected agent in the panel
+	Palette              *Palette
+	Welcome              bool // the "Who do you want to talk to?" screen
+	WelcomeSel           int
+	NewJob               *view.Row // a helper the parent has just started, shown once
+	Help                 bool
+	AnswerDeny           bool     // the answer chip chosen with ← →: deny, else allow
+	ConfirmLead          string   // a question u or h asked: confirmed with ⏎; the letter typed into the reply box, or "\x00"
+	Thread               string   // the job whose thread (its log) is open, from the panel
+	Files                []string // the repository's tracked files, for Ctrl-K
+	File                 string   // the file the code tab shows
+	FileLines            []string
+	FileErr              string
+	FileOff              int
+	Preview              bool // the file is previewed (markdown rendered, a csv as a table) instead of shown as source
+	Selecting            bool // v: lines are being selected to ask the parent about
+	SelFrom              int
+	SelTo                int
+	Finding              bool // /: typing a word to find in the file
+	Find                 string
+	Changed              map[string]string // the files each active helper is changing, by path, to its worker
+	Diff                 *view.JobDiff     // the changes tab's job, its diff
+	DiffID               string
+	DiffFile             int
+	DiffOff              int
+	Comments             map[string][]string // what you said to each helper from the changes tab
+	Commenting           bool
+	Search               *SearchState
+	Settings             *SettingsScreen
+	Onboard              *Onboarding // the first-run steps after the parent: helpers, then where agents work
+	FirstRun             bool        // the welcome screen opened by itself: the other steps follow it
+	InstallSel           int         // the no-agents screen's choice
+	ProblemSeen          string      // a problem screen you closed with esc, not shown again for the same problem
+	History              *HistoryState
+	ShipScreen           *ShipState
 }
 
 // Palette is Ctrl-K: ask the parent, open a file, or run a command.
 type Palette struct {
-	Query string
-	Sel   int
+	Query  string
+	Sel    int
+	Attach bool // @: the chosen file goes into your message instead of opening
 }
 
 // paletteItem is one row of the palette.
@@ -66,6 +74,28 @@ type paletteItem struct {
 }
 
 const appColumn = 84 // the conversation's width in the design
+
+// confirmLine is a question waiting on y or n; one u or h asked from the reply box is answered with ⏎ or esc.
+func confirmLine(st State, w int) string {
+	yes, no := "y", "n"
+	if st.App != nil && st.App.ConfirmLead != "" {
+		yes, no = "⏎", "esc"
+	}
+	return center(st.paint(colAmber, st.Prompt)+"   "+st.dim(yes)+" "+st.faint("yes")+"    "+st.dim(no)+" "+st.faint("no"), w)
+}
+
+// AppRightKeys are the right half of the design's footer on the conversation, changes and code screens.
+var AppRightKeys = [][2]string{{"u", "undo"}, {"h", "hold"}, {"⌃p", "files"}, {"?", "help"}}
+
+var (
+	mdCode = regexp.MustCompile("`([^`]+)`")
+	mdBold = regexp.MustCompile(`\*\*([^*]+)\*\*`)
+)
+
+// plainMarkdown drops the inline markers a parent writes (code and bold), which a terminal line would show raw.
+func plainMarkdown(s string) string {
+	return mdBold.ReplaceAllString(mdCode.ReplaceAllString(s, "$1"), "$1")
+}
 
 var agentColors = map[string]string{"claude": "#6d4aff", "codex": "#0d9488", "opencode": "#db2777", "cursor": "#2563eb",
 	"pi": "#4d7c0f", "grok": "#c2410c", "omp": "#0891b2", "agy": "#ca8a04", "parent": "#6d4aff"}
@@ -87,13 +117,42 @@ func (st State) bold(s string) string {
 func (st State) faint(s string) string { return st.paint(colFaint, s) }
 func (st State) dim(s string) string   { return st.paint(colMuted, s) }
 
-// dot is an agent's mark: the design's logo tile, drawn as a dot in the agent's colour.
-func (st State) dot(agent string) string {
+// tile is an agent's mark, three cells wide: the design's logo tile ringed in the agent's colour where the terminal
+// draws images (gfx.go), else its fallback, "the coloured letter tile": the first letter on the agent's colour.
+func (st State) tile(agent string) string {
 	c, ok := agentColors[agent]
 	if !ok {
 		c = colAccent
 	}
-	return st.paint(c, "●")
+	letter := "r"
+	if r := []rune(agent); len(r) > 0 && agent != "parent" {
+		letter = string(r[0])
+	}
+	if !st.Styled {
+		return "[" + letter + "]"
+	}
+	if mark := logoMark(agent); st.Logos && mark != "" {
+		return mark
+	}
+	return lipgloss.NewStyle().Background(lipgloss.Color(c)).Foreground(lipgloss.Color("#ffffff")).Bold(true).Render(" " + letter + " ")
+}
+
+// surface puts a line on the card surface, w cells wide: the design's white boxes.
+func (st State) surface(s string, w int) string {
+	if !st.Styled {
+		return fit(s, w)
+	}
+	return tint(fit(s, w), colRaised)
+}
+
+// washed is what shows behind an overlay: the screen faded to one light grey, as the design draws it.
+func (st State) washed(lines []string) []string {
+	out := make([]string, len(lines))
+	for i, l := range lines {
+		plain := strings.ReplaceAll(ansi.Strip(l), placeholderCells, "   ")
+		out[i] = st.paint(colBorder, plain)
+	}
+	return out
 }
 
 // center puts s in the middle of w cells.
@@ -102,10 +161,11 @@ func center(s string, w int) string {
 	return fit(strings.Repeat(" ", pad)+s, w)
 }
 
-// spread lays out a left, centre and right part on one line of w cells.
+// spread lays out a left, centre and right part on one line of w cells, with equal room on either side of the centre
+// part, as the design's top lines are laid out.
 func spread(left, mid, right string, w int) string {
 	lw, mw, rw := lipgloss.Width(left), lipgloss.Width(mid), lipgloss.Width(right)
-	start := max(lw+2, (w-mw)/2)
+	start := lw + max(2, (w-lw-mw-rw)/2)
 	if start+mw+rw+2 > w {
 		mid, mw = "", 0
 		start = lw
@@ -136,7 +196,7 @@ func roundBox(st State, lines []string, w int, lit bool) []string {
 	p := func(s string) string { return st.paint(edge, s) }
 	out := []string{p("╭" + strings.Repeat("─", w-2) + "╮")}
 	for _, l := range lines {
-		out = append(out, p("│")+fit(l, w-2)+p("│"))
+		out = append(out, p("│")+st.surface(l, w-2)+p("│"))
 	}
 	return append(out, p("╰"+strings.Repeat("─", w-2)+"╯"))
 }
@@ -215,7 +275,7 @@ func AppFrame(v *view.View, st State, w, h int) []string {
 	confirm := func(lines []string) []string {
 		switch {
 		case st.Mode == ModeConfirm:
-			lines[len(lines)-1] = center(st.paint(colAmber, st.Prompt)+"   "+st.dim("y")+" "+st.faint("yes")+"    "+st.dim("n")+" "+st.faint("no"), w)
+			lines[len(lines)-1] = confirmLine(st, w)
 		case st.Message != "" && problem(st.Message):
 			lines[len(lines)-1] = center(st.paint(colAmber, clean(st.Message)), w)
 		}
@@ -246,13 +306,10 @@ func AppFrame(v *view.View, st State, w, h int) []string {
 	}
 	if a.Settings != nil {
 		lines := settingsScreenLines(v, st, w, h-1)
-		keys := [][2]string{{"←→", "change"}, {"⇥", "section"}, {"g", "all repos / this repo"}, {"esc", "back"}}
-		if SettingsSections[a.Settings.Section] == "toml" {
-			keys = [][2]string{{"E", "edit in $EDITOR"}, {"⇥", "section"}, {"esc", "back"}}
-		}
+		keys := settingsKeys(SettingsSections[a.Settings.Section])
 		switch {
 		case st.Mode == ModeConfirm:
-			lines = append(lines, center(st.paint(colAmber, st.Prompt)+"   "+st.dim("y")+" "+st.faint("yes")+"    "+st.dim("n")+" "+st.faint("no"), w))
+			lines = append(lines, confirmLine(st, w))
 		case st.Message != "" && problem(st.Message):
 			lines = append(lines, center(st.paint(colAmber, clean(st.Message)), w))
 		default:
@@ -261,7 +318,20 @@ func AppFrame(v *view.View, st State, w, h int) []string {
 		return lines
 	}
 	lines := []string{topBar(v, st, w), st.paint(colBorder, strings.Repeat("─", w))}
+	if a.Search != nil {
+		lines = []string{fit(rigBarLeft(st, v)+st.faint(" › search"), w), fit("", w)} // the design's search is a page of its own
+	}
+	if a.Search == nil && a.Thread == "" && a.Tab == 1 && st.Chat == nil && st.ChatE == "" {
+		lines = []string{rigBarLeft(st, v) + "", fit("", w)} // the design's first conversation has the mark and repo only
+		lines[0] = fit(lines[0], w)
+	}
+	// The conversation, changes and code screens end in the design's full-width footer under a rule.
+	previewing := a.Tab == 3 && a.Preview && previewKind(a.File) != "" && a.FileErr == ""
+	ruled := a.Search == nil && a.Thread == "" && !previewing && (a.Tab == 2 || a.Tab == 3 || st.Chat != nil || st.ChatE != "")
 	body := h - 3
+	if ruled {
+		body = h - 4
+	}
 	var main []string
 	var keys [][2]string
 	footer := ""
@@ -272,26 +342,37 @@ func AppFrame(v *view.View, st State, w, h int) []string {
 		main, keys = threadBody(st, w, body)
 	case a.Tab == 2:
 		main, footer = changesScreen(v, st, w, body)
+	case a.Tab == 3 && a.Preview && previewKind(a.File) != "" && a.FileErr == "":
+		// the design's preview is a page of its own: the file rendered in the middle, its keys at the foot
+		lines = []string{fit(rigBarLeft(st, v)+st.faint(" › preview"), w), fit("", w)}
+		cw := min(appColumn, w-8)
+		main = indentAll(previewLines(st, a, cw, body), (w-cw)/2, w)
+		for len(main) < body {
+			main = append(main, fit("", w)) // the keys stay at the foot of the window
+		}
+		main = main[:body]
+		keys = [][2]string{{"⇥", "next file"}, {"s", "source"}, {"/", "filter rows"}, {"o", "open in app"}, {"?", "ask " + appParent(st)}}
+		if a.Finding {
+			keys = [][2]string{{"⏎", "keep"}, {"esc", "all rows"}}
+		}
 	case a.Tab == 3:
 		main, footer = codeScreen(st, w, body)
 	case st.Chat == nil && st.ChatE == "":
 		main, keys = emptyBody(v, st, w, body)
 	default:
 		main, keys = conversationBody(v, st, w, body)
+		footer = splitHints(st, keys, AppRightKeys, w)
 	}
-	if a.Panel {
-		overlay(main, agentsPanel(v, st, min(46, w/2), body), w-min(46, w/2), 0)
-		keys = [][2]string{{"↑↓", "agent"}, {"⏎", "watch thread"}, {"s", "stop"}, {"⇥", "close"}}
-	}
+
+	var modal []string
+	modalY := 3
 	if a.Palette != nil {
-		pw := min(70, w-8)
-		overlay(main, paletteBox(v, st, pw), (w-pw)/2, 2)
+		modal = paletteBox(v, st, min(76, w-8))
 		keys = [][2]string{{"↑↓", "move"}, {"⏎", "open"}, {"esc", "close"}}
 	}
 	if a.NewJob != nil && a.Palette == nil {
-		dw := min(76, w-8)
-		overlay(main, newJobBox(st, *a.NewJob, dw), (w-dw)/2, 3)
-		keys = [][2]string{{"⏎", "watch thread"}, {"t", "tell " + appParent(st)}, {"s", "stop"}, {"esc", "close"}}
+		modal, modalY = newJobBox(st, *a.NewJob, min(84, w-8)), 5
+		keys = nil
 	}
 	if a.Help {
 		hw := min(64, w-8)
@@ -299,9 +380,12 @@ func AppFrame(v *view.View, st State, w, h int) []string {
 		keys = [][2]string{{"esc", "close"}}
 	}
 	lines = append(lines, main...)
+	if ruled {
+		lines = append(lines, st.paint(colBorder, strings.Repeat("─", w)))
+	}
 	switch {
 	case st.Mode == ModeConfirm:
-		lines = append(lines, center(st.paint(colAmber, st.Prompt)+"   "+st.dim("y")+" "+st.faint("yes")+"    "+st.dim("n")+" "+st.faint("no"), w))
+		lines = append(lines, confirmLine(st, w))
 	case st.Message != "" && problem(st.Message):
 		lines = append(lines, center(st.paint(colAmber, clean(st.Message)), w))
 	case footer != "" && !a.Panel && a.Palette == nil && a.NewJob == nil && !a.Help:
@@ -312,7 +396,21 @@ func AppFrame(v *view.View, st State, w, h int) []string {
 	for len(lines) < h {
 		lines = append(lines, fit("", w))
 	}
-	return lines[:h]
+	lines = lines[:h]
+	if len(modal) > 0 && st.Mode != ModeConfirm {
+		// the design's palette and helper card float on a faded screen
+		lines = st.washed(lines)
+		lines[h-1] = fit("", w)
+		mw := lipgloss.Width(modal[0])
+		overlay(lines, modal, (w-mw)/2, modalY)
+	}
+	if a.Panel && st.Mode != ModeConfirm {
+		// the design's panel: from under the top bar to the bottom, its own keys at its foot, the screen faded behind
+		pw := min(46, w/2)
+		copy(lines[1:], st.washed(lines[1:]))
+		overlay(lines, agentsPanel(v, st, pw, h-1), w-pw, 1)
+	}
+	return lines
 }
 
 // topBar is the design's: the mark, the repo and branch and the parent; the three tabs; and what is working.
@@ -327,11 +425,12 @@ func topBar(v *view.View, st State, w int) string {
 		}
 		left += st.faint(" / " + branch)
 	}
-	left += "   " + st.dot(appParent(st)) + " " + appParent(st)
+	left += "   " + st.tile(appParent(st)) + " " + appParent(st)
 	tab := func(n int, name, extra string) string {
 		label := st.faint(fmt.Sprint(n)) + " " + name
 		if a.Tab == n && st.Styled {
-			label = st.faint(fmt.Sprint(n)) + " " + lipgloss.NewStyle().Foreground(lipgloss.Color(colText)).Bold(true).Underline(true).Render(name)
+			on := lipgloss.NewStyle().Foreground(lipgloss.Color(colText)).Bold(true).Underline(true)
+			label = on.Foreground(lipgloss.Color(colFaint)).Render(fmt.Sprint(n)) + on.Render(" "+name)
 		} else if a.Tab == n {
 			label = fmt.Sprint(n) + " [" + name + "]"
 		} else {
@@ -363,7 +462,7 @@ func countLabel(v *view.View, label string) int {
 }
 
 // replyBox is the design's rounded reply box with the draft or the placeholder.
-func replyBox(st State, w int, placeholder string) []string {
+func replyBox(st State, w int, placeholder string, lit bool) []string {
 	text := " " + st.faint("›") + " "
 	if st.Prompt != "" {
 		draft := st.Prompt + "▏"
@@ -375,7 +474,7 @@ func replyBox(st State, w int, placeholder string) []string {
 	} else {
 		text += "▏" + st.faint(placeholder)
 	}
-	return roundBox(st, []string{text}, w, true)
+	return roundBox(st, []string{text}, w, lit)
 }
 
 // conversationBody is the design's main screen: what the parent is working on, the conversation, the change cards,
@@ -394,10 +493,22 @@ func conversationBody(v *view.View, st State, w, h int) ([]string, [][2]string) 
 		}
 	}
 	if st.Chat.State == "running" {
+		// the design's "claude · working in sandbox · 4m": where the parent works, and for how long this turn
 		state = "working"
+		if st.Workspace != nil && st.Workspace.Context != "" {
+			state += " in sandbox"
+		}
+		for i := len(st.Chat.Entries) - 1; i >= 0; i-- {
+			if e := st.Chat.Entries[i]; e.Role == "user" {
+				if at, err := time.Parse(time.RFC3339, e.At); err == nil && !st.Now.IsZero() && !st.Now.Before(at) {
+					state += " · " + elapsed(st.Now.Sub(at))
+				}
+				break
+			}
+		}
 	}
-	lines = append(lines, st.dot(parent)+"  "+st.bold(fit(title, cw-4)))
-	lines = append(lines, "   "+st.faint(parent+" · "+state))
+	lines = append(lines, st.tile(parent)+"  "+st.bold(fit(title, cw-5)))
+	lines = append(lines, "     "+st.faint(parent+" · "+state))
 	lines = append(lines, "", "")
 	entries := st.Chat.Entries
 	if st.Chat.State == "running" && strings.TrimSpace(st.Chat.Partial) != "" {
@@ -409,7 +520,7 @@ func conversationBody(v *view.View, st State, w, h int) ([]string, [][2]string) 
 			lines = append(lines, bubble(st, e.Text, cw)...)
 		case "assistant":
 			for _, raw := range strings.Split(strings.TrimRight(e.Text, "\n"), "\n") {
-				for _, l := range wrap(sanitize(raw), cw, "") {
+				for _, l := range wrap(plainMarkdown(sanitize(raw)), cw, "") {
 					lines = append(lines, st.dim(l))
 				}
 			}
@@ -430,18 +541,22 @@ func conversationBody(v *view.View, st State, w, h int) ([]string, [][2]string) 
 		lines = append(lines, changeCard(st, r, cw)...)
 		lines = append(lines, "")
 	}
-	keys := [][2]string{{"⇥", "agents"}, {"⌃k", "commands"}, {"2", "changes"}, {"?", "more"}}
+	var keys [][2]string
+	if len(appliedCards(v, st)) > 0 {
+		keys = append(keys, [2]string{"d", "see changes"})
+	}
 	if q := questionLines(v, st, cw); len(q) > 0 {
 		lines = append(lines, q...)
-		keys = [][2]string{{"1", "allow"}, {"2", "deny"}, {"⇥", "agents"}, {"⌃k", "commands"}}
+		keys = append(keys, [2]string{"← →", "pick answer"})
 	}
+	keys = append(keys, [2]string{"⏎", "send"})
 	if st.Chat.State == "running" && st.Chat.Ask == nil {
 		lines = append(lines, workingLine(st))
 	}
 	if st.Prompt != "" {
 		keys = [][2]string{{"⏎", "send"}, {"esc", "clear"}, {"⇥", "agents"}, {"⌃k", "commands"}}
 	}
-	box := replyBox(st, cw, "Reply to "+parent)
+	box := replyBox(st, cw, "Reply to "+parent, false)
 	if menu := slashMenu(st, cw); len(menu) > 0 {
 		box = append(menu, box...)
 		keys = [][2]string{{"↑↓", "choose"}, {"⇥", "complete"}, {"⏎", "run"}, {"esc", "clear"}}
@@ -474,16 +589,34 @@ func bubble(st State, text string, cw int) []string {
 	return out
 }
 
-// changeCard is the design's card for work a helper finished and the parent accepted.
+// changeCard is the design's card for work a helper finished and the parent accepted: what it changed and how it was
+// checked (from done today), then which job it was, with the keys that see and undo it.
 func changeCard(st State, r view.Row, cw int) []string {
-	worker := r.Worker
-	if worker == "" {
-		worker = "parent"
-	}
-	head := "  " + st.bold(fit(clean(r.Title), cw-24)) + "  "
+	head := "  " + st.bold(fit(clean(r.Title), cw-24))
 	right := st.paint(colGreen, "● checked") + "  "
+	if st.Today != nil {
+		for _, t := range st.Today.Rows {
+			if t.JobID != r.ID || t.State != "applied" {
+				continue
+			}
+			head = "  " + st.bold(fmt.Sprintf("%d files changed", t.Files)) + "  " + st.paint(colGreen, fmt.Sprintf("+%d", t.Added)) + " " +
+				st.paint(colRed, fmt.Sprintf("−%d", t.Deleted))
+			passed := len(t.Checks) > 0
+			for _, c := range t.Checks {
+				passed = passed && c.OK
+			}
+			switch {
+			case passed:
+				right = st.paint(colGreen, "● checks pass") + "  "
+			case len(t.Checks) > 0:
+				right = st.paint(colRed, "● a check failed") + "  "
+			}
+		}
+	}
 	line1 := head + strings.Repeat(" ", max(1, cw-2-lipgloss.Width(head)-lipgloss.Width(right))) + right
-	line2 := "  " + st.dot(worker) + " " + st.dim(r.Second) + "     " + st.faint("⌃k › done today")
+	about := appParent(st) + " applied " + clean(r.Title)
+	hints := "2 changes   u undo"
+	line2 := "  " + st.paint(colAccent, "●") + " " + st.dim(fit(about, max(8, cw-12-len(hints)))) + "     " + st.faint(hints)
 	return roundBox(st, []string{line1, "", line2}, cw, false)
 }
 
@@ -493,11 +626,11 @@ func questionLines(v *view.View, st State, cw int) []string {
 	who, what := "", ""
 	switch {
 	case st.Chat != nil && st.Chat.Ask != nil:
-		who, what = st.dot(parent)+"  "+st.faint(parent+" asks to run"), clean(st.Chat.Ask.Preview)
+		who, what = st.tile(parent)+"  "+st.faint(parent+" asks to run"), clean(st.Chat.Ask.Preview)
 	case waitingJob(v) != nil:
 		job := waitingJob(v)
 		worker := job.Worker
-		who = st.dot(worker) + "  " + st.faint(worker+" asks, via "+parent)
+		who = st.tile(worker) + "  " + st.faint(worker+" asks, via "+parent)
 		what = strings.TrimPrefix(clean(job.Second), "permission: ")
 	default:
 		return nil
@@ -506,16 +639,17 @@ func questionLines(v *view.View, st State, cw int) []string {
 	for _, l := range wrap(what, cw, "") {
 		out = append(out, st.dim(l))
 	}
-	chip := func(n, label string, on bool) string {
+	chip := func(label string, on bool) string {
 		if on && st.Styled {
-			return lipgloss.NewStyle().Background(lipgloss.Color(colText)).Foreground(lipgloss.Color(colGround)).Bold(true).Render(" " + n + "  " + label + " ")
+			return lipgloss.NewStyle().Background(lipgloss.Color(colText)).Foreground(lipgloss.Color(colGround)).Bold(true).Render(" " + label + " ")
 		}
 		if on {
-			return "[" + n + "  " + label + "]"
+			return "[" + label + "]"
 		}
-		return st.faint(n) + " " + label
+		return " " + label + " "
 	}
-	return append(out, "", chip("1", "allow", true)+"    "+chip("2", "deny", false)+"    "+st.faint("or type"), "")
+	deny := st.App != nil && st.App.AnswerDeny
+	return append(out, "", chip("allow", !deny)+"   "+chip("deny", deny)+"    "+st.faint("or type below"), "")
 }
 
 // emptyBody is the design's first conversation: what should we work on, the box, and four suggestions.
@@ -525,7 +659,7 @@ func emptyBody(v *view.View, st State, w, h int) ([]string, [][2]string) {
 	parent := appParent(st)
 	repo := appProject(v, st.App)
 	lines := []string{"", "", ""}
-	lines = append(lines, st.dot(parent)+"  "+st.bold("What should we work on in "+repo+"?"))
+	lines = append(lines, st.tile(parent)+"  "+st.bold("What should we work on in "+repo+"?"))
 	lines = append(lines, st.dim(parent+" plans, starts helpers when needed, checks and applies."), "")
 	text := " " + st.faint("›") + " "
 	if st.Prompt != "" {
@@ -542,6 +676,9 @@ func emptyBody(v *view.View, st State, w, h int) ([]string, [][2]string) {
 		lines = append(lines, st.dim(fmt.Sprint(i+1))+"  "+s)
 	}
 	lines = append(lines, "", "")
+	if st.App.Facts != "" {
+		lines = append(lines, st.faint("rig looked at the repo: "+st.App.Facts))
+	}
 	if st.Workspace != nil && st.Workspace.Context != "" {
 		helpers := len(activeJobs(v))
 		note := "no helpers yet"
@@ -553,7 +690,7 @@ func emptyBody(v *view.View, st State, w, h int) ([]string, [][2]string) {
 	for len(lines) < h {
 		lines = append(lines, "")
 	}
-	keys := [][2]string{{"⏎", "send"}, {"1-4", "suggestion"}, {"⌃k", "commands"}, {"⇥", "agents"}, {"?", "more"}}
+	keys := [][2]string{{"⏎", "send"}, {"1-4", "suggestion"}, {"@", "add file"}, {"⌃k", "commands"}, {"?", "more"}}
 	return indentAll(lines[:h], x, w), keys
 }
 
@@ -584,12 +721,15 @@ func welcomeScreen(st State, w, h int) []string {
 		if !it.Installed {
 			continue
 		}
-		row := "   " + st.dot(it.Name) + "  " + it.Name
+		row := "   " + st.tile(it.Name) + "  " + it.Name
 		if i == a.WelcomeSel {
-			row = " " + st.bold("›") + " " + st.dot(it.Name) + "  " + st.bold(it.Name)
-			if it.Name == st.ChatParent {
-				row += "  " + st.faint("in use")
+			row = " " + st.bold("›") + " " + st.tile(it.Name) + "  " + st.bold(it.Name)
+			model := "auto"
+			if it.Name == st.ChatParent && st.ChatModel != "" {
+				model = st.ChatModel // the model its own settings name, as the design shows on the chosen row
 			}
+			right := st.faint(model+" model") + " "
+			row += strings.Repeat(" ", max(2, cw-2-lipgloss.Width(row)-lipgloss.Width(right))) + right
 			body = append(body, roundBox(st, []string{row}, cw, true)...)
 		} else {
 			body = append(body, row)
@@ -630,27 +770,35 @@ func agentsPanel(v *view.View, st State, pw, h int) []string {
 		return t + strings.Repeat(" ", max(1, iw-lipgloss.Width(t)-lipgloss.Width(right))) + st.faint(right)
 	}
 	lines := []string{""}
-	done := appliedCards(v, st)
-	lines = append(lines, head("Done today", fmt.Sprintf("%d · all ›", len(done))))
-	if len(done) == 0 {
+	var applied []string
+	commands := 0
+	if st.Today != nil {
+		for _, r := range st.Today.Rows {
+			switch r.State {
+			case "applied":
+				undo := ""
+				if len(applied) == 0 {
+					undo = st.dim("u") + " " + st.faint("undo")
+				}
+				top := " " + st.tile(r.Worker) + "  " + fit(clean(r.Title), iw-14)
+				if len(applied) < 4 {
+					applied = append(applied, top+strings.Repeat(" ", max(1, iw-lipgloss.Width(top)-lipgloss.Width(undo)))+undo,
+						"      "+st.paint(colGreen, fit(r.Worker+" · applied by "+parent+" · "+ago(st.Now, r.At), iw-6)))
+				}
+			case "command":
+				commands++
+			}
+		}
+	}
+	lines = append(lines, head("Done today", fmt.Sprintf("%d · all ›", len(applied)/2)))
+	if len(applied) == 0 {
 		lines = append(lines, st.faint("  nothing applied yet"))
 	}
-	for i, r := range done {
-		if i == 3 {
-			break
-		}
-		undo := ""
-		if i == 0 && st.Today != nil {
-			undo = st.dim("u") + " " + st.faint("undo")
-		}
-		top := " " + st.dot(r.Worker) + "  " + fit(clean(r.Title), iw-12)
-		lines = append(lines, top+strings.Repeat(" ", max(1, iw-lipgloss.Width(top)-lipgloss.Width(undo)))+undo)
-		lines = append(lines, "    "+st.paint(colGreen, fit(r.Second, iw-4)))
-	}
+	lines = append(lines, applied...)
 	lines = append(lines, "", head("Agents", "started by "+parent))
-	parentRow := " " + st.dot(parent) + "  " + st.bold(parent) + "  " + st.faint("parent · in the conversation")
+	parentRow := " " + st.tile(parent) + "  " + st.bold(parent) + "  " + st.faint("parent · in the conversation")
 	if st.Styled {
-		parentRow = lipgloss.NewStyle().Background(lipgloss.Color(colSelBg)).Render(fit(parentRow, iw))
+		parentRow = tint(fit(parentRow, iw), colSelBg)
 	}
 	lines = append(lines, parentRow)
 	jobs := activeJobs(v)
@@ -660,11 +808,15 @@ func agentsPanel(v *view.View, st State, pw, h int) []string {
 		if worker == "" {
 			worker = "helper"
 		}
-		top := " " + st.dot(worker) + "  " + worker + "  " + st.faint(fit(clean(r.Title), max(4, iw-lipgloss.Width(worker)-12)))
-		top = fit(top, iw-4) + st.faint("  › ")
-		activity := "    " + st.paint(colAccent, fit(strings.TrimPrefix(clean(r.Second), "permission: "), iw-6))
+		name := worker
+		if i == sel {
+			name = st.bold(worker)
+		}
+		top := " " + st.tile(worker) + "  " + name + "  " + st.faint(fit(clean(r.Title), max(4, iw-lipgloss.Width(worker)-14)))
+		top = fit(top, iw-6) + st.faint("  › ")
+		activity := "      " + st.paint(colAccent, fit(strings.TrimPrefix(clean(r.Second), "permission: "), iw-10))
 		if r.Ask {
-			activity = "    " + st.paint(colAmber, fit("asks: "+strings.TrimPrefix(clean(r.Second), "permission: "), iw-6))
+			activity = "      " + st.paint(colAmber, fit("asks: "+strings.TrimPrefix(clean(r.Second), "permission: "), iw-10))
 		}
 		if i == sel {
 			lines = append(lines, roundBox(st, []string{top, activity}, iw, true)...)
@@ -687,11 +839,19 @@ func agentsPanel(v *view.View, st State, pw, h int) []string {
 	if len(queue) == 0 {
 		lines = append(lines, st.faint("  empty"))
 	}
-	foot := []string{}
+	var foot []string
+	if commands > 0 {
+		word := "commands"
+		if commands == 1 {
+			word = "command"
+		}
+		foot = append(foot, st.faint(fmt.Sprintf("%s allowed %d %s today", parent, commands, word)))
+	}
 	if st.Workspace != nil && st.Workspace.Context != "" {
 		foot = append(foot, st.paint(colGreen, "●")+" "+st.faint("sandbox "+lastWord(st.Workspace.Context)))
 	}
-	room := h - len(foot)
+	keys := st.dim("⏎") + " " + st.faint("watch thread") + "   " + st.dim("s") + " " + st.faint("stop") + "   " + st.dim("⇥") + " " + st.faint("close")
+	room := h - len(foot) - 2
 	if len(lines) > room {
 		lines = lines[:room]
 	}
@@ -700,10 +860,11 @@ func agentsPanel(v *view.View, st State, pw, h int) []string {
 	}
 	lines = append(lines, foot...)
 	edge := st.paint(colBorder, "│")
-	out := make([]string, len(lines))
-	for i, l := range lines {
-		out[i] = edge + "  " + fit(l, iw) + "  "
+	out := make([]string, 0, h)
+	for _, l := range lines {
+		out = append(out, edge+st.surface("  "+fit(l, iw)+"  ", pw-1))
 	}
+	out = append(out, edge+st.surface(st.paint(colBorder, strings.Repeat("─", pw-1)), pw-1), edge+st.surface("  "+keys, pw-1))
 	return out
 }
 
@@ -711,6 +872,20 @@ func agentsPanel(v *view.View, st State, pw, h int) []string {
 func paletteItems(st State) []paletteItem {
 	q := strings.ToLower(strings.TrimSpace(st.App.Palette.Query))
 	var out []paletteItem
+	if st.App.Palette.Attach {
+		for _, f := range st.App.Files {
+			if q == "" || strings.Contains(strings.ToLower(f), q) {
+				dir, name := "", f
+				if i := strings.LastIndex(f, "/"); i >= 0 {
+					dir, name = f[:i], f[i+1:]
+				}
+				if out = append(out, paletteItem{"add a file", name, dir, "attach:" + f}); len(out) == 10 {
+					break
+				}
+			}
+		}
+		return out
+	}
 	if q != "" {
 		out = append(out, paletteItem{"ask", "ask " + appParent(st) + ": " + st.App.Palette.Query, "", "ask"})
 		n := 0
@@ -727,23 +902,57 @@ func paletteItems(st State) []paletteItem {
 			}
 		}
 	}
+	// the design lists commands by name only; undo last apply says what it would undo
+	command := func(c [3]string) paletteItem {
+		it := paletteItem{"commands", c[0], "", c[2]}
+		if c[2] == "undo-last" {
+			if r := lastApplied(st); r != nil {
+				it.Detail = r.Worker + " · " + clean(r.Title)
+			}
+		}
+		return it
+	}
+	matched := 0
 	for _, c := range PaletteCommands {
 		if q == "" || strings.Contains(c[0], q) {
-			out = append(out, paletteItem{"commands", c[0], c[1], c[2]})
+			out = append(out, command(c))
+			matched++
+		}
+	}
+	if matched == 0 {
+		for _, c := range PaletteCommands[:5] { // nothing matches: the usual ones, as the design shows them
+			out = append(out, command(c))
 		}
 	}
 	return out
 }
 
+// lastApplied is the newest work applied today, the one undo last apply would undo.
+func lastApplied(st State) *struct {
+	Worker, Title, JobID string
+} {
+	if st.Today == nil {
+		return nil
+	}
+	for _, r := range st.Today.Rows {
+		if r.State == "applied" {
+			return &struct{ Worker, Title, JobID string }{r.Worker, r.Title, r.JobID}
+		}
+	}
+	return nil
+}
+
 // PaletteCommands are Ctrl-K's commands: label, detail, action.
 var PaletteCommands = [][3]string{
+	{"undo last apply", "revert the newest applied work", "undo-last"},
+	{"hold all applies", "keep every helper's work from being applied", "hold-all"},
 	{"switch parent", "choose who you talk to", "parent"},
+	{"ship changes", "push, or open a pull request", "ship"},
 	{"new conversation", "start again with the parent", "new"},
 	{"queue a task", "park it for the parent to pick", "queue"},
 	{"change theme", "rig, light, dark, material, dracula", "theme"},
 	{"search the code", "text in every file (⌃f)", "search"},
 	{"done today", "what was applied, undo and redo", "today"},
-	{"ship changes", "push, or open a pull request", "ship"},
 	{"settings", "theme, agents, routing, sandbox, toml", "settings"},
 	{"start the sandbox", "rig env up", "env-up"},
 	{"stop a helper", "from the agents panel", "panel"},
@@ -753,10 +962,13 @@ var PaletteCommands = [][3]string{
 }
 
 func paletteBox(v *view.View, st State, pw int) []string {
-	iw := pw - 4
+	iw := pw - 6
 	text := "  " + st.faint("›") + " " + st.App.Palette.Query + "▏"
 	if st.App.Palette.Query == "" {
 		text = "  " + st.faint("›") + " ▏" + st.faint("search files and commands, or ask "+appParent(st))
+		if st.App.Palette.Attach {
+			text = "  " + st.faint("@") + " ▏" + st.faint("a file to add to your message")
+		}
 	}
 	lines := []string{text, ""}
 	items := paletteItems(st)
@@ -775,22 +987,23 @@ func paletteBox(v *view.View, st State, pw int) []string {
 			row += "  " + st.faint(it.Detail)
 		}
 		if it.Section == "ask" {
-			row = " " + st.dot(appParent(st)) + " " + it.Label
+			row = " " + st.tile(appParent(st)) + " " + it.Label
 		}
 		if i == sel {
-			row = fit(row, iw-4)
+			row = fit(row, iw)
 			if st.Styled {
-				row = lipgloss.NewStyle().Background(lipgloss.Color(colSelBg)).Bold(true).Render(row)
+				row = tint(lipgloss.NewStyle().Bold(true).Render(row), colSelBg)
 			} else {
 				row = ">" + row[1:]
 			}
 		}
 		lines = append(lines, row)
 	}
-	return roundBox(st, indentAll(append([]string{""}, append(lines, "")...), 2, pw-4), pw, false)
+	return roundBox(st, indentAll(append([]string{""}, append(lines, "")...), 2, pw-2), pw, false)
 }
 
-// newJobBox is the design's "claude started codex" card: the task, where it runs, and how far it has got.
+// newJobBox is the design's "claude started codex" card: the task, why and where it runs, what finishes it, how far it
+// has got, and its keys with the one primary button.
 func newJobBox(st State, r view.Row, dw int) []string {
 	parent := appParent(st)
 	worker := r.Worker
@@ -798,22 +1011,42 @@ func newJobBox(st State, r view.Row, dw int) []string {
 		worker = "helper"
 	}
 	iw := dw - 6
-	lines := []string{"", st.dot(parent) + " " + st.faint("→") + " " + st.dot(worker) + "  " + st.bold(parent+" started "+worker) + "  " + st.faint("just now"), ""}
+	lines := []string{"", st.tile(parent) + " " + st.faint("→") + " " + st.tile(worker) + "  " + st.bold(parent+" started "+worker) + "  " + st.faint("just now"), ""}
 	for _, l := range wrap(clean(r.Title), iw-4, "") {
-		cell := "  " + fit(l, iw-4) + "  "
-		if st.Styled {
-			cell = lipgloss.NewStyle().Background(lipgloss.Color(colSelBg)).Render(cell)
-		}
-		lines = append(lines, cell)
+		lines = append(lines, tintIf(st, "  "+fit(l, iw-4)+"  ", colSelBg))
 	}
 	lines = append(lines, "")
-	lines = append(lines, st.faint("where ")+"  worktree "+r.ID)
-	if r.Second != "" {
-		lines = append(lines, st.faint("now   ")+"  "+fit(clean(r.Second), iw-8))
+	if why := clean(r.Explanation); why != "" {
+		lines = append(lines, st.faint("why    ")+fit(why, iw-7))
 	}
-	lines = append(lines, "", st.paint(colGreen, "✓ admitted")+"  "+st.bold("● "+strings.ToLower(clean(r.Label)))+"  "+st.faint("○ checked  ○ applied"), "")
-	box := roundBox(st, indentAll(lines, 2, iw+2), dw, false)
+	where := "worktree " + r.ID
+	if st.Workspace != nil && st.Workspace.Context != "" {
+		where = "sandbox " + lastWord(st.Workspace.Context) + st.faint(" · ") + where
+	}
+	lines = append(lines, st.faint("where  ")+where, st.faint("done   ")+"when its checks pass"+st.faint(" · then "+parent+" applies it"), "")
+	now := strings.ToLower(clean(r.Label))
+	if r.Second != "" {
+		now = clean(r.Second)
+	}
+	lines = append(lines, st.paint(colGreen, "✓ admitted")+"  "+st.paint(colGreen, "✓ worktree")+"  "+st.bold("● "+fit(now, 30))+"  "+st.faint("○ checks  ○ applied"), "")
+	keys := st.dim("t") + " " + st.faint("tell "+parent) + "   " + st.dim("s") + " " + st.faint("stop") + "   " + st.dim("esc") + " " + st.faint("close")
+	button := " ⏎ watch thread "
+	if st.Styled {
+		button = lipgloss.NewStyle().Background(lipgloss.Color(colText)).Foreground(lipgloss.Color(colGround)).Bold(true).Render(button)
+	} else {
+		button = "[⏎ watch thread]"
+	}
+	foot := keys + strings.Repeat(" ", max(2, iw-lipgloss.Width(keys)-lipgloss.Width(button))) + button
+	box := roundBox(st, append(indentAll(lines, 2, iw+2), st.paint(colBorder, strings.Repeat("─", iw+4)), "  "+foot), dw, false)
 	return box
+}
+
+// tintIf is tint where the screen has colour.
+func tintIf(st State, s, bg string) string {
+	if !st.Styled {
+		return s
+	}
+	return tint(s, bg)
 }
 
 // helpBox lists the app's keys.

@@ -22,15 +22,21 @@ type SettingsScreen struct {
 	Row     int
 }
 
-// setRow is one row: a label, its choices (the current one marked), or a fixed value with a note.
+// setRow is one row of the design's Settings: a bold label on the left and its value on the right, a note under it.
 type setRow struct {
 	Label   string
-	Key     string   // the setting it changes ("" for a row that only explains)
+	Key     string   // the setting it changes ("" for a row that only shows a value)
 	Options []string // the values it can take
 	Names   []string // how each value is shown; the value itself when empty
 	Value   string
 	Note    string
-	Scoped  bool // g keeps it for all repos or this repo
+	Scoped  bool   // g keeps it for all repos or this repo
+	Toggle  bool   // on/off, shown as the design's green "on" or grey "off"
+	Right   string // the value as drawn, for a row that only shows one
+	Group   bool   // a blank line before it: the design groups its rows
+	Agent   string // an agent's row: its tile and name on the left
+	Install string // the command that installs a missing agent (i)
+	Stacked bool   // the label on its own line and the choices under it, as the design draws the theme
 }
 
 func settingRows(st State, section string) []setRow {
@@ -44,76 +50,161 @@ func settingRows(st State, section string) []setRow {
 		}
 		return "false"
 	}
+	toggle := func(label, key string, on bool, note string) setRow {
+		return setRow{Label: label, Key: key, Options: []string{"true", "false"}, Names: []string{"on", "off"}, Value: onoff(on), Note: note, Toggle: true}
+	}
+	parent := s.Parent
+	if parent == "" {
+		parent = st.ChatParent
+	}
 	switch section {
 	case "general":
-		parents := append([]string(nil), s.Installed...)
-		parent := s.Parent
-		if parent == "" {
-			parent = st.ChatParent
+		var themes []string
+		for _, t := range s.Themes {
+			if t != "rig" { // the design's four; the board's own colours stay with /theme rig
+				themes = append(themes, t)
+			}
+		}
+		model := st.ChatModel
+		if model == "" {
+			model = "auto"
 		}
 		return []setRow{
-			{Label: "Theme", Key: "ui.theme", Options: s.Themes, Value: st.Theme, Scoped: true},
-			{Label: "Default parent", Key: "parent", Options: parents, Value: parent, Note: "the CLI you talk to; it plans and hands work to helpers"},
-			{Label: "Rig in this repo", Key: "project.enabled", Options: []string{"true", "false"}, Names: []string{"on", "off"}, Value: onoff(s.Enabled),
-				Note: "off keeps history and memory, stops new work"},
+			{Label: "Theme", Key: "ui.theme", Options: themes, Value: st.Theme, Scoped: true, Stacked: true},
+			{Label: "Default parent", Key: "parent", Options: append([]string(nil), s.Installed...), Value: parent, Group: true,
+				Right: st.tile(parent) + " " + parent + st.faint(" · "+model)},
+			{Label: "When rig starts", Key: "ui.start", Options: []string{"last", "picker"}, Names: []string{"last project", "project picker"}, Value: s.Start,
+				Group: true},
+			func() setRow {
+				r := toggle("Rig in this repo", "project.enabled", s.Enabled, "off keeps history and memory, stops new work")
+				r.Group = true
+				return r
+			}(),
+			{Label: "Updates", Right: versions(st, s), Group: true},
 		}
 	case "agents":
 		var rows []setRow
 		for _, name := range sortedWorkers(s.Workers) {
-			note := "not installed"
+			installed := false
 			for _, n := range s.Installed {
-				if n == name {
-					note = "installed"
+				installed = installed || n == name
+			}
+			role := "helper"
+			if name == parent {
+				role = "parent"
+			}
+			r := toggle(name, "workers."+name, s.Workers[name], role)
+			r.Agent = name
+			if model := s.Models[name]; model != "" && installed {
+				r.Right = st.dim(model) + "  "
+			}
+			if !installed {
+				r.Note, r.Options, r.Key = "not installed", nil, ""
+				for _, c := range installCommands {
+					if c.Name == name {
+						r.Install = c.Command
+					}
+				}
+				if r.Install != "" {
+					r.Right = st.dim("i") + " " + st.faint("install")
 				}
 			}
-			rows = append(rows, setRow{Label: name, Key: "workers." + name, Options: []string{"true", "false"}, Names: []string{"on", "off"},
-				Value: onoff(s.Workers[name]), Note: note})
+			rows = append(rows, r)
 		}
 		counts := []string{"1", "2", "3", "4"}
 		if s.MaxRunning > 4 {
 			counts = append(counts, fmt.Sprint(s.MaxRunning))
 		}
-		return append(rows, setRow{Label: "At the same time", Key: "queue.max_running", Options: counts, Value: fmt.Sprint(s.MaxRunning),
+		return append(rows, setRow{Label: "At the same time", Key: "queue.max_running", Options: counts, Value: fmt.Sprint(s.MaxRunning), Group: true,
 			Note: "helpers working at once"})
 	case "routing":
-		return []setRow{
-			{Label: "Optimise for", Key: "routing.objective", Options: []string{"balanced", "quality", "cost", "speed"}, Value: s.Objective},
-			{Label: "Routing", Value: s.RoutingMode, Note: "Rig picks the helper and model for each task; rig pick explains a choice"},
-		}
+		return []setRow{{Label: "Optimise for", Key: "routing.objective", Options: []string{"balanced", "quality", "cost", "speed"}, Value: s.Objective}}
 	case "approvals":
 		return []setRow{
-			{Label: "Helper commands", Value: "the parent decides", Note: "a helper's risky command waits for the parent; it can ask you in the conversation"},
-			{Label: "Your parent's own", Value: "its own settings", Note: "Rig adds no permission flags; its requests wait in the conversation (1 allows, 2 denies)"},
+			{Label: "Helper commands", Key: "approvals", Options: []string{parent + " decides"}, Value: parent + " decides", Stacked: true,
+				Note: "  " + parent + " allows routine commands and asks you about risky ones."},
+			{Label: parent + " applies checked work", Right: st.paint(colGreen, "on"), Group: true, Note: "you can undo any of it with u, or hold a helper with h"},
 		}
 	case "sandbox":
-		return []setRow{
-			{Label: "Where agents work", Key: "sandbox.provider", Options: []string{"devcontainer", "host"}, Names: []string{"dev container", "this machine"}, Value: s.Sandbox,
-				Note: "a dev container keeps helpers away from your files"},
-			{Label: "A separate copy per helper", Key: "worktrees.mode", Options: []string{"per-job", "off"}, Names: []string{"on", "off"}, Value: s.Worktrees,
-				Note: "each writer works in its own worktree"},
-			{Label: "A container per helper", Key: "worktrees.container", Options: []string{"per-job", "shared"}, Names: []string{"on", "off"}, Value: s.WorktreeContainer},
+		image := ""
+		if st.Workspace != nil {
+			for _, sec := range st.Workspace.Brief {
+				for _, l := range sec.Lines {
+					if v, ok := strings.CutPrefix(strings.TrimSpace(l.Text), "image"); ok {
+						image = strings.TrimSpace(v)
+					}
+				}
+			}
 		}
+		rows := []setRow{
+			{Label: "Where agents work", Key: "sandbox.provider", Options: []string{"devcontainer", "host"}, Names: []string{"dev container", "this machine"}, Value: s.Sandbox},
+		}
+		if image != "" {
+			rows = append(rows, setRow{Label: "Image", Right: image + st.faint(" · .devcontainer wins"), Group: true})
+		}
+		copyRow := setRow{Label: "A separate copy per helper", Key: "worktrees.mode", Options: []string{"per-job", "off"}, Names: []string{"on", "off"},
+			Value: s.Worktrees, Toggle: true, Group: image == ""}
+		boxRow := setRow{Label: "A container per helper", Key: "worktrees.container", Options: []string{"per-job", "shared"}, Names: []string{"on", "off"},
+			Value: s.WorktreeContainer, Toggle: true}
+		return append(rows, copyRow, boxRow)
 	case "editor":
 		editor := s.Editor
 		if editor == "" {
-			editor = "vi ($EDITOR is not set)"
+			editor = "vi"
+		}
+		size := fmt.Sprint(s.TabSize)
+		if s.TabSize == 0 {
+			size = "4"
 		}
 		return []setRow{
-			{Label: "e opens in", Value: editor, Note: "in the code tab, e hands the file to your own editor"},
-			{Label: "Terminal shell", Value: s.Shell},
+			{Label: "Tab size", Key: "ui.tab_size", Options: []string{"2", "4", "8"}, Value: size},
+			{Label: "Terminal shell", Right: lastWord(strings.ReplaceAll(s.Shell, "/", " "))},
+			{Label: "e opens in", Right: "$EDITOR" + st.faint(" · "+editor), Group: true, Note: "in the terminal, e hands the file to your own editor"},
 		}
 	case "git":
+		account := st.faint("gh is not installed")
+		switch {
+		case s.GHUser != "":
+			account = st.paint(colGreen, "●") + " " + s.GHUser + st.faint(" · via gh")
+		case s.GH:
+			account = st.faint("not signed in · gh auth login")
+		}
+		sign := st.faint("off")
+		if s.SignCommits {
+			sign = st.paint(colGreen, "on")
+		}
 		return []setRow{
-			{Label: "Shipping", Value: "always yours", Note: "agents never push; Rig commits a helper's work only when the parent accepts it"},
-			{Label: "Each helper", Value: "its own branch", Note: "rig/<job> in its own worktree, merged after acceptance"},
+			{Label: "GitHub account", Right: account},
+			{Label: "Clone new repos into", Right: s.CloneDir},
+			{Label: "Each apply is one commit", Right: st.faint("rig: merge job <id>"), Group: true},
+			{Label: "When you ship", Key: "ui.ship", Options: []string{"pr", "push"}, Names: []string{"pull request", "push to branch"}, Value: s.Ship, Group: true},
+			{Label: "Pull request branch", Right: "rig/{topic}"},
+			{Label: "Sign commits", Right: sign},
 		}
 	case "notify":
-		return []setRow{
-			{Label: "Terminal bell", Key: "ui.bell", Options: []string{"true", "false"}, Names: []string{"on", "off"}, Value: onoff(s.Bell), Scoped: true,
-				Note: "rings when a request waits for you"},
-		}
+		needs := toggle("Something needs me", "ui.notify_needs", s.NotifyNeeds, "a request waiting for you, or a sandbox problem")
+		applied := toggle("Work was applied", "ui.notify_applied", s.NotifyApplied, "")
+		bell := toggle("Terminal bell", "ui.bell", s.Bell, "")
+		bell.Scoped, bell.Group = true, true
+		desktop := toggle("Desktop notice", "ui.desktop", s.Desktop, "Ghostty, kitty, iTerm2 and others show it")
+		return []setRow{needs, applied, bell, desktop}
 	}
 	return nil
+}
+
+// versions is the design's "rig 0.9.2 · dc-cli 0.23.0": what is installed.
+func versions(st State, s *view.AppSettings) string {
+	var parts []string
+	if s.RigVersion != "" {
+		parts = append(parts, "rig "+s.RigVersion)
+	}
+	if s.DCVersion != "" {
+		parts = append(parts, "dc-cli "+s.DCVersion)
+	}
+	if len(parts) == 0 {
+		return st.faint("rig doctor shows them")
+	}
+	return strings.Join(parts, st.faint(" · "))
 }
 
 func sortedWorkers(m map[string]bool) []string {
@@ -134,6 +225,12 @@ func sortedWorkers(m map[string]bool) []string {
 	return out
 }
 
+// settingsTitles are each section's heading and the line under it, as the design writes them.
+var settingsTitles = map[string][2]string{
+	"agents": {"Agents", ""}, "routing": {"Who does what", "smart defaults · change only what you care about"}, "approvals": {"", ""},
+	"sandbox": {"Sandbox", "powered by dc-cli"}, "editor": {"Editor", ""}, "git": {"Git and shipping", ""}, "notify": {"Notifications", ""},
+}
+
 // settingsScreenLines is the Settings screen.
 func settingsScreenLines(v *view.View, st State, w, h int) []string {
 	a := st.App
@@ -141,28 +238,25 @@ func settingsScreenLines(v *view.View, st State, w, h int) []string {
 	section := SettingsSections[sc.Section]
 	rows := settingRows(st, section)
 	sel := clampSel(sc.Row, len(rows))
-	scope, file := "this repo", ".rig/harness.toml"
-	if s := st.AppSettings; s != nil && sel < len(rows) && rows[sel].Scoped {
-		which := s.ThemeScope
-		if rows[sel].Key == "ui.bell" {
+	repo := appProject(v, a)
+	scope, file := repo, ".rig/harness.toml"
+	if s := st.AppSettings; s != nil && sel < len(rows) && strings.HasPrefix(rows[sel].Key, "ui.") {
+		which := "all"
+		switch rows[sel].Key {
+		case "ui.theme":
+			which = s.ThemeScope
+		case "ui.bell":
 			which = s.BellScope
 		}
 		if which != "repo" {
 			scope, file = "all repos", s.Global
 		}
 	}
-	chip := func(text string) string {
-		if st.Styled {
-			return lipgloss.NewStyle().Background(lipgloss.Color(colText)).Foreground(lipgloss.Color(colGround)).Bold(true).Render(" " + text + " ")
-		}
-		return "[" + text + "]"
-	}
-	repo := appProject(v, a)
 	other := "all repos"
 	if scope == "all repos" {
 		other = repo
 	}
-	head := "   " + st.faint("←") + "  " + st.bold("Settings") + "   " + chip(scope) + "  " + st.faint(other) + "  " + st.faint(file)
+	head := "   " + st.faint("←") + "  " + st.bold("Settings") + "   " + chipOn(st, scope) + "  " + st.faint(other) + "  " + st.faint(file)
 	var tabs []string
 	for i, name := range SettingsSections {
 		if i == sc.Section {
@@ -177,9 +271,17 @@ func settingsScreenLines(v *view.View, st State, w, h int) []string {
 	}
 	lines := []string{spread(head, "", "", w), center(strings.Join(tabs, "   "), w)}
 	cw := min(76, w-8)
-	body := []string{"", st.bold(strings.ToUpper(section[:1]) + section[1:]), ""}
-	if section == "routing" {
-		body[1] = st.bold("Who does what")
+	body := []string{""}
+	if t := settingsTitles[section]; t[0] != "" {
+		body = append(body, st.bold(t[0]))
+		sub := t[1]
+		if section == "agents" && st.AppSettings != nil {
+			sub = fmt.Sprintf("today %d helper runs", st.AppSettings.RunsToday)
+		}
+		if sub != "" {
+			body = append(body, st.dim(sub))
+		}
+		body = append(body, "")
 	}
 	switch {
 	case st.AppSettings == nil:
@@ -187,42 +289,162 @@ func settingsScreenLines(v *view.View, st State, w, h int) []string {
 	case section == "toml":
 		body = append(body, tomlLines(st, cw)...)
 	default:
+		var rowsOut []string
 		for i, r := range rows {
-			body = append(body, settingLine(st, r, i == sel, cw))
-			if strings.HasPrefix(r.Key, "workers.") {
-				continue // its note is on its line, and the agents sit close together as in the design
+			if r.Group && i > 0 {
+				rowsOut = append(rowsOut, "")
 			}
-			if r.Note != "" {
-				body = append(body, "    "+st.dim(fit(r.Note, cw-4)))
+			rowsOut = append(rowsOut, settingLines(st, r, i == sel, cw, scopeName(st, r))...)
+			if r.Note != "" && r.Agent == "" {
+				rowsOut = append(rowsOut, "    "+st.dim(fit(r.Note, cw-4)))
 			}
-			body = append(body, "")
 		}
-		if section == "sandbox" && st.Workspace != nil && st.Workspace.Context != "" {
-			body = append(body, st.paint(colGreen, "●")+" "+st.faint(st.Workspace.Context))
+		body = append(body, rowsOut...)
+		body = append(body, settingsExtra(st, section, cw)...)
+	}
+	// the rows carry the cursor in the two cells left of the column, as the design's › sits in its margin
+	for i, l := range body {
+		if !strings.HasPrefix(l, "\x00") {
+			body[i] = "  " + l
+		} else {
+			body[i] = l[1:]
 		}
 	}
-	lines = append(lines, indentAll(body, (w-cw)/2, w)...)
+	lines = append(lines, indentAll(body, (w-cw)/2-2, w)...)
 	for len(lines) < h {
 		lines = append(lines, fit("", w))
 	}
 	return lines[:h]
 }
 
-// settingLine is one row: the label on the left, its choices (or value) on the right, the chosen one on a chip.
-func settingLine(st State, r setRow, selected bool, cw int) string {
-	label := r.Label
-	if strings.HasPrefix(r.Key, "workers.") {
-		label = st.dot(r.Label) + " " + fmt.Sprintf("%-9s", r.Label) + " " + st.faint(r.Note) // the design's "codex  chatgpt plus"
+// settingsExtra is what a section shows under its rows: routing's table, today's allowed commands, the sandbox's state.
+func settingsExtra(st State, section string, cw int) []string {
+	s := st.AppSettings
+	var out []string
+	switch section {
+	case "routing":
+		if len(s.RoutingTable) == 0 {
+			break
+		}
+		out = append(out, "", "", st.faint(fmt.Sprintf("%-20s%-28s%s", "task", "who", "model")))
+		for _, r := range s.RoutingTable {
+			who := "auto" + st.faint(" · usually "+r.Worker)
+			if r.Parent {
+				who = r.Worker + st.faint(" · parent")
+			}
+			out = append(out, fmt.Sprintf("%-20s", r.Task)+who+strings.Repeat(" ", max(1, 28-lipgloss.Width(who)))+r.Model)
+		}
+		out = append(out, "", st.faint("rig pick explains a choice · helpers come from the agents section"))
+	case "approvals":
+		var allowed []string
+		if st.Today != nil {
+			for _, r := range st.Today.Rows {
+				if r.State == "command" {
+					allowed = append(allowed, strings.TrimPrefix(clean(r.Title), "allowed "))
+				}
+			}
+		}
+		out = append(out, "", "", st.bold("Allowed today"), "")
+		if len(allowed) == 0 {
+			out = append(out, "    "+st.faint("nothing yet"))
+		}
+		for i := 0; i < len(allowed) && i < 9; i += 3 {
+			row := "    "
+			for _, c := range allowed[i:min(len(allowed), i+3)] {
+				row += fit(c, 22) + "  "
+			}
+			out = append(out, row)
+		}
+	case "sandbox":
+		if st.Workspace == nil {
+			break
+		}
+		state := ""
+		for _, sec := range st.Workspace.Brief {
+			for _, l := range sec.Lines {
+				if t := strings.TrimSpace(l.Text); strings.HasPrefix(t, "●") || strings.HasPrefix(t, "○") {
+					state = t
+				}
+			}
+		}
+		if st.Workspace.Context != "" {
+			up := strings.TrimSpace(strings.TrimPrefix(state, "● up"))
+			out = append(out, "", "", st.paint(colGreen, "●")+" running "+up+st.faint(" · "+versions(st, s)))
+			out = append(out, "  "+st.dim("s")+" "+st.faint("stop")+"   "+st.dim("d")+" "+st.faint("doctor"))
+		} else {
+			out = append(out, "", "", st.faint("○")+" not running", "  "+st.dim("u")+" "+st.faint("start")+"   "+st.dim("d")+" "+st.faint("doctor"))
+		}
+	case "git":
+		out = append(out, "", "", st.faint("agents never push · shipping is always yours"))
+	}
+	return out
+}
+
+// chipOn is the design's black chip for the chosen value.
+func chipOn(st State, text string) string {
+	if st.Styled {
+		return lipgloss.NewStyle().Background(lipgloss.Color(colText)).Foreground(lipgloss.Color(colGround)).Bold(true).Render(" " + text + " ")
+	}
+	return "[" + text + "]"
+}
+
+// scopeName is where a row's value is kept, for the theme's "all repos" after its choices.
+func scopeName(st State, r setRow) string {
+	if r.Key != "ui.theme" || st.AppSettings == nil {
+		return ""
+	}
+	if st.AppSettings.ThemeScope == "repo" {
+		return "this repo"
+	}
+	return "all repos"
+}
+
+// settingLines is a row as lines that carry their own cursor margin (marked with a leading NUL): one line, or for a
+// stacked row its label and then its choices under it.
+func settingLines(st State, r setRow, selected bool, cw int, scope string) []string {
+	if !r.Stacked {
+		return []string{"\x00" + settingLine(st, r, selected, cw)}
 	}
 	mark := "  "
 	if selected {
 		mark = st.bold("› ")
-		label = st.bold(label)
 	}
-	var right string
-	if len(r.Options) == 0 {
-		right = st.dim(r.Value)
-	} else {
+	var parts []string
+	for _, o := range r.Options {
+		if o == r.Value {
+			parts = append(parts, chipOn(st, o))
+		} else {
+			parts = append(parts, st.faint(" "+o+" "))
+		}
+	}
+	if scope != "" {
+		parts = append(parts, st.faint(" "+scope))
+	}
+	return []string{"\x00  " + st.bold(r.Label), "", "\x00    " + mark + strings.Join(parts, "  ")}
+}
+
+// settingLine is one row: the label on the left in bold, the value on the right: chips, a green on or grey off, or text.
+func settingLine(st State, r setRow, selected bool, cw int) string {
+	label := st.bold(r.Label)
+	if r.Agent != "" {
+		label = st.tile(r.Agent) + " " + fmt.Sprintf("%-9s", r.Agent) + " " + st.faint(r.Note)
+		if r.Note == "not installed" {
+			label = st.tile(r.Agent) + " " + fmt.Sprintf("%-9s", r.Agent) + " " + st.paint(colAmber, r.Note)
+		}
+	}
+	mark := "  "
+	if selected {
+		mark = st.bold("› ")
+	}
+	right := r.Right
+	switch {
+	case len(r.Options) > 0 && r.Toggle:
+		if r.Value == r.Options[0] {
+			right += st.paint(colGreen, "on")
+		} else {
+			right += st.faint("off")
+		}
+	case len(r.Options) > 0:
 		var parts []string
 		for i, o := range r.Options {
 			name := o
@@ -230,25 +452,25 @@ func settingLine(st State, r setRow, selected bool, cw int) string {
 				name = r.Names[i]
 			}
 			if o == r.Value {
-				if st.Styled {
-					parts = append(parts, lipgloss.NewStyle().Background(lipgloss.Color(colText)).Foreground(lipgloss.Color(colGround)).Bold(true).Render(" "+name+" "))
-				} else {
-					parts = append(parts, "["+name+"]")
-				}
+				parts = append(parts, chipOn(st, name))
 			} else {
 				parts = append(parts, st.faint(" "+name+" "))
 			}
 		}
-		right = strings.Join(parts, " ")
+		if r.Right == "" {
+			right = strings.Join(parts, "  ")
+		}
 	}
 	left := mark + label
 	return left + strings.Repeat(" ", max(2, cw-lipgloss.Width(left)-lipgloss.Width(right))) + right
 }
 
-// tomlLines is the toml section: the harness itself, whether it is valid, and how to edit it.
+// tomlLines is the toml section: the harness itself as the design shows it (its tables in the accent colour), whether
+// it is valid, and how to edit it.
 func tomlLines(st State, cw int) []string {
 	s := st.AppSettings
-	out := []string{st.bold(s.Harness) + "  " + st.faint("this repo"), ""}
+	head := st.bold(s.Harness)
+	out := []string{head + strings.Repeat(" ", max(2, cw-lipgloss.Width(head)-9)) + st.faint("this repo"), ""}
 	for i, l := range strings.Split(strings.TrimRight(s.HarnessText, "\n"), "\n") {
 		if i == 24 {
 			out = append(out, st.faint("…"))
@@ -256,15 +478,15 @@ func tomlLines(st State, cw int) []string {
 		}
 		text := sanitize(l)
 		if strings.HasPrefix(strings.TrimSpace(text), "[") {
-			text = st.bold(text)
+			text = st.paint(colAccent, text)
 		} else if strings.HasPrefix(strings.TrimSpace(text), "#") {
 			text = st.faint(text)
 		}
-		out = append(out, st.faint(fmt.Sprintf("%3d  ", i+1))+text)
+		out = append(out, text)
 	}
 	out = append(out, "")
 	if len(s.Problems) == 0 {
-		out = append(out, st.paint(colGreen, "✓ valid")+" "+st.faint("· E edits it in $EDITOR"))
+		out = append(out, st.paint(colGreen, "✓ valid")+" "+st.faint("· E edits it in $EDITOR · mistakes show here"))
 	} else {
 		for _, p := range s.Problems {
 			out = append(out, st.paint(colAmber, "! "+clean(p)))
@@ -319,7 +541,7 @@ func (m *Model) settingsKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		r := rows[clampSel(sc.Row, len(rows))]
-		if r.Key == "" || len(r.Options) == 0 {
+		if r.Key == "" || r.Key == "approvals" || len(r.Options) < 2 {
 			return m, nil
 		}
 		at := 0
@@ -347,6 +569,27 @@ func (m *Model) settingsKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 				}
 				return m, m.changeSetting(r, r.Value, scope)
 			}
+		}
+	case "i":
+		if len(rows) > 0 {
+			if r := rows[clampSel(sc.Row, len(rows))]; r.Install != "" {
+				m.pendingX, m.pendingI = "install", r.Install
+				m.st.Mode, m.st.Prompt = ModeConfirm, "Install "+r.Agent+"? It runs: "+r.Install
+			}
+		}
+	case "s", "u", "d":
+		if SettingsSections[sc.Section] != "sandbox" {
+			return m, nil
+		}
+		switch k.String() {
+		case "s":
+			m.pendingX, m.pendingI = "env.down", "down"
+			m.st.Mode, m.st.Prompt = ModeConfirm, "Stop this project's container (rig env down)? Agents in it pause."
+		case "u":
+			m.pendingX, m.pendingI = "env.up", "up"
+			m.st.Mode, m.st.Prompt = ModeConfirm, "Start this project's container (rig env up)?"
+		case "d":
+			return m, m.exec([]string{"sh", "-c", "rig doctor; printf '\\n⏎ goes back to rig shell '; read _"}, func(err error) tea.Msg { return shellDoneMsg{err: err} })
 		}
 	case "E", "e":
 		if SettingsSections[sc.Section] == "toml" {
@@ -384,8 +627,10 @@ func (m *Model) changeSetting(r setRow, value, scope string) tea.Cmd {
 	}
 	if scope == "" {
 		scope = "repo"
-		if r.Scoped && s.BellScope == "all" {
-			scope = "all"
+		switch {
+		case r.Key == "ui.bell" && s.BellScope != "all":
+		case strings.HasPrefix(r.Key, "ui."):
+			scope = "all" // the board's own preferences follow you to every repo; g keeps the bell for this one
 		}
 	}
 	src := m.src
@@ -414,13 +659,71 @@ func (m *Model) bell() tea.Cmd {
 	} else if job := waitingJob(m.view); job != nil {
 		key = "job:" + job.ID
 	}
-	ring := key != "" && key != m.lastAsk && m.st.AppSettings != nil && m.st.AppSettings.Bell
+	fresh := key != "" && key != m.lastAsk
 	m.lastAsk = key
-	if !ring {
+	if !fresh || m.st.AppSettings == nil || !m.st.AppSettings.NotifyNeeds {
 		return nil
 	}
+	return m.notify(appParent(m.st) + " needs you: a request is waiting")
+}
+
+// notify reaches you the ways Settings › Notifications keeps on: the terminal bell, a desktop notice, or both.
+func (m *Model) notify(text string) tea.Cmd {
+	s := m.st.AppSettings
+	if s == nil || (!s.Bell && !s.Desktop) {
+		return nil
+	}
+	ring, desktop := s.Bell, s.Desktop
 	return func() tea.Msg {
-		m.ringer()
+		if ring {
+			m.ringer()
+		}
+		if desktop && m.notifier != nil {
+			m.notifier("rig", text)
+		}
 		return nil
 	}
+}
+
+// notifyApplied tells you when the parent applied a helper's work, if Settings › Notifications asks for it.
+func (m *Model) notifyApplied(t *view.Today) tea.Cmd {
+	applied := map[string]bool{}
+	var fresh string
+	if t != nil {
+		for _, r := range t.Rows {
+			if r.State == "applied" {
+				applied[r.JobID] = true
+				if m.seenApplied != nil && !m.seenApplied[r.JobID] && fresh == "" {
+					fresh = r.Title
+				}
+			}
+		}
+	}
+	first := m.seenApplied == nil
+	m.seenApplied = applied
+	if first || fresh == "" || m.st.AppSettings == nil || !m.st.AppSettings.NotifyApplied {
+		return nil
+	}
+	return m.notify(appParent(m.st) + " applied " + clean(fresh))
+}
+
+// settingsKeys are each section's keys, as the design's footers list them.
+func settingsKeys(section string) [][2]string {
+	switch section {
+	case "agents":
+		return [][2]string{{"↑↓", "agent"}, {"space", "on/off"}, {"i", "install"}, {"⇥", "section"}, {"esc", "back"}}
+	case "routing":
+		return [][2]string{{"↑↓", "row"}, {"←→", "change"}, {"⇥", "section"}, {"esc", "back"}}
+	case "approvals":
+		return [][2]string{{"⇥", "section"}, {"E", "edit toml"}, {"esc", "back"}}
+	case "sandbox":
+		return [][2]string{{"←→", "change"}, {"s", "stop"}, {"d", "doctor"}, {"⇥", "section"}, {"esc", "back"}}
+	case "editor", "git":
+		return [][2]string{{"←→", "change"}, {"⇥", "section"}, {"esc", "back"}}
+	case "notify":
+		return [][2]string{{"space", "on/off"}, {"g", "all repos / this repo"}, {"⇥", "section"}, {"esc", "back"}}
+	case "toml":
+		return [][2]string{{"E", "edit in $EDITOR"}, {"⇥", "section"}, {"esc", "back"}}
+	}
+	return [][2]string{{"←→", "change"}, {"⇥", "section"}, {"g", "all repos / this repo"}, {"esc", "back"}}
 }

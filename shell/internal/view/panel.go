@@ -124,6 +124,27 @@ type AppSettings struct {
 	Global            string          `json:"global"`
 	Editor            string          `json:"editor"`
 	Shell             string          `json:"shell"`
+	Start             string          `json:"start"`    // what rig shell opens outside a project: last or picker
+	Ship              string          `json:"ship"`     // what ship offers first: pr or push
+	TabSize           int             `json:"tab_size"` // the code view's tab width
+	NotifyNeeds       bool            `json:"notify_needs"`
+	NotifyApplied     bool            `json:"notify_applied"`
+	Desktop           bool            `json:"desktop"` // a desktop notice through the terminal, as well as or instead of the bell
+	RoutingTable      []struct {
+		Task   string `json:"task"`
+		Kind   string `json:"kind"`
+		Worker string `json:"worker"`
+		Parent bool   `json:"parent"`
+		Model  string `json:"model"`
+	} `json:"routing_table"`
+	Models      map[string]string `json:"models"`
+	RunsToday   int               `json:"runs_today"`
+	RigVersion  string            `json:"rig_version"`
+	DCVersion   string            `json:"dc_version"`
+	GH          bool              `json:"gh"`
+	GHUser      string            `json:"gh_user"`
+	CloneDir    string            `json:"clone_dir"`
+	SignCommits bool              `json:"sign_commits"`
 }
 
 // Today is applies.today: the helpers' work applied, undone or held, and commands allowed, newest first.

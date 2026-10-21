@@ -76,6 +76,32 @@ func (m *Model) applyThenTell(method string, params map[string]any, done, tell s
 	}
 }
 
+// holdAll holds every helper's work not yet applied: the ones at work and the finished ones waiting on the parent.
+func (m *Model) holdAll() tea.Cmd {
+	var ids []string
+	for _, r := range m.view.Rows("Jobs") {
+		if r.Label == "Unverified" || r.Label == "Running" || r.Label == "Needs input" || r.Ask {
+			ids = append(ids, r.ID)
+		}
+	}
+	src := m.src
+	return func() tea.Msg {
+		held := 0
+		var last error
+		for _, id := range ids {
+			if _, err := src.Act("applies.hold", map[string]any{"id": id, "on": true}, 30*time.Second); err != nil {
+				last = err
+				continue
+			}
+			held++
+		}
+		if held == 0 && last != nil {
+			return appliedMsg{err: last}
+		}
+		return appliedMsg{text: fmt.Sprintf("holding %d helpers' work", held)}
+	}
+}
+
 // undoNote is what the parent is told after an undo, so it can handle anything built on that work.
 func (m *Model) undoNote(id string) string {
 	title, commit, branch := id, "", ""
@@ -131,7 +157,7 @@ func stateColour(state string) string {
 // historyScreen is "Done today": one row per applied, undone or held job, and the chosen one's details.
 func historyScreen(st State, w, h int) []string {
 	parent := appParent(st)
-	cw := min(appColumn, w-8)
+	cw := min(70, w-8) // the design's done today and ship are 70 wide
 	lines := []string{spread(rigBarLeft(st, nil)+st.faint(" › done today"), "", "", w), fit("", w)}
 	body := []string{"", st.bold("Done today") + "  " + st.faint("applied, held and allowed by "+parent), ""}
 	var keys [][2]string
@@ -162,15 +188,15 @@ func historyScreen(st State, w, h int) []string {
 					title = st.bold(title)
 				}
 			}
-			left := st.faint(when) + "  " + st.dot(r.Worker) + " " + title
-			row := left + strings.Repeat(" ", max(2, cw-2-lipgloss.Width(left)-lipgloss.Width(right))) + right
+			left := st.faint(when) + "  " + st.tile(r.Worker) + " " + title
+			row := left + strings.Repeat(" ", max(2, cw-2-lipgloss.Width(left)-lipgloss.Width(right))) + right + "  "
 			if i == sel {
-				row = st.bold("›") + " " + row
+				row = " " + row // the design shifts the chosen row by one and lights it
 				if st.Styled {
 					row = tint(fit(row, cw), colSelBg)
+				} else {
+					row = ">" + row[1:]
 				}
-			} else {
-				row = "  " + row
 			}
 			body = append(body, row)
 		}
@@ -205,7 +231,7 @@ func historyScreen(st State, w, h int) []string {
 func shipScreen(st State, w, h int) []string {
 	s := st.Ship
 	sh := st.App.ShipScreen
-	cw := min(appColumn, w-8)
+	cw := min(70, w-8) // the design's done today and ship are 70 wide
 	lines := []string{spread(rigBarLeft(st, nil)+st.faint(" › ship"), "", "", w), fit("", w)}
 	var body []string
 	keys := [][2]string{{"esc", "not now"}}
@@ -239,7 +265,7 @@ func shipScreen(st State, w, h int) []string {
 		for i, c := range shown {
 			mark := "  "
 			if whos[i] != "" {
-				mark = st.dot(whos[i]) + " "
+				mark = st.tile(whos[i]) + " "
 			}
 			body = append(body, mark+fit(subjects[i], col)+"   "+st.faint(c.Commit))
 		}

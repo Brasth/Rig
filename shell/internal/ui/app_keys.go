@@ -2,10 +2,16 @@ package ui
 
 import (
 	"bufio"
+	"bytes"
 	"fmt"
+	"image"
+	_ "image/gif"
+	_ "image/jpeg"
+	"image/png"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -21,11 +27,16 @@ type fileMsg struct {
 	path  string
 	lines []string
 	err   error
+	image []byte // a picture as PNG, for terminals that show images
+	w, h  int    // its size in pixels
 }
 
 // SetApp opens the board as the app (the design's ADE screens) for the repository at repo.
+// SetLogos draws agents as their logo tiles; main turns it on where the terminal shows images.
+func (m *Model) SetLogos(on bool) { m.st.Logos = on }
+
 func (m *Model) SetApp(repo string) {
-	m.st.App = &AppState{Repo: repo, Branch: gitBranch(repo), Tab: 1}
+	m.st.App = &AppState{Repo: repo, Branch: gitBranch(repo), Tab: 1, Facts: repoFacts(repo)}
 	m.st.Tab = SessionTab
 	if !m.themeFixed && ApplyTheme("light") { // the design's default; a saved theme replaces it when it loads
 		m.st.Theme = "light"
@@ -33,6 +44,13 @@ func (m *Model) SetApp(repo string) {
 	m.noticeNewJobs() // the helpers already at work are not new
 	if m.ringer == nil {
 		m.ringer = func() { _, _ = os.Stdout.WriteString("\a") }
+	}
+	if m.notifier == nil {
+		// OSC 777 (Ghostty, kitty, WezTerm, foot) and OSC 9 (iTerm2, Windows Terminal); a terminal ignores the one it lacks
+		m.notifier = func(title, text string) {
+			text = strings.NewReplacer("\x1b", "", "\a", "", ";", ",").Replace(text)
+			_, _ = os.Stdout.WriteString("\x1b]777;notify;" + title + ";" + text + "\a\x1b]9;" + text + "\a")
+		}
 	}
 }
 
@@ -77,7 +95,11 @@ func (m *Model) openFile(rel string) tea.Cmd {
 	return func() tea.Msg {
 		path := filepath.Join(repo, filepath.Clean("/"+rel))
 		if previewKind(rel) == "binary" {
-			return fileMsg{path: rel, lines: []string{}}
+			msg := fileMsg{path: rel, lines: []string{}}
+			if img, w, h := pictureAsPNG(path); img != nil {
+				msg.image, msg.w, msg.h = img, w, h
+			}
+			return msg
 		}
 		data, err := os.ReadFile(path)
 		if err != nil {
@@ -144,6 +166,9 @@ func (m *Model) askStopJob(r view.Row) {
 func (m *Model) appKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	a := m.st.App
 	key := k.String()
+	if m.st.Mode == ModeConfirm && a.ConfirmLead != "" {
+		return m.leadConfirmKey(k)
+	}
 	if m.st.Mode == ModeConfirm {
 		return m.confirmKey(k)
 	}
@@ -221,13 +246,19 @@ func (m *Model) appKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	switch key {
-	case "ctrl+k":
+	case "ctrl+k", "ctrl+p":
 		a.Palette = &Palette{}
 		return m, m.loadFiles()
 	case "ctrl+f":
 		a.Search = &SearchState{}
 		return m, m.fetchChanged()
 	case "tab":
+		if a.Tab == 3 && a.Preview && previewKind(a.File) != "" && a.Search == nil && a.Palette == nil {
+			if next := nextPreview(a.Files, a.File); next != "" && next != a.File {
+				return m, m.runPalette(paletteItem{Action: "file:" + next}, "")
+			}
+			return m, m.loadFiles()
+		}
 		if matches := slashMatches(m.st.Prompt); len(matches) > 0 {
 			sel := clampSel(m.st.SlashSel, len(matches))
 			m.st.Prompt, m.st.SlashSel = matches[sel].Name, 0
@@ -270,7 +301,13 @@ func (m *Model) appKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.appTabKey(k)
 	}
 	matches := slashMatches(m.st.Prompt)
+	asking := (m.st.Chat != nil && m.st.Chat.Ask != nil) || waitingJob(m.view) != nil
 	switch k.Type {
+	case tea.KeyLeft, tea.KeyRight:
+		if asking && m.st.Prompt == "" {
+			a.AnswerDeny = !a.AnswerDeny // the design's "← → pick answer"
+		}
+		return m, nil
 	case tea.KeyUp, tea.KeyDown:
 		if len(matches) > 0 {
 			step := 1
@@ -289,6 +326,11 @@ func (m *Model) appKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			return m, m.appSend(sel.Name)
 		}
+		if asking && strings.TrimSpace(m.st.Prompt) == "" {
+			deny := a.AnswerDeny
+			a.AnswerDeny = false
+			return m.answer(!deny)
+		}
 		return m, m.appSend(m.st.Prompt)
 	case tea.KeyBackspace:
 		if r := []rune(m.st.Prompt); len(r) > 0 {
@@ -301,9 +343,18 @@ func (m *Model) appKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case tea.KeyRunes, tea.KeySpace:
 		if m.st.Prompt == "" && !k.Paste && k.Type == tea.KeyRunes && len(k.Runes) == 1 {
-			// with the box empty, the design's single keys: the answer chips, the suggestions, the tabs, help
-			asking := (m.st.Chat != nil && m.st.Chat.Ask != nil) || waitingJob(m.view) != nil
+			// with the box empty, the design's single keys: the answer chips, the suggestions, the tabs, help, and
+			// d, u and h when there is a change to see, undo or hold (else the letter is typed)
 			switch r := k.Runes[0]; {
+			case r == '@':
+				a.Palette = &Palette{Attach: true} // the design's "@ add file"
+				return m, m.loadFiles()
+			case r == 'd' && len(appliedCards(m.view, m.st)) > 0:
+				m.selectJob(appliedCards(m.view, m.st)[0].ID)
+				a.Tab = 2
+				return m, tea.Batch(m.fetchDock(true), m.fetchDiff(true))
+			case (r == 'u' || r == 'h') && m.quickApply(string(r), true):
+				return m, nil
 			case m.st.Chat == nil && r >= '1' && r <= '4':
 				return m, m.appSend(Suggestions[r-'1'])
 			case asking && (r == '1' || r == '2'):
@@ -400,6 +451,9 @@ func (m *Model) appTabKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	// the code tab
+	if (key == "u" || key == "h") && !a.Selecting && m.quickApply(key, false) {
+		return m, nil
+	}
 	lo := func() int { return min(a.SelFrom, a.SelTo) }
 	hi := func() int { return max(a.SelFrom, a.SelTo) }
 	switch key {
@@ -436,7 +490,11 @@ func (m *Model) appTabKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case "/":
 		if a.File != "" {
-			a.Finding, a.Find = true, ""
+			a.Finding, a.Find = true, "" // in a table, the rows that hold it
+		}
+	case "?":
+		if a.Preview && previewKind(a.File) != "" {
+			return m, m.appSend("Tell me about " + a.File + ": what it is for and what stands out.")
 		}
 	case "s":
 		if previewKind(a.File) != "" && previewKind(a.File) != "binary" {
@@ -589,13 +647,29 @@ func (m *Model) fetchChanged() tea.Cmd {
 // runSearch greps the repository's tracked files for the query (case-insensitive, fixed text, up to 200 matches).
 func (m *Model) runSearch() tea.Cmd {
 	s := m.st.App.Search
-	query, repo := s.Query, m.st.App.Repo
+	query, repo, key := s.Query, m.st.App.Repo, s.key()
 	if strings.TrimSpace(query) == "" {
-		s.Results, s.Ran = nil, query
+		s.Results, s.Ran = nil, key
 		return nil
 	}
+	args := []string{"-C", repo, "grep", "-n", "-I", "--max-count=20"}
+	if !s.Case {
+		args = append(args, "-i")
+	}
+	if s.Word {
+		args = append(args, "-w")
+	}
+	if s.Regex {
+		args = append(args, "-E")
+	} else {
+		args = append(args, "-F")
+	}
+	args = append(args, "-e", query)
+	if scope := strings.TrimSpace(s.Scope); scope != "" {
+		args = append(args, "--", ":(glob)"+scope)
+	}
 	return func() tea.Msg {
-		out, _ := exec.Command("git", "-C", repo, "grep", "-n", "-I", "-i", "-F", "--max-count=20", "-e", query).Output()
+		out, _ := exec.Command("git", args...).Output()
 		var hits []SearchHit
 		sc := bufio.NewScanner(strings.NewReader(string(out)))
 		for sc.Scan() && len(hits) < 200 {
@@ -606,7 +680,7 @@ func (m *Model) runSearch() tea.Cmd {
 			n, _ := strconv.Atoi(parts[1])
 			hits = append(hits, SearchHit{Path: parts[0], Line: n, Text: parts[2]})
 		}
-		return searchMsg{query: query, hits: hits}
+		return searchMsg{query: key, hits: hits}
 	}
 }
 
@@ -614,8 +688,56 @@ func (m *Model) runSearch() tea.Cmd {
 func (m *Model) searchKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	a := m.st.App
 	s := a.Search
+	if s.Replace != nil {
+		switch k.Type {
+		case tea.KeyEsc:
+			s.Replace = nil
+		case tea.KeyBackspace:
+			if r := []rune(*s.Replace); len(r) > 0 {
+				*s.Replace = string(r[:len(r)-1])
+			}
+		case tea.KeyRunes, tea.KeySpace:
+			*s.Replace += string(k.Runes)
+		case tea.KeyEnter:
+			files := map[string]bool{}
+			for _, r := range s.Results {
+				files[r.Path] = true
+			}
+			m.pendingX, m.pendingI = "search.replace", *s.Replace
+			m.st.Mode, m.st.Prompt = ModeConfirm, fmt.Sprintf("Replace %d matches of %q in %d files with %q?", len(s.Results), s.Query, len(files), *s.Replace)
+		}
+		return m, nil
+	}
+	switch k.String() {
+	case "alt+c":
+		s.Case = !s.Case
+		return m, m.runSearch()
+	case "alt+w":
+		s.Word = !s.Word
+		return m, m.runSearch()
+	case "alt+r":
+		s.Regex = !s.Regex
+		return m, m.runSearch()
+	case "alt+p":
+		s.EditScope = !s.EditScope
+		return m, nil
+	case "ctrl+r":
+		if len(s.Results) > 0 {
+			empty := ""
+			s.Replace = &empty
+		}
+		return m, nil
+	}
+	edit := &s.Query
+	if s.EditScope {
+		edit = &s.Scope
+	}
 	switch k.Type {
 	case tea.KeyEsc:
+		if s.EditScope {
+			s.EditScope = false
+			return m, nil
+		}
 		a.Search = nil
 	case tea.KeyUp:
 		s.Sel = clampSel(clampSel(s.Sel, len(s.Results))-1, len(s.Results))
@@ -629,6 +751,10 @@ func (m *Model) searchKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, m.appSend("Where is " + q + " used, and what does it do?")
 	case tea.KeyEnter:
+		if s.EditScope {
+			s.EditScope = false
+			return m, nil
+		}
 		if len(s.Results) == 0 {
 			return m, nil
 		}
@@ -637,17 +763,68 @@ func (m *Model) searchKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		a.Tab, a.File, a.FileLines, a.FileErr, a.FileOff, a.Preview, a.Find = 3, hit.Path, nil, "", max(0, hit.Line-4), false, s.Query
 		return m, tea.Batch(m.openFile(hit.Path), m.fetchChanged())
 	case tea.KeyBackspace:
-		if r := []rune(s.Query); len(r) > 0 {
-			s.Query = string(r[:len(r)-1])
+		if r := []rune(*edit); len(r) > 0 {
+			*edit = string(r[:len(r)-1])
 		}
 		s.Sel = 0
 		return m, m.runSearch()
 	case tea.KeyRunes, tea.KeySpace:
-		s.Query += string(k.Runes)
+		*edit += string(k.Runes)
 		s.Sel = 0
 		return m, m.runSearch()
 	}
 	return m, nil
+}
+
+// replaceAll puts with in place of the search's matches, on the lines it found them, in the files it found them in.
+func (m *Model) replaceAll(with string) tea.Cmd {
+	s := m.st.App.Search
+	repo, hits := m.st.App.Repo, append([]SearchHit(nil), s.Results...)
+	pattern := regexp.QuoteMeta(s.Query)
+	if s.Regex {
+		pattern = s.Query
+	}
+	if s.Word {
+		pattern = `\b(?:` + pattern + `)\b`
+	}
+	if !s.Case {
+		pattern = "(?i)" + pattern
+	}
+	return func() tea.Msg {
+		re, err := regexp.Compile(pattern)
+		if err != nil {
+			return appliedMsg{err: err}
+		}
+		byFile := map[string]map[int]bool{}
+		for _, h := range hits {
+			if byFile[h.Path] == nil {
+				byFile[h.Path] = map[int]bool{}
+			}
+			byFile[h.Path][h.Line] = true
+		}
+		changed := 0
+		for rel, lines := range byFile {
+			path := filepath.Join(repo, rel)
+			data, err := os.ReadFile(path)
+			if err != nil {
+				return appliedMsg{err: err}
+			}
+			rows := strings.Split(string(data), "\n")
+			for n := range lines {
+				if n >= 1 && n <= len(rows) {
+					if out := re.ReplaceAllLiteralString(rows[n-1], with); out != rows[n-1] {
+						rows[n-1] = out
+						changed++
+					}
+				}
+			}
+			info, _ := os.Stat(path)
+			if err := os.WriteFile(path, []byte(strings.Join(rows, "\n")), info.Mode().Perm()); err != nil {
+				return appliedMsg{err: err}
+			}
+		}
+		return appliedMsg{text: fmt.Sprintf("replaced on %d lines in %d files", changed, len(byFile))}
+	}
 }
 
 func (m *Model) welcomeKey(key string) (tea.Model, tea.Cmd) {
@@ -746,6 +923,12 @@ func (m *Model) runPalette(it paletteItem, query string) tea.Cmd {
 	switch {
 	case it.Action == "ask":
 		return m.appSend(query)
+	case strings.HasPrefix(it.Action, "attach:"):
+		if m.st.Prompt != "" && !strings.HasSuffix(m.st.Prompt, " ") {
+			m.st.Prompt += " "
+		}
+		m.st.Prompt += "@" + strings.TrimPrefix(it.Action, "attach:") + " "
+		return nil
 	case strings.HasPrefix(it.Action, "file:"):
 		rel := strings.TrimPrefix(it.Action, "file:")
 		a.Tab, a.File, a.FileLines, a.FileErr, a.FileOff, a.Selecting, a.Find = 3, rel, nil, "", 0, false, ""
@@ -756,7 +939,7 @@ func (m *Model) runPalette(it paletteItem, query string) tea.Cmd {
 	case "parent":
 		m.openWelcome()
 	case "new":
-		m.chatID, m.st.Chat, m.st.ChatUp = "", nil, 0
+		m.chatID, m.st.Chat, m.st.ChatUp, m.chatAdopted = "", nil, 0, true
 		a.Tab = 1
 	case "queue":
 		m.st.Prompt, a.Tab = "/queue ", 1
@@ -769,6 +952,15 @@ func (m *Model) runPalette(it paletteItem, query string) tea.Cmd {
 			}
 		}
 		return m.switchTheme(next, m.st.ThemeScope)
+	case "undo-last":
+		if r := lastApplied(m.st); r != nil {
+			m.askApply("applies.undo", r.JobID, "Undo "+clean(r.Title)+"? It reverts its merge.")
+		} else {
+			m.st.Message = "nothing applied today to undo"
+		}
+	case "hold-all":
+		m.pendingX, m.pendingI = "applies.hold-all", ""
+		m.st.Mode, m.st.Prompt = ModeConfirm, "Hold every helper's work? "+appParent(m.st)+" applies none of it until you let it."
 	case "env-up":
 		m.pendingX, m.pendingI = "env.up", "up"
 		m.st.Mode, m.st.Prompt = ModeConfirm, "Start this project's container (rig env up)?"
@@ -780,7 +972,7 @@ func (m *Model) runPalette(it paletteItem, query string) tea.Cmd {
 		a.History = &HistoryState{}
 		return m.fetchToday()
 	case "ship":
-		a.ShipScreen = &ShipState{}
+		a.ShipScreen = &ShipState{Push: m.st.AppSettings != nil && m.st.AppSettings.Ship == "push"} // Settings › Git: what you ship by
 		m.st.Ship, m.st.ShipE = nil, ""
 		return tea.Batch(m.fetchShip(), m.fetchToday())
 	case "search":
@@ -817,4 +1009,162 @@ func (m *Model) noticeNewJobs() {
 			m.st.App.NewJob = &r
 		}
 	}
+}
+
+// selectJob makes id the chosen job, as the changes tab shows it.
+func (m *Model) selectJob(id string) {
+	for i, r := range m.view.Rows("Jobs") {
+		if r.ID == id {
+			m.st.Selected["Jobs"] = i
+		}
+	}
+}
+
+// holdTarget is the work h holds from the conversation or the code tab: the newest finished helper waiting on the
+// parent's acceptance, else the newest one at work.
+func holdTarget(v *view.View) *view.Row {
+	for _, r := range v.Rows("Jobs") {
+		if r.Label == "Unverified" {
+			r := r
+			return &r
+		}
+	}
+	if jobs := activeJobs(v); len(jobs) > 0 {
+		return &jobs[0]
+	}
+	return nil
+}
+
+// quickApply is u (undo the newest applied work) and h (hold the newest unapplied work) outside the changes tab. Both
+// ask first and are confirmed with ⏎. From the reply box (lead), any other key cancels and is typed, so a message that
+// starts with u or h is not lost. It reports false when there is nothing to undo or hold.
+func (m *Model) quickApply(key string, lead bool) bool {
+	a := m.st.App
+	switch key {
+	case "u":
+		cards := appliedCards(m.view, m.st)
+		if len(cards) == 0 || m.st.Today == nil {
+			return false
+		}
+		m.askApply("applies.undo", cards[0].ID, "Undo "+clean(cards[0].Title)+"? It reverts its merge.")
+	case "h":
+		r := holdTarget(m.view)
+		if r == nil {
+			return false
+		}
+		m.pendingX, m.pendingI = "applies.hold", r.ID
+		m.st.Mode, m.st.Prompt = ModeConfirm, "Hold "+clean(r.Title)+"? "+appParent(m.st)+" will not apply it until you let it."
+	default:
+		return false
+	}
+	a.ConfirmLead = "\x00"
+	if lead {
+		a.ConfirmLead = key
+	}
+	return true
+}
+
+// leadConfirmKey answers a question quickApply asked: ⏎ yes, esc no; from the reply box any other key is typed.
+func (m *Model) leadConfirmKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
+	a := m.st.App
+	lead := a.ConfirmLead
+	a.ConfirmLead = ""
+	if k.Type == tea.KeyEnter {
+		return m.confirmKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
+	}
+	m.st.Mode, m.st.Prompt, m.pendingX, m.pendingI = ModeNormal, "", "", ""
+	if lead != "\x00" && k.Type != tea.KeyEsc {
+		m.st.Prompt = lead
+		if k.Type == tea.KeyRunes || k.Type == tea.KeySpace {
+			m.st.Prompt += string(k.Runes)
+		} else if k.Type == tea.KeyBackspace {
+			m.st.Prompt = ""
+		}
+	}
+	return m, nil
+}
+
+// repoFacts is what the first-conversation screen says about the repo: its stack, how many files git tracks, and
+// whether it has a dev container, read from the files at its root.
+func repoFacts(repo string) string {
+	has := func(name string) bool { _, err := os.Stat(filepath.Join(repo, name)); return err == nil }
+	var facts []string
+	switch {
+	case has("package.json"):
+		data, _ := os.ReadFile(filepath.Join(repo, "package.json"))
+		stack := "node"
+		for _, f := range []struct{ dep, name string }{{`"next"`, "next.js"}, {`"react"`, "react"}, {`"vue"`, "vue"}, {`"svelte"`, "svelte"}, {`"express"`, "express"}} {
+			if strings.Contains(string(data), f.dep) {
+				stack = f.name
+				break
+			}
+		}
+		facts = append(facts, stack)
+		for _, pm := range []struct{ lock, name string }{{"pnpm-lock.yaml", "pnpm"}, {"yarn.lock", "yarn"}, {"bun.lockb", "bun"}, {"package-lock.json", "npm"}} {
+			if has(pm.lock) {
+				facts = append(facts, pm.name)
+				break
+			}
+		}
+	case has("go.mod"):
+		facts = append(facts, "go")
+	case has("Cargo.toml"):
+		facts = append(facts, "rust")
+	case has("pyproject.toml") || has("requirements.txt"):
+		facts = append(facts, "python")
+	}
+	if out, err := exec.Command("git", "-C", repo, "ls-files").Output(); err == nil {
+		if n := strings.Count(string(out), "\n"); n > 0 {
+			facts = append(facts, fmt.Sprintf("%d files", n))
+		}
+	}
+	if has(".devcontainer/devcontainer.json") || has(".devcontainer.json") {
+		facts = append(facts, "dev container found")
+	}
+	return strings.Join(facts, " · ")
+}
+
+// pictureAsPNG reads a PNG, JPEG or GIF and gives it as PNG with its size, for the preview to show; nil for anything
+// else or anything too large to send to a terminal.
+func pictureAsPNG(path string) ([]byte, int, int) {
+	info, err := os.Stat(path)
+	if err != nil || info.Size() > 16<<20 {
+		return nil, 0, 0
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, 0, 0
+	}
+	img, format, err := image.Decode(bytes.NewReader(data))
+	if err != nil {
+		return nil, 0, 0
+	}
+	b := img.Bounds()
+	if format == "png" {
+		return data, b.Dx(), b.Dy()
+	}
+	var out bytes.Buffer
+	if png.Encode(&out, img) != nil {
+		return nil, 0, 0
+	}
+	return out.Bytes(), b.Dx(), b.Dy()
+}
+
+// nextPreview is the next file after the open one that the preview shows, in the repository's order.
+func nextPreview(files []string, current string) string {
+	var list []string
+	for _, f := range files {
+		if previewKind(f) != "" {
+			list = append(list, f)
+		}
+	}
+	for i, f := range list {
+		if f == current && i+1 < len(list) {
+			return list[i+1]
+		}
+	}
+	if len(list) > 0 {
+		return list[0]
+	}
+	return ""
 }
