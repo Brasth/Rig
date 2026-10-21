@@ -107,7 +107,7 @@ func (m *Model) loadFiles() tea.Cmd {
 	}
 	repo := m.st.App.Repo
 	return func() tea.Msg {
-		out, err := exec.Command("git", "-C", repo, "ls-files").Output()
+		out, err := exec.Command("git", "-C", repo, "ls-files", "--cached", "--others", "--exclude-standard").Output() // new files too, not ignored ones
 		if err != nil {
 			return filesMsg{}
 		}
@@ -609,6 +609,7 @@ func (m *Model) appTabKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "ctrl+s":
 		if a.Dirty {
 			m.saveFile()
+			return m, m.afterSave()
 		}
 	case "n", "N":
 		if a.Find != "" {
@@ -626,6 +627,18 @@ func (m *Model) appTabKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, m.closeTab()
 	case "e":
 		m.startEdit()
+	case "ctrl+t":
+		return m, m.jumpBackCmd()
+	case "g":
+		return m, m.openGit()
+	case "b":
+		if a.File != "" && a.FileLines != nil && previewKind(a.File) != "binary" {
+			a.Blame = !a.Blame
+			if a.Blame {
+				m.st.Message = "blame: who last changed each line (b hides it)"
+				return m, m.fetchBlame()
+			}
+		}
 	case "ctrl+o":
 		if a.File != "" && a.FileLines != nil {
 			a.Palette = &Palette{Symbols: true}
@@ -661,9 +674,12 @@ func (m *Model) appTabKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.st.Message = "opened " + a.File + " in your default app"
 		}
 	case "esc":
-		if a.Selecting {
+		switch {
+		case a.GitDiff != nil:
+			a.GitDiff = nil
+		case a.Selecting:
 			a.Selecting = false
-		} else {
+		default:
 			a.Tab = 1
 		}
 	}
@@ -1085,6 +1101,7 @@ func (m *Model) runPalette(it paletteItem, query string) tea.Cmd {
 			m.stashBuffer() // its unsaved changes wait in its tab
 		}
 		a.Tabs, a.Editing, a.Dirty, a.TreeFocus, a.CodeAsk, a.EdSel = addTab(a.Tabs, rel), false, false, false, nil, false
+		a.GitDiff = nil
 		a.Tab, a.File, a.FileLines, a.FileErr, a.FileOff, a.Selecting, a.Find = 3, rel, nil, "", 0, false, ""
 		a.Preview = previewKind(rel) != ""
 		if m.restoreBuffer(rel) {

@@ -69,12 +69,22 @@ type AppState struct {
 	Undo, Redo           []snapshot          // the edits, for ⌃z and ⌃y
 	Bufs                 map[string]*codeBuf // other tabs' unsaved changes
 	CodeAsk              *codeAsk            // go to line, find, a new file or a new name, asked on the code tab's last row
-	findAt               pos                 // where find last stopped, while not editing
-	renameFrom           string              // the file or folder the rename question is about
-	CurLine, CurCol      int                 // the editing cursor, in runes
-	FileCRLF             bool                // the file ends its lines with CRLF
-	FileTruncated        bool                // only its first lines were read, so it is not edited here
-	Diff                 *view.JobDiff       // the changes tab's job, its diff
+	GitView              bool                // the side bar shows git (g) instead of the files
+	GitSel               int
+	Git                  *gitState
+	GitDiff              *gitDiffView // a file's diff, shown in place of the file
+	Blame                bool         // b: who last changed each line
+	BlameFor             string
+	BlameLines           []blameLine
+	Gutter               map[int]byte // the open file's lines changed since the last commit
+	GutterFor            string
+	pendingAt            *jumpTo       // where the cursor goes once the file being opened is read
+	findAt               pos           // where find last stopped, while not editing
+	renameFrom           string        // the file or folder the rename question is about
+	CurLine, CurCol      int           // the editing cursor, in runes
+	FileCRLF             bool          // the file ends its lines with CRLF
+	FileTruncated        bool          // only its first lines were read, so it is not edited here
+	Diff                 *view.JobDiff // the changes tab's job, its diff
 	DiffID               string
 	DiffFile             int
 	DiffOff              int

@@ -82,6 +82,9 @@ func (m *Model) openTree(path string, dir bool) tea.Cmd {
 // treeKey is the explorer's keys after ⌃b: ↑↓ move, ⏎ opens, ←→ fold, / filters, esc goes back to the code.
 func (m *Model) treeKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	a := m.st.App
+	if a.GitView {
+		return m.gitKey(k)
+	}
 	if a.CodeAsk != nil {
 		return m.askKey(k)
 	}
@@ -166,6 +169,8 @@ func (m *Model) treeKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		cmd := m.openTree(r.path, false)
 		a.TreeFocus = false
 		return m, cmd
+	case "g":
+		return m, m.openGit()
 	case "esc", "ctrl+b":
 		a.TreeFocus = false
 		if a.TreeFilter != "" && k.String() == "esc" {

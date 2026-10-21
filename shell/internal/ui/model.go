@@ -246,6 +246,7 @@ type Model struct {
 	boxFrom     int       // where in the box's text it went down
 	clickAt     time.Time // the last press, for a double click
 	clickN      int       // presses in a row at one place: 2 a double click, 3 a triple one
+	jumpBack    []jumpTo  // where go to definition came from, for ⌃t
 	clicks      int
 	clickX      int
 	clickY      int
@@ -988,6 +989,37 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.appOn() && m.st.ChatParent != "" && m.st.ChatParent != m.cmdsFor {
 			return m, m.fetchParentCommands(m.st.ChatParent) // the / menu offers this parent's skills and commands
 		}
+	case definitionMsg:
+		if m.appOn() {
+			return m, m.afterDefinition(msg)
+		}
+	case gitStatusMsg:
+		if m.appOn() {
+			m.st.App.Git = msg.state
+			if msg.state.branch != "" {
+				m.st.App.Branch = msg.state.branch
+			}
+		}
+	case blameMsg:
+		if a := m.st.App; m.appOn() && msg.file == a.File {
+			if msg.err != nil {
+				a.Blame, m.st.Message = false, "no blame for "+msg.file+": "+clean(msg.err.Error())
+			} else {
+				a.BlameFor, a.BlameLines = msg.file, msg.lines
+			}
+		}
+	case gutterMsg:
+		if a := m.st.App; m.appOn() && msg.file == a.File {
+			a.GutterFor, a.Gutter = msg.file, msg.marks
+		}
+	case gitDoneMsg:
+		if m.appOn() {
+			return m, m.afterGit(msg)
+		}
+	case gitDiffMsg:
+		if m.appOn() {
+			m.st.App.GitDiff = msg.view
+		}
 	case modelsMsg:
 		m.afterModels(msg)
 	case parentCmdsMsg:
@@ -1105,6 +1137,14 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if msg.err != nil {
 				a.FileErr = msg.err.Error()
 			}
+			cmds := []tea.Cmd{m.fetchGutter()}
+			if a.Blame {
+				cmds = append(cmds, m.fetchBlame())
+			}
+			if to := a.pendingAt; to != nil && to.file == msg.path && msg.err == nil {
+				a.pendingAt = nil
+				m.goTo(to.at) // go to definition: the cursor on the name
+			}
 			if msg.image != nil && m.st.Logos && msg.w > 0 && msg.h > 0 {
 				// shown inline: as wide as the column allows, as tall as its shape needs (a cell is about twice as tall as wide)
 				cols := min(84, m.w-8, msg.w/8+1)
@@ -1116,6 +1156,7 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					a.ImageCols, a.ImageRows = cols, rows
 				}
 			}
+			return m, tea.Batch(cmds...) // the lines changed since the last commit, and who wrote each
 		}
 	case themeMsg:
 		switch {
@@ -1693,6 +1734,8 @@ func (m *Model) confirmKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "file.delete":
 			m.deleteFile(id)
 			return m, nil
+		case "git.discard":
+			return m, m.discard(id)
 		case "tab.discard":
 			m.pendingX = "tab.discard"
 			cmd := m.closeTab()

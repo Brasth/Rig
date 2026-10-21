@@ -3,10 +3,12 @@ package ui
 import (
 	"encoding/hex"
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
@@ -128,8 +130,42 @@ func underlineHovered(line string, marks []zoneMark, zones []hitZone, hx, hy int
 	if from < 0 {
 		return line
 	}
+	// only the text is underlined, as a link is: not the padding around it, which would draw a rule across the row
+	from, to = textSpan(line, from, to)
+	if from >= to {
+		return line
+	}
 	inner := sgrSeq.ReplaceAllStringFunc(line[from:to], func(s string) string { return s + "\x1b[4m" })
 	return line[:from] + "\x1b[4m" + inner + "\x1b[24m" + line[to:]
+}
+
+// ansiSeq is an escape sequence in a drawn line: a CSI one (colours, styles) or an OSC or APC one.
+var ansiSeq = regexp.MustCompile(`\x1b(?:\[[0-9;?]*[ -/]*[@-~]|[\]_][^\x1b\x07]*(?:\x07|\x1b\\))`)
+
+// textSpan narrows line[from:to] to its visible text: from its first character that is not a space to the end of its
+// last one, stepping over escape sequences.
+func textSpan(line string, from, to int) (int, int) {
+	first, last := -1, -1
+	for i := from; i < to; {
+		if line[i] == '\x1b' {
+			if loc := ansiSeq.FindStringIndex(line[i:to]); loc != nil && loc[0] == 0 {
+				i += loc[1]
+				continue
+			}
+		}
+		r, size := utf8.DecodeRuneInString(line[i:])
+		if r != ' ' {
+			if first < 0 {
+				first = i
+			}
+			last = i + size
+		}
+		i += size
+	}
+	if first < 0 {
+		return from, from
+	}
+	return first, last
 }
 
 // innermost is the deepest zone holding the cell, or -1.
@@ -202,6 +238,16 @@ func (m *Model) mouse(e tea.MouseMsg) (tea.Model, tea.Cmd) {
 		// a middle click on a tab closes it, as in a browser or an editor
 		if id, _ := hitAt(m.zones, e.X, e.Y); strings.HasPrefix(id, "row:tabfile:") {
 			return m, m.closeTabFile(strings.TrimPrefix(id, "row:tabfile:"))
+		}
+		return m, nil
+	case e.Action == tea.MouseActionPress && e.Button == tea.MouseButtonLeft && (e.Ctrl || e.Alt):
+		// ⌃ or ⌥ click on a name: go to where it is defined
+		if _, ok := m.codeAt(e.X, e.Y); ok || m.codeZone(e.X, e.Y) {
+			m.textPress(e.X, e.Y, false)
+			m.codeDrag = false
+			if m.st.App.Editing {
+				return m, m.goToDefinition()
+			}
 		}
 		return m, nil
 	case e.Action == tea.MouseActionPress && e.Button == tea.MouseButtonLeft:
@@ -376,6 +422,12 @@ func (m *Model) textPress(x, y int, shift bool) bool {
 	}
 	m.codeDrag, a.EdAnchor = true, at
 	return true
+}
+
+// codeZone is whether (x, y) is on a line of the open file.
+func (m *Model) codeZone(x, y int) bool {
+	z, ok := m.zoneAt(x, y)
+	return ok && strings.HasPrefix(z.id, "text:code:")
 }
 
 // codeAt is the place in the file being edited under (x, y): text:code:<line> marks a line of it.
@@ -706,6 +758,27 @@ func (m *Model) clickRow(list, at string) (tea.Model, tea.Cmd) {
 				return m, m.openTree(r.path, r.dir)
 			}
 		}
+	case "side":
+		// the side bar's heads: the files, or git
+		if at == "git" {
+			return m, m.openGit()
+		}
+		a.GitView, a.GitDiff = false, nil
+	case "git":
+		// a changed file shows its diff; a click on the chosen one again stages or unstages it
+		rows := gitRows(a)
+		if i >= len(rows) {
+			return m, nil
+		}
+		again := a.TreeFocus && a.GitView && a.GitSel == i
+		a.GitView, a.TreeFocus, a.GitSel = true, true, i
+		if rows[i].kind == "commit" {
+			return m, nil
+		}
+		if again {
+			return m, m.toggleStage(rows[i])
+		}
+		return m, m.fetchGitDiff(rows[i].file.path, rows[i].kind == "staged")
 	}
 	return m, nil
 }

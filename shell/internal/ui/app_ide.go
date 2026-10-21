@@ -469,6 +469,9 @@ func (m *Model) askKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 				a.FileOff = max(0, n-3)
 				a.findAt = pos{n, 0}
 			}
+		case "commit":
+			a.CodeAsk = nil
+			return m, m.commit(q.text)
 		case "new", "rename":
 			a.CodeAsk = nil
 			return m, m.fileOp(q.kind, q.text)
@@ -591,12 +594,19 @@ func (m *Model) editFileKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 change:
+	switch key {
+	case "f12":
+		return m, m.goToDefinition()
+	case "ctrl+t":
+		return m, m.jumpBackCmd()
+	}
 	if m.ideKey(k) {
 		return m, nil
 	}
 	switch key {
 	case "ctrl+s":
 		m.saveFile()
+		return m, m.afterSave()
 	case "esc":
 		if a.EdSel {
 			a.EdSel = false
@@ -722,7 +732,7 @@ func editKeys(a *AppState) [][2]string {
 		}
 		return [][2]string{{"⏎", "ok"}, {"esc", "cancel"}}
 	}
-	return [][2]string{{"⌃s", "save"}, {"⌃z", "undo"}, {"⌃f", "find"}, {"⌃r", "replace"}, {"⌃o", "symbol"}, {"⌃/", "comment"}, {"esc", "done"}}
+	return [][2]string{{"⌃s", "save"}, {"⌃z", "undo"}, {"⌃f", "find"}, {"⌃r", "replace"}, {"F12", "definition"}, {"⌃/", "comment"}, {"esc", "done"}}
 }
 
 // inRepo is a path the explorer may make, rename or delete: relative, inside the repository, not in .git.
