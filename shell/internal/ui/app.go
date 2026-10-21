@@ -25,6 +25,7 @@ type AppState struct {
 	Tab                  int  // 1 conversation, 2 changes, 3 code
 	Panel                bool // the agents panel (Tab)
 	PanelSel             int  // the selected agent in the panel
+	PanelHidden          bool // ⇥ hid the docked panel (160 columns and up)
 	Palette              *Palette
 	Welcome              bool // the "Who do you want to talk to?" screen
 	WelcomeSel           int
@@ -50,8 +51,22 @@ type AppState struct {
 	SelTo                int
 	Finding              bool // /: typing a word to find in the file
 	Find                 string
-	Changed              map[string]string // the files each active helper is changing, by path, to its worker
-	Diff                 *view.JobDiff     // the changes tab's job, its diff
+	Changed              map[string]string       // the files each active helper is changing, by path, to its worker
+	Added                map[string]bool         // of those, the ones new in the helper's copy
+	ChangedLines         map[string]map[int]bool // and the lines of the file here each helper's change touches
+	Tabs                 []string                // the code tab's open files
+	TreeOpen             map[string]bool         // explorer folders opened or closed by hand
+	TreeFocus            bool                    // ⌃b: the keys move in the explorer
+	TreeSel              int
+	TreeFilter           string
+	TreeFiltering        bool
+	Editing              bool          // e: the file is being edited here
+	Dirty                bool          // it has changes not yet saved (⌃s)
+	editEsc              bool          // esc was pressed once with changes not saved
+	CurLine, CurCol      int           // the editing cursor, in runes
+	FileCRLF             bool          // the file ends its lines with CRLF
+	FileTruncated        bool          // only its first lines were read, so it is not edited here
+	Diff                 *view.JobDiff // the changes tab's job, its diff
 	DiffID               string
 	DiffFile             int
 	DiffOff              int
@@ -160,6 +175,13 @@ func (st State) washed(lines []string) []string {
 	}
 	return out
 }
+
+// panelWidth is the agents panel's width, docked or floating.
+const panelWidth = 46
+
+// panelDocks: the window is wide enough for the panel beside the main view (the design's 160 columns), and ⇥ has not
+// hidden it.
+func panelDocks(st State, w int) bool { return w >= 160 && !st.App.PanelHidden }
 
 // layer marks an overlay's lines, so a click outside it closes it.
 func layer(st State, name string, lines []string) []string {
@@ -361,6 +383,12 @@ func appBody(v *view.View, st State, w, h int) []string {
 	if ruled {
 		body = h - 4
 	}
+	// 160 columns and up, the panel stays docked beside the main view, as in the window; ⇥ hides it
+	docked := panelDocks(st, w) && a.Search == nil && !previewing
+	mw := w
+	if docked {
+		mw = w - panelWidth
+	}
 	var main []string
 	var keys [][2]string
 	footer := ""
@@ -368,9 +396,10 @@ func appBody(v *view.View, st State, w, h int) []string {
 	case a.Search != nil:
 		main, footer = searchScreen(st, w, body)
 	case a.Thread != "":
-		main, keys = threadBody(st, w, body)
+		main, keys = threadBody(st, mw, body)
 	case a.Tab == 2:
-		main, footer = changesScreen(v, st, w, body)
+		main, keys = changesScreen(v, st, mw, body)
+		footer = splitHints(st, keys, AppRightKeys, w)
 	case a.Tab == 3 && a.Preview && previewKind(a.File) != "" && a.FileErr == "":
 		// the design's preview is a page of its own: the file rendered in the middle, its keys at the foot
 		lines = []string{fit(rigBarLeft(st, v)+st.faint(" › preview"), w), fit("", w)}
@@ -385,12 +414,19 @@ func appBody(v *view.View, st State, w, h int) []string {
 			keys = [][2]string{{"⏎", "keep"}, {"esc", "all rows"}}
 		}
 	case a.Tab == 3:
-		main, footer = codeScreen(st, w, body)
-	case st.Chat == nil && st.ChatE == "":
-		main, keys = emptyBody(v, st, w, body)
-	default:
-		main, keys = conversationBody(v, st, w, body)
+		main, keys = codeScreen(v, st, mw, body)
 		footer = splitHints(st, keys, AppRightKeys, w)
+	case st.Chat == nil && st.ChatE == "":
+		main, keys = emptyBody(v, st, mw, body)
+	default:
+		main, keys = conversationBody(v, st, mw, body)
+		footer = splitHints(st, keys, AppRightKeys, w)
+	}
+	if docked {
+		side := layer(st, "dock", agentsPanel(v, st, panelWidth, len(main), false))
+		for i := range main {
+			main[i] = fit(main[i], mw) + side[i]
+		}
 	}
 
 	var modal []string
@@ -435,11 +471,12 @@ func appBody(v *view.View, st State, w, h int) []string {
 		mw := lipgloss.Width(modal[0])
 		overlay(lines, modal, (w-mw)/2, modalY)
 	}
-	if a.Panel && st.Mode != ModeConfirm {
-		// the design's panel: from under the top bar to the bottom, its own keys at its foot, the screen faded behind
-		pw := min(46, w/2)
+	if a.Panel && !docked && st.Mode != ModeConfirm {
+		// under 160 columns the design's panel floats: a card over the faded screen, a row and two columns clear of
+		// its edges
+		pw := min(panelWidth, w/2)
 		copy(lines[1:], st.washed(lines[1:]))
-		overlay(lines, layer(st, "panel", agentsPanel(v, st, pw, h-1)), w-pw, 1)
+		overlay(lines, layer(st, "panel", agentsPanel(v, st, pw, h-3, true)), w-pw-2, 2)
 	}
 	return lines
 }
@@ -475,7 +512,11 @@ func topBar(v *view.View, st State, w int) string {
 	}
 	mid := tab(1, "conversation", "") + "     " + tab(2, "changes", changes) + "     " + tab(3, "code", "")
 	working := len(activeJobs(v))
-	right := st.zone("key:⌃k", st.dim("⌃k")) + "   " + st.hint([2]string{"⇥", "panel"}) + "   "
+	panel := "panel"
+	if panelDocks(st, w) {
+		panel = "hide panel"
+	}
+	right := st.zone("key:⌃k", st.dim("⌃k")) + "   " + st.hint([2]string{"⇥", panel}) + "   "
 	if working > 0 {
 		right = st.zone("key:⇥", st.paint(colAccent, "●")+" "+st.dim(fmt.Sprintf("%d working", working))) + "   " + right
 	}
@@ -792,8 +833,11 @@ func WelcomeItems(st State) []PickItem {
 }
 
 // agentsPanel is the design's panel on Tab: done today, the agents at work, the queue, and the sandbox.
-func agentsPanel(v *view.View, st State, pw, h int) []string {
+func agentsPanel(v *view.View, st State, pw, h int, float bool) []string {
 	iw := pw - 5
+	if float {
+		iw = pw - 6 // a card: its border, and the same room inside
+	}
 	parent := appParent(st)
 	head := func(title, right string) string {
 		t := st.bold(title)
@@ -882,8 +926,15 @@ func agentsPanel(v *view.View, st State, pw, h int) []string {
 	if st.Workspace != nil && st.Workspace.Context != "" {
 		foot = append(foot, st.paint(colGreen, "●")+" "+st.faint("sandbox "+lastWord(st.Workspace.Context)))
 	}
-	keys := st.hint([2]string{"⏎", "watch thread"}) + "   " + st.hint([2]string{"s", "stop"}) + "   " + st.hint([2]string{"⇥", "close"})
+	shut := "hide"
+	if float {
+		shut = "close"
+	}
+	keys := st.hint([2]string{"⏎", "watch thread"}) + "   " + st.hint([2]string{"s", "stop"}) + "   " + st.hint([2]string{"⇥", shut})
 	room := h - len(foot) - 2
+	if float {
+		room -= 2
+	}
 	if len(lines) > room {
 		lines = lines[:room]
 	}
@@ -891,6 +942,15 @@ func agentsPanel(v *view.View, st State, pw, h int) []string {
 		lines = append(lines, "")
 	}
 	lines = append(lines, foot...)
+	if float {
+		// the design's floating card: rounded, over the faded screen, its keys under a rule at its foot
+		var in []string
+		for _, l := range lines {
+			in = append(in, "  "+fit(l, iw)+"  ")
+		}
+		in = append(in, st.paint(colBorder, strings.Repeat("─", pw-2)), "  "+keys)
+		return roundBox(st, in, pw, false)
+	}
 	edge := st.paint(colBorder, "│")
 	out := make([]string, 0, h)
 	for _, l := range lines {
@@ -1108,6 +1168,7 @@ func helpBox(st State, hw int) []string {
 		{"PgUp PgDn", "scroll the conversation"},
 		{"click", "does what its key would; the wheel scrolls"},
 		{"drag", "selects text; letting go copies it"},
+		{"⇧ ← →", "select in the box; a click there places the cursor"},
 		{"esc", "close, or clear the box"},
 		{"⌃c", "clear the box, or quit"},
 	}

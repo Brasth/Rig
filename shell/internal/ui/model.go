@@ -236,7 +236,12 @@ type Model struct {
 	zones       []hitZone // where the last frame's clickable places are (mouse.go)
 	plain       []string  // the last frame's text, for copying a selection
 	press, sel  *textSel  // where the button went down, and the text dragged over since
-	hoverX      int       // the pointer, for the zone drawn underlined
+	boxDrag     bool      // the button went down in the reply box: dragging selects its text
+	boxFrom     int       // where in the box's text it went down
+	clickAt     time.Time // the last press, for a double click
+	clickX      int
+	clickY      int
+	hoverX      int // the pointer, for the zone drawn underlined
 	hoverY      int
 }
 
@@ -1053,7 +1058,7 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case changedMsg:
 		if m.appOn() {
-			m.st.App.Changed = msg.files
+			m.st.App.Changed, m.st.App.Added, m.st.App.ChangedLines = msg.files, msg.added, msg.lines
 		}
 	case searchMsg:
 		if m.appOn() && m.st.App.Search != nil && m.st.App.Search.key() == msg.query {
@@ -1071,6 +1076,7 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.appOn() && msg.path == m.st.App.File {
 			a := m.st.App
 			a.FileLines, a.FileErr, a.ImageCols, a.ImageRows = msg.lines, "", 0, 0
+			a.FileCRLF, a.FileTruncated, a.Dirty = msg.crlf, msg.truncated, false
 			if msg.err != nil {
 				a.FileErr = msg.err.Error()
 			}

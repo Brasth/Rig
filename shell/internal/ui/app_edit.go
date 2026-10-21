@@ -1,10 +1,12 @@
 package ui
 
 import (
+	"fmt"
 	"strings"
 	"unicode"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 // The reply box edits as codex's and grok's do: ←→ move through the text, ⌥←→ (⌥b ⌥f, ⌃←→) a word at a time, ⌃a or
@@ -20,11 +22,20 @@ func (st State) caret() int {
 
 // draftRows is the box's text as rows of at most room cells: its lines, wrapped, with the cursor drawn in its row. With
 // colour the cursor is a block on the character under it, as codex and grok draw theirs, so the text keeps its place;
-// without, a bar. A draft taller than most rows shows the rows around the cursor.
-func (st State) draftRows(room, most int) []string {
+// draftRow is one row of the box's text as drawn, and where it starts in the text, for a click on it.
+type draftRow struct {
+	text       string
+	start, end int // its runes in the draft
+}
+
+// draftRows is the box's text as rows of at most room cells: its lines, wrapped, with the cursor drawn in its row and
+// the selection lit. With colour the cursor is a block on the character under it, as codex and grok draw theirs, so
+// the text keeps its place; without, a bar. A draft taller than most rows shows the rows around the cursor.
+func (st State) draftRows(room, most int) []draftRow {
 	room = max(2, room-1) // a cell for the cursor after a full row
 	r, c := []rune(st.Prompt), st.caret()
-	var rows []string
+	s0, s1 := st.selection()
+	var rows []draftRow
 	at := 0 // the row the cursor is on
 	for line := 0; line <= len(r); {
 		end := line
@@ -33,12 +44,11 @@ func (st State) draftRows(room, most int) []string {
 		}
 		for p := line; ; p += room { // a long line in pieces of room
 			q := min(p+room, end)
+			col := -1
 			if c >= p && (c < q || (c == q && q == end)) {
-				at = len(rows)
-				rows = append(rows, cursorIn(st, r[p:q], c-p))
-			} else {
-				rows = append(rows, string(r[p:q]))
+				at, col = len(rows), c-p
 			}
+			rows = append(rows, draftRow{drawRow(st, r[p:q], col, s0-p, s1-p), p, q})
 			if q == end {
 				break
 			}
@@ -52,32 +62,63 @@ func (st State) draftRows(room, most int) []string {
 	return rows
 }
 
-// cursorIn draws the cursor at col in a row of the draft.
-func cursorIn(st State, row []rune, col int) string {
-	if !st.Styled {
-		return string(row[:col]) + "▏" + string(row[col:])
+// selection is the box's selected runes, [s0, s1); empty when nothing is selected.
+func (st State) selection() (int, int) {
+	if !st.PromptSel {
+		return 0, 0
 	}
-	under, rest := " ", ""
-	if col < len(row) {
-		under, rest = string(row[col]), string(row[col+1:])
-	}
-	return string(row[:col]) + "\x1b[7m" + under + "\x1b[27m" + rest
+	n := len([]rune(st.Prompt))
+	a, c := min(max(0, st.PromptAnchor), n), st.caret()
+	return min(a, c), max(a, c)
 }
 
-// boxRows is the reply box's content: the › and the draft's rows under it, or the placeholder.
+// drawRow draws a row of the draft: the selected runes in [s0, s1) lit, and the cursor at col (none when col < 0).
+func drawRow(st State, row []rune, col, s0, s1 int) string {
+	sel := "#c7d2fe"
+	if !lightGround() {
+		sel = "#3f3f8f"
+	}
+	var b strings.Builder
+	for i := 0; i <= len(row); i++ {
+		ch := " "
+		if i < len(row) {
+			ch = string(row[i])
+		} else if i != col {
+			break
+		}
+		switch {
+		case i == col && !st.Styled:
+			b.WriteString("▏")
+			if i < len(row) {
+				b.WriteString(ch)
+			}
+		case i == col:
+			b.WriteString("\x1b[7m" + ch + "\x1b[27m")
+		case i >= s0 && i < s1 && st.Styled:
+			b.WriteString(lipgloss.NewStyle().Background(lipgloss.Color(sel)).Foreground(lipgloss.Color(colText)).Render(ch))
+
+		default:
+			b.WriteString(ch)
+		}
+	}
+	return b.String()
+}
+
+// boxRows is the reply box's content: the › and the draft's rows under it, or the placeholder. Each row's text is a
+// zone a click places the cursor in.
 func boxRows(st State, w int, placeholder string) []string {
 	if st.Prompt == "" {
-		return []string{" " + st.faint("›") + " ▏" + st.faint(placeholder)}
+		return []string{" " + st.faint("›") + " " + st.zone("text:box:0:0", "▏"+st.faint(placeholder))}
 	}
-	rows := st.draftRows(w-7, 8)
-	for i := range rows {
+	var out []string
+	for i, r := range st.draftRows(w-7, 8) {
 		lead := "   "
 		if i == 0 {
 			lead = " " + st.faint("›") + " "
 		}
-		rows[i] = lead + rows[i]
+		out = append(out, lead+st.zone(fmt.Sprintf("text:box:%d:%d", r.start, r.end), r.text+" "))
 	}
-	return rows
+	return out
 }
 
 // lineOf is where rune c of r is: its line's start and end, and its column.
@@ -113,7 +154,7 @@ func (m *Model) moveLine(step int) bool {
 // syncCaret puts the cursor at the end of a box that something other than the editor filled or emptied.
 func (m *Model) syncCaret() {
 	if m.st.Prompt != m.edited {
-		m.st.PromptBack, m.edited = 0, m.st.Prompt
+		m.st.PromptBack, m.edited, m.st.PromptSel = 0, m.st.Prompt, false
 	}
 }
 
@@ -123,11 +164,26 @@ func (m *Model) setPrompt(text string, caret int) {
 	m.st.PromptBack = len([]rune(text)) - max(0, min(caret, len([]rune(text))))
 }
 
-// insert types s at the cursor.
+// insert types s at the cursor, in place of the selection when there is one.
 func (m *Model) insert(s string) {
 	r, c := []rune(m.st.Prompt), m.st.caret()
-	m.histAt = -1 // an edited message is a draft again
-	m.setPrompt(string(r[:c])+s+string(r[c:]), c+len([]rune(s)))
+	from, to := c, c
+	if s0, s1 := m.st.selection(); s1 > s0 {
+		from, to = s0, s1
+	}
+	m.histAt, m.st.PromptSel = -1, false // an edited message is a draft again
+	m.setPrompt(string(r[:from])+s+string(r[to:]), from+len([]rune(s)))
+}
+
+// selectTo moves the cursor to c with the selection following it, from where it was when the selection began.
+func (m *Model) selectTo(c int) {
+	if !m.st.PromptSel {
+		m.st.PromptSel, m.st.PromptAnchor = true, m.st.caret()
+	}
+	m.setPrompt(m.st.Prompt, c)
+	if m.st.PromptAnchor == m.st.caret() {
+		m.st.PromptSel = false
+	}
 }
 
 // wordLeft and wordRight are where ⌥← and ⌥→ go from c: the start of this or the previous word, the end of the next.
@@ -151,12 +207,70 @@ func wordRight(r []rune, c int) int {
 	return c
 }
 
-// editKey moves through or changes the box's text; false when k is not one of its keys.
+// editKey moves through or changes the box's text; false when k is not one of its keys. With Shift the arrows, Home
+// and End select; typing, ⌫ and Delete replace or remove what is selected.
 func (m *Model) editKey(k tea.KeyMsg) bool {
 	r, c := []rune(m.st.Prompt), m.st.caret()
+	s0, s1 := m.st.selection()
 	cut := func(from, to int) {
-		m.histAt = -1
+		m.histAt, m.st.PromptSel = -1, false
 		m.setPrompt(string(r[:from])+string(r[to:]), from)
+	}
+	switch k.String() {
+	case "shift+left":
+		m.selectTo(max(0, c-1))
+		return true
+	case "shift+right":
+		m.selectTo(min(len(r), c+1))
+		return true
+	case "ctrl+shift+left", "alt+shift+left":
+		m.selectTo(wordLeft(r, c))
+		return true
+	case "ctrl+shift+right", "alt+shift+right":
+		m.selectTo(wordRight(r, c))
+		return true
+	case "shift+home":
+		start, _ := lineOf(r, c)
+		m.selectTo(start)
+		return true
+	case "shift+end":
+		_, end := lineOf(r, c)
+		m.selectTo(end)
+		return true
+	case "shift+up", "shift+down":
+		start, end := lineOf(r, c)
+		switch {
+		case k.String() == "shift+up" && start > 0:
+			ps, _ := lineOf(r, start-1)
+			m.selectTo(ps + min(c-start, start-1-ps))
+		case k.String() == "shift+up":
+			m.selectTo(0)
+		case end < len(r):
+			_, ne := lineOf(r, end+1)
+			m.selectTo(end + 1 + min(c-start, ne-end-1))
+		default:
+			m.selectTo(len(r))
+		}
+		return true
+	}
+	if s1 > s0 {
+		switch k.String() {
+		case "backspace", "delete", "ctrl+d", "ctrl+w", "alt+backspace", "alt+d", "ctrl+u":
+			cut(s0, s1) // what is selected goes
+			return true
+		case "left":
+			m.st.PromptSel = false
+			m.setPrompt(m.st.Prompt, s0)
+			return true
+		case "right":
+			m.st.PromptSel = false
+			m.setPrompt(m.st.Prompt, s1)
+			return true
+		}
+	}
+	switch k.String() {
+	case "left", "right", "alt+left", "ctrl+left", "alt+b", "alt+right", "ctrl+right", "alt+f", "home", "ctrl+a", "end", "ctrl+e":
+		m.st.PromptSel = false
 	}
 	switch k.String() {
 	case "left", "ctrl+b":

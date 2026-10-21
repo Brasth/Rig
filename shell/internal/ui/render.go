@@ -39,6 +39,8 @@ type State struct {
 	Mode           Mode
 	Prompt         string // confirm question or input draft
 	PromptBack     int    // the app's box: how many runes of the draft are after the cursor
+	PromptSel      bool   // and some of it is selected, from PromptAnchor to the cursor
+	PromptAnchor   int
 	Message        string
 	Stale          string // set when the last refresh failed; shown until one succeeds
 	Loading        bool
