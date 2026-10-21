@@ -469,6 +469,9 @@ func (m *Model) askKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 				a.FileOff = max(0, n-3)
 				a.findAt = pos{n, 0}
 			}
+		case "commit":
+			a.CodeAsk = nil
+			return m, m.commit(q.text)
 		case "new", "rename":
 			a.CodeAsk = nil
 			return m, m.fileOp(q.kind, q.text)
@@ -597,6 +600,7 @@ change:
 	switch key {
 	case "ctrl+s":
 		m.saveFile()
+		return m, m.afterSave()
 	case "esc":
 		if a.EdSel {
 			a.EdSel = false

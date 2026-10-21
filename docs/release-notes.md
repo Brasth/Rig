@@ -3,6 +3,10 @@
 
 
 
+## Git in the code tab: blame, change marks, source control (2026-10-21)
+
+The code tab now has git as an IDE does. The gutter marks the lines added, changed and removed since the last commit. `b` shows blame beside the line numbers (who last changed each line and when) and the cursor line's author, age and commit in the status bar. `g`, or a click on `GIT` above the explorer, turns the side bar into source control: the branch (ahead and behind its upstream), staged and changed files, and the recent commits; `space` stages or unstages, `a` stages everything, `⏎` shows a file's diff, `u` discards after a question, `c` commits what is staged, and `p` pushes through the ship screen. Hover now underlines only the text of a button or a file name, not the padding around it.
+
 ## Switching parent keeps the conversation (2026-10-21)
 
 Switching parent used to start a new conversation, because one CLI cannot resume another's session. Now the conversation goes on: the new parent takes it over with your next message (`chat.send` with the session and another `parent`), told once what was said since it last took part (the last 12 messages, each shortened), and from then on its own session carries it. Each parent keeps its own native session, so switching back resumes it. The transcript marks each switch (a `switch` entry) and names the parent of each answer (`parent` on each entry); the shell shows a divider and, with several parents, who wrote what. On opening, `rig shell` picks up the newest conversation whichever parent had it. `/new` starts a clean one.

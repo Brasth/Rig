@@ -151,9 +151,11 @@ func fileMark(st State, path string) string {
 // explorer is the left column.
 func explorer(st State, w, h int) []string {
 	a := st.App
-	head := " " + st.bold("EXPLORER")
+	if a.GitView {
+		return gitPane(st, w, h)
+	}
 	repo := st.faint(filepath.Base(a.Repo))
-	lines := []string{spread(head, "", repo+" ", w)}
+	lines := []string{spread(sideHeads(st, w-lipgloss.Width(repo)-1), "", repo+" ", w)}
 	filter := st.faint("/ filter files")
 	switch {
 	case a.TreeFiltering:
@@ -319,7 +321,27 @@ func statusBar(v *view.View, st State, w int) string {
 	a := st.App
 	left := "   "
 	if a.Branch != "" {
-		left += "⎇ " + a.Branch + "   "
+		left += "⎇ " + a.Branch
+		if g := a.Git; g != nil && g.branch == a.Branch {
+			if g.ahead > 0 {
+				left += fmt.Sprintf(" ↑%d", g.ahead)
+			}
+			if g.behind > 0 {
+				left += fmt.Sprintf(" ↓%d", g.behind)
+			}
+		}
+		left += "   "
+	}
+	if a.File != "" && a.FileLines != nil {
+		// blame on: who last changed the cursor's line, as an IDE's status bar says
+		line, _ := cursorLine(a)
+		if b := blameAt(a, line); b != nil {
+			who := b.author + ", " + ago(st.Now, b.at) + " · " + b.summary
+			if strings.Trim(b.hash, "0") == "" {
+				who = "not committed yet"
+			}
+			left += fit(clean(who), max(10, w/3)) + "   "
+		}
 	}
 	if n := len(activeJobs(v)); n > 0 {
 		word := "agents"
@@ -512,12 +534,22 @@ func codeRows(st State, w, room int) []string {
 			text = withCursor(st, text, displayCol(a.FileLines[i], a.CurCol, tabSize(st)))
 		}
 		gutter := " "
-		if marks[i+1] {
+		switch {
+		case marks[i+1]:
 			gutter = st.paint(agentColor(who), "▎")
+		case a.GutterFor == a.File && a.Gutter[i] == 'A':
+			gutter = st.paint(colGreen, "▎") // added since the last commit
+		case a.GutterFor == a.File && a.Gutter[i] == 'M':
+			gutter = st.paint(colAccent, "▎") // changed
+		case a.GutterFor == a.File && a.Gutter[i] == 'D':
+			gutter = st.paint(colRed, "▁") // lines removed after this one
+		}
+		if cell := blameCell(st, i); cell != "" {
+			gutter += cell
 		}
 		if a.Editing || canEdit(a) {
 			// a click in the text puts the cursor there, and starts editing
-			text = st.zone(fmt.Sprintf("text:code:%d", i), text+strings.Repeat(" ", max(0, w-6-ansi.StringWidth(text))))
+			text = st.zone(fmt.Sprintf("text:code:%d", i), text+strings.Repeat(" ", max(0, w-6-lipgloss.Width(gutter)+1-ansi.StringWidth(text))))
 		}
 		row := gutter + st.paint("#c3c5ce", fmt.Sprintf("%3d  ", i+1)) + text
 		row = fit(row, w)
@@ -584,12 +616,17 @@ func withCursor(st State, line string, col int) string {
 // codeScreen is the code tab: the explorer, and the open file in its tabs; its keys for the footer.
 func codeScreen(v *view.View, st State, w, h int) ([]string, [][2]string) {
 	a := st.App
-	keys := [][2]string{{"⌃b", "tree"}, {"/", "find"}, {"v", "select"}, {"e", "edit"}, {"E", "$EDITOR"}}
+	keys := [][2]string{{"⌃b", "tree"}, {"g", "git"}, {"b", "blame"}, {"/", "find"}, {"v", "select"}, {"e", "edit"}, {"E", "$EDITOR"}}
+	if a.GitDiff != nil {
+		keys = [][2]string{{"g", "git"}, {"esc", "close diff"}}
+	}
 	switch {
 	case a.CodeAsk != nil || a.Editing:
 		keys = editKeys(a)
+	case a.TreeFocus && a.GitView:
+		keys = [][2]string{{"↑↓", "move"}, {"space", "stage"}, {"⏎", "diff"}, {"o", "open"}, {"u", "discard"}, {"c", "commit"}, {"p", "push"}, {"g", "files"}, {"esc", "back"}}
 	case a.TreeFocus:
-		keys = [][2]string{{"↑↓", "move"}, {"⏎", "open"}, {"←→", "fold"}, {"/", "filter"}, {"n", "new"}, {"r", "rename"}, {"d", "delete"}, {"esc", "back"}}
+		keys = [][2]string{{"↑↓", "move"}, {"⏎", "open"}, {"←→", "fold"}, {"/", "filter"}, {"n", "new"}, {"r", "rename"}, {"d", "delete"}, {"g", "git"}, {"esc", "back"}}
 	}
 	treeW := 0
 	if w >= 90 {
@@ -604,6 +641,9 @@ func codeScreen(v *view.View, st State, w, h int) ([]string, [][2]string) {
 		ed = []string{codeTabs(st, ew), breadcrumb(st, ew), "", "  " + st.paint(colAmber, "cannot open: "+clean(a.FileErr))}
 	case a.FileLines == nil:
 		ed = []string{codeTabs(st, ew), breadcrumb(st, ew), "", "  " + st.faint("loading…")}
+	case a.GitDiff != nil:
+		ed = []string{codeTabs(st, ew)}
+		ed = append(ed, gitDiffRows(st, ew, h-1-len(ed)-1)...)
 	default:
 		ed = []string{codeTabs(st, ew), breadcrumb(st, ew)}
 		ed = append(ed, codeRows(st, ew, h-1-len(ed)-1)...)

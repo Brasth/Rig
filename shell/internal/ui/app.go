@@ -69,6 +69,15 @@ type AppState struct {
 	Undo, Redo           []snapshot          // the edits, for ⌃z and ⌃y
 	Bufs                 map[string]*codeBuf // other tabs' unsaved changes
 	CodeAsk              *codeAsk            // go to line, find, a new file or a new name, asked on the code tab's last row
+	GitView              bool                // the side bar shows git (g) instead of the files
+	GitSel               int
+	Git                  *gitState
+	GitDiff              *gitDiffView // a file's diff, shown in place of the file
+	Blame                bool         // b: who last changed each line
+	BlameFor             string
+	BlameLines           []blameLine
+	Gutter               map[int]byte // the open file's lines changed since the last commit
+	GutterFor            string
 	findAt               pos                 // where find last stopped, while not editing
 	renameFrom           string              // the file or folder the rename question is about
 	CurLine, CurCol      int                 // the editing cursor, in runes

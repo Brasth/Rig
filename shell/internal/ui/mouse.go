@@ -742,6 +742,27 @@ func (m *Model) clickRow(list, at string) (tea.Model, tea.Cmd) {
 				return m, m.openTree(r.path, r.dir)
 			}
 		}
+	case "side":
+		// the side bar's heads: the files, or git
+		if at == "git" {
+			return m, m.openGit()
+		}
+		a.GitView, a.GitDiff = false, nil
+	case "git":
+		// a changed file shows its diff; a click on the chosen one again stages or unstages it
+		rows := gitRows(a)
+		if i >= len(rows) {
+			return m, nil
+		}
+		again := a.TreeFocus && a.GitView && a.GitSel == i
+		a.GitView, a.TreeFocus, a.GitSel = true, true, i
+		if rows[i].kind == "commit" {
+			return m, nil
+		}
+		if again {
+			return m, m.toggleStage(rows[i])
+		}
+		return m, m.fetchGitDiff(rows[i].file.path, rows[i].kind == "staged")
 	}
 	return m, nil
 }
