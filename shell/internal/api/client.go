@@ -242,6 +242,11 @@ func (c *Client) ChatCancel(session string, timeout time.Duration) error {
 	return c.Call("chat.cancel", map[string]any{"session": session}, timeout, nil)
 }
 
+// ChatAnswer allows or denies the parent's pending permission request (decision "allow" or "deny").
+func (c *Client) ChatAnswer(session, askID, decision string, timeout time.Duration) error {
+	return c.Call("chat.answer", map[string]any{"session": session, "ask_id": askID, "decision": decision}, timeout, nil)
+}
+
 type textResult struct {
 	Text string `json:"text"`
 }

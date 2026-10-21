@@ -80,6 +80,11 @@ func sessionFrame(v *view.View, st State, w, h int) []string {
 		if st.Styled {
 			msg = muted(msg)
 		}
+	} else if strings.TrimSpace(msg) == "" && st.Chat != nil && st.Chat.Ask != nil && !st.PaneRunning {
+		msg = fit(" the parent needs input: a allows, d denies.", w)
+		if st.Styled {
+			msg = tone("attention").Render(msg)
+		}
 	} else if strings.TrimSpace(msg) == "" && row != nil && row.Ask {
 		msg = fit(" "+clean(row.ID)+" needs input: a allows, d denies.", w)
 		if st.Styled {
@@ -106,7 +111,7 @@ func sessionKeys(st State, row *view.Row) []string {
 		return []string{"Enter queue it", "Esc discard"}
 	case st.Mode == ModeConfirm:
 		return []string{"y confirm", "n cancel"}
-	case row != nil && row.Ask:
+	case (st.Chat != nil && st.Chat.Ask != nil && !st.PaneRunning) || (row != nil && row.Ask):
 		return append([]string{"a allow", "d deny"}, keys...)
 	}
 	return keys
@@ -260,7 +265,7 @@ func chatColumn(st State, w, h int) []string {
 			}
 		}
 	} else {
-		lines = chatAll(st, w)
+		lines = append(chatAll(st, w), askLines(st, w)...)
 	}
 	out = append(out, lastLines(lines, st.ChatUp, w, body)...)
 	sep := " " + strings.Repeat("─", max(0, w-2)) + " "
@@ -279,6 +284,44 @@ func chatColumn(st State, w, h int) []string {
 	}
 	out = append(out, fit(sep, w), fit(input, w))
 	return out[:h]
+}
+
+// askLines is the mockup's request block: what the parent wants to run, in amber, and the keys that answer it. A
+// parent whose headless mode cannot ask says so once, under its first answer.
+func askLines(st State, w int) []string {
+	if st.Chat == nil {
+		return nil
+	}
+	paint := func(s string) string {
+		if st.Styled {
+			return tone("attention").Render(s)
+		}
+		return s
+	}
+	if ask := st.Chat.Ask; ask != nil {
+		var out []string
+		out = append(out, " "+paint("parent › asks to run:"))
+		for _, l := range wrap(clean(ask.Preview), max(8, w-5), "") {
+			out = append(out, "   "+paint(l))
+		}
+		hint := "   a allow  d deny"
+		if st.Styled {
+			hint = muted(hint)
+		}
+		return append(out, hint, "")
+	}
+	if !st.Chat.Asks && len(st.Chat.Entries) > 0 {
+		note := " " + clean(st.Chat.Parent) + " cannot ask for permission headless: it follows its own settings. p opens its own screen."
+		var out []string
+		for _, l := range wrap(note, max(8, w-2), "  ") {
+			if st.Styled {
+				l = muted(l)
+			}
+			out = append(out, " "+l)
+		}
+		return out
+	}
+	return nil
 }
 
 // parentTitle is the middle column's heading, as the mockup words it: "Parent · codex", and what it is doing.

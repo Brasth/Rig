@@ -65,6 +65,7 @@ LOCAL_METHODS = {
     "chat.transcript": (False, "EXPERIMENT: a chat session's transcript (params: session, tail)"),
     "chat.send": (True, "EXPERIMENT: send one message to the headless parent; the answer arrives in the transcript (params: message, session, parent)"),
     "chat.cancel": (True, "EXPERIMENT: stop a chat session's running turn (params: session)"),
+    "chat.answer": (True, "Allow or deny the parent's pending permission request in a chat session (params: session, ask_id, decision)"),
     "log.follow": (False, "Tail of a job's log as plain text; without an id, the job worth watching (params: id, lines)"),
     "shell.parent": (False, "The command that runs the parent CLI in a board pane, or why there is none (params: parent)"),
     "env.shell": (False, "The dc exec --no-start command for an interactive shell in a job's container, or why there is none (params: id)"),
@@ -173,7 +174,7 @@ class Api:
         if method == "workspace.status":
             return self._workspace(request_id, params)
         if method in ("job.evidence", "fleet.status", "settings.view", "env.recovery", "env.recover", "log.follow", "env.shell", "shell.parent",
-                      "chat.status", "chat.transcript", "chat.send", "chat.cancel"):
+                      "chat.status", "chat.transcript", "chat.send", "chat.cancel", "chat.answer"):
             return self._environment(request_id, method, params)
         if method in ("ui.request", "events.list", "events.ack"):
             return self._companion(request_id, method, params)
@@ -290,6 +291,11 @@ def _environment(self, request_id, method, params):
                 result = rig_chat.transcript(self.repo, session, tail)
             elif method == "chat.cancel":
                 result = rig_chat.cancel(self.repo, session)
+            elif method == "chat.answer":
+                ask_id, decision = params.get("ask_id"), params.get("decision")
+                if not isinstance(ask_id, str) or decision not in ("allow", "deny"):
+                    return _reply(request_id, error=_error(INVALID_PARAMS, "ask_id must be a string and decision allow or deny"))
+                result = rig_chat.answer(self.repo, session, ask_id, decision)
             else:
                 message, parent = params.get("message"), params.get("parent", "")
                 if not isinstance(message, str) or not isinstance(parent, str):

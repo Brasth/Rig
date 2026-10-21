@@ -313,3 +313,41 @@ func TestPSwapsInTheParentsOwnScreenAndClosingItGivesTheConversationBack(t *test
 		t.Fatalf("closing it brings the conversation back:\n%s", Render(m.view, m.st, 120, 36))
 	}
 }
+
+func TestTheParentsRequestShowsInTheConversationAndADAnswerIt(t *testing.T) {
+	m, src, _ := chatSession(t)
+	src.chatView.Ask = &view.ChatAsk{ID: "ask-1", Tool: "Bash", Preview: "Bash npm i -D supertest"}
+	src.chatView.Asks = true
+	m.chBusy = false
+	run(m.fetchChat(true), m)
+	out := Render(m.view, m.st, 120, 36)
+	for _, want := range []string{"parent › asks to run:", "Bash npm i -D supertest", "a allow  d deny", "the parent needs input"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("missing %q:\n%s", want, out)
+		}
+	}
+	run(press(m, "a"), m)
+	if len(src.chatAnswers) != 1 || src.chatAnswers[0] != [3]string{"c-1a2b3c4d", "ask-1", "allow"} {
+		t.Fatalf("answers %v", src.chatAnswers)
+	}
+	for _, c := range src.calls {
+		if c.method == "job.allow" {
+			t.Fatal("the parent's request comes before the selected job's ASK")
+		}
+	}
+	run(press(m, "d"), m)
+	if src.chatAnswers[1][2] != "deny" {
+		t.Fatalf("d denies: %v", src.chatAnswers)
+	}
+}
+
+func TestAParentThatCannotAskSaysSoOnce(t *testing.T) {
+	m, src, _ := chatSession(t)
+	src.chatView.Parent, src.chatView.Asks = "codex", false
+	m.chBusy = false
+	run(m.fetchChat(true), m)
+	out := Render(m.view, m.st, 120, 36)
+	if strings.Count(out, "cannot ask for permission headless") != 1 {
+		t.Fatalf("one note expected:\n%s", out)
+	}
+}

@@ -686,7 +686,7 @@ func chatTitle(st State) string {
 
 // chatBody renders the transcript: you, the parent, and its tool calls, wrapped, newest at the bottom.
 func chatBody(st State, w, h int) []string {
-	return lastLines(chatAll(st, w), st.ChatUp, w, h)
+	return lastLines(append(chatAll(st, w), askLines(st, w)...), st.ChatUp, w, h)
 }
 
 // lastLines is the h lines ending up lines before the newest, padded to w.

@@ -32,6 +32,7 @@ type Source interface {
 	ChatTranscript(session string, tail int, timeout time.Duration) (*view.ChatTranscript, error)
 	ChatSend(message, session, parent string, timeout time.Duration) (*view.ChatStarted, error)
 	ChatCancel(session string, timeout time.Duration) error
+	ChatAnswer(session, askID, decision string, timeout time.Duration) error
 }
 
 const (
@@ -125,6 +126,8 @@ type chatSentMsg struct {
 }
 
 type chatCancelMsg struct{ err error }
+
+type chatAnsweredMsg struct{ err error }
 
 type shellPlanMsg struct {
 	plan *view.ShellPlan
@@ -262,6 +265,15 @@ func (m *Model) paneLive() bool {
 
 // chatInSession: the Session screen's middle column is the conversation with the parent, as in the mockup.
 func (m *Model) chatInSession() bool { return m.composite() && m.st.ChatOn && !m.paneLive() }
+
+// chatAsk is the parent's permission request a/d answer: shown in the conversation (the Chat tab, or the Session
+// screen's middle column) and still waiting. It comes before a worker's ASK, which the Jobs list also shows.
+func (m *Model) chatAsk() *view.ChatAsk {
+	if m.st.Chat == nil || m.st.Chat.Ask == nil || !(m.st.Tab == ChatTab || m.chatInSession()) {
+		return nil
+	}
+	return m.st.Chat.Ask
+}
 
 // startChatInput opens the mockup's "› Ask the parent" box.
 func (m *Model) startChatInput() {
@@ -590,6 +602,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.st.Message = "sent to " + clean(msg.started.Parent)
 		m.chLast = time.Time{}
 		return m, m.fetchChat(true)
+	case chatAnsweredMsg:
+		if msg.err != nil {
+			m.st.Message = "Answer failed: " + msg.err.Error()
+		}
+		m.chLast = time.Time{}
+		return m, m.fetchChat(true)
 	case chatCancelMsg:
 		if msg.err != nil {
 			m.st.Message = "Stop failed: " + msg.err.Error()
@@ -889,6 +907,15 @@ func (m *Model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, tea.Batch(cmds...)
 	case "a", "d":
+		if ask := m.chatAsk(); ask != nil {
+			decision := "allow"
+			if k.String() == "d" {
+				decision = "deny"
+			}
+			m.st.Message = decision + " requested: " + clean(ask.Preview)
+			src, session, id := m.src, m.chatID, ask.ID
+			return m, func() tea.Msg { return chatAnsweredMsg{err: src.ChatAnswer(session, id, decision, callTimeout)} }
+		}
 		row, ok := m.selected()
 		if !ok || m.listTab() != "Jobs" || !row.Ask {
 			return m, nil

@@ -98,6 +98,15 @@ type ChatTranscript struct {
 	Turns   int         `json:"turns"`
 	Note    string      `json:"note"`
 	Entries []ChatEntry `json:"entries"`
+	Ask     *ChatAsk    `json:"ask"`  // the parent's permission request waiting for the owner, if any
+	Asks    bool        `json:"asks"` // this parent's headless mode can ask for permission at all
+}
+
+// ChatAsk is a permission request the parent is blocked on; chat.answer allows or denies it by ID.
+type ChatAsk struct {
+	ID      string `json:"id"`
+	Tool    string `json:"tool"`
+	Preview string `json:"preview"`
 }
 
 // ChatStarted is the chat.send result.

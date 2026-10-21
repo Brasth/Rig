@@ -216,6 +216,12 @@ func TestGoldenFrames(t *testing.T) {
 			s.ChatOn, s.Mode, s.InputLabel, s.Prompt = true, ModeInput, "chat", "summarise the open jobs"
 		}},
 		{"session-120x36-chat-empty", 120, 36, SessionTab, func(s *State) { s.ChatOn = true }},
+		{"session-120x36-chat-ask", 120, 36, SessionTab, func(s *State) {
+			s.ChatOn = true
+			s.Chat = &view.ChatTranscript{Session: "c-1a2b3c4d", Parent: "claude", State: "running", Asks: true,
+				Entries: []view.ChatEntry{{Role: "user", Text: "add supertest and pin it"}, {Role: "tool", Text: "Read package.json"}},
+				Ask:     &view.ChatAsk{ID: "a1", Tool: "Bash", Preview: "Bash npm i -D supertest"}}
+		}},
 		{"settings-120x36", 120, 36, SettingsTab, func(s *State) { s.Settings = loadSettings(t) }},
 		{"settings-60x14-ascii", 60, 14, SettingsTab, func(s *State) { s.ASCII, s.Settings = true, loadSettings(t) }},
 		{"settings-loading", 80, 12, SettingsTab, nil},
