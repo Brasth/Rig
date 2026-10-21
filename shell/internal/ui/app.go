@@ -46,6 +46,10 @@ type AppState struct {
 	Commenting   bool
 	Search       *SearchState
 	Settings     *SettingsScreen
+	Onboard      *Onboarding // the first-run steps after the parent: helpers, then where agents work
+	FirstRun     bool        // the welcome screen opened by itself: the other steps follow it
+	InstallSel   int         // the no-agents screen's choice
+	ProblemSeen  string      // a problem screen you closed with esc, not shown again for the same problem
 }
 
 // Palette is Ctrl-K: ask the parent, open a file, or run a command.
@@ -206,8 +210,31 @@ func AppFrame(v *view.View, st State, w, h int) []string {
 		lines[0] = fit(" rig · window too small (need 60×16); q quits", w)
 		return lines
 	}
+	confirm := func(lines []string) []string {
+		switch {
+		case st.Mode == ModeConfirm:
+			lines[len(lines)-1] = center(st.paint(colAmber, st.Prompt)+"   "+st.dim("y")+" "+st.faint("yes")+"    "+st.dim("n")+" "+st.faint("no"), w)
+		case st.Message != "" && problem(st.Message):
+			lines[len(lines)-1] = center(st.paint(colAmber, clean(st.Message)), w)
+		}
+		return lines
+	}
 	if a.Welcome {
-		return welcomeScreen(st, w, h)
+		return confirm(welcomeScreen(st, w, h))
+	}
+	if a.Onboard != nil && a.Onboard.Step == 2 {
+		return confirm(helpersScreen(st, w, h))
+	}
+	if a.Onboard != nil && a.Onboard.Step == 3 {
+		return confirm(sandboxScreen(st, w, h))
+	}
+	switch problemScreen(st) {
+	case "noagents":
+		return confirm(noAgentsScreen(st, w, h))
+	case "signedout":
+		return confirm(parentLostScreen(v, st, w, h))
+	case "sandbox":
+		return confirm(sandboxProblemScreen(v, st, w, h))
 	}
 	if a.Settings != nil {
 		lines := settingsScreenLines(v, st, w, h-1)
@@ -537,7 +564,11 @@ func lastWord(s string) string {
 func welcomeScreen(st State, w, h int) []string {
 	a := st.App
 	logo := st.bold("r") + st.paint("#6d4aff", "•") + st.paint("#0d9488", "•") + st.paint("#db2777", "•")
-	lines := []string{spread("   "+logo+"   "+st.bold("rig"), "", "", w), fit("", w)}
+	right := ""
+	if a.FirstRun {
+		right = stepDots(st, 1)
+	}
+	lines := []string{spread("   "+logo+"   "+st.bold("rig"), "", right, w), fit("", w)}
 	cw := min(60, w-8)
 	body := []string{"", "", st.bold("Who do you want to talk to?"), st.dim("It plans, hands work to helpers and checks it."), "", ""}
 	items := WelcomeItems(st)

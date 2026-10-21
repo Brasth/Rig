@@ -8,9 +8,12 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -179,6 +182,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	noEnsure := fs.Bool("no-ensure", false, "do not start the API server when it is not running")
 	rigBin := fs.String("rig", os.Getenv("RIG_BIN"), "path to the rig CLI used to start the API server")
 	showVersion := fs.Bool("version", false, "print the version and exit")
+	launcher := fs.Bool("launcher", false, "open a project: recent ones, a path, or a git URL to clone (rig shell runs this outside a Rig project)")
 	layout := fs.String("layout", os.Getenv("RIG_SHELL_LAYOUT"), "app: the design's screens (what rig shell opens); board: the jobs board (the default here)")
 	theme := fs.String("theme", os.Getenv("RIG_SHELL_THEME"), "draw this board in a theme without saving it: "+strings.Join(ui.ThemeNames(), ", "))
 	if err := fs.Parse(args); err != nil {
@@ -205,6 +209,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 
+	if *launcher {
+		return runLauncher(*repo, *rigBin, stderr)
+	}
 	if *once {
 		return renderOnce(stdout, stderr, *repo, *rigBin, *fixture, *wsFixture, *fleetFixture, *evFixture, *settingsFixture, *size, *tab, useASCII, !*noEnsure)
 	}
@@ -364,5 +371,45 @@ func renderOnce(stdout, stderr io.Writer, repo, rigBin, fixture, wsFixture, flee
 		st.EvidenceOpen, st.EvidenceID, st.Evidence = true, evidence.JobID, evidence
 	}
 	fmt.Fprintln(stdout, ui.Render(&snap.View, st, w, h))
+	return 0
+}
+
+// runLauncher shows "Open a project" and hands the chosen project to rig shell, replacing this process.
+func runLauncher(input, rigBin string, stderr io.Writer) int {
+	home := os.Getenv("RIG_HOME")
+	if home == "" {
+		if h, err := os.UserHomeDir(); err == nil {
+			home = filepath.Join(h, ".rig")
+		}
+	}
+	code := os.Getenv("RIG_CODE_DIR")
+	if code == "" {
+		if h, err := os.UserHomeDir(); err == nil {
+			code = filepath.Join(h, "code")
+		}
+	}
+	if wd, err := os.Getwd(); err == nil && input == wd {
+		input = "" // rig shell passes the folder it ran in; the launcher starts with an empty box then
+	}
+	l := ui.NewLauncher(home, code, input)
+	if _, err := tea.NewProgram(l, tea.WithAltScreen()).Run(); err != nil {
+		fmt.Fprintln(stderr, "rig-shell:", err)
+		return 1
+	}
+	if l.Open == "" {
+		return 0
+	}
+	if rigBin == "" {
+		rigBin = "rig"
+	}
+	path, err := exec.LookPath(rigBin)
+	if err != nil {
+		fmt.Fprintln(stderr, "rig-shell: cannot find rig to open", l.Open)
+		return 1
+	}
+	if err := syscall.Exec(path, []string{rigBin, "shell", "--repo", l.Open}, os.Environ()); err != nil {
+		fmt.Fprintln(stderr, "rig-shell:", err)
+		return 1
+	}
 	return 0
 }

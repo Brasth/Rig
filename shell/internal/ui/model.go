@@ -883,6 +883,7 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.pickerSeen = true // the first time only: a project with no parent of its own chooses one here
 			if m.appOn() {
 				m.openWelcome()
+				m.st.App.FirstRun = true
 			} else {
 				m.openPicker()
 			}
@@ -1499,6 +1500,10 @@ func (m *Model) confirmKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.st.Message = "stopping " + id
 			src := m.src
 			return m, func() tea.Msg { return chatCancelMsg{err: src.ChatCancel(id, callTimeout)} }
+		}
+		if method == "install" {
+			m.st.Message, m.csLast, m.csBusy = "installing…", time.Time{}, false
+			return m, m.exec([]string{"sh", "-c", id}, func(err error) tea.Msg { return shellDoneMsg{err: err} })
 		}
 		if method == "settings.set" {
 			return m, m.saveConfirmed(id)

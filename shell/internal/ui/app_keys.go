@@ -163,6 +163,10 @@ func (m *Model) appKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case a.Welcome:
 		return m.welcomeKey(key)
+	case a.Onboard != nil:
+		return m.onboardKey(key)
+	case problemScreen(m.st) != "":
+		return m.problemKey(problemScreen(m.st), key)
 	case a.Settings != nil:
 		return m.settingsKey(k)
 	case a.Palette != nil:
@@ -647,6 +651,10 @@ func (m *Model) welcomeKey(key string) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		pk.Sel = a.WelcomeSel
+		if a.FirstRun {
+			a.FirstRun = false
+			m.startOnboarding() // then who it can hand work to, and where agents work
+		}
 		return m.pickerKey(tea.KeyMsg{Type: tea.KeyEnter})
 	case "esc":
 		a.Welcome, m.st.Picker = false, nil

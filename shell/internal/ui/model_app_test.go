@@ -437,3 +437,113 @@ func TestTheBellRingsOnceForANewRequest(t *testing.T) {
 		t.Fatal("no ring with the bell off")
 	}
 }
+
+func TestFirstRunGoesFromTheParentToHelpersToTheSandbox(t *testing.T) {
+	t.Cleanup(func() { ApplyTheme("rig") })
+	m, src := newReady(t)
+	m.SetApp(t.TempDir())
+	src.appSettings = sampleSettings()
+	run(m.fetchAppSettings(), m)
+	src.chatStatus = chatOn()
+	src.chatStatus.Configured = ""
+	src.chatStatus.Available = []string{"claude", "codex"}
+	m.csLast = time.Time{}
+	run(m.fetchChatStatus(), m)
+	if !strings.Contains(appScreen(m), "1 of 3") {
+		t.Fatalf("step 1 of 3:\n%s", appScreen(m))
+	}
+	run(press(m, "enter"), m)
+	out := appScreen(m)
+	for _, want := range []string{"2 of 3", "Who can claude hand work to?", "Each helper works in its own copy of the repo.", "codex", "[x]", "up to 3 at once"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q:\n%s", want, out)
+		}
+	}
+	press(m, "down", " ", "2")
+	run(press(m, "enter"), m)
+	saved := map[string]string{}
+	for _, s := range src.settingsSaved {
+		saved[s[0]] = s[1]
+	}
+	if saved["workers.codex"] != "false" || saved["queue.max_running"] != "2" {
+		t.Fatalf("helpers and how many at once saved: %v", src.settingsSaved)
+	}
+	out = appScreen(m)
+	for _, want := range []string{"3 of 3", "Where should agents work?", "New sandbox", "recommended", "This machine", "! no boundary around your files", "⏎ start sandbox"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q:\n%s", want, out)
+		}
+	}
+	press(m, "down")
+	run(press(m, "enter"), m)
+	if last := src.settingsSaved[len(src.settingsSaved)-1]; last != [3]string{"sandbox.provider", "host", "repo"} || m.st.App.Onboard != nil {
+		t.Fatalf("this machine saved and the steps done: %v", src.settingsSaved)
+	}
+}
+
+func TestNoAgentShowsHowToInstallOne(t *testing.T) {
+	m, src := appModel(t)
+	src.appSettings = sampleSettings()
+	src.appSettings.Installed = nil
+	run(m.fetchAppSettings(), m)
+	m.st.ChatParent = ""
+	out := appScreen(m)
+	for _, want := range []string{"Let's get you an agent", "› 1  ● claude", "npm install -g @anthropic-ai/claude-code", "2  ● codex", "r scan again"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q:\n%s", want, out)
+		}
+	}
+	var ran []string
+	m.exec = func(argv []string, done func(error) tea.Msg) tea.Cmd { ran = argv; return nil }
+	press(m, "2")
+	press(m, "enter")
+	if m.st.Mode != ModeConfirm || !strings.Contains(m.st.Prompt, "Install codex") {
+		t.Fatalf("installing asks first: %q", m.st.Prompt)
+	}
+	press(m, "y")
+	if strings.Join(ran, " ") != "sh -c npm install -g @openai/codex" {
+		t.Fatalf("ran %v", ran)
+	}
+}
+
+func TestASignedOutParentCanBeReplaced(t *testing.T) {
+	m, src := appModel(t)
+	src.chatView = transcript("failed", ce("user", "hi"), ce("error", "the parent exited with status 1: Invalid API key · Please run /login"))
+	m.chatID, m.chBusy = "c-1a2b3c4d", false
+	run(m.fetchChat(true), m)
+	m.openPicker()
+	m.st.Picker.Items = []PickItem{{Name: "claude", Installed: true}, {Name: "codex", Installed: true}}
+	out := appScreen(m)
+	for _, want := range []string{"claude is signed out", "Nothing gets checked or applied until a parent is back", "1  sign in to claude again", "2  hand over to ● codex"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q:\n%s", want, out)
+		}
+	}
+	m.st.Picker = nil
+	m.openPicker()
+	m.st.Picker.Items = []PickItem{{Name: "claude", Installed: true}, {Name: "codex", Installed: true}}
+	m.st.Picker = &Picker{Items: m.st.Picker.Items}
+	run(press(m, "2"), m)
+	if len(src.parentSet) != 1 || src.parentSet[0] != "codex" {
+		t.Fatalf("handed over: %v", src.parentSet)
+	}
+}
+
+func TestAStoppedSandboxSaysSoAndOffersTheWaysOut(t *testing.T) {
+	m, src := appModel(t)
+	src.appSettings = sampleSettings()
+	src.appSettings.Sandbox = "devcontainer"
+	run(m.fetchAppSettings(), m)
+	m.st.Workspace = &view.Workspace{Sections: []view.Section{{Title: "Workspace", Lines: []view.Line{{Text: "kind    devcontainer"},
+		{Text: "! docker is not running", Tone: "attention"}}}}}
+	out := appScreen(m)
+	for _, want := range []string{"sandbox stopped", "agents are paused", "✗ docker is not running", "✓ kind    devcontainer", "1  start it", "3  run on this machine instead"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q:\n%s", want, out)
+		}
+	}
+	run(press(m, "3"), m)
+	if last := src.settingsSaved[len(src.settingsSaved)-1]; last != [3]string{"sandbox.provider", "host", "repo"} {
+		t.Fatalf("this machine instead: %v", src.settingsSaved)
+	}
+}

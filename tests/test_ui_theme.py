@@ -75,6 +75,24 @@ class Theme(unittest.TestCase):
         with self.assertRaisesRegex(rig_shell.ShellError, "--theme is one of"):
             rig_shell.board_env(self.repo, "", "neon")
 
+    def test_rig_shell_remembers_recent_projects_for_the_launcher(self):
+        import json
+        rig_shell.remember(self.repo)
+        rig_shell.remember(self.repo.parent)
+        rig_shell.remember(self.repo)
+        rows = json.loads(rig_shell.recent_path().read_text())
+        self.assertEqual([row["path"] for row in rows], [str(self.repo), str(self.repo.parent)], "newest first, never twice")
+        for n in range(30):
+            rig_shell.remember(self.repo / str(n))
+        self.assertEqual(len(json.loads(rig_shell.recent_path().read_text())), 20)
+
+    def test_rig_shell_opens_the_launcher_where_nothing_is_set_up(self):
+        bare = self.repo.parent / "bare"
+        (bare / ".git").mkdir(parents=True)
+        with mock.patch.object(rig_shell, "launcher", return_value=0) as opened:
+            self.assertEqual(rig_shell.main(["--repo", str(bare)]), 0)
+        opened.assert_called_once()
+
     def test_rig_shell_opens_the_app_unless_the_board_is_asked_for(self):
         self.assertIn("RIG_SHELL_LAYOUT=app", rig_shell.board_env(self.repo))
         self.assertNotIn("RIG_SHELL_LAYOUT=app", rig_shell.board_env(self.repo, layout="board"))

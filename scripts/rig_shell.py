@@ -325,6 +325,34 @@ def follow_logs(repo: Path, interval: float = 2.0) -> int:
         return 0
 
 
+def recent_path() -> Path:
+    root = os.environ.get("RIG_HOME", "").strip()
+    return (Path(root) if root else Path.home() / ".rig") / "recent.json"
+
+
+def remember(repo: Path, keep: int = 20) -> None:
+    """Put a project at the top of the launcher's recent list (~/.rig/recent.json). Never fails rig shell."""
+    import json
+    path = recent_path()
+    try:
+        rows = json.loads(path.read_text()) if path.exists() else []
+        rows = [row for row in rows if isinstance(row, dict) and row.get("path") != str(repo)]
+        rows.insert(0, {"path": str(repo), "at": time.time()})
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_name(path.name + ".tmp")
+        temporary.write_text(json.dumps(rows[:keep], indent=1) + "\n")
+        os.replace(temporary, path)
+    except (OSError, ValueError, TypeError):
+        pass
+
+
+def launcher(start: Path) -> int:
+    """The design's "Open a project", where there is no Rig project to open: rig-shell picks one, then reopens rig shell."""
+    command = [shell_binary(), "--launcher", "--repo", str(start)]
+    os.execvpe(command[0], command, {**os.environ, "RIG_BIN": rig_binary()})
+    return 0
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(prog="rig shell", description="The Rig board: the parent, workspace, jobs and evidence on one screen")
     parser.add_argument("command", nargs="?", choices=["start", "logs", "kill", "print"], default="start")
@@ -349,6 +377,10 @@ def main(argv=None) -> int:
         if args.command == "kill":
             print("killed" if kill(repo) else "no rig shell session for this repository")
             return 0
+        if args.command == "start" and args.layout == "app" and not harness.harness_path(repo).is_file():
+            return launcher(repo)  # nothing set up here: open a project instead of failing
+        if args.command == "start":
+            remember(repo)
         if args.no_tmux and args.command in ("start", "print"):
             if args.parent_cmd:
                 raise ShellError("--parent-cmd needs the split layout's tmux pane; use --parent NAME without tmux")
