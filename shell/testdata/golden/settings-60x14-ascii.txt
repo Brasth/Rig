@@ -1,5 +1,7 @@
  Rig . my-repo   ! 1 need attention  * 1 running  slots 2/3 
-  Ses   Job !1   Que 2   Flw 2   Env  [Settings]            
+ Session   Jobs !1   Queue 2   Workflows   Env  [Settings]  
+- Theme ----------------------------------------------------
+  > [rig]   light    dark    material    dracula     all re~
 - This project ---------------------------------------------
  file       .rig/harness.toml                               
  state      enabled                                         
@@ -8,7 +10,5 @@
  * grok                                                     
  * claude                                                   
  off: codex, cursor, opencode, omp, pi, agy, devin, mimo    
- Models come from rig pick; the parent's model is chosen in~
-- Routing --------------------------------------------------
                                                             
- Tab pane  j/k scroll  r refresh  read-only: edit .rig/harn~
+ ←→ theme  g where  j/k scroll  rest read-only: edit .rig/h~

@@ -33,6 +33,14 @@ type Source interface {
 	ChatSend(message, session, parent string, timeout time.Duration) (*view.ChatStarted, error)
 	ChatCancel(session string, timeout time.Duration) error
 	ChatAnswer(session, askID, decision string, timeout time.Duration) error
+	ChatSetParent(name string, timeout time.Duration) error
+	Theme(timeout time.Duration) (*view.ThemeReply, error)
+	JobDiff(id string, timeout time.Duration) (*view.JobDiff, error)
+	AppSettings(timeout time.Duration) (*view.AppSettings, error)
+	Today(timeout time.Duration) (*view.Today, error)
+	ShipStatus(timeout time.Duration) (*view.ShipStatus, error)
+	SetSetting(key, value, scope string, timeout time.Duration) (*view.AppSettings, error)
+	SetTheme(theme, scope string, timeout time.Duration) (*view.ThemeReply, error)
 }
 
 const (
@@ -40,6 +48,8 @@ const (
 	workspaceEvery = 5 * time.Second
 	logEvery       = 2 * time.Second
 	chatEvery      = time.Second
+	chatLiveEvery  = 300 * time.Millisecond // while the parent answers, so its reply streams in
+	spinEvery      = 100 * time.Millisecond
 	chatStatEvery  = 10 * time.Second
 	logFetchRows   = 200
 	callTimeout    = 5 * time.Second
@@ -123,11 +133,25 @@ type chatMsg struct {
 type chatSentMsg struct {
 	started *view.ChatStarted
 	err     error
+	sent    string
 }
 
 type chatCancelMsg struct{ err error }
 
 type chatAnsweredMsg struct{ err error }
+
+type parentSetMsg struct {
+	name string
+	err  error
+}
+
+type spinMsg struct{}
+
+type themeMsg struct {
+	reply *view.ThemeReply
+	err   error
+	saved bool
+}
 
 type shellPlanMsg struct {
 	plan *view.ShellPlan
@@ -171,20 +195,32 @@ type Model struct {
 	pane       Pane
 	paneName   string
 	paneFocus  bool
-	winW, winH int    // the terminal; w and h are the board drawn in it (the mockup's size when the terminal is larger)
 	parentName string // the parent CLI `rig shell --parent` asked for; empty means the project's own
 	spawn      func(argv []string, dir string, env []string, cols, rows int) (Pane, error)
 	chatID     string // the session the Chat tab follows; empty until one exists
 	inputFor   string // "chat" while the input line is a chat message, else enqueue
 	// exec hands the terminal to a command and returns when it exits; tests replace it.
-	exec     func(argv []string, done func(error) tea.Msg) tea.Cmd
-	lastOK   time.Time
-	now      func() time.Time
-	newKey   func() string
-	selID    map[string]string
-	draftKey string
-	pendingX string // method for a confirmed stop: job.cancel or queue.cancel
-	pendingI string // id for a confirmed stop
+	exec       func(argv []string, done func(error) tea.Msg) tea.Cmd
+	lastOK     time.Time
+	now        func() time.Time
+	newKey     func() string
+	selID      map[string]string
+	draftKey   string
+	pendingX   string // method for a confirmed stop: job.cancel or queue.cancel
+	pendingI   string // id for a confirmed stop
+	pickerSeen bool   // the picker opened by itself once, for a project with no parent
+	framed     bool   // the window has room for the mockup's border around the board
+	winW, winH int    // the window; the app uses all of it
+	dfBusy     bool
+	dfLast     time.Time
+	lastAsk    string // the request the bell last rang for
+	tdLast     time.Time
+	ringer     func() // rings the terminal bell; tests replace it
+	seenJobs   map[string]bool
+	themeFixed bool // rig shell --theme chose the theme for this board; the saved one is not loaded
+	messaging  bool // m was pressed under a request: a and d type again until the message is sent
+	spinning   bool // the spinner's tick is scheduled
+	chatStat   *view.ChatStatus
 }
 
 // NewModel returns a model that polls src.
@@ -206,7 +242,74 @@ func randomKey() string {
 	return "shell-" + hex.EncodeToString(b)
 }
 
-func (m *Model) Init() tea.Cmd { return tea.Batch(m.fetch(), tick()) }
+func (m *Model) Init() tea.Cmd {
+	if m.appOn() {
+		return tea.Batch(m.fetch(), tick(), m.fetchTheme(), m.fetchAppSettings())
+	}
+	return tea.Batch(m.fetch(), tick(), m.fetchTheme())
+}
+
+// fetchTheme loads the saved theme once at the start (a server that predates themes keeps the default).
+func (m *Model) fetchTheme() tea.Cmd {
+	if m.themeFixed {
+		return nil
+	}
+	src := m.src
+	return func() tea.Msg {
+		reply, err := src.Theme(callTimeout)
+		return themeMsg{reply: reply, err: err}
+	}
+}
+
+// SetTheme draws this board in the named theme without saving it (rig shell --theme); false for an unknown name.
+func (m *Model) SetTheme(name string) bool {
+	if !ApplyTheme(name) {
+		return false
+	}
+	m.st.Theme, m.st.ThemeScope, m.themeFixed = name, "this board", true
+	return true
+}
+
+// switchTheme applies a theme at once and keeps it where the current one is kept: this repo, or all repos.
+func (m *Model) switchTheme(name, scope string) tea.Cmd {
+	if !ApplyTheme(name) {
+		m.st.Message = "no theme called " + name + "; the themes are " + strings.Join(ThemeNames(), ", ")
+		return nil
+	}
+	if scope != "repo" {
+		scope = "all"
+	}
+	m.st.Theme, m.themeFixed = name, false
+	src := m.src
+	return func() tea.Msg {
+		reply, err := src.SetTheme(name, scope, callTimeout)
+		return themeMsg{reply: reply, err: err, saved: true}
+	}
+}
+
+// themeKey is the Settings tab's Theme row: ←→ change the theme, g keeps it for all repos or only this one.
+func (m *Model) themeKey(key string) (tea.Cmd, bool) {
+	names := ThemeNames()
+	at := 0
+	for i, n := range names {
+		if n == m.st.Theme {
+			at = i
+		}
+	}
+	switch key {
+	case "left", "h":
+		return m.switchTheme(names[(at+len(names)-1)%len(names)], m.st.ThemeScope), true
+	case "right", "l":
+		return m.switchTheme(names[(at+1)%len(names)], m.st.ThemeScope), true
+	case "g":
+		scope := "repo"
+		if m.st.ThemeScope == "repo" {
+			scope = "all"
+		}
+		return m.switchTheme(names[at], scope), true
+	}
+	return nil, false
+}
 
 func tick() tea.Cmd { return tea.Tick(pollEvery, func(time.Time) tea.Msg { return tickMsg{} }) }
 
@@ -281,8 +384,181 @@ func (m *Model) startChatInput() {
 	m.st.Mode, m.st.InputLabel, m.inputFor, m.st.Message = ModeInput, "chat", "chat", ""
 }
 
+// autoFocus keeps the Session screen's ask line ready for typing once Tab (or i, m, /) gave it the keyboard: whenever nothing
+// else holds the keyboard (a confirmation, the help list, the picker, board keys), the box does.
+func (m *Model) autoFocus() {
+	if !m.chatInSession() {
+		if m.st.Mode == ModeInput && m.inputFor == "chat" && m.st.Tab == SessionTab && !m.paneLive() && m.st.Prompt == "" {
+			m.st.Mode, m.st.InputLabel, m.inputFor = ModeNormal, "", "" // the pane took the column: the board's keys again
+		}
+		return
+	}
+	if m.st.Mode == ModeNormal && m.st.Focus == "parent" && !m.st.HelpOpen && !m.st.EvidenceOpen && m.st.Picker == nil && !m.paneFocus {
+		m.st.Mode, m.st.InputLabel, m.inputFor = ModeInput, "chat", "chat"
+	}
+}
+
+// openPicker shows the parent picker: the installed parents first, in the order Rig prefers them.
+func (m *Model) openPicker() {
+	names := []string{"claude", "codex", "grok", "opencode", "omp", "pi", "agy"}
+	installed := map[string]bool{}
+	if m.chatStat != nil {
+		if len(m.chatStat.Parents) > 0 {
+			known := map[string]bool{}
+			for _, n := range m.chatStat.Parents {
+				known[n] = true
+			}
+			var kept []string
+			for _, n := range names {
+				if known[n] {
+					kept = append(kept, n)
+					delete(known, n)
+				}
+			}
+			for _, n := range m.chatStat.Parents {
+				if known[n] {
+					kept = append(kept, n)
+				}
+			}
+			names = kept
+		}
+		for _, n := range m.chatStat.Available {
+			installed[n] = true
+		}
+	}
+	pk := &Picker{Current: m.st.ChatParent}
+	for _, pass := range []bool{true, false} {
+		for _, n := range names {
+			if installed[n] == pass {
+				pk.Items = append(pk.Items, PickItem{Name: n, Installed: pass})
+			}
+		}
+	}
+	for i, it := range pk.Items {
+		if it.Name == pk.Current {
+			pk.Sel = i
+		}
+	}
+	m.st.Picker = pk
+	if m.st.Mode == ModeInput && m.inputFor == "chat" {
+		m.st.Mode, m.st.InputLabel, m.inputFor = ModeNormal, "", ""
+	}
+}
+
+// pickerKey moves through the picker; Enter saves the choice as the project's parent.
+func (m *Model) pickerKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
+	pk := m.st.Picker
+	switch k.String() {
+	case "up", "k", "shift+tab":
+		pk.Sel = clampSel(pk.Sel-1, len(pk.Items))
+	case "down", "j", "tab":
+		pk.Sel = clampSel(pk.Sel+1, len(pk.Items))
+	case "esc", "q":
+		m.st.Picker = nil
+	case "enter":
+		if len(pk.Items) == 0 {
+			m.st.Picker = nil
+			return m, nil
+		}
+		item := pk.Items[pk.Sel]
+		if !item.Installed {
+			m.st.Message = item.Name + " is not installed here; choose an installed one"
+			return m, nil
+		}
+		m.st.Picker = nil
+		m.st.Message = "saving " + item.Name + " as the parent…"
+		src, name := m.src, item.Name
+		return m, func() tea.Msg { return parentSetMsg{name: name, err: src.ChatSetParent(name, callTimeout)} }
+	}
+	return m, nil
+}
+
+// runSlash runs a / command typed into the ask box. ok is false for text that is not one of them.
+func (m *Model) runSlash(text string) (tea.Cmd, bool) {
+	name, rest, _ := strings.Cut(text, " ")
+	rest = strings.TrimSpace(rest)
+	clear := func() { m.st.Prompt, m.st.SlashSel = "", 0 }
+	switch name {
+	case "/parent":
+		clear()
+		m.openPicker()
+	case "/queue":
+		if rest == "" {
+			m.st.Prompt = "/queue "
+			m.st.Message = "type the task after /queue"
+			return nil, true
+		}
+		// the mockup's "/queue to park a task": the same queue.add as e, never sent to the parent
+		if m.draftKey == "" {
+			m.draftKey = m.newKey()
+		}
+		m.st.Mode, m.st.InputLabel, m.inputFor = ModeNormal, "", ""
+		return m.act("queue.add", map[string]any{"text": rest, "idempotency_key": m.draftKey}, true), true
+	case "/new":
+		clear()
+		m.chatID, m.st.Chat, m.st.ChatUp = "", nil, 0
+		m.st.Message = "new conversation: the next message starts it"
+	case "/stop":
+		clear()
+		if m.chatID == "" || m.st.Chat == nil || m.st.Chat.State != "running" {
+			m.st.Message = "the parent is not working on anything"
+			return nil, true
+		}
+		m.st.Message = "stopping " + m.chatID
+		src, id := m.src, m.chatID
+		return func() tea.Msg { return chatCancelMsg{err: src.ChatCancel(id, callTimeout)} }, true
+	case "/jobs", "/env":
+		clear()
+		m.st.Mode, m.st.InputLabel, m.inputFor = ModeNormal, "", ""
+		if name == "/jobs" {
+			return m.goTab("Jobs"), true
+		}
+		return m.goTab(EnvTab), true
+	case "/help":
+		clear()
+		m.st.Mode, m.st.InputLabel, m.inputFor = ModeNormal, "", ""
+		m.st.HelpOpen = true
+	case "/theme":
+		clear()
+		if rest == "" {
+			m.st.Mode, m.st.InputLabel, m.inputFor = ModeNormal, "", ""
+			return m.goTab(SettingsTab), true // the Theme row, where ←→ shows each one
+		}
+		return m.switchTheme(strings.ToLower(rest), m.st.ThemeScope), true
+	case "/settings":
+		clear()
+		m.st.Mode, m.st.InputLabel, m.inputFor = ModeNormal, "", ""
+		if m.appOn() {
+			return m.openSettings("general"), true
+		}
+		return m.goTab(SettingsTab), true
+	case "/quit":
+		return tea.Quit, true
+	default:
+		return nil, false
+	}
+	return nil, true
+}
+
+// chatEntries is what the conversation already shows of a session, so a message just sent appears under it at once.
+func (m *Model) chatEntries(session string) []view.ChatEntry {
+	if m.st.Chat == nil || m.st.Chat.Session != session {
+		return nil
+	}
+	return append([]view.ChatEntry(nil), m.st.Chat.Entries...)
+}
+
+// spin keeps the working spinner turning while the parent answers.
+func (m *Model) spin() tea.Cmd {
+	if m.spinning || m.st.Chat == nil || m.st.Chat.State != "running" {
+		return nil
+	}
+	m.spinning = true
+	return tea.Tick(spinEvery, func(time.Time) tea.Msg { return spinMsg{} })
+}
+
 // showsWorkspace: the workspace panel is on screen (the Env tab, or the Session screen's left column).
-func (m *Model) showsWorkspace() bool { return m.st.Tab == EnvTab || m.composite() }
+func (m *Model) showsWorkspace() bool { return m.st.Tab == EnvTab || m.composite() || m.appOn() }
 
 // listTab is the tab whose rows the keyboard moves through: the Session screen shows the Jobs list.
 func (m *Model) listTab() string {
@@ -303,7 +579,7 @@ type dockMsg struct {
 // selection changes, and at most every workspaceEvery after that.
 func (m *Model) fetchDock(force bool) tea.Cmd {
 	id := m.selectedJobID()
-	if !m.composite() || id == "" || m.dkBusy {
+	if !(m.composite() || (m.appOn() && m.st.App.Tab == 2)) || id == "" || m.dkBusy {
 		return nil
 	}
 	if id == m.st.DockID && !force && m.now().Sub(m.dkLast) < workspaceEvery {
@@ -347,11 +623,15 @@ func (m *Model) selectedJobID() string {
 
 // fetchLog follows the selected job's log, only while the Logs tab is showing.
 func (m *Model) fetchLog(force bool) tea.Cmd {
-	if m.st.Tab != LogsTab || m.lgBusy || (!force && m.now().Sub(m.lgLast) < logEvery) {
+	thread := m.appOn() && m.st.App.Thread != ""
+	if !(m.st.Tab == LogsTab || thread) || m.lgBusy || (!force && m.now().Sub(m.lgLast) < logEvery) {
 		return nil
 	}
 	m.lgBusy = true
 	src, id := m.src, m.selectedJobID()
+	if thread {
+		id = m.st.App.Thread
+	}
 	return func() tea.Msg {
 		l, err := src.Log(id, logFetchRows, callTimeout)
 		return logMsg{log: l, err: err, at: time.Now()}
@@ -373,7 +653,11 @@ func (m *Model) fetchChatStatus() tea.Cmd {
 }
 
 func (m *Model) fetchChat(force bool) tea.Cmd {
-	if !(m.st.Tab == ChatTab || m.chatInSession()) || m.chBusy || m.chatID == "" || (!force && m.now().Sub(m.chLast) < chatEvery) {
+	every := chatEvery
+	if m.st.Chat != nil && m.st.Chat.State == "running" {
+		every = chatLiveEvery
+	}
+	if !(m.st.Tab == ChatTab || m.chatInSession() || m.appOn()) || m.chBusy || m.chatID == "" || (!force && m.now().Sub(m.chLast) < every) {
 		return nil
 	}
 	m.chBusy = true
@@ -537,10 +821,23 @@ func (m *Model) reselect() {
 }
 
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	model, cmd := m.update(msg)
+	if m.appOn() {
+		return model, cmd
+	}
+	m.autoFocus()
+	return model, cmd
+}
+
+func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
+		// the board fills the window inside the mockup's thin border; the side columns keep their widths and the chat grows
 		m.winW, m.winH = msg.Width, msg.Height
-		m.w, m.h = BoardSize(msg.Width, msg.Height)
+		m.w, m.h, m.framed = msg.Width, msg.Height, false
+		if msg.Width >= sessionMinW+2 && msg.Height >= sessionMinH+2 {
+			m.w, m.h, m.framed = msg.Width-2, msg.Height-2, true
+		}
 		m.st.WideSession = sessionGeometry(m.w, m.h).ok
 		if m.pane != nil {
 			m.pane.Resize(m.paneSize())
@@ -569,7 +866,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, waitPane(m.pane)
 	case tickMsg:
-		return m, tea.Batch(m.fetch(), m.fetchWorkspace(false), m.fetchFleet(false), m.fetchSettings(false), m.fetchLog(false), m.fetchDock(false), m.fetchChatStatus(), m.fetchChat(false), tick())
+		return m, tea.Batch(m.fetch(), m.fetchWorkspace(false), m.fetchFleet(false), m.fetchSettings(false), m.fetchLog(false), m.fetchDock(false), m.fetchChatStatus(), m.fetchChat(false), m.fetchDiff(false), m.fetchTodayEvery(), tick())
 	case chatStatusMsg:
 		m.csBusy, m.csLast = false, m.now()
 		if msg.err != nil || msg.status == nil || !msg.status.Enabled {
@@ -580,9 +877,19 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.st.ChatOn = true
-		m.st.ChatParent = msg.status.Parent
-		if m.parentName != "" {
-			m.st.ChatParent = m.parentName
+		m.chatStat = msg.status
+		m.st.ChatParent, m.st.ChatModel = msg.status.Parent, msg.status.Model
+		if m.parentName != "" && m.parentName != msg.status.Parent {
+			m.st.ChatParent, m.st.ChatModel = m.parentName, "" // its model is in its own settings, not read for this one
+		}
+		if !m.pickerSeen && msg.status.Configured == "" && m.parentName == "" && m.st.Tab == SessionTab {
+			m.pickerSeen = true // the first time only: a project with no parent of its own chooses one here
+			if m.appOn() {
+				m.openWelcome()
+				m.st.App.FirstRun = true
+			} else {
+				m.openPicker()
+			}
 		}
 		if m.chatID == "" && len(msg.status.Sessions) > 0 {
 			m.chatID = msg.status.Sessions[0].ID
@@ -594,6 +901,115 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.st.Chat, m.st.ChatE = msg.chat, ""
+		if m.appOn() {
+			return m, tea.Batch(m.spin(), m.bell())
+		}
+		return m, m.spin()
+	case todayMsg:
+		m.tdLast = m.now()
+		if msg.err == nil {
+			m.st.Today = msg.t
+		}
+	case shipMsg:
+		m.st.Ship, m.st.ShipE = msg.s, ""
+		if msg.err != nil {
+			m.st.ShipE = msg.err.Error()
+		}
+	case appliedMsg:
+		if msg.err != nil {
+			m.st.Message = "Could not do that: " + msg.err.Error()
+		} else {
+			m.st.Message = msg.text
+		}
+		m.fetching = false
+		if msg.err == nil && msg.tell != "" {
+			return m, tea.Batch(m.fetchToday(), m.fetchShip(), m.fetch(), m.tellParent(msg.tell))
+		}
+		return m, tea.Batch(m.fetchToday(), m.fetchShip(), m.fetch())
+	case noteSentMsg:
+		if msg.err != nil || msg.started == nil {
+			m.st.Message = "undone, but " + appParent(m.st) + " could not be told"
+			if msg.err != nil {
+				m.st.Message += ": " + msg.err.Error()
+			}
+			return m, nil
+		}
+		m.chatID, m.chLast = msg.started.Session, time.Time{}
+		m.st.Message = "undone; " + appParent(m.st) + " is handling anything built on it"
+		return m, tea.Batch(m.fetchChat(true), m.spin())
+	case appSettingsMsg:
+		if msg.err != nil {
+			m.st.Message = "Could not save the setting: " + msg.err.Error()
+			return m, nil
+		}
+		m.st.AppSettings = msg.s
+	case settingsEditedMsg:
+		return m, m.fetchAppSettings()
+	case diffMsg:
+		m.dfBusy, m.dfLast = false, m.now()
+		if m.appOn() {
+			if msg.id != m.st.App.DiffID {
+				m.st.App.DiffFile, m.st.App.DiffOff = 0, 0
+			}
+			m.st.App.Diff, m.st.App.DiffID = msg.diff, msg.id
+			if msg.err != nil || msg.diff == nil {
+				m.st.App.Diff = &view.JobDiff{JobID: msg.id}
+			}
+		}
+	case changedMsg:
+		if m.appOn() {
+			m.st.App.Changed = msg.files
+		}
+	case searchMsg:
+		if m.appOn() && m.st.App.Search != nil && m.st.App.Search.Query == msg.query {
+			m.st.App.Search.Results, m.st.App.Search.Ran = msg.hits, msg.query
+		}
+	case reopenMsg:
+		if m.appOn() && m.st.App.File == msg.path {
+			return m, m.openFile(msg.path)
+		}
+	case filesMsg:
+		if m.appOn() {
+			m.st.App.Files = msg.files
+		}
+	case fileMsg:
+		if m.appOn() && msg.path == m.st.App.File {
+			m.st.App.FileLines, m.st.App.FileErr = msg.lines, ""
+			if msg.err != nil {
+				m.st.App.FileErr = msg.err.Error()
+			}
+		}
+	case themeMsg:
+		switch {
+		case msg.err != nil && msg.saved:
+			m.st.Message = "Could not save the theme: " + msg.err.Error()
+		case msg.err != nil || msg.reply == nil:
+			// a server without themes, or none saved: keep the default
+		case msg.saved:
+			m.st.ThemeScope = msg.reply.Scope
+			where := map[string]string{"repo": "this repo (.rig/harness.toml)", "all": "all repos (~/.rig/config.toml)"}[msg.reply.Scope]
+			m.st.Message = "theme " + msg.reply.Theme + " for " + where
+		case m.appOn() && msg.reply.Scope == "default":
+			m.st.ThemeScope = "default" // nothing saved: the app keeps the design's light
+		case !m.themeFixed && ApplyTheme(msg.reply.Theme):
+			m.st.Theme, m.st.ThemeScope = msg.reply.Theme, msg.reply.Scope
+		}
+	case spinMsg:
+		m.spinning = false
+		return m, tea.Batch(m.spin(), m.fetchChat(false))
+	case parentSetMsg:
+		if msg.err != nil {
+			m.st.Message = "Could not save the parent: " + msg.err.Error()
+			return m, nil
+		}
+		m.parentName, m.st.ChatParent, m.st.ChatModel = msg.name, msg.name, ""
+		if m.chatStat != nil {
+			m.chatStat.Configured = msg.name
+		}
+		if m.st.Chat != nil && m.st.Chat.Parent != msg.name {
+			m.chatID, m.st.Chat, m.st.ChatUp = "", nil, 0 // another CLI cannot resume this one's session
+		}
+		m.st.Message = "parent: " + msg.name + " (saved in .rig/harness.toml)"
 	case chatSentMsg:
 		if msg.err == nil && msg.started == nil {
 			msg.err = errors.New("the server sent no session")
@@ -601,13 +1017,16 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			m.st.InputLabel, m.inputFor = "chat", "chat"
 			m.st.Mode = ModeInput // keep the draft, as a failed enqueue does
+			m.st.Prompt = msg.sent
 			m.st.Message = "Chat send failed: " + msg.err.Error() + "; draft retained"
 			return m, nil
 		}
 		m.chatID, m.st.Prompt, m.st.ChatUp = msg.started.Session, "", 0
-		m.st.Message = "sent to " + clean(msg.started.Parent)
+		m.st.Message = ""
 		m.chLast = time.Time{}
-		return m, m.fetchChat(true)
+		m.st.Chat = &view.ChatTranscript{Session: msg.started.Session, Parent: msg.started.Parent, State: "running",
+			Entries: append(m.chatEntries(msg.started.Session), view.ChatEntry{Role: "user", Text: msg.sent, At: m.now().UTC().Format(time.RFC3339)})}
+		return m, tea.Batch(m.fetchChat(true), m.spin())
 	case chatAnsweredMsg:
 		if msg.err != nil {
 			m.st.Message = "Answer failed: " + msg.err.Error()
@@ -715,6 +1134,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.st.Stale, m.lastOK = "", msg.at
 		m.view = &msg.snap.View
 		m.reselect()
+		m.noticeNewJobs()
+		if m.appOn() {
+			return m, m.bell()
+		}
 	case actionMsg:
 		switch {
 		case msg.err != nil && msg.enqueue:
@@ -745,6 +1168,9 @@ func firstLine(s string) string {
 }
 
 func (m *Model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.appOn() {
+		return m.appKey(k)
+	}
 	// While typing into the pane every key belongs to its program, Ctrl-C included, except the one way back.
 	if m.paneFocus && m.pane != nil && m.st.Tab == SessionTab {
 		if k.Type == tea.KeyCtrlCloseBracket {
@@ -756,7 +1182,14 @@ func (m *Model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	if k.Type == tea.KeyCtrlC {
+		if m.st.Mode == ModeInput && m.st.Prompt != "" {
+			m.st.Prompt, m.st.SlashSel = "", 0 // as in codex: Ctrl-C clears a draft first, and quits on an empty box
+			return m, nil
+		}
 		return m, tea.Quit
+	}
+	if m.st.Picker != nil {
+		return m.pickerKey(k)
 	}
 	switch m.st.Mode {
 	case ModeInput:
@@ -781,10 +1214,51 @@ func (m *Model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			case m.paneLive():
 				m.paneFocus = true
 				m.st.Message = ""
+			case m.chatInSession() && m.st.Focus == "":
+				if _, ok := m.selected(); ok { // the mockup's "Enter details": the Jobs tab, opened on this job
+					cmd := m.goTab("Jobs")
+					m.st.DetailOpen = true
+					return m, cmd
+				}
 			case m.chatInSession():
+				m.st.Focus = "parent"
 				m.startChatInput()
 			}
 			return m, nil
+		case "i", "/", "m":
+			if m.chatInSession() {
+				m.st.Focus = "parent"
+				m.startChatInput()
+				if k.String() == "/" {
+					m.st.Prompt = "/"
+				}
+				return m, nil
+			}
+		case "tab":
+			if m.composite() { // the mockup's "Tab pane": the jobs, then the ask line, then the workspace
+				m.st.Focus = map[string]string{"": "parent", "parent": "workspace", "workspace": ""}[m.st.Focus]
+				m.st.Message = ""
+				if m.st.Focus == "parent" && !m.chatInSession() {
+					m.st.Focus = "workspace"
+				}
+				return m, nil
+			}
+		case "shift+tab":
+			if m.composite() {
+				return m, m.goTab("Jobs") // the next tab; Tab itself moves between the panes here
+			}
+		}
+		if m.composite() && m.st.Focus == "workspace" {
+			switch k.String() {
+			case "u":
+				m.pendingX, m.pendingI = "env.up", "up"
+				m.st.Mode, m.st.Prompt = ModeConfirm, "Start this project's container (rig env up)?"
+				return m, nil
+			case "x":
+				return m, m.askShell()
+			case "d":
+				return m, m.goTab(EnvTab) // the full doctor report and the proposed fix
+			}
 		}
 	}
 	if k.String() == "c" && (m.st.Tab == ChatTab || m.chatInSession()) {
@@ -799,6 +1273,11 @@ func (m *Model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		}
 		return m, nil
+	}
+	if m.st.Tab == SettingsTab {
+		if cmd, ok := m.themeKey(k.String()); ok {
+			return m, cmd
+		}
 	}
 	if m.view == nil {
 		if k.String() == "q" {
@@ -913,14 +1392,8 @@ func (m *Model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, tea.Batch(cmds...)
 	case "a", "d":
-		if ask := m.chatAsk(); ask != nil {
-			decision := "allow"
-			if k.String() == "d" {
-				decision = "deny"
-			}
-			m.st.Message = decision + " requested: " + clean(ask.Preview)
-			src, session, id := m.src, m.chatID, ask.ID
-			return m, func() tea.Msg { return chatAnsweredMsg{err: src.ChatAnswer(session, id, decision, callTimeout)} }
+		if m.chatAsk() != nil {
+			return m.answerAsk(k.String())
 		}
 		row, ok := m.selected()
 		if !ok || m.listTab() != "Jobs" || !row.Ask {
@@ -956,6 +1429,7 @@ func (m *Model) SetTab(name string) { m.st.Tab = name }
 // goTab shows a tab and starts whatever it needs loaded.
 func (m *Model) goTab(name string) tea.Cmd {
 	m.st.Tab = name
+	m.st.Focus = ""
 	m.st.DetailOpen, m.st.DetailOff, m.st.Message = false, 0, ""
 	m.st.EvidenceOpen = false
 	return tea.Batch(m.fetchWorkspace(true), m.fetchFleet(true), m.fetchSettings(true), m.fetchLog(true), m.fetchDock(true), m.fetchChat(true))
@@ -1062,6 +1536,28 @@ func (m *Model) confirmKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			src := m.src
 			return m, func() tea.Msg { return chatCancelMsg{err: src.ChatCancel(id, callTimeout)} }
 		}
+		switch method {
+		case "applies.undo", "applies.redo":
+			if method == "applies.undo" {
+				return m, m.applyThenTell(method, map[string]any{"id": id}, "undone "+id, m.undoNote(id))
+			}
+			return m, m.applyAct(method, map[string]any{"id": id}, "applied again "+id)
+		case "ship.push":
+			return m, m.applyAct("ship.run", map[string]any{"mode": "push"}, "pushed")
+		case "ship.pr":
+			return m, m.applyAct("ship.run", map[string]any{"mode": "pr", "title": id}, "pull request opened")
+		}
+		if method == "install" {
+			m.st.Message, m.csLast, m.csBusy = "installing…", time.Time{}, false
+			return m, m.exec([]string{"sh", "-c", id}, func(err error) tea.Msg { return shellDoneMsg{err: err} })
+		}
+		if method == "settings.set" {
+			return m, m.saveConfirmed(id)
+		}
+		if method == "env.up" {
+			m.st.Message = "starting the container (rig env up)"
+			return m, m.exec([]string{"rig", "env", "up"}, func(err error) tea.Msg { return shellDoneMsg{err: err} })
+		}
 		if method == "env.recover" {
 			m.st.Message = "recovering: " + id
 			return m, m.recover(id)
@@ -1079,6 +1575,9 @@ func (m *Model) confirmKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) inputKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.inputFor == "chat" {
+		return m.chatKey(k)
+	}
 	switch k.Type {
 	case tea.KeyEsc:
 		m.st.Mode, m.st.Prompt, m.st.InputLabel, m.inputFor = ModeNormal, "", "", ""
@@ -1088,21 +1587,6 @@ func (m *Model) inputKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.st.Mode = ModeNormal
-		if m.inputFor == "chat" {
-			m.st.InputLabel, m.inputFor = "", ""
-			if rest, ok := strings.CutPrefix(text, "/queue "); ok && strings.TrimSpace(rest) != "" {
-				// the mockup's "/queue to park a task": the same queue.add as e, never sent to the parent
-				if m.draftKey == "" {
-					m.draftKey = m.newKey()
-				}
-				return m, m.act("queue.add", map[string]any{"text": strings.TrimSpace(rest), "idempotency_key": m.draftKey}, true)
-			}
-			src, session, parent := m.src, m.chatID, m.parentName
-			return m, func() tea.Msg {
-				started, err := src.ChatSend(text, session, parent, 10*time.Second)
-				return chatSentMsg{started: started, err: err}
-			}
-		}
 		return m, m.act("queue.add", map[string]any{"text": text, "idempotency_key": m.draftKey}, true)
 	case tea.KeyBackspace:
 		if r := []rune(m.st.Prompt); len(r) > 0 {
@@ -1116,11 +1600,151 @@ func (m *Model) inputKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// chatKey is the ask box: typing, Enter to send, / commands with their list, and the keys that still reach the
+// board while it has the keyboard (↑↓ the jobs, PgUp/PgDn the conversation, Tab the tabs, a/d the parent's request).
+func (m *Model) chatKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
+	inSession := m.chatInSession()
+	matches := slashMatches(m.st.Prompt)
+	if len(matches) > 0 {
+		sel := clampSel(m.st.SlashSel, len(matches))
+		switch k.Type {
+		case tea.KeyUp:
+			m.st.SlashSel = clampSel(sel-1, len(matches))
+			return m, nil
+		case tea.KeyDown:
+			m.st.SlashSel = clampSel(sel+1, len(matches))
+			return m, nil
+		case tea.KeyTab:
+			m.st.Prompt, m.st.SlashSel = matches[sel].Name, 0
+			if matches[sel].Args != "" {
+				m.st.Prompt += " "
+			}
+			return m, nil
+		case tea.KeyEnter:
+			if matches[sel].Args != "" {
+				m.st.Prompt, m.st.SlashSel = matches[sel].Name+" ", 0
+				return m, nil
+			}
+			cmd, _ := m.runSlash(matches[sel].Name)
+			return m, cmd
+		}
+	}
+	empty := m.st.Prompt == ""
+	switch k.Type {
+	case tea.KeyEsc:
+		m.st.SlashSel = 0
+		if !empty {
+			m.st.Prompt = ""
+			return m, nil
+		}
+		m.st.Mode, m.st.InputLabel, m.inputFor = ModeNormal, "", ""
+		if inSession {
+			m.st.Focus = "" // the board's keys, with the jobs
+		}
+		return m, nil
+	case tea.KeyEnter:
+		text := strings.TrimSpace(m.st.Prompt)
+		if text == "" {
+			return m, nil
+		}
+		if strings.HasPrefix(text, "/") {
+			if cmd, ok := m.runSlash(text); ok {
+				return m, cmd
+			}
+		}
+		if !inSession {
+			m.st.Mode, m.st.InputLabel, m.inputFor = ModeNormal, "", ""
+		}
+		m.st.Message, m.messaging = "sending…", false
+		src, session, parent := m.src, m.chatID, m.parentName
+		m.st.Prompt = ""
+		return m, func() tea.Msg {
+			started, err := src.ChatSend(text, session, parent, 10*time.Second)
+			return chatSentMsg{started: started, err: err, sent: text}
+		}
+	case tea.KeyBackspace:
+		if r := []rune(m.st.Prompt); len(r) > 0 {
+			m.st.Prompt = string(r[:len(r)-1])
+		}
+		m.st.SlashSel = 0
+		return m, nil
+	case tea.KeyCtrlU:
+		m.st.Prompt, m.st.SlashSel = "", 0
+		return m, nil
+	case tea.KeyRunes, tea.KeySpace:
+		if empty && inSession && !k.Paste && !m.messaging && (k.String() == "a" || k.String() == "d" || k.String() == "m") {
+			// the conversation shows a request: before anything is typed, a and d answer it and m starts a message
+			if m.st.Chat != nil && m.st.Chat.Ask != nil {
+				if k.String() == "m" {
+					m.messaging, m.st.Message = true, "type your message to the parent"
+					return m, nil
+				}
+				return m.answerAsk(k.String())
+			}
+			if job := waitingJob(m.view); job != nil {
+				if k.String() == "m" {
+					m.messaging, m.st.Message = true, "type your message to the parent about "+job.ID
+					return m, nil
+				}
+				method := map[string]string{"a": "job.allow", "d": "job.deny"}[k.String()]
+				m.st.Message = map[string]string{"a": "allow", "d": "deny"}[k.String()] + " requested " + job.ID
+				return m, m.act(method, map[string]any{"id": job.ID}, false)
+			}
+		}
+		m.st.Prompt += string(k.Runes)
+		m.st.SlashSel = 0
+		return m, nil
+	}
+	if !inSession {
+		return m, nil
+	}
+	switch k.String() {
+	case "up", "down":
+		delta := 1
+		if k.String() == "up" {
+			delta = -1
+		}
+		m.move(delta)
+		return m, m.fetchDock(false)
+	case "pgup":
+		m.st.ChatUp += 8
+	case "pgdown":
+		m.st.ChatUp = max(0, m.st.ChatUp-8)
+	case "tab":
+		m.st.Mode, m.st.InputLabel, m.inputFor = ModeNormal, "", ""
+		m.st.Focus = "workspace"
+	case "shift+tab":
+		m.st.Mode, m.st.InputLabel, m.inputFor = ModeNormal, "", ""
+		return m, m.goTab("Jobs")
+	}
+	return m, nil
+}
+
+// answerAsk allows or denies the parent's waiting request.
+func (m *Model) answerAsk(key string) (tea.Model, tea.Cmd) {
+	ask := m.st.Chat.Ask
+	decision := "allow"
+	if key == "d" {
+		decision = "deny"
+	}
+	m.st.Message = decision + " requested: " + clean(ask.Preview)
+	src, session, id := m.src, m.chatID, ask.ID
+	return m, func() tea.Msg { return chatAnsweredMsg{err: src.ChatAnswer(session, id, decision, callTimeout)} }
+}
+
 func (m *Model) View() string {
 	m.syncPane()
+	m.st.Now = m.now()
+	if m.appOn() {
+		w, h := m.winW, m.winH
+		if w == 0 {
+			w, h = m.w, m.h
+		}
+		return strings.Join(Paint(AppFrame(m.view, m.st, w, h)), "\n")
+	}
 	lines := Decorate(RenderLines(m.view, m.st, m.w, m.h))
-	if m.winW > m.w || m.winH > m.h {
-		lines = Frame(lines, m.w, m.h, m.winW, m.winH)
+	if m.framed {
+		lines = Border(lines, m.w)
 	}
 	return strings.Join(Paint(lines), "\n")
 }

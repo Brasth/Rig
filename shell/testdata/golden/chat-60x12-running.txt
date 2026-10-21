@@ -1,12 +1,12 @@
  Rig · my-repo   ! 1 need attention  ● 1 running  slots 2/3 
-  Ses   Job !1   Que 2   Flw 2   Env   Set  [Chat]          
+ Ses   Job !1   Que 2   Flw   Env   Set  [Chat]             
 ─ Chat (experiment) › c-1a2b3c4d · claude · running ────────
  you › a question long enough to need wrapping at this      
        narrow width of pane                                 
    · Bash ls                                                
+ ⠋ working… · /stop stops it                                
  claude cannot ask for permission headless: it follows its  
    own settings. p opens its own screen.                    
-                                                            
                                                             
                                                             
  Tab pane  c write  N new session  x stop  k/j scroll  G fo…

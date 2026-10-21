@@ -301,6 +301,20 @@ class Drawer(Gate):
         self.assertIn("merged", " ".join(shown["Ran"]))
         self.assertIn("+1 -1       a.txt", shown["Change"])
 
+    def test_the_diff_of_a_job_while_it_works_and_after_its_commit(self):
+        self.start("w1", edit={"a.txt": self.lines(l1="ONE")}, finish=False)
+        live = job_evidence_view.diff(self.repo, "w1")
+        self.assertEqual((live["source"], [f["path"] for f in live["files"]]), ("git", ["a.txt"]))
+        self.assertIn("-one", live["diff"])
+        self.assertIn("+ONE", live["diff"])
+        self.start("w2", edit={"a.txt": self.lines(l2="TWO")})
+        done = job_evidence_view.diff(self.repo, "w2")
+        self.assertEqual((done["files"][0]["added"], done["files"][0]["deleted"]), ("1", "1"))
+        self.assertIn("+TWO", done["diff"])
+        self.assertFalse(done["truncated"])
+        with self.assertRaisesRegex(ValueError, "no such job"):
+            job_evidence_view.diff(self.repo, "../w1")
+
     def test_out_of_scope_observations_are_flagged(self):
         self.start("w1", edit={"a.txt": self.lines(l1="ONE")})
         folder = self.jobs["w1"][0]

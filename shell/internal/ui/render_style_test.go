@@ -57,16 +57,16 @@ func TestSelectedRowIsADarkBarAndStatesKeepTheirTone(t *testing.T) {
 
 func TestPaintPutsTheMockupGroundUnderEveryCellAfterEveryReset(t *testing.T) {
 	cases := map[string]string{
-		"plain":                    baseSGR + "plain\x1b[0m",
-		"a\x1b[0mb":                baseSGR + "a\x1b[0m\x1b[38;5;255m\x1b[48;5;233mb\x1b[0m",
-		"a\x1b[mb":                 baseSGR + "a\x1b[m\x1b[38;5;255m\x1b[48;5;233mb\x1b[0m",
-		"\x1b[0;1;31mred":          baseSGR + "\x1b[0;1;31m\x1b[48;5;233mred\x1b[0m",
-		"\x1b[0;31;44mboth":        baseSGR + "\x1b[0;31;44mboth\x1b[0m",
-		"\x1b[39mfg":               baseSGR + "\x1b[39m\x1b[38;5;255mfg\x1b[0m",
-		"\x1b[49mbg":               baseSGR + "\x1b[49m\x1b[48;5;233mbg\x1b[0m",
-		"\x1b[38;5;179mamber":      baseSGR + "\x1b[38;5;179mamber\x1b[0m",
-		"\x1b[0;38;2;1;2;3mtrue":   baseSGR + "\x1b[0;38;2;1;2;3m\x1b[48;5;233mtrue\x1b[0m",
-		"\x1b[48;5;235mbar\x1b[0m": baseSGR + "\x1b[48;5;235mbar\x1b[0m\x1b[38;5;255m\x1b[48;5;233m\x1b[0m",
+		"plain":                    baseSGR() + "plain\x1b[0m",
+		"a\x1b[0mb":                baseSGR() + "a\x1b[0m\x1b[38;5;255m\x1b[48;5;233mb\x1b[0m",
+		"a\x1b[mb":                 baseSGR() + "a\x1b[m\x1b[38;5;255m\x1b[48;5;233mb\x1b[0m",
+		"\x1b[0;1;31mred":          baseSGR() + "\x1b[0;1;31m\x1b[48;5;233mred\x1b[0m",
+		"\x1b[0;31;44mboth":        baseSGR() + "\x1b[0;31;44mboth\x1b[0m",
+		"\x1b[39mfg":               baseSGR() + "\x1b[39m\x1b[38;5;255mfg\x1b[0m",
+		"\x1b[49mbg":               baseSGR() + "\x1b[49m\x1b[48;5;233mbg\x1b[0m",
+		"\x1b[38;5;179mamber":      baseSGR() + "\x1b[38;5;179mamber\x1b[0m",
+		"\x1b[0;38;2;1;2;3mtrue":   baseSGR() + "\x1b[0;38;2;1;2;3m\x1b[48;5;233mtrue\x1b[0m",
+		"\x1b[48;5;235mbar\x1b[0m": baseSGR() + "\x1b[48;5;235mbar\x1b[0m\x1b[38;5;255m\x1b[48;5;233m\x1b[0m",
 	}
 	for in, want := range cases {
 		if got := Paint([]string{in})[0]; got != want {

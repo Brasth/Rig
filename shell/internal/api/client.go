@@ -242,6 +242,74 @@ func (c *Client) ChatCancel(session string, timeout time.Duration) error {
 	return c.Call("chat.cancel", map[string]any{"session": session}, timeout, nil)
 }
 
+// JobDiff is what one job changed (job.diff).
+func (c *Client) JobDiff(id string, timeout time.Duration) (*view.JobDiff, error) {
+	var out view.JobDiff
+	if err := c.Call("job.diff", map[string]any{"id": id}, timeout, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// AppSettings is the Settings screen's values (settings.app).
+func (c *Client) AppSettings(timeout time.Duration) (*view.AppSettings, error) {
+	var out view.AppSettings
+	if err := c.Call("settings.app", map[string]any{}, timeout, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// SetSetting changes one setting (settings.set) and returns the screen's values after it.
+func (c *Client) SetSetting(key, value, scope string, timeout time.Duration) (*view.AppSettings, error) {
+	var out view.AppSettings
+	if err := c.Call("settings.set", map[string]any{"key": key, "value": value, "scope": scope}, timeout, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// Today is what helpers applied today (applies.today).
+func (c *Client) Today(timeout time.Duration) (*view.Today, error) {
+	var out view.Today
+	if err := c.Call("applies.today", map[string]any{}, timeout, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// ShipStatus is what is ahead of the upstream branch (ship.status).
+func (c *Client) ShipStatus(timeout time.Duration) (*view.ShipStatus, error) {
+	var out view.ShipStatus
+	if err := c.Call("ship.status", map[string]any{}, timeout, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// Theme is the board's colour theme (ui.theme).
+func (c *Client) Theme(timeout time.Duration) (*view.ThemeReply, error) {
+	var out view.ThemeReply
+	if err := c.Call("ui.theme", map[string]any{}, timeout, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// SetTheme keeps the board's colour theme for all repos ("all") or this repo ("repo").
+func (c *Client) SetTheme(theme, scope string, timeout time.Duration) (*view.ThemeReply, error) {
+	var out view.ThemeReply
+	if err := c.Call("ui.set_theme", map[string]any{"theme": theme, "scope": scope}, timeout, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// ChatSetParent names the project's parent CLI in .rig/harness.toml.
+func (c *Client) ChatSetParent(name string, timeout time.Duration) error {
+	return c.Call("chat.parent", map[string]any{"name": name}, timeout, nil)
+}
+
 // ChatAnswer allows or denies the parent's pending permission request (decision "allow" or "deny").
 func (c *Client) ChatAnswer(session, askID, decision string, timeout time.Duration) error {
 	return c.Call("chat.answer", map[string]any{"session": session, "ask_id": askID, "decision": decision}, timeout, nil)

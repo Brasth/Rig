@@ -65,10 +65,22 @@ LOCAL_METHODS = {
     "chat.transcript": (False, "EXPERIMENT: a chat session's transcript (params: session, tail)"),
     "chat.send": (True, "EXPERIMENT: send one message to the headless parent; the answer arrives in the transcript (params: message, session, parent)"),
     "chat.cancel": (True, "EXPERIMENT: stop a chat session's running turn (params: session)"),
+    "applies.today": (False, "Done today: the helpers' work applied, undone or held, newest first"),
+    "applies.undo": (True, "Undo an applied job: revert its merge commit on its base branch (params: id)"),
+    "applies.redo": (True, "Apply an undone job again (params: id)"),
+    "applies.hold": (True, "Hold a job's branch so the parent's acceptance does not merge it, or release it (params: id, on)"),
+    "ship.status": (False, "What is ahead of the upstream branch, and the pull request it would make"),
+    "ship.run": (True, "Push what is ahead, or open a pull request with gh (params: mode push|pr, title, body)"),
+    "settings.app": (False, "The board's Settings screen: the values it can change and where each is kept"),
+    "settings.set": (True, "Change one of the board's settings (params: key, value, scope all|repo)"),
+    "ui.theme": (False, "The board's colour theme and where it is kept (all repos or this repo)"),
+    "ui.set_theme": (True, "Keep the board's colour theme for all repos or this repo (params: theme, scope all|repo)"),
+    "chat.parent": (True, "Name the project's parent CLI in .rig/harness.toml, as rig use does (params: name)"),
     "chat.answer": (True, "Allow or deny the parent's pending permission request in a chat session (params: session, ask_id, decision)"),
     "log.follow": (False, "Tail of a job's log as plain text; without an id, the job worth watching (params: id, lines)"),
     "shell.parent": (False, "The command that runs the parent CLI in a board pane, or why there is none (params: parent)"),
     "env.shell": (False, "The dc exec --no-start command for an interactive shell in a job's container, or why there is none (params: id)"),
+    "job.diff": (False, "What one job changed, as a unified diff with per-file counts (params: id)"),
     "job.evidence": (False, "Evidence drawer for one job: where it ran, change, contract, checks, ports (params: id)"),
     "fleet.status": (False, "Fleet panel: workspace containers on the engine with observed CPU and memory, ready to render"),
     "settings.view": (False, "Settings tab: what this repository's .rig/harness.toml makes effective, ready to render and read-only"),
@@ -173,8 +185,9 @@ class Api:
             return self._board_snapshot(request_id, params)
         if method == "workspace.status":
             return self._workspace(request_id, params)
-        if method in ("job.evidence", "fleet.status", "settings.view", "env.recovery", "env.recover", "log.follow", "env.shell", "shell.parent",
-                      "chat.status", "chat.transcript", "chat.send", "chat.cancel", "chat.answer"):
+        if method in ("job.evidence", "job.diff", "fleet.status", "settings.view", "env.recovery", "env.recover", "log.follow", "env.shell", "shell.parent",
+                      "chat.status", "chat.transcript", "chat.send", "chat.cancel", "chat.answer", "chat.parent", "ui.theme", "ui.set_theme", "settings.app", "settings.set",
+                      "applies.today", "applies.undo", "applies.redo", "applies.hold", "ship.status", "ship.run"):
             return self._environment(request_id, method, params)
         if method in ("ui.request", "events.list", "events.ack"):
             return self._companion(request_id, method, params)
@@ -261,6 +274,12 @@ def _environment(self, request_id, method, params):
                 return _reply(request_id, error=_error(INVALID_PARAMS, "id must be a job id"))
             import job_evidence_view
             result = job_evidence_view.build(self.repo, job_id)
+        elif method == "job.diff":
+            job_id = params.get("id")
+            if not isinstance(job_id, str) or not job_id:
+                return _reply(request_id, error=_error(INVALID_PARAMS, "id must be a job id"))
+            import job_evidence_view
+            result = job_evidence_view.diff(self.repo, job_id)
         elif method == "log.follow":
             lines = params.get("lines", 60)
             job_id = params.get("id", "")
@@ -280,6 +299,47 @@ def _environment(self, request_id, method, params):
                 return _reply(request_id, error=_error(INVALID_PARAMS, "id must be a string"))
             import env_shell
             result = env_shell.plan(self.repo, job_id)
+        elif method.startswith("applies.") or method.startswith("ship."):
+            import applies
+            job_id = params.get("id", "")
+            if method in ("applies.undo", "applies.redo", "applies.hold") and (not isinstance(job_id, str) or not job_id):
+                return _reply(request_id, error=_error(INVALID_PARAMS, "id must be a job id"))
+            if method == "applies.today":
+                result = applies.today(self.repo)
+            elif method == "applies.undo":
+                result = applies.undo(self.repo, job_id)
+            elif method == "applies.redo":
+                result = applies.redo(self.repo, job_id)
+            elif method == "applies.hold":
+                on = params.get("on", True)
+                if not isinstance(on, bool):
+                    return _reply(request_id, error=_error(INVALID_PARAMS, "on must be true or false"))
+                result = applies.hold(self.repo, job_id, on)
+            elif method == "ship.status":
+                result = applies.ship_status(self.repo)
+            else:
+                mode, title, body = params.get("mode"), params.get("title", ""), params.get("body", "")
+                if mode not in ("push", "pr") or not isinstance(title, str) or not isinstance(body, str):
+                    return _reply(request_id, error=_error(INVALID_PARAMS, "mode is push or pr; title and body are strings"))
+                result = applies.ship(self.repo, mode, title, body)
+        elif method in ("settings.app", "settings.set"):
+            import ui_settings
+            if method == "settings.app":
+                result = ui_settings.read(self.repo)
+            else:
+                key, value, scope = params.get("key"), params.get("value"), params.get("scope", "repo")
+                if not isinstance(key, str) or not isinstance(value, (str, bool, int)) or scope not in ("all", "repo"):
+                    return _reply(request_id, error=_error(INVALID_PARAMS, "key and value are needed, and scope is all or repo"))
+                result = ui_settings.save(self.repo, key, value if not isinstance(value, int) or isinstance(value, bool) else str(value), scope)
+        elif method in ("ui.theme", "ui.set_theme"):
+            import ui_theme
+            if method == "ui.theme":
+                result = ui_theme.read(self.repo)
+            else:
+                theme, scope = params.get("theme"), params.get("scope", "all")
+                if not isinstance(theme, str) or scope not in ("all", "repo"):
+                    return _reply(request_id, error=_error(INVALID_PARAMS, "theme must be a string and scope all or repo"))
+                result = ui_theme.save(self.repo, theme, scope)
         elif method.startswith("chat."):
             import rig_chat
             session, tail = params.get("session", ""), params.get("tail", 200)
@@ -291,6 +351,12 @@ def _environment(self, request_id, method, params):
                 result = rig_chat.transcript(self.repo, session, tail)
             elif method == "chat.cancel":
                 result = rig_chat.cancel(self.repo, session)
+            elif method == "chat.parent":
+                name = params.get("name")
+                if not isinstance(name, str):
+                    return _reply(request_id, error=_error(INVALID_PARAMS, "name must be a string"))
+                rig_chat.require_enabled(self.repo)
+                result = rig_chat.set_parent(self.repo, name)
             elif method == "chat.answer":
                 ask_id, decision = params.get("ask_id"), params.get("decision")
                 if not isinstance(ask_id, str) or decision not in ("allow", "deny"):

@@ -1,36 +1,36 @@
  Rig · my-repo · devcontainer a3f9c1                                         ! 1 need attention  ● 1 running  slots 2/3 
- [Session]  Jobs !1   Queue 2   Workflows 2   Env !   Settings                                                          
+[Session]  Jobs !1   Queue 2   Workflows   Env   Settings                                                               
 ─ Workspace ──────────────│━ Parent · claude ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━│─ Jobs 1-7/7 · attention first ─────────
- kind     devcontainer    │ you › Fix the failing auth tests and add rate      │> ! Needs input   Add supertest dev dep 
- override none            │       limiting to POST /login                      │    claude · job-7f2 · permission: npm …
-   dc-cli   0.23.0 (pin 0…│                                                    │  ● Running       Rate limit POST /login
- ● running  a3f9c1d2e4b5 …│ parent › Two writers, then a verify node.          │    codex · job-81c · editing src/middl…
- image    node:22-bookworm│          wf-12 · 3 nodes · 0/3 accepted            │  ● Checking      Verify wf-12 auth tes…
-                          │                                                    │    claude · job-6d0 · running npm test…
-─ Ports ──────────────────│   · rig_job_launch auth-tests claude job-7f2       │  Finished                              
-   3000  web              │                                                    │  ○ Unverified    Session store refactor
-   5173  vite             │ you › allow, and pin the version                   │    opencode · job-4c1 · finished 4m ag…
- ! 9229  held by node     │                                                    │  ✗ Failed        Bump eslint config    
-                          │ parent › Allowed with a pinned version. job-7f2    │    pi · job-5aa · check npm run lint f…
-─ Worktrees ──────────────│          resumed; waiting on job-81c.              │  ✓ Verified      Settings loader       
-   main                   │                                                    │    claude · job-3b9 · Parent accepted …
-   job-7f2  ● writer      │ claude cannot ask for permission headless: it      │  – Cancelled     Spike: SSE logs       
-   job-81c  ● writer      │   follows its own settings. p opens its own        │    grok · job-2e7 · Stop confirmed; th…
+ kind    devcontainer     │ you › Fix the failing auth tests and add rate      │> ! Needs input  Add supertest dev dep  
+ image   node:22-bookworm │       limiting to POST /login                      │    claude · job-7f2 · ASK              
+ ● up    a3f9c1 · 2h      │                                                    │  ● Running      Rate limit POST /login 
+                          │ parent › Two writers, then a verify node.          │    codex · job-81c · editing src/middl…
+─ Ports ──────────────────│   wf-12 · 3 nodes · 0/3 accepted                   │  ● Checking     Verify wf-12 auth tests
+ 3000  web                │                                                    │    claude · job-6d0 · running npm test…
+ 5173  vite               │   · rig_job_launch auth-tests claude job-7f2       │  Finished                              
+ ! 9229  held by node     │                                                    │  ○ Unverified   Session store refactor 
+                          │ you › allow, and pin the version                   │    opencode · finished 4m              
+─ Worktrees ──────────────│                                                    │  ✗ Failed       Bump eslint config     
+ main                     │ parent › Allowed with a pinned version. job-7f2    │    pi · check npm run lint             
+ job-7f2  ● writer        │          resumed; waiting on job-81c.              │  ✓ Verified     Settings loader        
+ job-81c  ● writer        │                                                    │    claude · accepted                   
+                          │ parent › job-7f2 asks to run:                      │  – Cancelled    Spike: SSE logs        
+─ Doctor ─────────────────│   npm i -D supertest                               │    grok · stop confirmed               
+ ! engine                 │   in container a3f9c1                              │                                        
+                          │   a allow  d deny  m message                       │─ Queue 2 pending ──────────────────────
+─ Memory ─────────────────│                                                    │  · Queued       Add /logout audit      
+ 42/120 lines             │ claude cannot ask for permission headless: it      │  · Queued       Docs for rate limit    
+                          │   follows its own settings. p opens its own        │                                        
                           │   screen.                                          │                                        
-─ Doctor ─────────────────│                                                    │─ Queue 2 pending ──────────────────────
- ! engine  (fix: dc recov…│                                                    │  · Queued       Add /logout audit      
-                          │                                                    │  · Queued       Docs for rate limit    
-─ Memory ─────────────────│                                                    │                                        
- 42/120 lines             │                                                    │                                        
                           │                                                    │                                        
                           │                                                    │                                        
                           │                                                    │                                        
                           │ ────────────────────────────────────────────────── │                                        
- w the full env view      │ › Ask the parent, or /queue to park a task         │                                        
+ u up  x shell  d doctor  │ › Ask the parent, or /queue to park a task▏        │                                        
 ─ Evidence · job-7f2 · Add supertest dev dep ───────────────────────────────────────────────────────────────────────────
- diff     src/app.py  ·  tests/test_app.py                                                                              
- checks   ● unit  exit 0  devcontainer  ·  ! lint  exit 1  devcontainer                                                 
- contract acceptance unknown  ·  no acceptance contract                                                                 
- ports    localhost:3000  Up 2 minutes                                                                                  
- job-7f2 needs input: a allows, d denies.                                                                               
- a allow  d deny  Tab pane  Enter ask the parent  p parent  e enqueue  v evidence  w workspace  ? help  q quit          
+  diff      src/app.py  ·  tests/test_app.py                                                                            
+  checks    ● unit  exit 0  devcontainer  ·  ! lint  exit 1  devcontainer                                               
+  contract  acceptance unknown  ·  no acceptance contract                                                               
+  ports     localhost:3000  Up 2 minutes                                                                                
+ job-7f2 needs input: allow or deny the command in the parent pane.                                                     
+ Tab pane  Enter details  a allow  d deny  e enqueue  v evidence  w workspace  ? help  q quit                           

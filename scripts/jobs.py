@@ -1448,6 +1448,10 @@ def answer_pending(job: dict, behavior: str, message: str = "") -> str:
     except ValueError as error:
         return f"rig: {error}"
     preview = str(pending.get("preview") or pending.get("tool_name") or "tool")
+    if behavior == "allow":
+        import applies
+        folder = Path(job["dir"])
+        applies.record_allowed(folder.parent.parent.parent, job.get("worker", ""), preview, "parent")
     return f"{behavior} {job['job_id']}  {preview}"
 
 

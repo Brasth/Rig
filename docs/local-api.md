@@ -31,9 +31,14 @@ repository. Owner tokens are never returned, and workers may not serve the API.
 | `workflows.show` | no | `rig_workflow_show` | Show one workflow |
 | `api.methods` | no | none | List the methods this server offers |
 | `api.ping` | no | none | Check the server and protocol version |
+| `applies.hold` | yes | none | Hold a job's branch so the parent's acceptance does not merge it, or release it (params: id, on) |
+| `applies.redo` | yes | none | Apply an undone job again (params: id) |
+| `applies.today` | no | none | Done today: the helpers' work applied, undone or held, newest first |
+| `applies.undo` | yes | none | Undo an applied job: revert its merge commit on its base branch (params: id) |
 | `board.snapshot` | no | none | Board data (jobs window, pending queue, slots, settings, workflows) plus a ready-to-render `view` |
 | `chat.answer` | yes | none | Allow or deny the parent's pending permission request in a chat session (params: session, ask_id, decision) |
 | `chat.cancel` | yes | none | EXPERIMENT: stop a chat session's running turn (params: session) |
+| `chat.parent` | yes | none | Name the project's parent CLI in .rig/harness.toml, as rig use does (params: name) |
 | `chat.send` | yes | none | EXPERIMENT: send one message to the headless parent; the answer arrives in the transcript (params: message, session, parent) |
 | `chat.status` | no | none | EXPERIMENT: whether the headless-parent chat is on, which parents can run, and recent sessions |
 | `chat.transcript` | no | none | EXPERIMENT: a chat session's transcript (params: session, tail) |
@@ -43,9 +48,16 @@ repository. Owner tokens are never returned, and workers may not serve the API.
 | `events.ack` | yes | none | Acknowledge one notice, or all, for a companion session |
 | `events.list` | no | none | Notices for a companion session: approvals, finished work, verification, stop progress |
 | `fleet.status` | no | none | Fleet panel: workspace containers on the engine with observed CPU and memory, ready to render |
+| `job.diff` | no | none | What one job changed, as a unified diff with per-file counts (params: id) |
 | `job.evidence` | no | none | Evidence drawer for one job: where it ran, change, contract, checks, ports (params: id) |
 | `log.follow` | no | none | Tail of a job's log as plain text; without an id, the job worth watching (params: id, lines) |
+| `settings.app` | no | none | The board's Settings screen: the values it can change and where each is kept |
+| `settings.set` | yes | none | Change one of the board's settings (params: key, value, scope all|repo) |
 | `settings.view` | no | none | Settings tab: what this repository's .rig/harness.toml makes effective, ready to render and read-only |
 | `shell.parent` | no | none | The command that runs the parent CLI in a board pane, or why there is none (params: parent) |
+| `ship.run` | yes | none | Push what is ahead, or open a pull request with gh (params: mode push|pr, title, body) |
+| `ship.status` | no | none | What is ahead of the upstream branch, and the pull request it would make |
 | `ui.request` | yes | none | Companion operations (snapshot, enqueue, stop, reply, details, sessions) on the hosted UI service |
+| `ui.set_theme` | yes | none | Keep the board's colour theme for all repos or this repo (params: theme, scope all|repo) |
+| `ui.theme` | no | none | The board's colour theme and where it is kept (all repos or this repo) |
 | `workspace.status` | no | none | Workspace panel: container, ports and dc-cli diagnosis as ready-to-render sections (params: deep) |

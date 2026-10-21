@@ -1,27 +1,25 @@
  Rig · my-repo · devcontainer a3f9c1                                                             ! 1 need attention  ● 1 running  slots 2/3 
- [Session]  Jobs !1   Queue 2   Workflows 2   Env !   Settings                                                                              
+[Session]  Jobs !1   Queue 2   Workflows   Env   Settings                                                                                   
 ─ Workspace ──────────────────│━ Parent ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━│─ Jobs 1-7/7 · attention first ───────────────
- kind     devcontainer        │                                                              │  ! Needs input   Add supertest dev dep       
- override none                │ p  start the parent CLI for this project here                │    claude · job-7f2 · permission: npm i -D s…
-   dc-cli   0.23.0 (pin 0.23.…│ s  a shell in this project's container                       │> ● Running       Rate limit POST /login      
- ● running  a3f9c1d2e4b5 · 2h │                                                              │    codex · job-81c · editing src/middleware/…
- image    node:22-bookworm    │ Enter types into it; Ctrl-] returns to the board.            │  ● Checking      Verify wf-12 auth tests     
-                              │ Jobs and their evidence stay in view while it runs.          │    claude · job-6d0 · running npm test -- lo…
-─ Ports ──────────────────────│                                                              │  Finished                                    
-   3000  web                  │                                                              │  ○ Unverified    Session store refactor      
-   5173  vite                 │                                                              │    opencode · job-4c1 · finished 4m ago; not…
- ! 9229  held by node         │                                                              │  ✗ Failed        Bump eslint config          
-                              │                                                              │    pi · job-5aa · check npm run lint failed  
-─ Worktrees ──────────────────│                                                              │  ✓ Verified      Settings loader             
-   main                       │                                                              │    claude · job-3b9 · Parent accepted the cu…
-   job-7f2  ● writer          │                                                              │  – Cancelled     Spike: SSE logs             
-   job-81c  ● writer          │                                                              │    grok · job-2e7 · Stop confirmed; the work…
-                              │                                                              │                                              
-─ Doctor ─────────────────────│                                                              │─ Queue 2 pending ────────────────────────────
- ! engine  (fix: dc recover e…│                                                              │  · Queued       Add /logout audit            
-                              │                                                              │  · Queued       Docs for rate limit          
-─ Memory ─────────────────────│                                                              │                                              
- 42/120 lines                 │                                                              │                                              
+ kind    devcontainer         │                                                              │  ! Needs input  Add supertest dev dep        
+ image   node:22-bookworm     │ p  start the parent CLI for this project here                │    claude · job-7f2 · ASK                    
+ ● up    a3f9c1 · 2h          │ s  a shell in this project's container                       │> ● Running      Rate limit POST /login       
+                              │                                                              │    codex · job-81c · editing src/middleware/…
+─ Ports ──────────────────────│ Enter types into it; Ctrl-] returns to the board.            │  ● Checking     Verify wf-12 auth tests      
+ 3000  web                    │ Jobs and their evidence stay in view while it runs.          │    claude · job-6d0 · running npm test -- lo…
+ 5173  vite                   │                                                              │  Finished                                    
+ ! 9229  held by node         │                                                              │  ○ Unverified   Session store refactor       
+                              │                                                              │    opencode · finished 4m                    
+─ Worktrees ──────────────────│                                                              │  ✗ Failed       Bump eslint config           
+ main                         │                                                              │    pi · check npm run lint                   
+ job-7f2  ● writer            │                                                              │  ✓ Verified     Settings loader              
+ job-81c  ● writer            │                                                              │    claude · accepted                         
+                              │                                                              │  – Cancelled    Spike: SSE logs              
+─ Doctor ─────────────────────│                                                              │    grok · stop confirmed                     
+ ! engine                     │                                                              │                                              
+                              │                                                              │─ Queue 2 pending ────────────────────────────
+─ Memory ─────────────────────│                                                              │  · Queued       Add /logout audit            
+ 42/120 lines                 │                                                              │  · Queued       Docs for rate limit          
                               │                                                              │                                              
                               │                                                              │                                              
                               │                                                              │                                              
@@ -30,11 +28,13 @@
                               │                                                              │                                              
                               │                                                              │                                              
                               │                                                              │                                              
- w the full env view          │                                                              │                                              
+                              │                                                              │                                              
+                              │                                                              │                                              
+ u up  x shell  d doctor      │                                                              │                                              
 ─ Evidence · job-81c · Rate limit POST /login ──────────────────────────────────────────────────────────────────────────────────────────────
  Evidence unavailable: connection refused                                                                                                   
                                                                                                                                             
                                                                                                                                             
                                                                                                                                             
-                                                                                                                                            
- Tab pane  Enter type  p parent  e enqueue  v evidence  w workspace  ? help  q quit                                                         
+ job-7f2 needs input: allow or deny the command in the parent pane.                                                                         
+ Tab pane  Enter details  e enqueue  v evidence  w workspace  ? help  q quit                                                                

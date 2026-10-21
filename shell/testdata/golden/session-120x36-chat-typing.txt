@@ -1,21 +1,21 @@
  Rig · my-repo                                                               ! 1 need attention  ● 1 running  slots 2/3 
- [Session]  Jobs !1   Queue 2   Workflows 2   Env   Settings                                                            
+[Session]  Jobs !1   Queue 2   Workflows   Env   Settings                                                               
 ─ Workspace ──────────────│━ Parent ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━│─ Jobs 1-7/7 · attention first ─────────
- Loading workspace…       │                                                    │> ! Needs input   Add supertest dev dep 
-                          │ No conversation yet.                               │    claude · job-7f2 · permission: npm …
-                          │                                                    │  ● Running       Rate limit POST /login
-                          │ Press Enter and type to talk to the parent; none   │    codex · job-81c · editing src/middl…
-                          │  is installed here, so install claude or codex, or │  ● Checking      Verify wf-12 auth tes…
-                          │  start with rig shell --parent NAME. The answer    │    claude · job-6d0 · running npm test…
-                          │  appears here.                                     │  Finished                              
-                          │ /queue TEXT parks a task instead; p opens the pare…│  ○ Unverified    Session store refactor
-                          │                                                    │    opencode · job-4c1 · finished 4m ag…
-                          │                                                    │  ✗ Failed        Bump eslint config    
-                          │                                                    │    pi · job-5aa · check npm run lint f…
-                          │                                                    │  ✓ Verified      Settings loader       
-                          │                                                    │    claude · job-3b9 · Parent accepted …
-                          │                                                    │  – Cancelled     Spike: SSE logs       
-                          │                                                    │    grok · job-2e7 · Stop confirmed; th…
+ Loading workspace…       │                                                    │> ! Needs input  Add supertest dev dep  
+                          │ No conversation yet.                               │    claude · job-7f2 · ASK              
+                          │                                                    │  ● Running      Rate limit POST /login 
+                          │ Type below and press Enter to talk to the parent;  │    codex · job-81c · editing src/middl…
+                          │ none is installed here, so install claude or       │  ● Checking     Verify wf-12 auth tests
+                          │ codex, or start with rig shell --parent NAME. The  │    claude · job-6d0 · running npm test…
+                          │ answer appears here as it is written.              │  Finished                              
+                          │                                                    │  ○ Unverified   Session store refactor 
+                          │ /parent changes the parent · /queue TEXT parks a   │    opencode · finished 4m              
+                          │ task · /help lists every key                       │  ✗ Failed       Bump eslint config     
+                          │                                                    │    pi · check npm run lint             
+                          │ parent › job-7f2 asks to run:                      │  ✓ Verified     Settings loader        
+                          │   npm i -D supertest                               │    claude · accepted                   
+                          │   a allow  d deny  m message                       │  – Cancelled    Spike: SSE logs        
+                          │                                                    │    grok · stop confirmed               
                           │                                                    │                                        
                           │                                                    │─ Queue 2 pending ──────────────────────
                           │                                                    │  · Queued       Add /logout audit      
@@ -26,11 +26,11 @@
                           │                                                    │                                        
                           │                                                    │                                        
                           │ ────────────────────────────────────────────────── │                                        
- w the full env view      │ › summarise the open jobs▏                         │                                        
+ u up  x shell  d doctor  │ › summarise the open jobs▏                         │                                        
 ─ Evidence · job-7f2 · Add supertest dev dep ───────────────────────────────────────────────────────────────────────────
  Loading evidence…                                                                                                      
                                                                                                                         
                                                                                                                         
                                                                                                                         
- Enter sends to the parent · /queue TEXT parks it in the queue · Esc discards                                           
- Enter send  Esc discard                                                                                                
+ job-7f2 needs input: allow or deny the command in the parent pane.                                                     
+ Enter send  Esc clear  ↑↓ jobs  PgUp/PgDn scroll  Ctrl-C clear                                                         

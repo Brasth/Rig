@@ -62,6 +62,16 @@ type fakeSource struct {
 	chatAnswers     [][3]string
 	chatAnswerErr   error
 	chatCancelled   []string
+	parentSet       []string
+	parentSetErr    error
+	theme           *view.ThemeReply
+	diffs           map[string]*view.JobDiff
+	appSettings     *view.AppSettings
+	today           *view.Today
+	shipStatus      *view.ShipStatus
+	settingsSaved   [][3]string
+	diffIDs         []string
+	themeSaved      [][2]string
 }
 
 func (f *fakeSource) Workspace(bool, time.Duration) (*view.Workspace, error) {
@@ -105,6 +115,49 @@ func (f *fakeSource) ChatSend(message, session, parent string, _ time.Duration) 
 func (f *fakeSource) ChatAnswer(session, askID, decision string, _ time.Duration) error {
 	f.chatAnswers = append(f.chatAnswers, [3]string{session, askID, decision})
 	return f.chatAnswerErr
+}
+func (f *fakeSource) JobDiff(id string, _ time.Duration) (*view.JobDiff, error) {
+	f.diffIDs = append(f.diffIDs, id)
+	if d, ok := f.diffs[id]; ok {
+		return d, nil
+	}
+	return nil, errors.New("no diff for " + id)
+}
+func (f *fakeSource) AppSettings(time.Duration) (*view.AppSettings, error) {
+	if f.appSettings == nil {
+		return nil, errors.New("no settings here")
+	}
+	return f.appSettings, nil
+}
+func (f *fakeSource) SetSetting(key, value, scope string, _ time.Duration) (*view.AppSettings, error) {
+	f.settingsSaved = append(f.settingsSaved, [3]string{key, value, scope})
+	return f.appSettings, nil
+}
+func (f *fakeSource) Today(time.Duration) (*view.Today, error) {
+	if f.today == nil {
+		return nil, errors.New("no applies here")
+	}
+	return f.today, nil
+}
+func (f *fakeSource) ShipStatus(time.Duration) (*view.ShipStatus, error) {
+	if f.shipStatus == nil {
+		return nil, errors.New("no upstream")
+	}
+	return f.shipStatus, nil
+}
+func (f *fakeSource) Theme(time.Duration) (*view.ThemeReply, error) {
+	if f.theme == nil {
+		return nil, errors.New("no theme here")
+	}
+	return f.theme, nil
+}
+func (f *fakeSource) SetTheme(theme, scope string, _ time.Duration) (*view.ThemeReply, error) {
+	f.themeSaved = append(f.themeSaved, [2]string{theme, scope})
+	return &view.ThemeReply{Theme: theme, Scope: scope}, nil
+}
+func (f *fakeSource) ChatSetParent(name string, _ time.Duration) error {
+	f.parentSet = append(f.parentSet, name)
+	return f.parentSetErr
 }
 func (f *fakeSource) ChatCancel(session string, _ time.Duration) error {
 	f.chatCancelled = append(f.chatCancelled, session)
@@ -311,15 +364,23 @@ func TestNavigationTabsDetailAndQuit(t *testing.T) {
 	if m.st.Tab != "Queue" {
 		t.Fatalf("tab %q", m.st.Tab)
 	}
-	press(m, "tab", "tab", "tab", "tab", "tab")
+	press(m, "tab", "tab", "tab", "tab")
+	if m.st.Tab != SessionTab {
+		t.Fatalf("tab wraps after Settings to Session, got %q", m.st.Tab)
+	}
+	press(m, "tab")
+	if m.st.Tab != SessionTab || m.st.Focus == "" {
+		t.Fatalf("on the Session screen Tab moves between its panes: %q %q", m.st.Tab, m.st.Focus)
+	}
+	press(m, "shift+tab")
 	if m.st.Tab != "Jobs" {
-		t.Fatalf("tab wraps after Settings through Session, got %q", m.st.Tab)
+		t.Fatalf("shift+tab leaves the Session screen for Jobs, got %q", m.st.Tab)
 	}
 	press(m, "shift+tab")
 	if m.st.Tab != SessionTab {
 		t.Fatalf("shift+tab goes back and wraps, got %q", m.st.Tab)
 	}
-	press(m, "tab")
+	press(m, "shift+tab")
 	press(m, "enter")
 	if !m.st.DetailOpen {
 		t.Fatal("enter opens details")

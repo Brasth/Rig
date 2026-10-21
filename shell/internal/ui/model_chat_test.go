@@ -12,7 +12,7 @@ import (
 )
 
 func chatOn(sessions ...string) *view.ChatStatus {
-	st := &view.ChatStatus{Enabled: true, Available: []string{"claude"}}
+	st := &view.ChatStatus{Enabled: true, Available: []string{"claude"}, Configured: "claude"}
 	for _, id := range sessions {
 		st.Sessions = append(st.Sessions, struct {
 			ID     string `json:"id"`
@@ -163,7 +163,7 @@ func TestEscDropsTheChatInputLabel(t *testing.T) {
 	if m.st.Mode != ModeNormal || m.st.InputLabel != "" || m.inputFor != "" {
 		t.Fatal("esc leaves chat input cleanly")
 	}
-	press(m, "tab")
+	press(m, "tab", "shift+tab") // Session, then Jobs
 	press(m, "e")
 	if m.inputFor == "chat" || m.st.InputLabel != "" {
 		t.Fatal("enqueue after chat is an enqueue")

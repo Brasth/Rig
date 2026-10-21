@@ -206,9 +206,35 @@ class Turns(Base):
         first, second = self.calls()
         asks = ["--mcp-config", str(rig_chat.chat_dir(self.repo) / started["session"] / "ask-mcp.json"),
                 "--permission-prompt-tool", "mcp__rig-ask__permission_prompt"]
-        self.assertEqual(first["argv"], ["-p", "--output-format", "stream-json", "--verbose", *asks, "--", "what is in a.txt?"])
-        self.assertEqual(second["argv"], ["-p", "--output-format", "stream-json", "--verbose", *asks, "--resume", "native-claude-1", "--", "and b.txt?"])
+        stream = ["-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages"]
+        self.assertEqual(first["argv"], [*stream, *asks, "--", "what is in a.txt?"])
+        self.assertEqual(second["argv"], [*stream, *asks, "--resume", "native-claude-1", "--", "and b.txt?"])
         self.assertEqual((first["cwd"], first["parent"], first["owner"]), (str(self.repo), "claude", started["session"]))
+
+    def test_the_answer_streams_in_before_it_joins_the_transcript(self):
+        deltas = [{"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": t}}}
+                  for t in ("It says ", "one.")]
+        self.assertEqual(rig_chat.decode_event("claude", deltas[0])["entries"], [{"role": "chunk", "text": "It says "}])
+        stand_in(self.bin, "claude", [CLAUDE_STREAM[0], *deltas], sleep=3)
+        started = rig_chat.send(self.repo, "what is in a.txt?")
+        deadline = time.monotonic() + 10
+        view = rig_chat.transcript(self.repo, started["session"])
+        while view["partial"] != "It says one." and time.monotonic() < deadline:
+            time.sleep(0.05)
+            view = rig_chat.transcript(self.repo, started["session"])
+        self.assertEqual((view["state"], view["partial"]), ("running", "It says one."))
+        done = self.wait_idle(started["session"])
+        self.assertEqual(([(e["role"], e["text"]) for e in done["entries"]], done["partial"]),
+                         ([("user", "what is in a.txt?"), ("assistant", "It says one.")], ""))
+        self.assertFalse((rig_chat.chat_dir(self.repo) / started["session"] / "partial.txt").exists())
+
+    def test_a_streamed_answer_is_kept_once_when_the_whole_message_follows(self):
+        deltas = [{"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": t}}}
+                  for t in ("It says ", "one.")]
+        stand_in(self.bin, "claude", [CLAUDE_STREAM[0], *deltas, CLAUDE_STREAM[3], CLAUDE_STREAM[4]])
+        started = rig_chat.send(self.repo, "what is in a.txt?")
+        view = self.wait_idle(started["session"])
+        self.assertEqual([(e["role"], e["text"]) for e in view["entries"]], [("user", "what is in a.txt?"), ("assistant", "It says one.")])
 
     def test_codex_as_the_parent(self):
         stand_in(self.bin, "codex", CODEX_STREAM)
@@ -412,6 +438,7 @@ while True:
                 "codex_command": ["npm", "i", "-D", "supertest"], "codex_call_id": "call-1", "requestedSchema": {}}})
             answer = read()
             decision = answer["result"]["decision"]
+        send({"jsonrpc": "2.0", "method": "codex/event", "params": {"msg": {"type": "agent_message_delta", "delta": "decision was "}}})
         send({"jsonrpc": "2.0", "method": "codex/event", "params": {"msg": {"type": "agent_message", "message": "decision was " + decision}}})
         send({"jsonrpc": "2.0", "method": "codex/event", "params": {"msg": {"type": "task_complete"}}})
         send({"jsonrpc": "2.0", "id": msg["id"], "result": {"content": [{"type": "text", "text": "decision was " + decision}],
@@ -482,6 +509,55 @@ class NoParentSet(Base):
         self.assertEqual(rig_chat.status(self.repo)["parent"], "grok")
 
 
+class ChoosingTheParent(Base):
+    def test_the_picker_saves_the_parent_as_a_top_level_key(self):
+        harness = self.repo / ".rig" / "harness.toml"
+        harness.write_text("# my project\n[project]\nenabled = true\n")
+        self.assertEqual(rig_chat.status(self.repo)["configured"], "")
+        with self.assertRaisesRegex(rig_chat.ChatError, "not on PATH"):
+            rig_chat.set_parent(self.repo, "codex")
+        with self.assertRaisesRegex(rig_chat.ChatError, "not cursor"):
+            rig_chat.set_parent(self.repo, "cursor")
+        stand_in(self.bin, "codex", CODEX_STREAM)
+        stand_in(self.bin, "grok", [])
+        self.assertEqual(rig_chat.set_parent(self.repo, "codex")["parent"], "codex")
+        self.assertEqual(harness.read_text(), '# my project\nparent = "codex"\n[project]\nenabled = true\n')
+        rig_chat.set_parent(self.repo, "grok")
+        self.assertEqual(harness.read_text(), '# my project\nparent = "grok"\n[project]\nenabled = true\n')
+        import harness as harness_module
+        self.assertEqual(harness_module.parse_harness(harness)["parent"], "grok")
+        self.assertTrue(harness_module.parse_harness(harness)["project"]["enabled"])
+        self.assertEqual((rig_chat.status(self.repo)["configured"], rig_chat.status(self.repo)["parent"]), ("grok", "grok"))
+
+    def test_the_title_names_the_model_from_the_parents_own_settings(self):
+        home = self.base / "home"
+        (home / ".claude").mkdir(parents=True)
+        (home / ".codex").mkdir()
+        with mock.patch.dict(os.environ, {"HOME": str(home)}):
+            self.assertEqual(rig_chat.parent_model("claude"), "")
+            (home / ".claude" / "settings.json").write_text('{"model": "claude-opus-4-7"}')
+            self.assertEqual(rig_chat.parent_model("claude"), "opus")
+            (home / ".claude" / "settings.json").write_text("not json")
+            self.assertEqual(rig_chat.parent_model("claude"), "")
+            (home / ".codex" / "config.toml").write_text('model = "gpt-5.6-sol"\n')
+            self.assertEqual(rig_chat.parent_model("codex"), "gpt-5.6-sol")
+            self.assertEqual(rig_chat.parent_model("grok"), "")
+            stand_in(self.bin, "claude", CLAUDE_STREAM)
+            (home / ".claude" / "settings.json").write_text('{"model": "sonnet"}')
+            self.assertEqual(rig_chat.status(self.repo)["model"], "sonnet")
+
+    def test_a_parent_key_inside_a_table_is_left_alone(self):
+        harness = self.repo / ".rig" / "harness.toml"
+        harness.write_text('[project]\nenabled = true\n[other]\nparent = "x"\n')
+        stand_in(self.bin, "codex", CODEX_STREAM)
+        rig_chat.set_parent(self.repo, "codex")
+        self.assertEqual(harness.read_text(), 'parent = "codex"\n[project]\nenabled = true\n[other]\nparent = "x"\n')
+        harness.unlink()
+        with self.assertRaisesRegex(rig_chat.ChatError, "rig init"):
+            rig_chat.set_parent(self.repo, "codex")
+        self.assertFalse(harness.exists(), "choosing a parent never creates the harness")
+
+
 class OtherParents(Base):
     def test_grok_gets_a_session_id_then_resumes_it(self):
         stand_in(self.bin, "grok", [{"type": "text", "data": "hi"}, {"type": "result", "result": "hi"}])
@@ -525,8 +601,15 @@ class Api(Base):
 
     def test_the_methods_and_which_ones_mutate(self):
         rows = {r["method"]: r["mutates"] for r in self.call("api.methods")["result"]["methods"]}
-        self.assertEqual([rows[m] for m in ("chat.status", "chat.transcript", "chat.send", "chat.cancel", "chat.answer")],
-                         [False, False, True, True, True])
+        self.assertEqual([rows[m] for m in ("chat.status", "chat.transcript", "chat.send", "chat.cancel", "chat.answer", "chat.parent")],
+                         [False, False, True, True, True, True])
+
+    def test_the_board_saves_the_parent_through_the_api(self):
+        stand_in(self.bin, "codex", CODEX_STREAM)
+        self.assertEqual(self.call("chat.parent", {"name": "codex"})["result"]["parent"], "codex")
+        self.assertIn('parent = "codex"', (self.repo / ".rig" / "harness.toml").read_text())
+        self.assertEqual(self.call("chat.parent", {"name": 5})["error"]["code"], local_api.INVALID_PARAMS)
+        self.assertEqual(self.call("chat.parent", {"name": "nope"})["error"]["code"], local_api.INVALID_PARAMS)
 
     def test_send_then_read_the_transcript_through_the_api(self):
         stand_in(self.bin, "claude", CLAUDE_STREAM)

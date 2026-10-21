@@ -1,21 +1,21 @@
  Rig · my-repo                                                               ! 1 need attention  ● 1 running  slots 2/3 
- [Session]  Jobs !1   Queue 2   Workflows 2   Env   Settings                                                            
+[Session]  Jobs !1   Queue 2   Workflows   Env   Settings                                                               
 ─ Workspace ──────────────│━ Parent · claude · working ━━━━━━━━━━━━━━━━━━━━━━━━│─ Jobs 1-7/7 · attention first ─────────
- Loading workspace…       │ you › add supertest and pin it                     │> ! Needs input   Add supertest dev dep 
-                          │                                                    │    claude · job-7f2 · permission: npm …
-                          │   · Read package.json                              │  ● Running       Rate limit POST /login
+ Loading workspace…       │ you › add supertest and pin it                     │> ! Needs input  Add supertest dev dep  
+                          │                                                    │    claude · job-7f2 · ASK              
+                          │   · Read package.json                              │  ● Running      Rate limit POST /login 
                           │                                                    │    codex · job-81c · editing src/middl…
-                          │ parent › asks to run:                              │  ● Checking      Verify wf-12 auth tes…
+                          │ parent › asks to run:                              │  ● Checking     Verify wf-12 auth tests
                           │   Bash npm i -D supertest                          │    claude · job-6d0 · running npm test…
-                          │   a allow  d deny                                  │  Finished                              
-                          │                                                    │  ○ Unverified    Session store refactor
-                          │                                                    │    opencode · job-4c1 · finished 4m ag…
-                          │                                                    │  ✗ Failed        Bump eslint config    
-                          │                                                    │    pi · job-5aa · check npm run lint f…
-                          │                                                    │  ✓ Verified      Settings loader       
-                          │                                                    │    claude · job-3b9 · Parent accepted …
-                          │                                                    │  – Cancelled     Spike: SSE logs       
-                          │                                                    │    grok · job-2e7 · Stop confirmed; th…
+                          │   a allow  d deny  m message                       │  Finished                              
+                          │                                                    │  ○ Unverified   Session store refactor 
+                          │                                                    │    opencode · finished 4m              
+                          │                                                    │  ✗ Failed       Bump eslint config     
+                          │                                                    │    pi · check npm run lint             
+                          │                                                    │  ✓ Verified     Settings loader        
+                          │                                                    │    claude · accepted                   
+                          │                                                    │  – Cancelled    Spike: SSE logs        
+                          │                                                    │    grok · stop confirmed               
                           │                                                    │                                        
                           │                                                    │─ Queue 2 pending ──────────────────────
                           │                                                    │  · Queued       Add /logout audit      
@@ -26,11 +26,11 @@
                           │                                                    │                                        
                           │                                                    │                                        
                           │ ────────────────────────────────────────────────── │                                        
- w the full env view      │ › Ask the parent, or /queue to park a task         │                                        
+ u up  x shell  d doctor  │ › Ask the parent, or /queue to park a task▏        │                                        
 ─ Evidence · job-7f2 · Add supertest dev dep ───────────────────────────────────────────────────────────────────────────
  Loading evidence…                                                                                                      
                                                                                                                         
                                                                                                                         
                                                                                                                         
- the parent needs input: a allows, d denies.                                                                            
- a allow  d deny  Tab pane  Enter ask the parent  p parent  e enqueue  v evidence  w workspace  ? help  q quit          
+ the parent needs input: allow or deny the command in the parent pane.                                                  
+ Tab pane  Enter details  a allow  d deny  e enqueue  v evidence  w workspace  ? help  q quit                           

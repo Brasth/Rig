@@ -3,6 +3,7 @@ package ui
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/lipgloss"
 
@@ -66,7 +67,113 @@ type State struct {
 	DockEvidence *view.Evidence // the selected job's evidence in the Session screen's dock
 	DockID       string
 	DockE        string
-	Styled       bool // apply colour and reverse video to list rows; golden tests leave it off
+	Styled       bool      // apply colour and reverse video to list rows; golden tests leave it off
+	ChatModel    string    // the parent's model, for the title "Parent · claude opus"
+	Theme        string    // the colour theme in use; empty is the default, rig
+	ThemeScope   string    // where it is kept: "all" repos, this "repo", "default" or "this board" (rig shell --theme)
+	Focus        string    // the Session screen's pane with the keyboard: "" (the jobs, as the mockup opens), "parent" or "workspace"
+	Picker       *Picker   // the parent picker, while it is open
+	App          *AppState // the app (the design's ADE screens); nil while the board shows
+	AppSettings  *view.AppSettings
+	Today        *view.Today      // what helpers applied today
+	Ship         *view.ShipStatus // what is ahead of the upstream branch
+	ShipE        string
+	SlashSel     int       // the chosen line of the / command list
+	Now          time.Time // the clock, for the working spinner and its elapsed time; zero in golden tests
+}
+
+// Picker is the parent picker: every parent the chat can run, the installed ones first.
+type Picker struct {
+	Items   []PickItem
+	Sel     int
+	Current string // the parent in use
+}
+
+// PickItem is one parent CLI in the picker.
+type PickItem struct {
+	Name      string
+	Installed bool
+}
+
+// SlashCommand is one of the ask box's / commands.
+type SlashCommand struct {
+	Name, Args, Help string
+}
+
+// SlashCommands are what the ask box understands besides a message for the parent.
+var SlashCommands = []SlashCommand{
+	{"/parent", "", "choose the parent CLI"},
+	{"/queue", " TEXT", "park a task in the queue instead"},
+	{"/new", "", "start a new conversation"},
+	{"/stop", "", "stop the parent's running turn"},
+	{"/jobs", "", "the Jobs tab"},
+	{"/env", "", "the container, ports and worktrees"},
+	{"/help", "", "every key"},
+	{"/theme", " NAME", "rig, light, dark, material or dracula"},
+	{"/settings", "", "theme, agents, routing, sandbox"},
+	{"/quit", "", "leave rig shell"},
+}
+
+// slashMatches is the commands a draft that starts with / could be, until it has a space.
+func slashMatches(prompt string) []SlashCommand {
+	if !strings.HasPrefix(prompt, "/") || strings.Contains(prompt, " ") {
+		return nil
+	}
+	var out []SlashCommand
+	for _, c := range SlashCommands {
+		if strings.HasPrefix(c.Name, prompt) {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// typingChat: the ask box has the keyboard.
+func typingChat(st State) bool { return st.Mode == ModeInput && st.InputLabel == "chat" }
+
+// problem: a message reports something that went wrong, so it is shown in amber.
+func problem(msg string) bool {
+	low := strings.ToLower(msg)
+	for _, w := range []string{"fail", "cannot", "could not", "unavailable", "error", "no parent", "not on path", "unknown"} {
+		if strings.Contains(low, w) {
+			return true
+		}
+	}
+	return false
+}
+
+var spinFrames = []rune("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏")
+
+// workingLine is the spinner under a running turn, with how long the parent has been at it.
+func workingLine(st State) string {
+	frame := spinFrames[0]
+	line := "working…"
+	if !st.Now.IsZero() {
+		frame = spinFrames[(st.Now.UnixMilli()/100)%int64(len(spinFrames))]
+		for i := len(st.Chat.Entries) - 1; i >= 0; i-- {
+			e := st.Chat.Entries[i]
+			if e.Role != "user" {
+				continue
+			}
+			if at, err := time.Parse(time.RFC3339, e.At); err == nil && !st.Now.Before(at) {
+				line += " " + elapsed(st.Now.Sub(at))
+			}
+			break
+		}
+	}
+	line = " " + string(frame) + " " + line + " · /stop stops it"
+	if st.Styled {
+		return lipgloss.NewStyle().Foreground(lipgloss.Color(colAccent)).Render(line)
+	}
+	return line
+}
+
+func elapsed(d time.Duration) string {
+	sec := int(d.Seconds())
+	if sec < 60 {
+		return fmt.Sprintf("%ds", sec)
+	}
+	return fmt.Sprintf("%dm %02ds", sec/60, sec%60)
 }
 
 // NewState returns a state on the first tab.
@@ -211,7 +318,18 @@ func frame(v *view.View, st State, w, h int) []string {
 		}
 		return lines[:h]
 	}
-	if st.Tab == EnvTab || st.Tab == SettingsTab {
+	if st.Tab == SettingsTab {
+		lines = append(lines, ruleS(st, "Theme", w))
+		lines = append(lines, themeLines(st, w)...)
+		lines = append(lines, ruleS(st, panelTitle(st), w))
+		lines = append(lines, panelBody(st, w, body-len(themeLines(st, w))-1)...)
+		lines = append(lines, messageLine(st, w), footerLine(nil, 0, st, w))
+		for len(lines) < h {
+			lines = append(lines, fit("", w))
+		}
+		return lines[:h]
+	}
+	if st.Tab == EnvTab {
 		lines = append(lines, ruleS(st, panelTitle(st), w))
 		lines = append(lines, panelBody(st, w, body)...)
 		lines = append(lines, messageLine(st, w), footerLine(nil, 0, st, w))
@@ -324,6 +442,7 @@ func tabLineWith(v *view.View, st State, short bool) string {
 					continue
 				}
 				switch {
+				case name == "Workflows": // the mockup counts jobs and the queue, not workflows
 				case t.Attention > 0:
 					label += fmt.Sprintf(" !%d", t.Attention)
 				case t.Count > 0:
@@ -334,9 +453,6 @@ func tabLineWith(v *view.View, st State, short bool) string {
 		if name == SettingsTab && st.Settings != nil && st.Settings.Attention {
 			label += " !"
 		}
-		if name == EnvTab && ((st.Workspace != nil && st.Workspace.Attention) || (st.Fleet != nil && st.Fleet.Attention)) {
-			label += " !"
-		}
 		if name == active {
 			label = "[" + label + "]"
 		} else {
@@ -344,7 +460,7 @@ func tabLineWith(v *view.View, st State, short bool) string {
 		}
 		parts = append(parts, label)
 	}
-	return " " + strings.Join(parts, " ")
+	return strings.Join(parts, " ")
 }
 
 func rule(title string, w int) string {
@@ -467,7 +583,7 @@ func entry(r view.Row, selected bool, w, eh int, styled bool) []string {
 	if selected {
 		marker = ">"
 	}
-	label := fit(glyph(r)+" "+clean(r.Label), 14)
+	label := fit(glyph(r)+" "+clean(r.Label), 13)
 	prefixPlain := fmt.Sprintf("%s %s  ", marker, label)
 	room := w - lipgloss.Width(prefixPlain)
 	title := clean(r.Title)
@@ -491,7 +607,7 @@ func entry(r view.Row, selected bool, w, eh int, styled bool) []string {
 		if selected {
 			return selectedRow(marker, label, r.Tone, rest, second, eh)
 		}
-		lines := []string{marker + " " + tone(r.Tone).Render(label) + "  " + rest}
+		lines := []string{tone(r.Tone).Render(marker + " " + label + "  " + rest)} // the mockup colours the whole row
 		if eh == 2 {
 			lines = append(lines, muted(second))
 		}
@@ -565,6 +681,10 @@ func messageLine(st State, w int) string {
 
 // helpKeys is every key, grouped, for the ? screen; the footer shows only the few a row of text has room for.
 var helpKeys = [][2]string{
+	{"type, Enter", "session: ask the parent (the box always has the keyboard)"},
+	{"/", "session: commands: /parent /queue /new /stop /jobs /env /help /quit"},
+	{"Esc", "session: clear the box, then board keys (Enter or i types again)"},
+	{"PgUp, PgDn", "session: scroll the conversation"},
 	{"Tab, Shift-Tab", "next or previous tab"},
 	{"j, k", "move (scroll on panels, logs and the evidence drawer)"},
 	{"Enter, Esc", "open or close details"},
@@ -603,7 +723,7 @@ func footerLine(rows []view.Row, sel int, st State, w int) string {
 		}
 	}
 	if st.Tab == SettingsTab {
-		keys = []string{"Tab pane", "j/k scroll", "r refresh", "read-only: edit .rig/harness.toml", "? help", "q quit"}
+		keys = []string{"←→ theme", "g where", "j/k scroll", "rest read-only: edit .rig/harness.toml", "? help", "q quit"}
 	}
 	if st.Tab == LogsTab {
 		keys = []string{"Esc back to jobs", "k/j scroll", "G follow", "s shell", "r refresh", "q quit"}
@@ -687,7 +807,10 @@ func chatTitle(st State) string {
 
 // chatBody renders the transcript: you, the parent, and its tool calls, wrapped, newest at the bottom.
 func chatBody(st State, w, h int) []string {
-	return lastLines(append(chatAll(st, w), askLines(st, w)...), st.ChatUp, w, h)
+	if st.Picker != nil {
+		return lastLines(pickerLines(st, w), 0, w, h)
+	}
+	return lastLines(append(chatAll(st, w), askLines(nil, st, w)...), st.ChatUp, w, h)
 }
 
 // lastLines is the h lines ending up lines before the newest, padded to w.
@@ -735,7 +858,11 @@ func chatAll(st State, w int) []string {
 		if st.WideSession && st.Tab == SessionTab {
 			parent = "parent" // the mockup's word; the column's title names the CLI
 		}
-		for _, e := range st.Chat.Entries {
+		entries := st.Chat.Entries
+		if st.Chat.State == "running" && strings.TrimSpace(st.Chat.Partial) != "" {
+			entries = append(append([]view.ChatEntry(nil), entries...), view.ChatEntry{Role: "assistant", Text: st.Chat.Partial})
+		}
+		for _, e := range entries {
 			prefix := parent + " › "
 			switch e.Role {
 			case "user":
@@ -752,6 +879,9 @@ func chatAll(st State, w int) []string {
 				lead := prefix
 				if i > 0 {
 					lead = strings.Repeat(" ", lipgloss.Width(prefix))
+					if e.Role == "assistant" && st.WideSession && st.Tab == SessionTab {
+						lead = "  " // the mockup starts the parent's next line under its name, not its text
+					}
 				}
 				for j, l := range wrap(sanitize(raw), max(8, w-2-lipgloss.Width(prefix)), "") {
 					if j > 0 {
@@ -766,6 +896,9 @@ func chatAll(st State, w int) []string {
 		}
 		if len(st.Chat.Entries) == 0 {
 			all = []string{" (empty session)"}
+		}
+		if st.Chat.State == "running" && st.Chat.Ask == nil {
+			all = append(all, workingLine(st))
 		}
 		if st.ChatE != "" {
 			all = append(all, ruleS(st, "stale", w))
@@ -878,6 +1011,38 @@ func panelTitle(st State) string {
 	return EnvTab
 }
 
+// themeLines is the Settings tab's Theme row, as the design's Settings › General draws it: the themes in a row with
+// the one in use on a chip, and where it is kept.
+func themeLines(st State, w int) []string {
+	current := st.Theme
+	if current == "" {
+		current = "rig"
+	}
+	row := "  ›"
+	for _, name := range ThemeNames() {
+		chip := "  " + name + "  "
+		if name == current {
+			chip = " [" + name + "] "
+			if st.Styled {
+				chip = " " + lipgloss.NewStyle().Background(lipgloss.Color(colSelBg)).Foreground(lipgloss.Color(colText)).Bold(true).Render(" "+name+" ") + " "
+			}
+		} else if st.Styled {
+			chip = muted(chip)
+		}
+		row += chip
+	}
+	where := map[string]string{"repo": "this repo", "all": "all repos", "this board": "this board only (--theme)"}[st.ThemeScope]
+	if where == "" {
+		where = "all repos (not saved yet)"
+	}
+	row += "   " + where + "   "
+	hint := "←→ change · g all repos / this repo"
+	if st.Styled {
+		hint = muted(hint)
+	}
+	return []string{fit(row+hint, w)}
+}
+
 // panelBody renders the Env or Settings tab.
 func panelBody(st State, w, h int) []string {
 	if st.Tab == SettingsTab {
@@ -936,7 +1101,10 @@ func sectionLines(sections *[]view.Section, errText, name string, firstInRule bo
 
 func tonedLine(toneName, text string, styled bool) string {
 	if styled && toneName != "" {
-		return tone(map[string]string{"ok": "verified", "attention": "attention"}[toneName]).Render(text)
+		if toneName == "muted" {
+			return muted(text)
+		}
+		return tone(map[string]string{"ok": "verified", "attention": "attention", "active": "active"}[toneName]).Render(text)
 	}
 	return text
 }

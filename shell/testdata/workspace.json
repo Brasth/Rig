@@ -81,6 +81,77 @@
      }
     ]
    }
+  ],
+  "brief": [
+   {
+    "title": "Workspace",
+    "lines": [
+     {
+      "text": "kind    devcontainer",
+      "tone": ""
+     },
+     {
+      "text": "image   node:22-bookworm",
+      "tone": ""
+     },
+     {
+      "text": "● up    a3f9c1 · 2h",
+      "tone": "active"
+     }
+    ]
+   },
+   {
+    "title": "Ports",
+    "lines": [
+     {
+      "text": "3000  web",
+      "tone": ""
+     },
+     {
+      "text": "5173  vite",
+      "tone": ""
+     },
+     {
+      "text": "! 9229  held by node",
+      "tone": "attention"
+     }
+    ]
+   },
+   {
+    "title": "Worktrees",
+    "lines": [
+     {
+      "text": "main",
+      "tone": ""
+     },
+     {
+      "text": "job-7f2  ● writer",
+      "tone": ""
+     },
+     {
+      "text": "job-81c  ● writer",
+      "tone": ""
+     }
+    ]
+   },
+   {
+    "title": "Doctor",
+    "lines": [
+     {
+      "text": "! engine",
+      "tone": "attention"
+     }
+    ]
+   },
+   {
+    "title": "Memory",
+    "lines": [
+     {
+      "text": "42/120 lines",
+      "tone": ""
+     }
+    ]
+   }
   ]
  }
 }

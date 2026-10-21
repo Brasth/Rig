@@ -76,12 +76,101 @@ type ChatStatus struct {
 	Enabled   bool     `json:"enabled"`
 	Available []string `json:"available"`
 	Parent    string   `json:"parent"` // who answers a new conversation; empty when no parent CLI is installed
-	Sessions  []struct {
+	// Configured is the project's own parent (.rig/harness.toml); empty means none was chosen, so the board offers its picker.
+	Configured string   `json:"configured"`
+	Model      string   `json:"model"`   // the parent CLI's own model setting, short ("opus"); empty when it names none
+	Parents    []string `json:"parents"` // every parent the chat can run
+	Sessions   []struct {
 		ID     string `json:"id"`
 		Parent string `json:"parent"`
 		State  string `json:"state"`
 		Turns  int    `json:"turns"`
 	} `json:"sessions"`
+}
+
+// JobDiff is job.diff: what one job changed, as a unified diff with per-file counts.
+type JobDiff struct {
+	JobID  string `json:"job_id"`
+	Source string `json:"source"` // "git", or "recorded" when only the paths are known
+	Files  []struct {
+		Path    string `json:"path"`
+		Added   string `json:"added"`
+		Deleted string `json:"deleted"`
+	} `json:"files"`
+	Diff      string `json:"diff"`
+	Truncated bool   `json:"truncated"`
+}
+
+// AppSettings is settings.app: what the Settings screen can change, and where each value is kept.
+type AppSettings struct {
+	Theme             string          `json:"theme"`
+	ThemeScope        string          `json:"theme_scope"`
+	Themes            []string        `json:"themes"`
+	Bell              bool            `json:"bell"`
+	BellScope         string          `json:"bell_scope"`
+	Parent            string          `json:"parent"`
+	Enabled           bool            `json:"enabled"`
+	Workers           map[string]bool `json:"workers"`
+	Installed         []string        `json:"installed"`
+	MaxRunning        int             `json:"max_running"`
+	Objective         string          `json:"objective"`
+	RoutingMode       string          `json:"routing_mode"`
+	Sandbox           string          `json:"sandbox"`
+	Worktrees         string          `json:"worktrees"`
+	WorktreeContainer string          `json:"worktree_container"`
+	Harness           string          `json:"harness"`
+	HarnessText       string          `json:"harness_text"`
+	Problems          []string        `json:"problems"`
+	Global            string          `json:"global"`
+	Editor            string          `json:"editor"`
+	Shell             string          `json:"shell"`
+}
+
+// Today is applies.today: the helpers' work applied, undone or held, and commands allowed, newest first.
+type Today struct {
+	Rows []struct {
+		JobID   string  `json:"job_id"`
+		Title   string  `json:"title"`
+		Worker  string  `json:"worker"`
+		Branch  string  `json:"branch"`
+		State   string  `json:"state"` // applied, undone, held or command
+		At      float64 `json:"at"`
+		Commit  string  `json:"commit"`
+		Files   int     `json:"files"`
+		Added   int     `json:"added"`
+		Deleted int     `json:"deleted"`
+		Checks  []Check `json:"checks"`
+		Review  string  `json:"review"` // the worker of a finished review of this job
+		By      string  `json:"by"`     // who allowed a command: "parent" or "you"
+	} `json:"rows"`
+}
+
+// Check is one check a job ran and whether it passed.
+type Check struct {
+	Name string `json:"name"`
+	OK   bool   `json:"ok"`
+}
+
+// ShipStatus is ship.status: what is ahead of the upstream branch.
+type ShipStatus struct {
+	Branch   string `json:"branch"`
+	Upstream string `json:"upstream"`
+	Ahead    []struct {
+		Commit  string `json:"commit"`
+		Subject string `json:"subject"`
+	} `json:"ahead"`
+	Title     string  `json:"title"`
+	TitleFrom string  `json:"title_from"` // "tasks" (the parent's) or "commits"
+	Checks    []Check `json:"checks"`
+	PRBranch  string  `json:"pr_branch"`
+	GH        bool    `json:"gh"`
+}
+
+// ThemeReply is ui.theme and ui.set_theme: the board's theme and where it is kept ("all", "repo" or "default").
+type ThemeReply struct {
+	Theme  string   `json:"theme"`
+	Scope  string   `json:"scope"`
+	Themes []string `json:"themes"`
 }
 
 // ChatEntry is one line of a chat transcript.
@@ -99,8 +188,9 @@ type ChatTranscript struct {
 	Turns   int         `json:"turns"`
 	Note    string      `json:"note"`
 	Entries []ChatEntry `json:"entries"`
-	Ask     *ChatAsk    `json:"ask"`  // the parent's permission request waiting for the owner, if any
-	Asks    bool        `json:"asks"` // this parent's headless mode can ask for permission at all
+	Ask     *ChatAsk    `json:"ask"`     // the parent's permission request waiting for the owner, if any
+	Asks    bool        `json:"asks"`    // this parent's headless mode can ask for permission at all
+	Partial string      `json:"partial"` // the answer streaming in, before it joins the entries
 }
 
 // ChatAsk is a permission request the parent is blocked on; chat.answer allows or denies it by ID.

@@ -321,8 +321,8 @@ func TestWorkspaceTabFlagsAttentionAndNeverShowsListChrome(t *testing.T) {
 	st.Tab = "Jobs"
 	st.Workspace = loadWorkspace(t)
 	out := Render(loadView(t), st, 120, 36)
-	if !strings.Contains(strings.Split(out, "\n")[1], "Env !") {
-		t.Errorf("tab bar must flag workspace attention:\n%s", strings.Split(out, "\n")[1])
+	if strings.Contains(strings.Split(out, "\n")[1], "Env !") {
+		t.Errorf("the mockup's tab bar has no Env flag; the workspace says what is wrong:\n%s", strings.Split(out, "\n")[1])
 	}
 	st.Tab = EnvTab
 	out = Render(loadView(t), st, 120, 36)
