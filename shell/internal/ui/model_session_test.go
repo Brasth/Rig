@@ -1,12 +1,15 @@
 package ui
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/charmbracelet/lipgloss"
 
 	"github.com/Brasth/Rig/shell/internal/api"
 	"github.com/Brasth/Rig/shell/internal/view"
@@ -60,8 +63,8 @@ func TestTheParentRunsInTheMiddleColumnAndFollowsResizes(t *testing.T) {
 		t.Fatalf("pane %dx%d, want the 52x26 middle column", c.cols, c.rows)
 	}
 	m.Update(tea.WindowSizeMsg{Width: 140, Height: 40})
-	if got := (*panes)[0].resizes; len(got) != 1 || got[0] != [2]int{62, 30} {
-		t.Fatalf("resizes %v, want the 62x30 middle column (the side columns widen in proportion)", got)
+	if got := (*panes)[0].resizes; len(got) != 1 || got[0] != [2]int{52, 26} {
+		t.Fatalf("resizes %v: a 140x40 terminal draws the mockup's 120x36 board, so the middle column stays 52x26", got)
 	}
 	m.Update(tea.WindowSizeMsg{Width: 100, Height: 36})
 	if got := (*panes)[0].resizes; got[len(got)-1] != [2]int{100, 31} {
@@ -349,5 +352,67 @@ func TestAParentThatCannotAskSaysSoOnce(t *testing.T) {
 	out := Render(m.view, m.st, 120, 36)
 	if strings.Count(out, "cannot ask for permission headless") != 1 {
 		t.Fatalf("one note expected:\n%s", out)
+	}
+}
+
+func TestABigTerminalGetsExactlyTheMockupsBoardFramedAndCentred(t *testing.T) {
+	for _, c := range []struct{ w, h, bw, bh int }{{250, 57, 120, 36}, {122, 38, 120, 36}, {121, 38, 121, 38}, {100, 30, 100, 30}} {
+		if bw, bh := BoardSize(c.w, c.h); bw != c.bw || bh != c.bh {
+			t.Errorf("%dx%d draws %dx%d, want %dx%d", c.w, c.h, bw, bh, c.bw, c.bh)
+		}
+	}
+	m, _, _, _ := sessionModel(t, 250, 57)
+	out := strings.Split(m.View(), "\n")
+	if len(out) != 57 {
+		t.Fatalf("%d lines", len(out))
+	}
+	top, left := (57-38)/2, (250-122)/2
+	for i, line := range out {
+		if w := lipgloss.Width(line); w != 250 {
+			t.Fatalf("line %d is %d wide", i, w)
+		}
+	}
+	plain := func(s string) string { return sgrSeq.ReplaceAllString(s, "") }
+	if got := []rune(plain(out[top])); string(got[left]) != "┌" || string(got[left+121]) != "┐" {
+		t.Fatalf("no top border at row %d col %d: %q", top, left, plain(out[top]))
+	}
+	if got := []rune(plain(out[top+37])); string(got[left]) != "└" {
+		t.Fatalf("no bottom border: %q", plain(out[top+37]))
+	}
+	if !strings.Contains(plain(out[top+1]), "│ Rig · my-repo") {
+		t.Fatalf("the board's header sits just inside the border: %q", plain(out[top+1]))
+	}
+}
+
+func TestAFailedSendShowsWhyInsteadOfTheHint(t *testing.T) {
+	m, src, _ := chatSession(t)
+	src.chatSendErr = errors.New("no parent CLI is installed here")
+	press(m, "enter")
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("hi")})
+	run(press(m, "enter"), m)
+	out := Render(m.view, m.st, 120, 36)
+	if !strings.Contains(out, "Chat send failed: no parent CLI is installed here") {
+		t.Fatalf("the reason must be on screen:\n%s", out)
+	}
+	if m.st.Prompt != "hi" {
+		t.Fatalf("the draft is kept: %q", m.st.Prompt)
+	}
+}
+
+func TestTheParentWhoWillAnswerIsNamedBeforeTheFirstMessage(t *testing.T) {
+	m, src, _, _ := sessionModel(t, 120, 36)
+	src.chatStatus = chatOn()
+	src.chatStatus.Parent = "claude"
+	m.csLast = time.Time{}
+	run(m.fetchChatStatus(), m)
+	out := Render(m.view, m.st, 120, 36)
+	if !strings.Contains(out, "Parent · claude") || !strings.Contains(out, "(claude)") {
+		t.Fatalf("who answers is not named:\n%s", out)
+	}
+	src.chatStatus.Parent = ""
+	m.csLast = time.Time{}
+	run(m.fetchChatStatus(), m)
+	if out := Render(m.view, m.st, 120, 36); !strings.Contains(out, "is installed here, so install claude or cod") {
+		t.Fatalf("no installed parent must be said:\n%s", out)
 	}
 }

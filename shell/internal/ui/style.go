@@ -191,3 +191,40 @@ func fixSGR(seq string) string {
 	}
 	return seq
 }
+
+// The mockup is one 120x36 board inside a thin border. A terminal with room for that border gets exactly it,
+// centred on the mockup's ground; a smaller one gets the board filling the window, as before.
+const (
+	DesignW = 120
+	DesignH = 36
+)
+
+// BoardSize is the size the board is drawn at in a terminal of w by h.
+func BoardSize(w, h int) (int, int) {
+	if w >= DesignW+2 && h >= DesignH+2 {
+		return DesignW, DesignH
+	}
+	return w, h
+}
+
+// Frame puts a bw by bh board inside the mockup's border, centred in a ww by wh terminal.
+func Frame(board []string, bw, bh, ww, wh int) []string {
+	left := max(0, (ww-bw-2)/2)
+	top := max(0, (wh-bh-2)/2)
+	pad := strings.Repeat(" ", left)
+	tail := strings.Repeat(" ", max(0, ww-left-bw-2))
+	blank := strings.Repeat(" ", ww)
+	out := make([]string, 0, wh)
+	for len(out) < top {
+		out = append(out, blank)
+	}
+	out = append(out, pad+border("┌"+strings.Repeat("─", bw)+"┐")+tail)
+	for _, line := range board {
+		out = append(out, pad+border("│")+line+border("│")+tail)
+	}
+	out = append(out, pad+border("└"+strings.Repeat("─", bw)+"┘")+tail)
+	for len(out) < wh {
+		out = append(out, blank)
+	}
+	return out[:wh]
+}

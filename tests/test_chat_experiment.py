@@ -460,6 +460,28 @@ class CodexServer(Base):
         self.assertIn(("assistant", "decision was denied"), texts)
 
 
+class NoParentSet(Base):
+    def setUp(self):
+        super().setUp()
+        (self.repo / ".rig" / "harness.toml").write_text("[project]\nenabled = true\n")  # `rig parent` is gone; often unset
+
+    def test_the_first_installed_parent_answers_and_status_names_it(self):
+        self.assertEqual(rig_chat.status(self.repo)["parent"], "")
+        with self.assertRaisesRegex(rig_chat.ChatError, "no parent CLI is installed here"):
+            rig_chat.send(self.repo, "hi")
+        stand_in(self.bin, "grok", [{"type": "result", "result": "hi"}])
+        stand_in(self.bin, "codex", CODEX_STREAM)
+        self.assertEqual(rig_chat.status(self.repo)["parent"], "codex", "the preferred order: claude, then codex, ...")
+        started = rig_chat.send(self.repo, "hi")
+        self.assertEqual(started["parent"], "codex")
+        self.wait_idle(started["session"])
+
+    def test_the_project_parent_still_wins(self):
+        (self.repo / ".rig" / "harness.toml").write_text('parent = "grok"\n[project]\nenabled = true\n')
+        stand_in(self.bin, "codex", CODEX_STREAM)
+        self.assertEqual(rig_chat.status(self.repo)["parent"], "grok")
+
+
 class OtherParents(Base):
     def test_grok_gets_a_session_id_then_resumes_it(self):
         stand_in(self.bin, "grok", [{"type": "text", "data": "hi"}, {"type": "result", "result": "hi"}])

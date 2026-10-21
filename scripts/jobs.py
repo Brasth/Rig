@@ -138,9 +138,14 @@ def _first_line(text: str, limit: int = 88) -> str:
 _INSTRUCTION = re.compile(
     r"rig[_ ]job[_ ]inbox|first rig operation|(?:not|isn'?t) (?:the )?orchestrator|worker only|worker not|"
     r"read-only (?:reviewer|worker)|no agents|computer[- ]use|do not spawn|handshake|^(?:work )?context\b|"
-    r"^(?:you are|you're) (?:a |an )?(?:rig )?(?:worker|reviewer|child)\b",
+    r"^(?:you are|you're) (?:a |an )?(?:rig )?(?:worker|reviewer|child)\b|"
+    # scope labels a parent puts before the task: "Scoped bugfix, no children/browser/...", "Exact report correction
+    # only", "Documentation-only continuation", "Same scoped writer continuation", "Workdir /path"
+    r"\bno (?:children|other files|agents)\b|^work ?dir\b|^(?:scoped|exact|same)\b[^.]*\b(?:only|continuation|repair|bugfix|update)\b|"
+    r"^[a-z-]+-only (?:continuation|update|change)s?$",
     re.IGNORECASE,
 )
+_TASK_LABEL = re.compile(r"^task(?: [\w.-]+)?:\s*", re.IGNORECASE)
 _SENTENCE_END = re.compile(r"(?<=[.!?])\s+|(?<=[.!?])(?=[A-Z])")
 
 
@@ -159,9 +164,12 @@ def task_from_brief(text: str, job_id: str) -> str:
         if any(m in low for m in PREAMBLE_MARKERS):
             continue
         for part in _SENTENCE_END.split(s):
-            part = part.strip()
-            if part and not _INSTRUCTION.search(part):
+            part = _TASK_LABEL.sub("", part.strip()).strip()
+            if part and not _INSTRUCTION.search(part.rstrip(".")):
                 lines.append(part)
+    if lines:
+        first = lines[0]
+        return _first_line(first[:1].upper() + first[1:])  # the first sentence that says what to do, like the mockup's short titles
     if lines:
         return _first_line(" ".join(lines[:2]))
     slug = job_id.split("-", 1)

@@ -290,16 +290,30 @@ def transcript(repo, session, tail: int = 200) -> dict:
 def status(repo) -> dict:
     on = enabled(repo)
     available = [name for name in HEADLESS if shutil.which(name)]
-    result = {"enabled": on, "parents": sorted(HEADLESS), "available": available, "sessions": []}
+    result = {"enabled": on, "parents": sorted(HEADLESS), "available": available, "sessions": [], "parent": default_parent(repo)}
     if on:
         result["sessions"] = [{"id": s["id"], "parent": s["parent"], "state": s["state"], "turns": s.get("turns", 0)} for s in sessions(repo)[:20]]
     return result
 
 
+PREFERRED = ("claude", "codex", "grok", "opencode", "omp", "pi", "agy")  # the order a parent is picked in when none is set
+
+
+def default_parent(repo) -> str:
+    """The project's parent, or else the first parent CLI installed here; empty when there is none at all."""
+    import harness
+    parent = harness.parse_harness(harness.harness_path(Path(repo)))["parent"]
+    if parent:
+        return parent
+    return next((name for name in PREFERRED if shutil.which(name)), "")
+
+
 def choose_parent(repo, parent: str = "") -> str:
     if not parent:
-        import harness
-        parent = harness.parse_harness(harness.harness_path(Path(repo)))["parent"]
+        parent = default_parent(repo)
+        if not parent:
+            raise ChatError("no parent CLI is installed here (" + ", ".join(PREFERRED) + "); install one, or name one with "
+                            "rig shell --parent NAME")
     if parent not in HEADLESS:
         raise ChatError(f"the chat supports {', '.join(sorted(HEADLESS))} as the parent, not {parent or 'none'}; pass --parent")
     if not shutil.which(parent):
