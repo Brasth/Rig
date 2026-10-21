@@ -57,6 +57,8 @@ def gate(repo, job_dir):
         return {"applies": True, "ok": True, "merged": True, "merge_commit": record.get("merge_commit", "")}
     if record.get("removed") and not record.get("merged"):
         raise GateRefused("worktree_removed", "the job's worktree was removed before it was merged")
+    if record.get("held"):
+        raise GateRefused("held", "the owner is holding this job's changes; it merges after the hold is released (rig shell, h)")
     busy = worktrees._busy(record["path"]) if Path(record["path"]).is_dir() else []
     if busy:
         raise GateRefused("worktree_busy", "a process is still running in the worktree (pid " + ", ".join(map(str, busy)) + ")")

@@ -103,7 +103,7 @@ func changesScreen(v *view.View, st State, w, h int) ([]string, string) {
 	a := st.App
 	rows := v.Rows("Jobs")
 	foot := splitHints(st, [][2]string{{"[ ]", "file"}, {"←→", "job"}, {"c", "comment"}, {"esc", "back"}},
-		[][2]string{{"↑↓", "scroll"}, {"⌃k", "files"}, {"?", "help"}}, w)
+		[][2]string{{"u", "undo"}, {"h", "hold"}, {"⌃k", "files"}, {"?", "help"}}, w)
 	if len(rows) == 0 {
 		lines := []string{"", center(st.dim("No changes yet. When a helper finishes, what it changed shows here."), w)}
 		for len(lines) < h {

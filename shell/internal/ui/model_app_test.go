@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -545,5 +546,98 @@ func TestAStoppedSandboxSaysSoAndOffersTheWaysOut(t *testing.T) {
 	run(press(m, "3"), m)
 	if last := src.settingsSaved[len(src.settingsSaved)-1]; last != [3]string{"sandbox.provider", "host", "repo"} {
 		t.Fatalf("this machine instead: %v", src.settingsSaved)
+	}
+}
+
+func sampleToday() *view.Today {
+	var t view.Today
+	_ = json.Unmarshal([]byte(`{"rows": [
+		{"job_id": "job-3b9", "title": "Rate limit POST /login", "worker": "claude", "branch": "main", "state": "applied", "at": 1792500000, "commit": "7f3a2c1", "files": 3, "added": 151, "deleted": 1},
+		{"job_id": "job-4c1", "title": "Add index to session store", "worker": "opencode", "branch": "main", "state": "undone", "at": 1792499000, "commit": "4e91b0c", "files": 1, "added": 4, "deleted": 0},
+		{"job_id": "job-81c", "title": "Tests for password reset", "worker": "codex", "branch": "main", "state": "held", "at": 1792498000}]}`), &t)
+	return &t
+}
+
+func TestDoneTodayUndoesAndRedoesAfterAQuestion(t *testing.T) {
+	m, src := appModel(t)
+	src.today = sampleToday()
+	run(m.runPalette(paletteItem{Action: "today"}, ""), m)
+	out := appScreen(m)
+	for _, want := range []string{"done today", "Done today  applied, held and undone", "Rate limit POST /login", "applied",
+		"undone by you", "held", "3 files +151 −1", "on main as 7f3a2c1", "u undo"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q:\n%s", want, out)
+		}
+	}
+	press(m, "u")
+	if m.st.Mode != ModeConfirm || !strings.Contains(m.st.Prompt, "It reverts 7f3a2c1 on main") {
+		t.Fatalf("undo asks first: %q", m.st.Prompt)
+	}
+	run(press(m, "y"), m)
+	if last := src.calls[len(src.calls)-1]; last.method != "applies.undo" || last.params["id"] != "job-3b9" {
+		t.Fatalf("undone: %v", src.calls)
+	}
+	press(m, "down")
+	press(m, "r")
+	run(press(m, "y"), m)
+	if last := src.calls[len(src.calls)-1]; last.method != "applies.redo" || last.params["id"] != "job-4c1" {
+		t.Fatalf("redone: %v", src.calls)
+	}
+	press(m, "down")
+	run(press(m, "h"), m)
+	if last := src.calls[len(src.calls)-1]; last.method != "applies.hold" || last.params["on"] != false {
+		t.Fatalf("released: %v", src.calls)
+	}
+}
+
+func TestTheChangesTabHoldsAHelpersWork(t *testing.T) {
+	m, src := appModel(t)
+	withConversation(t, m, src)
+	for i := range m.view.Jobs {
+		m.view.Jobs[i].Ask = false
+	}
+	src.today = sampleToday()
+	run(m.fetchToday(), m)
+	run(press(m, "2"), m)
+	run(press(m, "h"), m)
+	if last := src.calls[len(src.calls)-1]; last.method != "applies.hold" || last.params["id"] != "job-7f2" || last.params["on"] != true {
+		t.Fatalf("h holds the shown helper's work: %v", src.calls)
+	}
+	if !strings.Contains(appScreen(m), "u undo") || !strings.Contains(appScreen(m), "h hold") {
+		t.Fatal("the footer names them")
+	}
+}
+
+func TestShipPushesOrOpensAPullRequestAfterAQuestion(t *testing.T) {
+	m, src := appModel(t)
+	src.today = sampleToday()
+	var ship view.ShipStatus
+	_ = json.Unmarshal([]byte(`{"branch": "main", "upstream": "origin/main", "title": "Rate limit login, reset-token tests", "pr_branch": "rig/rate-limit-login", "gh": true,
+		"ahead": [{"commit": "7f3a2c1", "subject": "rig: merge job job-3b9"}, {"commit": "b81e09d", "subject": "fix typo in reset email"}]}`), &ship)
+	src.shipStatus = &ship
+	run(m.runPalette(paletteItem{Action: "ship"}, ""), m)
+	out := appScreen(m)
+	for _, want := range []string{"ship", "Ship 2 changes", "main is 2 ahead of origin/main", "Rate limit POST /login", "7f3a2c1", "fix typo in reset email",
+		"[open pull request]", "push to main", "branch rig/rate-limit-login", "title  Rate limit login, reset-token tests", "agents never push · you do"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q:\n%s", want, out)
+		}
+	}
+	press(m, "e")
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("!")})
+	press(m, "enter")
+	run(press(m, "enter"), m)
+	if m.st.Mode != ModeConfirm || !strings.Contains(m.st.Prompt, "open a pull request") {
+		t.Fatalf("asks first: %q", m.st.Prompt)
+	}
+	run(press(m, "y"), m)
+	if last := src.calls[len(src.calls)-1]; last.method != "ship.run" || last.params["mode"] != "pr" || last.params["title"] != "Rate limit login, reset-token tests!" {
+		t.Fatalf("pull request: %v", src.calls)
+	}
+	press(m, "right")
+	run(press(m, "enter"), m)
+	run(press(m, "y"), m)
+	if last := src.calls[len(src.calls)-1]; last.params["mode"] != "push" {
+		t.Fatalf("push: %v", src.calls)
 	}
 }

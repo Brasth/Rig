@@ -269,6 +269,24 @@ func (c *Client) SetSetting(key, value, scope string, timeout time.Duration) (*v
 	return &out, nil
 }
 
+// Today is what helpers applied today (applies.today).
+func (c *Client) Today(timeout time.Duration) (*view.Today, error) {
+	var out view.Today
+	if err := c.Call("applies.today", map[string]any{}, timeout, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// ShipStatus is what is ahead of the upstream branch (ship.status).
+func (c *Client) ShipStatus(timeout time.Duration) (*view.ShipStatus, error) {
+	var out view.ShipStatus
+	if err := c.Call("ship.status", map[string]any{}, timeout, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 // Theme is the board's colour theme (ui.theme).
 func (c *Client) Theme(timeout time.Duration) (*view.ThemeReply, error) {
 	var out view.ThemeReply

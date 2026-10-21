@@ -50,6 +50,8 @@ type AppState struct {
 	FirstRun     bool        // the welcome screen opened by itself: the other steps follow it
 	InstallSel   int         // the no-agents screen's choice
 	ProblemSeen  string      // a problem screen you closed with esc, not shown again for the same problem
+	History      *HistoryState
+	ShipScreen   *ShipState
 }
 
 // Palette is Ctrl-K: ask the parent, open a file, or run a command.
@@ -236,6 +238,12 @@ func AppFrame(v *view.View, st State, w, h int) []string {
 	case "sandbox":
 		return confirm(sandboxProblemScreen(v, st, w, h))
 	}
+	if a.History != nil {
+		return confirm(historyScreen(st, w, h))
+	}
+	if a.ShipScreen != nil {
+		return confirm(shipScreen(st, w, h))
+	}
 	if a.Settings != nil {
 		lines := settingsScreenLines(v, st, w, h-1)
 		keys := [][2]string{{"←→", "change"}, {"⇥", "section"}, {"g", "all repos / this repo"}, {"esc", "back"}}
@@ -418,7 +426,7 @@ func conversationBody(v *view.View, st State, w, h int) ([]string, [][2]string) 
 		}
 		lines = append(lines, "")
 	}
-	for _, r := range doneJobs(v) {
+	for _, r := range appliedCards(v, st) {
 		lines = append(lines, changeCard(st, r, cw)...)
 		lines = append(lines, "")
 	}
@@ -475,7 +483,7 @@ func changeCard(st State, r view.Row, cw int) []string {
 	head := "  " + st.bold(fit(clean(r.Title), cw-24)) + "  "
 	right := st.paint(colGreen, "● checked") + "  "
 	line1 := head + strings.Repeat(" ", max(1, cw-2-lipgloss.Width(head)-lipgloss.Width(right))) + right
-	line2 := "  " + st.dot(worker) + " " + st.dim(worker+" · "+briefOutcome(strings.TrimPrefix(r.Second, r.Worker+" · "))) + "     " + st.faint("2 changes")
+	line2 := "  " + st.dot(worker) + " " + st.dim(r.Second) + "     " + st.faint("⌃k › done today")
 	return roundBox(st, []string{line1, "", line2}, cw, false)
 }
 
@@ -622,8 +630,8 @@ func agentsPanel(v *view.View, st State, pw, h int) []string {
 		return t + strings.Repeat(" ", max(1, iw-lipgloss.Width(t)-lipgloss.Width(right))) + st.faint(right)
 	}
 	lines := []string{""}
-	done := doneJobs(v)
-	lines = append(lines, head("Done today", fmt.Sprint(len(done))))
+	done := appliedCards(v, st)
+	lines = append(lines, head("Done today", fmt.Sprintf("%d · all ›", len(done))))
 	if len(done) == 0 {
 		lines = append(lines, st.faint("  nothing applied yet"))
 	}
@@ -631,8 +639,13 @@ func agentsPanel(v *view.View, st State, pw, h int) []string {
 		if i == 3 {
 			break
 		}
-		lines = append(lines, " "+st.dot(r.Worker)+"  "+fit(clean(r.Title), iw-4))
-		lines = append(lines, "    "+st.paint(colGreen, fit(r.Worker+" · "+briefOutcome(strings.TrimPrefix(r.Second, r.Worker+" · ")), iw-4)))
+		undo := ""
+		if i == 0 && st.Today != nil {
+			undo = st.dim("u") + " " + st.faint("undo")
+		}
+		top := " " + st.dot(r.Worker) + "  " + fit(clean(r.Title), iw-12)
+		lines = append(lines, top+strings.Repeat(" ", max(1, iw-lipgloss.Width(top)-lipgloss.Width(undo)))+undo)
+		lines = append(lines, "    "+st.paint(colGreen, fit(r.Second, iw-4)))
 	}
 	lines = append(lines, "", head("Agents", "started by "+parent))
 	parentRow := " " + st.dot(parent) + "  " + st.bold(parent) + "  " + st.faint("parent · in the conversation")
@@ -729,6 +742,8 @@ var PaletteCommands = [][3]string{
 	{"queue a task", "park it for the parent to pick", "queue"},
 	{"change theme", "rig, light, dark, material, dracula", "theme"},
 	{"search the code", "text in every file (⌃f)", "search"},
+	{"done today", "what was applied, undo and redo", "today"},
+	{"ship changes", "push, or open a pull request", "ship"},
 	{"settings", "theme, agents, routing, sandbox, toml", "settings"},
 	{"start the sandbox", "rig env up", "env-up"},
 	{"stop a helper", "from the agents panel", "panel"},
@@ -844,4 +859,26 @@ func threadBody(st State, w, h int) ([]string, [][2]string) {
 		lines = append(lines, "")
 	}
 	return indentAll(lines[:h], (w-cw)/2, w), [][2]string{{"esc", "back"}, {"s", "stop"}, {"⇥", "agents"}}
+}
+
+// appliedCards are what was applied today, as rows for the change cards and the panel: from applies.today when the
+// server has it, else the jobs the parent verified.
+func appliedCards(v *view.View, st State) []view.Row {
+	if st.Today == nil {
+		var out []view.Row
+		for _, r := range doneJobs(v) {
+			r.Second = r.Worker + " · " + briefOutcome(strings.TrimPrefix(r.Second, r.Worker+" · "))
+			out = append(out, r)
+		}
+		return out
+	}
+	var out []view.Row
+	for _, r := range st.Today.Rows {
+		if r.State != "applied" {
+			continue
+		}
+		out = append(out, view.Row{ID: r.JobID, Title: r.Title, Worker: r.Worker, Label: "Verified",
+			Second: fmt.Sprintf("%s · applied · %d files +%d −%d", r.Worker, r.Files, r.Added, r.Deleted)})
+	}
+	return out
 }

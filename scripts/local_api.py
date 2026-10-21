@@ -65,6 +65,12 @@ LOCAL_METHODS = {
     "chat.transcript": (False, "EXPERIMENT: a chat session's transcript (params: session, tail)"),
     "chat.send": (True, "EXPERIMENT: send one message to the headless parent; the answer arrives in the transcript (params: message, session, parent)"),
     "chat.cancel": (True, "EXPERIMENT: stop a chat session's running turn (params: session)"),
+    "applies.today": (False, "Done today: the helpers' work applied, undone or held, newest first"),
+    "applies.undo": (True, "Undo an applied job: revert its merge commit on its base branch (params: id)"),
+    "applies.redo": (True, "Apply an undone job again (params: id)"),
+    "applies.hold": (True, "Hold a job's branch so the parent's acceptance does not merge it, or release it (params: id, on)"),
+    "ship.status": (False, "What is ahead of the upstream branch, and the pull request it would make"),
+    "ship.run": (True, "Push what is ahead, or open a pull request with gh (params: mode push|pr, title, body)"),
     "settings.app": (False, "The board's Settings screen: the values it can change and where each is kept"),
     "settings.set": (True, "Change one of the board's settings (params: key, value, scope all|repo)"),
     "ui.theme": (False, "The board's colour theme and where it is kept (all repos or this repo)"),
@@ -180,7 +186,8 @@ class Api:
         if method == "workspace.status":
             return self._workspace(request_id, params)
         if method in ("job.evidence", "job.diff", "fleet.status", "settings.view", "env.recovery", "env.recover", "log.follow", "env.shell", "shell.parent",
-                      "chat.status", "chat.transcript", "chat.send", "chat.cancel", "chat.answer", "chat.parent", "ui.theme", "ui.set_theme", "settings.app", "settings.set"):
+                      "chat.status", "chat.transcript", "chat.send", "chat.cancel", "chat.answer", "chat.parent", "ui.theme", "ui.set_theme", "settings.app", "settings.set",
+                      "applies.today", "applies.undo", "applies.redo", "applies.hold", "ship.status", "ship.run"):
             return self._environment(request_id, method, params)
         if method in ("ui.request", "events.list", "events.ack"):
             return self._companion(request_id, method, params)
@@ -292,6 +299,29 @@ def _environment(self, request_id, method, params):
                 return _reply(request_id, error=_error(INVALID_PARAMS, "id must be a string"))
             import env_shell
             result = env_shell.plan(self.repo, job_id)
+        elif method.startswith("applies.") or method.startswith("ship."):
+            import applies
+            job_id = params.get("id", "")
+            if method in ("applies.undo", "applies.redo", "applies.hold") and (not isinstance(job_id, str) or not job_id):
+                return _reply(request_id, error=_error(INVALID_PARAMS, "id must be a job id"))
+            if method == "applies.today":
+                result = applies.today(self.repo)
+            elif method == "applies.undo":
+                result = applies.undo(self.repo, job_id)
+            elif method == "applies.redo":
+                result = applies.redo(self.repo, job_id)
+            elif method == "applies.hold":
+                on = params.get("on", True)
+                if not isinstance(on, bool):
+                    return _reply(request_id, error=_error(INVALID_PARAMS, "on must be true or false"))
+                result = applies.hold(self.repo, job_id, on)
+            elif method == "ship.status":
+                result = applies.ship_status(self.repo)
+            else:
+                mode, title, body = params.get("mode"), params.get("title", ""), params.get("body", "")
+                if mode not in ("push", "pr") or not isinstance(title, str) or not isinstance(body, str):
+                    return _reply(request_id, error=_error(INVALID_PARAMS, "mode is push or pr; title and body are strings"))
+                result = applies.ship(self.repo, mode, title, body)
         elif method in ("settings.app", "settings.set"):
             import ui_settings
             if method == "settings.app":

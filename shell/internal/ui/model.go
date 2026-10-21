@@ -37,6 +37,8 @@ type Source interface {
 	Theme(timeout time.Duration) (*view.ThemeReply, error)
 	JobDiff(id string, timeout time.Duration) (*view.JobDiff, error)
 	AppSettings(timeout time.Duration) (*view.AppSettings, error)
+	Today(timeout time.Duration) (*view.Today, error)
+	ShipStatus(timeout time.Duration) (*view.ShipStatus, error)
 	SetSetting(key, value, scope string, timeout time.Duration) (*view.AppSettings, error)
 	SetTheme(theme, scope string, timeout time.Duration) (*view.ThemeReply, error)
 }
@@ -212,6 +214,7 @@ type Model struct {
 	dfBusy     bool
 	dfLast     time.Time
 	lastAsk    string // the request the bell last rang for
+	tdLast     time.Time
 	ringer     func() // rings the terminal bell; tests replace it
 	seenJobs   map[string]bool
 	themeFixed bool // rig shell --theme chose the theme for this board; the saved one is not loaded
@@ -863,7 +866,7 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, waitPane(m.pane)
 	case tickMsg:
-		return m, tea.Batch(m.fetch(), m.fetchWorkspace(false), m.fetchFleet(false), m.fetchSettings(false), m.fetchLog(false), m.fetchDock(false), m.fetchChatStatus(), m.fetchChat(false), m.fetchDiff(false), tick())
+		return m, tea.Batch(m.fetch(), m.fetchWorkspace(false), m.fetchFleet(false), m.fetchSettings(false), m.fetchLog(false), m.fetchDock(false), m.fetchChatStatus(), m.fetchChat(false), m.fetchDiff(false), m.fetchTodayEvery(), tick())
 	case chatStatusMsg:
 		m.csBusy, m.csLast = false, m.now()
 		if msg.err != nil || msg.status == nil || !msg.status.Enabled {
@@ -902,6 +905,24 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Batch(m.spin(), m.bell())
 		}
 		return m, m.spin()
+	case todayMsg:
+		m.tdLast = m.now()
+		if msg.err == nil {
+			m.st.Today = msg.t
+		}
+	case shipMsg:
+		m.st.Ship, m.st.ShipE = msg.s, ""
+		if msg.err != nil {
+			m.st.ShipE = msg.err.Error()
+		}
+	case appliedMsg:
+		if msg.err != nil {
+			m.st.Message = "Could not do that: " + msg.err.Error()
+		} else {
+			m.st.Message = msg.text
+		}
+		m.fetching = false
+		return m, tea.Batch(m.fetchToday(), m.fetchShip(), m.fetch())
 	case appSettingsMsg:
 		if msg.err != nil {
 			m.st.Message = "Could not save the setting: " + msg.err.Error()
@@ -1500,6 +1521,15 @@ func (m *Model) confirmKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.st.Message = "stopping " + id
 			src := m.src
 			return m, func() tea.Msg { return chatCancelMsg{err: src.ChatCancel(id, callTimeout)} }
+		}
+		switch method {
+		case "applies.undo", "applies.redo":
+			word := map[string]string{"applies.undo": "undone ", "applies.redo": "applied again "}[method]
+			return m, m.applyAct(method, map[string]any{"id": id}, word+id)
+		case "ship.push":
+			return m, m.applyAct("ship.run", map[string]any{"mode": "push"}, "pushed")
+		case "ship.pr":
+			return m, m.applyAct("ship.run", map[string]any{"mode": "pr", "title": id}, "pull request opened")
 		}
 		if method == "install" {
 			m.st.Message, m.csLast, m.csBusy = "installing…", time.Time{}, false

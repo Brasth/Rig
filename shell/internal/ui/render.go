@@ -75,6 +75,9 @@ type State struct {
 	Picker       *Picker   // the parent picker, while it is open
 	App          *AppState // the app (the design's ADE screens); nil while the board shows
 	AppSettings  *view.AppSettings
+	Today        *view.Today      // what helpers applied today
+	Ship         *view.ShipStatus // what is ahead of the upstream branch
+	ShipE        string
 	SlashSel     int       // the chosen line of the / command list
 	Now          time.Time // the clock, for the working spinner and its elapsed time; zero in golden tests
 }

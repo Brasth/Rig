@@ -145,6 +145,14 @@ func (e *ensuringSource) SetSetting(key, value, scope string, timeout time.Durat
 	return e.client.SetSetting(key, value, scope, timeout)
 }
 
+func (e *ensuringSource) Today(timeout time.Duration) (*view.Today, error) {
+	return e.client.Today(timeout)
+}
+
+func (e *ensuringSource) ShipStatus(timeout time.Duration) (*view.ShipStatus, error) {
+	return e.client.ShipStatus(timeout)
+}
+
 func (e *ensuringSource) Theme(timeout time.Duration) (*view.ThemeReply, error) {
 	return e.client.Theme(timeout)
 }

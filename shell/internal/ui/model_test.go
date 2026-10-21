@@ -67,6 +67,8 @@ type fakeSource struct {
 	theme           *view.ThemeReply
 	diffs           map[string]*view.JobDiff
 	appSettings     *view.AppSettings
+	today           *view.Today
+	shipStatus      *view.ShipStatus
 	settingsSaved   [][3]string
 	diffIDs         []string
 	themeSaved      [][2]string
@@ -130,6 +132,18 @@ func (f *fakeSource) AppSettings(time.Duration) (*view.AppSettings, error) {
 func (f *fakeSource) SetSetting(key, value, scope string, _ time.Duration) (*view.AppSettings, error) {
 	f.settingsSaved = append(f.settingsSaved, [3]string{key, value, scope})
 	return f.appSettings, nil
+}
+func (f *fakeSource) Today(time.Duration) (*view.Today, error) {
+	if f.today == nil {
+		return nil, errors.New("no applies here")
+	}
+	return f.today, nil
+}
+func (f *fakeSource) ShipStatus(time.Duration) (*view.ShipStatus, error) {
+	if f.shipStatus == nil {
+		return nil, errors.New("no upstream")
+	}
+	return f.shipStatus, nil
 }
 func (f *fakeSource) Theme(time.Duration) (*view.ThemeReply, error) {
 	if f.theme == nil {

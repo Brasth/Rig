@@ -126,6 +126,35 @@ type AppSettings struct {
 	Shell             string          `json:"shell"`
 }
 
+// Today is applies.today: the helpers' work applied, undone or held, newest first.
+type Today struct {
+	Rows []struct {
+		JobID   string  `json:"job_id"`
+		Title   string  `json:"title"`
+		Worker  string  `json:"worker"`
+		Branch  string  `json:"branch"`
+		State   string  `json:"state"` // applied, undone or held
+		At      float64 `json:"at"`
+		Commit  string  `json:"commit"`
+		Files   int     `json:"files"`
+		Added   int     `json:"added"`
+		Deleted int     `json:"deleted"`
+	} `json:"rows"`
+}
+
+// ShipStatus is ship.status: what is ahead of the upstream branch.
+type ShipStatus struct {
+	Branch   string `json:"branch"`
+	Upstream string `json:"upstream"`
+	Ahead    []struct {
+		Commit  string `json:"commit"`
+		Subject string `json:"subject"`
+	} `json:"ahead"`
+	Title    string `json:"title"`
+	PRBranch string `json:"pr_branch"`
+	GH       bool   `json:"gh"`
+}
+
 // ThemeReply is ui.theme and ui.set_theme: the board's theme and where it is kept ("all", "repo" or "default").
 type ThemeReply struct {
 	Theme  string   `json:"theme"`

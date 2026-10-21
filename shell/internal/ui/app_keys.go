@@ -169,6 +169,10 @@ func (m *Model) appKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.problemKey(problemScreen(m.st), key)
 	case a.Settings != nil:
 		return m.settingsKey(k)
+	case a.History != nil:
+		return m.historyKey(key)
+	case a.ShipScreen != nil:
+		return m.shipKey(k)
 	case a.Palette != nil:
 		return m.paletteKey(k)
 	case a.Search != nil:
@@ -204,6 +208,13 @@ func (m *Model) appKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if len(jobs) > 0 {
 				m.askStopJob(jobs[clampSel(a.PanelSel, len(jobs))])
 			}
+		case "u":
+			if done := appliedCards(m.view, m.st); len(done) > 0 && m.st.Today != nil {
+				m.askApply("applies.undo", done[0].ID, "Undo "+clean(done[0].Title)+"? It reverts its merge.")
+			}
+		case "a":
+			a.Panel, a.History = false, &HistoryState{}
+			return m, m.fetchToday()
 		case "tab", "esc":
 			a.Panel = false
 		}
@@ -348,9 +359,9 @@ func (m *Model) appTabKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 		case "[":
 			a.DiffFile, a.DiffOff = max(0, a.DiffFile-1), 0
-		case "left", "right", "h", "l":
+		case "left", "right": // h is hold here, as in the design
 			step := 1
-			if key == "left" || key == "h" {
+			if key == "left" {
 				step = -1
 			}
 			m.move(step)
@@ -359,6 +370,29 @@ func (m *Model) appTabKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "c":
 			if m.selectedJobID() != "" {
 				a.Commenting, m.st.Prompt = true, ""
+			}
+		case "h", "u":
+			id := m.selectedJobID()
+			state := ""
+			if m.st.Today != nil {
+				for _, r := range m.st.Today.Rows {
+					if r.JobID == id {
+						state = r.State
+					}
+				}
+			}
+			switch {
+			case key == "u" && state == "applied":
+				m.askApply("applies.undo", id, "Undo "+id+"? It reverts its merge.")
+			case key == "u":
+				m.st.Message = id + " is not applied, so there is nothing to undo"
+			case id != "":
+				on := state != "held"
+				word := "holding "
+				if !on {
+					word = "released "
+				}
+				return m, m.applyAct("applies.hold", map[string]any{"id": id, "on": on}, word+id)
 			}
 		case "esc":
 			a.Tab = 1
@@ -742,6 +776,13 @@ func (m *Model) runPalette(it paletteItem, query string) tea.Cmd {
 		a.Panel = true
 	case "settings":
 		return m.openSettings("general")
+	case "today":
+		a.History = &HistoryState{}
+		return m.fetchToday()
+	case "ship":
+		a.ShipScreen = &ShipState{}
+		m.st.Ship, m.st.ShipE = nil, ""
+		return tea.Batch(m.fetchShip(), m.fetchToday())
 	case "search":
 		a.Search = &SearchState{}
 		return m.fetchChanged()
