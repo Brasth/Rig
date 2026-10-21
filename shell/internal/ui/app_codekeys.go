@@ -213,6 +213,29 @@ func (m *Model) closeTab() tea.Cmd {
 	return m.runPalette(paletteItem{Action: "file:" + a.Tabs[min(at, len(a.Tabs)-1)]}, "")
 }
 
+// closeTabFile closes one tab by its × or a middle click: the open one as ⌃w does; another one is just taken off the
+// row, or, with changes not saved, opened first so closing it asks.
+func (m *Model) closeTabFile(file string) tea.Cmd {
+	a := m.st.App
+	if file == a.File {
+		return m.closeTab()
+	}
+	if a.Bufs[file] != nil {
+		cmd := m.runPalette(paletteItem{Action: "file:" + file}, "")
+		if a.File == file {
+			return tea.Batch(cmd, m.closeTab())
+		}
+		return cmd
+	}
+	for i, t := range a.Tabs {
+		if t == file {
+			a.Tabs = append(a.Tabs[:i:i], a.Tabs[i+1:]...)
+			break
+		}
+	}
+	return nil
+}
+
 // startEdit begins editing the open file here (e), with the cursor on the first line shown.
 func (m *Model) startEdit() {
 	a := m.st.App

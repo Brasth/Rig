@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import json
 import os
+import shutil
 import stat
 import subprocess
 import sys
@@ -245,6 +246,27 @@ class HostedCompanion(Served):
         self.assertIsNone(self.proc.poll(), "server must stay up while a session is registered")
         self.call("ui.request", {"payload": {"op": "unregister", "session": "keep"}})
         self.proc.wait(timeout=15)
+        self.assertFalse(endpoint.exists())
+
+    def test_a_server_leaves_when_rig_is_updated_under_it(self):
+        scripts = Path(self.td.name) / "rig-scripts"
+        shutil.copytree(Path(self.script).parent, scripts, ignore=shutil.ignore_patterns("__pycache__"))
+        self.script = str(scripts / "local_api.py")
+        endpoint, _ = self.start_with()
+        time.sleep(1)
+        self.assertIsNone(self.proc.poll(), "unchanged code keeps serving")
+        (scripts / "ui_settings.py").write_text((scripts / "ui_settings.py").read_text() + "\n# updated\n")
+        self.proc.wait(timeout=15)
+        self.assertIn("rig was updated", self.proc.stderr.read())
+        self.assertFalse(endpoint.exists())
+
+    def test_starting_the_shell_replaces_a_server_running_other_code(self):
+        endpoint, _ = self.start_with()
+        self.assertFalse(local_api.replace_outdated(self.repo), "the same code keeps serving")
+        self.assertIsNone(self.proc.poll())
+        with mock.patch.object(local_api, "build", return_value="0" * 16):
+            self.assertTrue(local_api.replace_outdated(self.repo))
+        self.proc.wait(timeout=10)
         self.assertFalse(endpoint.exists())
 
     def test_old_control_socket_is_gone(self):

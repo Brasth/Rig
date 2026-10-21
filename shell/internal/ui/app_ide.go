@@ -42,6 +42,8 @@ type codeBuf struct {
 // codeAsk is a question the code tab asks on its last row: go to which line, find what, a new file's or a new name.
 type codeAsk struct {
 	kind, label, text string
+	replace           bool   // ⌃r: what is found is then replaced
+	find              string // what replace replaces, once it asks for the new text
 }
 
 // linesID names a version of the file: a new slice for every edit, the same one when nothing changed since.
@@ -420,7 +422,7 @@ func (m *Model) askKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch k.Type {
 	case tea.KeyEsc:
 		a.CodeAsk = nil
-		if q.kind == "find" {
+		if q.kind == "find" || q.kind == "replace" {
 			a.Find = ""
 		}
 	case tea.KeyBackspace:
@@ -429,8 +431,29 @@ func (m *Model) askKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case tea.KeyRunes, tea.KeySpace:
 		q.text += string(k.Runes)
+	case tea.KeyCtrlA:
+		if q.kind == "replace" {
+			a.CodeAsk, a.Find = nil, ""
+			m.replaceOne(q.find, q.text, true) // ⌃a: every one at once
+		}
 	case tea.KeyEnter:
 		switch q.kind {
+		case "replace":
+			if k.Alt {
+				a.CodeAsk, a.Find = nil, ""
+				m.replaceOne(q.find, q.text, true)
+				return m, nil
+			}
+			m.replaceOne(q.find, q.text, false)
+		case "find":
+			a.Find = q.text
+			if q.replace && q.text != "" {
+				// what to find is known: now what to put in its place
+				m.findNext(q.text, false)
+				q.kind, q.find, q.label, q.text = "replace", q.text, "replace "+q.text+" with", ""
+				return m, nil
+			}
+			m.findNext(q.text, false)
 		case "goto":
 			a.CodeAsk = nil
 			n, err := strconv.Atoi(strings.TrimSpace(q.text))
@@ -446,9 +469,6 @@ func (m *Model) askKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 				a.FileOff = max(0, n-3)
 				a.findAt = pos{n, 0}
 			}
-		case "find":
-			a.Find = q.text
-			m.findNext(q.text, false)
 		case "new", "rename":
 			a.CodeAsk = nil
 			return m, m.fileOp(q.kind, q.text)
@@ -571,6 +591,9 @@ func (m *Model) editFileKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 change:
+	if m.ideKey(k) {
+		return m, nil
+	}
 	switch key {
 	case "ctrl+s":
 		m.saveFile()
@@ -694,9 +717,12 @@ func editKeys(a *AppState) [][2]string {
 		if a.CodeAsk.kind == "find" {
 			return [][2]string{{"⏎", "next"}, {"esc", "close"}}
 		}
+		if a.CodeAsk.kind == "replace" {
+			return [][2]string{{"⏎", "replace"}, {"⌃a", "all"}, {"esc", "close"}}
+		}
 		return [][2]string{{"⏎", "ok"}, {"esc", "cancel"}}
 	}
-	return [][2]string{{"⌃s", "save"}, {"⌃z", "undo"}, {"⌃f", "find"}, {"⌃g", "line"}, {"⌃/", "comment"}, {"esc", "done"}}
+	return [][2]string{{"⌃s", "save"}, {"⌃z", "undo"}, {"⌃f", "find"}, {"⌃r", "replace"}, {"⌃o", "symbol"}, {"⌃/", "comment"}, {"esc", "done"}}
 }
 
 // inRepo is a path the explorer may make, rename or delete: relative, inside the repository, not in .git.

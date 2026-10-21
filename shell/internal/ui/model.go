@@ -31,6 +31,7 @@ type Source interface {
 	Parent(name string, timeout time.Duration) (*view.ShellPlan, error)
 	ChatStatus(timeout time.Duration) (*view.ChatStatus, error)
 	ChatCommands(parent string, timeout time.Duration) (*view.ParentCommands, error)
+	ChatModels(parent string, timeout time.Duration) (*view.ParentModels, error)
 	ChatTranscript(session string, tail int, timeout time.Duration) (*view.ChatTranscript, error)
 	ChatSend(message, session, parent string, timeout time.Duration) (*view.ChatStarted, error)
 	ChatCancel(session string, timeout time.Duration) error
@@ -228,6 +229,7 @@ type Model struct {
 	spinning    bool // the spinner's tick is scheduled
 	chatStat    *view.ChatStatus
 	cmdsFor     string    // the parent whose skills and commands the / menu has
+	modelsAt    time.Time // when the parent's models were last listed
 	edited      string    // the box as the editor last left it (app_edit.go)
 	history     []string  // what was sent from the box, oldest first, for ↑
 	histAt      int       // the message ↑ brought back; -1 while typing
@@ -241,6 +243,8 @@ type Model struct {
 	boxDrag     bool      // the button went down in the reply box: dragging selects its text
 	boxFrom     int       // where in the box's text it went down
 	clickAt     time.Time // the last press, for a double click
+	clickN      int       // presses in a row at one place: 2 a double click, 3 a triple one
+	clicks      int
 	clickX      int
 	clickY      int
 	hoverX      int // the pointer, for the zone drawn underlined
@@ -981,6 +985,8 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.appOn() && m.st.ChatParent != "" && m.st.ChatParent != m.cmdsFor {
 			return m, m.fetchParentCommands(m.st.ChatParent) // the / menu offers this parent's skills and commands
 		}
+	case modelsMsg:
+		m.afterModels(msg)
 	case parentCmdsMsg:
 		if msg.err == nil && msg.parent == m.st.ChatParent {
 			m.st.ParentCommands = msg.list

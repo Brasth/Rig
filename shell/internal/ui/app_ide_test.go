@@ -208,3 +208,125 @@ func TestTheMouseSelectsInTheFileAndTheWheelScrollsIt(t *testing.T) {
 		t.Fatalf("the wheel scrolls the file, the cursor stays: %d %d", a.FileOff, a.CurLine)
 	}
 }
+
+func TestLinesMoveAndCopyUpAndDown(t *testing.T) {
+	m, _ := editing(t, 3, 2)
+	a := m.st.App
+	key(m, tea.KeyUp, true) // ⌥↑
+	if a.FileLines[2] != "  const user = 1" || a.FileLines[3] != "router.post('/login', async (req, res) => {" || a.CurLine != 2 {
+		t.Fatalf("⌥↑ moves the line up, the cursor with it: %q", a.FileLines[:5])
+	}
+	key(m, tea.KeyDown, true)
+	if a.FileLines[3] != "  const user = 1" || a.CurLine != 3 {
+		t.Fatalf("⌥↓ moves it back: %q", a.FileLines[:5])
+	}
+	key(m, tea.KeyShiftDown, true) // ⇧⌥↓
+	if a.FileLines[3] != "  const user = 1" || a.FileLines[4] != "  const user = 1" || a.CurLine != 4 {
+		t.Fatalf("⇧⌥↓ copies the line below, the cursor on the copy: %q", a.FileLines)
+	}
+	keyMsg(m, tea.KeyCtrlZ)
+	keyMsg(m, tea.KeyCtrlL)
+	keyMsg(m, tea.KeyCtrlL)
+	if from, to, ok := a.selRange(); !ok || from != (pos{3, 0}) || to != (pos{5, 0}) {
+		t.Fatalf("⌃l selects the line, and the next on each ⌃l: %v %v", from, to)
+	}
+	key(m, tea.KeyUp, true)
+	if a.FileLines[2] != "  const user = 1" || a.FileLines[3] != "})" {
+		t.Fatalf("⌥↑ moves the selected lines together: %q", a.FileLines)
+	}
+}
+
+func TestTheMatchingBracketAndTheWordAreLit(t *testing.T) {
+	m, _ := editing(t, 2, 42) // on the { that opens the block
+	a := m.st.App
+	if _, to, ok := matchBracket(a.FileLines, a.cursor()); !ok || to != (pos{4, 0}) {
+		t.Fatalf("the { pairs with the } two lines down: %v", to)
+	}
+	keyMsg(m, tea.KeyCtrlCloseBracket)
+	if a.cursor() != (pos{4, 0}) {
+		t.Fatalf("⌃] goes to it: %v", a.cursor())
+	}
+	if _, to, ok := matchBracket(a.FileLines, pos{2, 28}); !ok || to != (pos{2, 37}) {
+		t.Fatalf("( of (req, res) pairs with its ): %v", to)
+	}
+	if wordAt(a.FileLines[3], 9) != "user" || len(wordSpans("user users user_ user", "user")) != 2 {
+		t.Fatal("the word under the cursor, and only whole words")
+	}
+}
+
+func TestFindAndReplace(t *testing.T) {
+	m, _ := editing(t, 0, 0)
+	a := m.st.App
+	a.FileLines = []string{"a cat and a cat", "the Cat"}
+	keyMsg(m, tea.KeyCtrlR)
+	typeText(m, "cat")
+	keyMsg(m, tea.KeyEnter)
+	if a.CodeAsk == nil || a.CodeAsk.kind != "replace" || !strings.Contains(appScreen(m), "1 of 3") {
+		t.Fatalf("⌃r finds, says which of how many, then asks for the new text:\n%s", appScreen(m))
+	}
+	typeText(m, "dog")
+	keyMsg(m, tea.KeyEnter)
+	if a.FileLines[0] != "a dog and a cat" {
+		t.Fatalf("⏎ replaces the one found and goes to the next: %q", a.FileLines)
+	}
+	keyMsg(m, tea.KeyCtrlA)
+	if a.FileLines[0] != "a dog and a dog" || a.FileLines[1] != "the dog" || a.CodeAsk != nil {
+		t.Fatalf("⌃a replaces every one: %q", a.FileLines)
+	}
+	keyMsg(m, tea.KeyCtrlZ)
+	if a.FileLines[1] != "the Cat" {
+		t.Fatal("one undo takes back replace all")
+	}
+}
+
+func TestGoToASymbol(t *testing.T) {
+	m, _ := codeRepo(t)
+	m.st.App.FileLines = []string{"package main", "", "type Server struct {", "}", "", "func (s *Server) Start() error {", "}",
+		"class Box:", "  def open(self):", "export const handler = async (req) => {"}
+	m.Update(tea.KeyMsg{Type: tea.KeyCtrlO})
+	var names []string
+	for _, it := range paletteItems(m.st) {
+		names = append(names, it.Label+"@"+it.Detail)
+	}
+	if got := strings.Join(names, ","); got != "Server@line 3,Start@line 6,Box@line 8,open@line 9,handler@line 10" {
+		t.Fatalf("⌃o lists the file's symbols: %s", got)
+	}
+	m.st.App.Palette.Query = "start"
+	run(press(m, "enter"), m)
+	if m.st.App.FileOff != 2 || m.st.App.Palette != nil {
+		t.Fatalf("⏎ goes to it: %d", m.st.App.FileOff)
+	}
+}
+
+func TestAClickInTheFileStartsEditingThere(t *testing.T) {
+	m, _ := codeRepo(t)
+	m.SetMouse(true)
+	x, y := findOnScreen(t, m, "const user")
+	clickAt(m, x+6, y)
+	a := m.st.App
+	if !a.Editing || a.cursor() != (pos{3, 8}) {
+		t.Fatalf("a click edits the file with the cursor where it was: %v %v", a.Editing, a.cursor())
+	}
+	run(mouseAt(m, tea.MouseButtonLeft, tea.MouseActionPress, x+12, y), m)
+	m.Update(tea.MouseMsg{X: x + 12, Y: y, Button: tea.MouseButtonLeft, Action: tea.MouseActionRelease})
+	m.Update(tea.MouseMsg{X: x, Y: y, Button: tea.MouseButtonLeft, Action: tea.MouseActionPress, Shift: true})
+	m.Update(tea.MouseMsg{X: x, Y: y, Button: tea.MouseButtonLeft, Action: tea.MouseActionRelease, Shift: true})
+	if from, to, ok := a.selRange(); !ok || a.textOf(from, to) != "const user =" {
+		t.Fatalf("⇧click selects from the cursor: %q", a.textOf(from, to))
+	}
+	m.clickAt = time.Time{}
+	for i := 0; i < 3; i++ {
+		clickAt(m, x, y)
+	}
+	if from, to, ok := a.selRange(); !ok || from != (pos{3, 0}) || to != (pos{4, 0}) {
+		t.Fatalf("a third click selects the line: %v %v", from, to)
+	}
+}
+
+func TestThePaletteOpensWhileEditing(t *testing.T) {
+	m, _ := editing(t, 0, 0)
+	m.Update(tea.KeyMsg{Type: tea.KeyCtrlP})
+	if m.st.App.Palette == nil || m.st.App.FileLines[0] != "import { Router } from 'express'" {
+		t.Fatal("⌃p opens the files while a file is edited, as an IDE's quick open")
+	}
+}

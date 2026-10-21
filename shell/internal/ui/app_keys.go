@@ -314,7 +314,7 @@ func (m *Model) appKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	}
-	if a.Tab == 3 && a.Thread == "" && (a.Editing || a.TreeFocus || a.CodeAsk != nil) {
+	if a.Tab == 3 && a.Thread == "" && (a.Editing || a.TreeFocus || a.CodeAsk != nil) && key != "ctrl+k" && key != "ctrl+p" {
 		return m.appTabKey(k) // editing a file, or in the explorer: every key is theirs
 	}
 	if k.Type == tea.KeyRunes && (k.Paste || len(k.Runes) > 1) {
@@ -626,6 +626,10 @@ func (m *Model) appTabKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, m.closeTab()
 	case "e":
 		m.startEdit()
+	case "ctrl+o":
+		if a.File != "" && a.FileLines != nil {
+			a.Palette = &Palette{Symbols: true}
+		}
 	case "x":
 		if a.Selecting {
 			ref := fmt.Sprintf("%s:%d-%d", a.File, lo()+1, hi()+1)
@@ -1066,6 +1070,10 @@ func (m *Model) runPalette(it paletteItem, query string) tea.Cmd {
 		}
 		m.st.Prompt += "@" + strings.TrimPrefix(it.Action, "attach:") + " "
 		return nil
+	case strings.HasPrefix(it.Action, "line:"):
+		n, _ := strconv.Atoi(strings.TrimPrefix(it.Action, "line:"))
+		m.goToLine(n)
+		return nil
 	case strings.HasPrefix(it.Action, "model:"):
 		return m.setModel(strings.TrimPrefix(it.Action, "model:"))
 	case strings.HasPrefix(it.Action, "slash:"):
@@ -1118,7 +1126,7 @@ func (m *Model) runPalette(it paletteItem, query string) tea.Cmd {
 		a.Panel = true
 	case "model":
 		a.Settings, a.Palette = nil, &Palette{Model: true}
-		return m.fetchAppSettings()
+		return tea.Batch(m.fetchAppSettings(), m.fetchModels())
 	case "settings":
 		return m.openSettings("general")
 	case "today":

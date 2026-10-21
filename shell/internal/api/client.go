@@ -220,6 +220,15 @@ func (c *Client) ChatCommands(parent string, timeout time.Duration) (*view.Paren
 	return &out, nil
 }
 
+// ChatModels lists every model the parent CLI offers; an empty parent means the project's.
+func (c *Client) ChatModels(parent string, timeout time.Duration) (*view.ParentModels, error) {
+	var out view.ParentModels
+	if err := c.Call("chat.models", map[string]any{"parent": parent}, timeout, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 // ChatTranscript fetches the tail of one chat session.
 func (c *Client) ChatTranscript(session string, tail int, timeout time.Duration) (*view.ChatTranscript, error) {
 	var out view.ChatTranscript

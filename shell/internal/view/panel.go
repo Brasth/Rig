@@ -71,6 +71,15 @@ type ShellPlan struct {
 	Label     string   `json:"label"` // what to call the pane
 }
 
+// ParentModels is chat.models: every model the parent CLI lists or Rig knows for it, for /model.
+type ParentModels struct {
+	Parent string `json:"parent"`
+	Models []struct {
+		Name   string `json:"name"`
+		Detail string `json:"detail"`
+	} `json:"models"`
+}
+
 // ParentCommands is chat.commands: the parent's own skills and slash commands, for the / menu.
 type ParentCommands struct {
 	Parent   string `json:"parent"`

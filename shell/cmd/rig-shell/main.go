@@ -125,6 +125,10 @@ func (e *ensuringSource) ChatCommands(parent string, timeout time.Duration) (*vi
 	return e.client.ChatCommands(parent, timeout)
 }
 
+func (e *ensuringSource) ChatModels(parent string, timeout time.Duration) (*view.ParentModels, error) {
+	return e.client.ChatModels(parent, timeout)
+}
+
 func (e *ensuringSource) ChatTranscript(session string, tail int, timeout time.Duration) (*view.ChatTranscript, error) {
 	return e.client.ChatTranscript(session, tail, timeout)
 }
