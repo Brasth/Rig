@@ -105,10 +105,16 @@ func zonesOf(lines []string, hx, hy int) ([]string, []hitZone) {
 }
 
 // underlineHovered draws the clickable zone under the pointer underlined, through the resets inside it.
+// wideRow is the widest zone a hover underlines: a button, a tab, a file name; a list's rows are wider.
+const wideRow = 30
+
 func underlineHovered(line string, marks []zoneMark, zones []hitZone, hx, hy int) string {
 	z := innermost(zones, hx, hy)
 	if z < 0 || strings.HasPrefix(zones[z].id, "layer:") || strings.HasPrefix(zones[z].id, "text:") {
 		return line // an overlay or text to place the cursor in is not underlined
+	}
+	if strings.HasPrefix(zones[z].id, "row:") && zones[z].x1-zones[z].x0 > wideRow {
+		return line // a whole row of a list: a line under all of it, its padding too, reads as a rule, not a hover
 	}
 	from, to := -1, len(line)
 	for _, mk := range marks {
