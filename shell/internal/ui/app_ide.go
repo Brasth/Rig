@@ -422,8 +422,8 @@ func (m *Model) askKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch k.Type {
 	case tea.KeyEsc:
 		a.CodeAsk = nil
-		if q.kind == "rename-word" {
-			a.Extra = nil
+		if q.kind == "rename-word" || q.kind == "rename-where" {
+			a.Extra, a.renameOld, a.renameNew = nil, "", ""
 		}
 		if q.kind == "find" || q.kind == "replace" {
 			a.Find = ""
@@ -479,6 +479,9 @@ func (m *Model) askKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			a.CodeAsk = nil
 			m.renameTo(q.text)
 			m.keepCursorShown()
+		case "rename-where":
+			a.CodeAsk = nil
+			return m, m.renameEverywhere()
 		case "new", "rename":
 			a.CodeAsk = nil
 			return m, m.fileOp(q.kind, q.text)

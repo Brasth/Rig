@@ -3,6 +3,10 @@
 
 
 
+## tsconfig aliases and re-exports, rename everywhere, an outline (2026-10-21)
+
+Go to definition and hover follow `tsconfig.json`'s `paths` and `baseUrl`, and `export * from` / `export { x } from` in an index. `F2` renames in the file, then offers the rest of the repository through the search tab's replace. `O` shows an outline of the file in the side bar that follows the cursor.
+
 ## Terminal scrollback, problems from checks, movable keys (2026-10-21)
 
 The terminal split keeps 2000 rows of scrollback (`PgUp` `PgDn`, the wheel). The status bar's `✕ n ⚠ n` count the problems the helpers' failed checks found, read from their output (new API method `job.problems`); `m` lists them and `⏎` opens the file on the line. Settings › Keys moves the editor's keys that clash in some terminals: next occurrence, rename, definition, find in conversation, the terminal (`[keys]` in `~/.rig/config.toml`).

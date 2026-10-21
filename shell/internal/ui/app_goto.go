@@ -1,12 +1,15 @@
 package ui
 
 import (
+	"encoding/json"
 	"os"
 	"path"
 	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 	"unicode"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -73,6 +76,8 @@ func resolveImport(repo, from, spec string) string {
 	switch {
 	case strings.HasPrefix(spec, "./") || strings.HasPrefix(spec, "../"):
 		bases = []string{path.Join(path.Dir(from), spec)}
+	case len(aliasBases(repo, spec)) > 0:
+		bases = aliasBases(repo, spec) // tsconfig's paths and baseUrl
 	case strings.HasPrefix(spec, "@/") || strings.HasPrefix(spec, "~/"):
 		bases = []string{path.Join("src", spec[2:]), spec[2:]} // the usual alias for src
 	case strings.HasPrefix(spec, "/"):
@@ -110,6 +115,122 @@ var (
 	jsImport = regexp.MustCompile(`(?:import|export)\s+(?:type\s+)?([^'"]*?)\s+from\s+['"]([^'"]+)['"]`)
 	pyImport = regexp.MustCompile(`^\s*from\s+([\w.]+)\s+import\s+(.+)$`)
 )
+
+// tsPaths is a repository's tsconfig (or jsconfig) aliases: baseUrl and paths, read once and kept a minute.
+type tsPaths struct {
+	base  string
+	paths map[string][]string // "@app/*" → ["src/app/*"]
+	at    time.Time
+}
+
+var (
+	tsCache   = map[string]*tsPaths{}
+	tsCacheMu sync.Mutex
+)
+
+func readTsPaths(repo string) *tsPaths {
+	tsCacheMu.Lock()
+	defer tsCacheMu.Unlock()
+	if c := tsCache[repo]; c != nil && time.Since(c.at) < time.Minute {
+		return c
+	}
+	out := &tsPaths{paths: map[string][]string{}, at: time.Now()}
+	for _, name := range []string{"tsconfig.json", "jsconfig.json"} {
+		data, err := os.ReadFile(filepath.Join(repo, name))
+		if err != nil {
+			continue
+		}
+		var cfg struct {
+			CompilerOptions struct {
+				BaseURL string              `json:"baseUrl"`
+				Paths   map[string][]string `json:"paths"`
+			} `json:"compilerOptions"`
+		}
+		// tsconfig allows comments and trailing commas: strip the ones that break encoding/json
+		if err := json.Unmarshal(stripJSONComments(data), &cfg); err != nil {
+			continue
+		}
+		out.base = strings.TrimPrefix(path.Clean(cfg.CompilerOptions.BaseURL), "./")
+		for k, v := range cfg.CompilerOptions.Paths {
+			out.paths[k] = v
+		}
+		break
+	}
+	tsCache[repo] = out
+	return out
+}
+
+// stripJSONComments takes // and /* */ comments and trailing commas out of a tsconfig.
+func stripJSONComments(b []byte) []byte {
+	s := regexp.MustCompile(`(?m)^\s*//.*$|/\*[\s\S]*?\*/`).ReplaceAllString(string(b), "")
+	s = regexp.MustCompile(`,(\s*[}\]])`).ReplaceAllString(s, "$1")
+	return []byte(s)
+}
+
+// aliasBases is where a tsconfig alias points: "@app/x" with "@app/*": ["src/app/*"] gives src/app/x, under baseUrl.
+func aliasBases(repo, spec string) []string {
+	ts := readTsPaths(repo)
+	var out []string
+	add := func(target string) {
+		target = strings.TrimPrefix(path.Clean(target), "./")
+		if ts.base != "" && ts.base != "." {
+			target = path.Join(ts.base, target)
+		}
+		out = append(out, target)
+	}
+	for pattern, targets := range ts.paths {
+		if i := strings.Index(pattern, "*"); i >= 0 {
+			pre, post := pattern[:i], pattern[i+1:]
+			if strings.HasPrefix(spec, pre) && strings.HasSuffix(spec, post) && len(spec) >= len(pre)+len(post) {
+				mid := spec[len(pre) : len(spec)-len(post)]
+				for _, t := range targets {
+					add(strings.Replace(t, "*", mid, 1))
+				}
+			}
+		} else if pattern == spec {
+			for _, t := range targets {
+				add(t)
+			}
+		}
+	}
+	if len(out) == 0 && ts.base != "" && ts.base != "." && !strings.HasPrefix(spec, ".") {
+		add(spec) // a bare module under baseUrl
+	}
+	return out
+}
+
+var reExport = regexp.MustCompile(`^\s*export\s+(?:\*|\{([^}]*)\})\s+from\s+['"]([^'"]+)['"]`)
+
+// throughReExports follows export * from and export { x } from in a file, a few hops, to where name is defined.
+func throughReExports(repo, file, name string, re *regexp.Regexp, depth int) *jumpTo {
+	if depth > 4 {
+		return nil
+	}
+	data, err := os.ReadFile(filepath.Join(repo, filepath.FromSlash(file)))
+	if err != nil || len(data) > 2<<20 {
+		return nil
+	}
+	for _, l := range strings.Split(string(data), "\n") {
+		m := reExport.FindStringSubmatch(l)
+		if m == nil {
+			continue
+		}
+		if m[1] != "" && !regexp.MustCompile(`(^|[^\w$])`+regexp.QuoteMeta(name)+`($|[^\w$])`).MatchString(m[1]) {
+			continue // export { a, b } from: only those names
+		}
+		target := resolveImport(repo, file, m[2])
+		if target == "" || target == file {
+			continue
+		}
+		if found := findDefinition(repo, target, name, re); found != nil {
+			return found
+		}
+		if found := throughReExports(repo, target, name, re, depth+1); found != nil {
+			return found
+		}
+	}
+	return nil
+}
 
 // importedFrom is where this file imports a name from: the import's path, when the file names it in one.
 func importedFrom(lines []string, name string) string {
@@ -199,6 +320,9 @@ func (m *Model) goToDefinition() tea.Cmd {
 			}
 			if found := findDefinition(repo, target, name, re); found != nil {
 				return definitionMsg{name: name, found: found}
+			}
+			if found := throughReExports(repo, target, name, re, 0); found != nil {
+				return definitionMsg{name: name, found: found} // an index that re-exports it
 			}
 			return definitionMsg{name: name, found: &jumpTo{file: target}} // a default export: the file itself
 		}

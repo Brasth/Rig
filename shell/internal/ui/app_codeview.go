@@ -154,6 +154,9 @@ func explorer(st State, w, h int) []string {
 	if a.GitView {
 		return gitPane(st, w, h)
 	}
+	if a.Outline {
+		return outlinePane(st, w, h)
+	}
 	repo := st.faint(filepath.Base(a.Repo))
 	lines := []string{spread(sideHeads(st, w-lipgloss.Width(repo)-1), "", repo+" ", w)}
 	filter := st.faint("/ filter files")
@@ -631,6 +634,8 @@ func codeScreen(v *view.View, st State, w, h int) ([]string, [][2]string) {
 	switch {
 	case a.CodeAsk != nil || a.Editing:
 		keys = editKeys(st, a)
+	case a.TreeFocus && a.Outline:
+		keys = [][2]string{{"↑↓", "move"}, {"⏎", "go to"}, {"o", "files"}, {"esc", "back"}}
 	case a.TreeFocus && a.GitView:
 		keys = [][2]string{{"space", "stage"}, {"⏎", "diff"}, {"u", "discard"}, {"c", "commit"}, {"P", "pull"}, {"p", "push"}, {"b", "branch"}, {"g", "files"}, {"esc", "back"}}
 	case a.TreeFocus:

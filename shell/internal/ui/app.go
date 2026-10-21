@@ -79,9 +79,12 @@ type AppState struct {
 	TermFocus            bool              // its keys go to the shell
 	TermUp               int               // rows scrolled up into the split's scrollback
 	Problems             *view.JobProblems // what the helpers' failed checks found, for the status bar
-	ChatFind             *chatFind         // ⌃/: find in the conversation
-	Hover                *hoverInfo        // the name the pointer rests on, and where it is defined
-	SeenChat             int               // how many conversation entries were on screen last: more are new
+	renameOld, renameNew string            // F2: the names, for the question about the rest of the repository
+	Outline              bool              // o: the file's symbols in the side bar instead of the files
+	OutlineSel           int
+	ChatFind             *chatFind  // ⌃/: find in the conversation
+	Hover                *hoverInfo // the name the pointer rests on, and where it is defined
+	SeenChat             int        // how many conversation entries were on screen last: more are new
 	SeenJobs             map[string]bool
 	NewChat, NewJobs     bool // a dot in the top bar: something arrived while you were elsewhere
 	Blame                bool // b: who last changed each line

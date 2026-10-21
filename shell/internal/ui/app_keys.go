@@ -705,6 +705,8 @@ func (m *Model) appTabKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, m.jumpBackCmd()
 	case "m":
 		return m, m.runPalette(paletteItem{Action: "problems"}, "")
+	case "O":
+		m.toggleOutline()
 	case "g":
 		return m, m.openGit()
 	case "b":
