@@ -134,3 +134,60 @@ func sepTop(st State) string {
 	}
 	return "┬"
 }
+
+// The mockup's ground: #eeeeee text on #121212, so the board looks the same whatever the terminal's theme.
+const (
+	colGround = "233" // #121212
+	baseSGR   = "\x1b[38;5;" + colText + ";48;5;" + colGround + "m"
+)
+
+var sgrSeq = regexp.MustCompile(`\x1b\[([0-9;]*)m`)
+
+// Paint lays the mockup's text colour and background under every cell of a frame. Any escape that resets a colour
+// to the terminal default (0, 39, 49, or an empty reset) is followed by the mockup's, so styled runs, the
+// emulated pane's own output and the padding all sit on the same ground. It never changes a line's width.
+func Paint(frame []string) []string {
+	out := make([]string, len(frame))
+	for i, line := range frame {
+		out[i] = baseSGR + sgrSeq.ReplaceAllStringFunc(line, fixSGR) + "\x1b[0m"
+	}
+	return out
+}
+
+// fixSGR re-applies the ground colours a sequence leaves at the terminal's defaults.
+func fixSGR(seq string) string {
+	params := strings.Split(seq[2:len(seq)-1], ";")
+	fgDefault, bgDefault := false, false
+	for i := 0; i < len(params); i++ {
+		switch p := params[i]; {
+		case p == "" || p == "0":
+			fgDefault, bgDefault = true, true
+		case p == "39":
+			fgDefault = true
+		case p == "49":
+			bgDefault = true
+		case p == "38" || p == "48":
+			if p == "38" {
+				fgDefault = false
+			} else {
+				bgDefault = false
+			}
+			if i+1 < len(params) && params[i+1] == "5" {
+				i += 2
+			} else if i+1 < len(params) && params[i+1] == "2" {
+				i += 4
+			}
+		case len(p) == 2 && (p[0] == '3' || p[0] == '9') && p[1] >= '0' && p[1] <= '7':
+			fgDefault = false
+		case (len(p) == 2 && p[0] == '4' && p[1] >= '0' && p[1] <= '7') || (len(p) == 3 && p[:2] == "10"):
+			bgDefault = false
+		}
+	}
+	if fgDefault {
+		seq += "\x1b[38;5;" + colText + "m"
+	}
+	if bgDefault {
+		seq += "\x1b[48;5;" + colGround + "m"
+	}
+	return seq
+}

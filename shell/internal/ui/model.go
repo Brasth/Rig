@@ -1056,7 +1056,7 @@ func (m *Model) inputKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m *Model) View() string {
 	m.syncPane()
 	lines := RenderLines(m.view, m.st, m.w, m.h)
-	return strings.Join(Decorate(lines), "\n")
+	return strings.Join(Paint(Decorate(lines)), "\n")
 }
 
 // startingUp is true for the "no API server yet" error before the first snapshot has ever arrived: the board starts
