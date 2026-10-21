@@ -47,8 +47,17 @@ class Thread(unittest.TestCase):
         self.meta(status="running")
         inbox.write_inbox(self.folder, "use 429 with Retry-After")
         shown = job_thread.thread(self.repo, "j1")
-        self.assertIn(("claude", "message", "use 429 with Retry-After"), [(e["who"], e["kind"], e["text"]) for e in shown["entries"]])
+        self.assertIn(("claude", "message", "use 429 with Retry-After", True),
+                      [(e["who"], e["kind"], e["text"], e.get("unread")) for e in shown["entries"]])
         self.assertNotIn("result", [e["kind"] for e in shown["entries"]])
+
+    def test_every_message_stays_in_the_thread_once_read(self):
+        self.meta(status="running")
+        inbox.write_inbox(self.folder, "first note")
+        inbox.consume_inbox(self.folder)  # the helper read it
+        inbox.write_inbox(self.folder, "second note")
+        shown = [(e["text"], e.get("unread")) for e in job_thread.thread(self.repo, "j1")["entries"] if e["kind"] == "message"]
+        self.assertEqual(shown, [("first note", False), ("second note", True)])
 
     def test_over_the_api(self):
         self.meta(status="fail", exit_code=2)

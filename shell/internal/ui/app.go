@@ -72,8 +72,17 @@ type AppState struct {
 	GitView              bool                // the side bar shows git (g) instead of the files
 	GitSel               int
 	Git                  *gitState
-	GitDiff              *gitDiffView // a file's diff, shown in place of the file
-	Blame                bool         // b: who last changed each line
+	GitDiff              *gitDiffView  // a file's diff, shown in place of the file
+	Conflict             *conflictView // a conflicted file's conflicts, each with its two sides, in place of the file
+	Extra                []span        // more selections than the cursor's: ⌃d add next occurrence, F2 rename
+	Term                 bool          // ⌃`: a shell in a split at the foot of the screen
+	TermFocus            bool          // its keys go to the shell
+	ChatFind             *chatFind     // ⌃/: find in the conversation
+	Hover                *hoverInfo    // the name the pointer rests on, and where it is defined
+	SeenChat             int           // how many conversation entries were on screen last: more are new
+	SeenJobs             map[string]bool
+	NewChat, NewJobs     bool // a dot in the top bar: something arrived while you were elsewhere
+	Blame                bool // b: who last changed each line
 	BlameFor             string
 	BlameLines           []blameLine
 	Gutter               map[int]byte // the open file's lines changed since the last commit
@@ -362,6 +371,12 @@ func AppFrame(v *view.View, st State, w, h int) []string {
 		return splashScreen(v, st, w, h)
 	}
 	// a row of room above the top bar and below the footer, so neither sits on the window's edge
+	if st.App.Term {
+		// the terminal split: the screen above, the shell below a rule, a third of the height
+		th := termRows(h)
+		body := appBody(v, st, w, h-2-th-1)
+		return append(append(append([]string{fit("", w)}, body...), termSplit(st, w, th)...), fit("", w))
+	}
 	return append(append([]string{fit("", w)}, appBody(v, st, w, h-2)...), fit("", w))
 }
 
@@ -546,6 +561,9 @@ func topBar(v *view.View, st State, w int) string {
 	}
 	left += "   " + st.zone("row:open:parent", st.tile(appParent(st))+" "+appParent(st)) // a click switches parent
 	tab := func(n int, name, extra string) string {
+		if (n == 1 && a.NewChat) || (n == 2 && a.NewJobs) {
+			extra = strings.TrimSpace(st.paint(colAccent, "●") + " " + extra) // new since you looked
+		}
 		label := st.faint(fmt.Sprint(n)) + " " + name
 		if a.Tab == n && st.Styled {
 			on := lipgloss.NewStyle().Foreground(lipgloss.Color(colText)).Bold(true).Underline(true)
@@ -634,7 +652,7 @@ func conversationBody(v *view.View, st State, w, h int) ([]string, [][2]string) 
 	if a.chatKey != key {
 		a.chatKey, a.chatLines = key, entryLines(st, st.Chat.Entries, cw)
 	}
-	lines = append(lines, a.chatLines...)
+	lines = append(lines, markMatches(st, a.chatLines, a.ChatFind)...)
 	if st.Chat.State == "running" && strings.TrimSpace(st.Chat.Partial) != "" {
 		lines = append(lines, entryLines(st, []view.ChatEntry{{Role: "assistant", Text: st.Chat.Partial}}, cw)...)
 	}
@@ -662,7 +680,11 @@ func conversationBody(v *view.View, st State, w, h int) ([]string, [][2]string) 
 		keys = [][2]string{{"⏎", "send"}, {"⌥⏎", "new line"}, {"esc", "clear"}, {"⇥", "agents"}, {"⌃k", "commands"}}
 	}
 	box := replyBox(st, cw, "Reply to "+parent, false)
-	if menu := slashMenu(st, cw); len(menu) > 0 {
+	if a.ChatFind != nil {
+		box = chatFindRow(st, cw)
+		keys = [][2]string{{"⏎", "next"}, {"↑", "previous"}, {"esc", "close"}}
+	}
+	if menu := slashMenu(st, cw); len(menu) > 0 && a.ChatFind == nil {
 		box = append(menu, box...)
 		keys = [][2]string{{"↑↓", "choose"}, {"⇥", "complete"}, {"⏎", "run"}, {"esc", "clear"}}
 	}
@@ -973,6 +995,9 @@ func agentsPanel(v *view.View, st State, pw, h int, float bool) []string {
 		if i >= working {
 			activity = "      " + finishedWord(st, r)
 		}
+		if r.Label == "Paused" {
+			activity = "      " + st.faint("paused · p lets it go on")
+		}
 		group := []string{top, activity}
 		if i == sel {
 			group = roundBox(st, group, iw, true)
@@ -1021,7 +1046,7 @@ func agentsPanel(v *view.View, st State, pw, h int, float bool) []string {
 	if float {
 		shut = "close"
 	}
-	keys := st.hint([2]string{"⏎", "watch thread"}) + "   " + st.hint([2]string{"s", "stop"}) + "   " + st.hint([2]string{"⇥", shut})
+	keys := st.hint([2]string{"⏎", "thread"}) + "   " + st.hint([2]string{"p", "pause"}) + "   " + st.hint([2]string{"s", "stop"}) + "   " + st.hint([2]string{"⇥", shut})
 	room := h - len(foot) - 2
 	if float {
 		room -= 2
@@ -1316,7 +1341,7 @@ func threadBody(st State, w, h int) ([]string, [][2]string) {
 		}
 		keys := [][2]string{{"esc", "back"}, {"⇥", "agents"}}
 		if t.Running {
-			keys = [][2]string{{"esc", "back"}, {"s", "stop"}, {"⇥", "agents"}}
+			keys = [][2]string{{"esc", "back"}, {"p", "pause"}, {"s", "stop"}, {"⇥", "agents"}}
 		}
 		if st.LogUp > 0 {
 			keys = append([][2]string{{"G", "newest"}}, keys...)
@@ -1377,7 +1402,11 @@ func threadLines(st State, t *view.JobThread, cw int) []string {
 			who(e.Who, "→ "+t.Worker+" · the task")
 			wrap(e.Text, plain, "      ")
 		case "message":
-			who(e.Who, "→ "+t.Worker+" · not read yet")
+			note := "→ " + t.Worker
+			if e.Unread {
+				note += " · not read yet"
+			}
+			who(e.Who, note)
 			wrap(e.Text, plain, "      ")
 		case "ask":
 			who(e.Who, "asks "+t.Parent)

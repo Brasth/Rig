@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Brasth/Rig/shell/internal/term"
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/Brasth/Rig/shell/internal/view"
@@ -217,6 +218,17 @@ func (m *Model) askStopJob(r view.Row) {
 	m.st.Mode, m.st.Prompt = ModeConfirm, "Stop "+r.ID+" "+clean(r.Title)+"?"
 }
 
+// togglePause pauses a helper at work, or lets a paused one go on (the design's p pause).
+func (m *Model) togglePause(r view.Row) tea.Cmd {
+	on := r.Label != "Paused"
+	if on {
+		m.st.Message = "pausing " + r.ID
+	} else {
+		m.st.Message = r.ID + " goes on"
+	}
+	return m.act("job.pause", map[string]any{"id": r.ID, "on": on}, false)
+}
+
 // appKey is the app's keyboard. The box has the keyboard on the conversation, as in codex; overlays take it while open.
 func (m *Model) appKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	a := m.st.App
@@ -229,6 +241,26 @@ func (m *Model) appKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		m.st.Mode, m.pendingX, a.ConfirmLead = ModeNormal, "", ""
 		return m, m.quit()
+	}
+	if key == "ctrl+`" || key == "ctrl+@" {
+		return m, m.toggleTerm()
+	}
+	if a.Term && a.TermFocus && m.pane != nil {
+		// the shell has the keys; ⌃] gives them back without closing it
+		if k.Type == tea.KeyCtrlCloseBracket {
+			a.TermFocus = false
+			m.st.Message = "back in rig shell · ⌃` returns to the terminal"
+			return m, nil
+		}
+		m.pane.Write(term.KeyBytes(k, m.pane.AppCursor()))
+		return m, nil
+	}
+	if a.ChatFind != nil && a.Tab == 1 && a.Thread == "" {
+		return m.chatFindKey(k)
+	}
+	if (key == "ctrl+/" || key == "ctrl+_") && a.Tab == 1 && a.Thread == "" && a.Palette == nil && m.st.Chat != nil {
+		a.ChatFind = &chatFind{}
+		return m, nil
 	}
 	if a.Splash > 0 {
 		a.Splash = 0 // a key goes straight to the screen
@@ -314,6 +346,10 @@ func (m *Model) appKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if sel := clampSel(a.PanelSel, len(jobs)); sel < len(activeJobs(m.view)) {
 				m.askStopJob(jobs[sel]) // a finished helper has nothing to stop
 			}
+		case "p":
+			if sel := clampSel(a.PanelSel, len(jobs)); sel < len(activeJobs(m.view)) {
+				return m, m.togglePause(jobs[sel])
+			}
 		case "u":
 			if done := appliedCards(m.view, m.st); len(done) > 0 && m.st.Today != nil {
 				m.askApply("applies.undo", done[0].ID, "Undo "+clean(done[0].Title)+"? It reverts its merge.")
@@ -326,7 +362,7 @@ func (m *Model) appKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	}
-	if a.Tab == 3 && a.Thread == "" && (a.Editing || a.TreeFocus || a.CodeAsk != nil) && key != "ctrl+k" && key != "ctrl+p" {
+	if a.Tab == 3 && a.Thread == "" && (a.Editing || a.TreeFocus || a.CodeAsk != nil || a.Conflict != nil) && key != "ctrl+k" && key != "ctrl+p" {
 		return m.appTabKey(k) // editing a file, or in the explorer: every key is theirs
 	}
 	if k.Type == tea.KeyRunes && (k.Paste || len(k.Runes) > 1) {
@@ -393,11 +429,15 @@ func (m *Model) appKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.st.LogUp = 0 // the thread follows its newest lines again
 		return m, nil
 	}
-	if a.Thread != "" && key == "s" {
+	if a.Thread != "" && (key == "s" || key == "p") {
 		for _, r := range m.view.Rows("Jobs") {
-			if r.ID == a.Thread {
-				m.askStopJob(r)
+			if r.ID != a.Thread {
+				continue
 			}
+			if key == "p" {
+				return m, m.togglePause(r)
+			}
+			m.askStopJob(r)
 		}
 		return m, nil
 	}
@@ -486,6 +526,8 @@ func (m *Model) appTabKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		switch {
 		case a.CodeAsk != nil && !a.Editing && !a.TreeFocus:
 			return m.askKey(k)
+		case a.Conflict != nil && !a.TreeFocus && key != "q":
+			return m.conflictKey(k)
 		case a.Editing:
 			return m.editFileKey(k)
 		case a.TreeFocus:
@@ -501,6 +543,15 @@ func (m *Model) appTabKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch key {
 	case "1", "2", "3":
 		a.Tab, a.Selecting = int(key[0]-'0'), false
+		if a.Tab == 2 {
+			a.NewJobs = false
+			for _, r := range m.view.Rows("Jobs") {
+				if a.SeenJobs == nil {
+					a.SeenJobs = map[string]bool{}
+				}
+				a.SeenJobs[r.ID] = true
+			}
+		}
 		return m, tea.Batch(m.fetchDock(true), m.fetchDiff(true), m.fetchChanged(), m.loadFiles())
 	case "q":
 		return m, m.quit()
@@ -930,6 +981,12 @@ func (m *Model) searchKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		hit := s.Results[clampSel(s.Sel, len(s.Results))]
 		a.Search = nil
 		a.Tab, a.File, a.FileLines, a.FileErr, a.FileOff, a.Preview, a.Find = 3, hit.Path, nil, "", max(0, hit.Line-4), false, s.Query
+		a.Tabs = addTab(a.Tabs, hit.Path)
+		col := 0 // the cursor on the match: where the query is in the line (the first match, case aside)
+		if i := strings.Index(strings.ToLower(hit.Text), strings.ToLower(s.Query)); i >= 0 && !s.Regex {
+			col = len([]rune(hit.Text[:i]))
+		}
+		a.pendingAt = &jumpTo{file: hit.Path, at: pos{max(0, hit.Line-1), col}}
 		return m, tea.Batch(m.openFile(hit.Path), m.fetchChanged())
 	case tea.KeyBackspace:
 		if r := []rune(*edit); len(r) > 0 {
@@ -1117,7 +1174,10 @@ func (m *Model) runPalette(it paletteItem, query string) tea.Cmd {
 			m.stashBuffer() // its unsaved changes wait in its tab
 		}
 		a.Tabs, a.Editing, a.Dirty, a.TreeFocus, a.CodeAsk, a.EdSel = addTab(a.Tabs, rel), false, false, false, nil, false
-		a.GitDiff = nil
+		a.GitDiff, a.Extra = nil, nil
+		if a.Conflict != nil && a.Conflict.path != rel {
+			a.Conflict = nil
+		}
 		a.Tab, a.File, a.FileLines, a.FileErr, a.FileOff, a.Selecting, a.Find = 3, rel, nil, "", 0, false, ""
 		a.Preview = previewKind(rel) != ""
 		if m.restoreBuffer(rel) {

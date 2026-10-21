@@ -30,6 +30,7 @@ func appModel(t *testing.T) (*Model, *fakeSource) {
 }
 
 func appScreen(m *Model) string {
+	m.syncPane() // the terminal split shows the pane's screen, as View does
 	st := m.st
 	st.Styled = false
 	return strings.Join(AppFrame(m.view, st, 120, 36), "\n")
@@ -105,7 +106,7 @@ func TestTabOpensTheAgentsPanel(t *testing.T) {
 	out := appScreen(m)
 	for _, want := range []string{"Done today", "1 · all ›", "Rate limit POST /login", "claude · applied by claude", "Agents", "started by claude",
 		"parent · in the convers", "claude allowed 1 command today",
-		"codex", "Rate limit POST /login", "Queue", "claude picks next", "1  Add /logout audit", "⏎ watch thread", "⇥ close"} {
+		"codex", "Rate limit POST /login", "Queue", "claude picks next", "1  Add /logout audit", "⏎ thread", "p pause", "⇥ close"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q:\n%s", want, out)
 		}

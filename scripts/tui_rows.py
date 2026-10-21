@@ -28,6 +28,7 @@ LABEL_WIDTH = 12
 STATE_LEGEND = {
     "Needs input": (ATTENTION, "Waiting on a person or parent: an ASK answer, reconciliation, or a decision."),
     "Running": (ACTIVE, "Worker process is executing."),
+    "Paused": (HISTORY, "Paused from the board; p lets it go on."),
     "Reserved": (ACTIVE, "Scope is reserved; waiting for an execution slot."),
     "Checking": (ACTIVE, "A verification check or reviewer is running."),
     "Unverified": (HISTORY, "Finished, but the parent has not accepted the current content."),
@@ -139,6 +140,8 @@ def job_state(row: dict, requested=()) -> tuple[str, str, str]:
         return _info("Verified") if _accepted_current(row) else _info("Unverified")
     label = {"working": "Running", "verifying": "Checking", "reserved": "Reserved", "failed": "Failed",
              "queued": "Queued", "completed-unverified": "Unverified"}.get(display)
+    if label == "Running" and row.get("paused"):
+        return _info("Paused")
     return _info(label or state_label(display))
 
 

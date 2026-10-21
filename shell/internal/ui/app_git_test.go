@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -229,3 +230,61 @@ func TestTheGitViewSwitchesBranchesAndPulls(t *testing.T) {
 		t.Fatalf("P pulls: %q %q", log, m.st.Message)
 	}
 }
+
+func TestOneHunkIsStagedOnItsOwn(t *testing.T) {
+	m := gitRepo(t)
+	a := m.st.App
+	repo := a.Repo
+	// a file with two changes far apart: two hunks
+	var body strings.Builder
+	for i := 1; i <= 30; i++ {
+		fmt.Fprintf(&body, "line %d\n", i)
+	}
+	_ = os.WriteFile(filepath.Join(repo, "long.txt"), []byte(body.String()), 0o644)
+	for _, args := range [][]string{{"add", "long.txt"}, {"commit", "-qm", "long"}} {
+		if out, err := exec.Command("git", append([]string{"-C", repo}, args...)...).CombinedOutput(); err != nil {
+			t.Fatalf("%v %s", err, out)
+		}
+	}
+	changed := strings.Replace(strings.Replace(body.String(), "line 2\n", "line TWO\n", 1), "line 28\n", "line TWENTY-EIGHT\n", 1)
+	_ = os.WriteFile(filepath.Join(repo, "long.txt"), []byte(changed), 0o644)
+	follow(m, press(m, "g"), 0)
+	for i, r := range gitRows(a) {
+		if r.file.path == "long.txt" {
+			a.GitSel = i
+		}
+	}
+	follow(m, press(m, "enter"), 0)
+	if d := a.GitDiff; d == nil || len(hunkPatchParts(d.raw)) != 2 || !strings.Contains(appScreen(m), "hunk 1 of 2") {
+		t.Fatalf("two hunks:\n%s", appScreen(m))
+	}
+	follow(m, press(m, "]"), 0)
+	if a.GitDiff.hunk != 1 || !strings.Contains(appScreen(m), "hunk 2 of 2") {
+		t.Fatal("] chooses the next hunk")
+	}
+	follow(m, press(m, "h"), 0)
+	staged, _ := gitOut(repo, "diff", "--cached", "--", "long.txt")
+	unstaged, _ := gitOut(repo, "diff", "--", "long.txt")
+	if !strings.Contains(staged, "+line TWENTY-EIGHT") || strings.Contains(staged, "+line TWO") || !strings.Contains(unstaged, "+line TWO") {
+		t.Fatalf("h stages only the second hunk:\nstaged %s\nunstaged %s", staged, unstaged)
+	}
+	if !strings.Contains(m.st.Message, "staged hunk 2 of long.txt") {
+		t.Fatalf("says what it did: %q", m.st.Message)
+	}
+	// the staged view: h there unstages it again
+	for i, r := range gitRows(a) {
+		if r.kind == "staged" && r.file.path == "long.txt" {
+			a.GitSel = i
+		}
+	}
+	follow(m, press(m, "enter"), 0)
+	if a.GitDiff == nil || !a.GitDiff.staged {
+		t.Fatal("the staged diff")
+	}
+	follow(m, press(m, "h"), 0)
+	if staged, _ := gitOut(repo, "diff", "--cached", "--", "long.txt"); strings.TrimSpace(staged) != "" {
+		t.Fatalf("h in the staged diff unstages the hunk: %s", staged)
+	}
+}
+
+func hunkPatchParts(raw string) []string { _, parts := hunks(raw); return parts }

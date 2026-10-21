@@ -233,7 +233,12 @@ func (m *Model) mouse(e tea.MouseMsg) (tea.Model, tea.Cmd) {
 		return m.wheel(e.Button == tea.MouseButtonWheelUp)
 	case e.Action == tea.MouseActionMotion && e.Button == tea.MouseButtonNone:
 		m.hoverX, m.hoverY = e.X, e.Y
-		return m, nil
+		if a := m.st.App; a.Hover != nil && (e.X != a.Hover.x || e.Y != a.Hover.y) {
+			if at, ok := m.codeAt(e.X, e.Y); !ok || at.l >= len(a.FileLines) || identAt(a.FileLines[at.l], at.c) != a.Hover.name {
+				a.Hover = nil // off the name
+			}
+		}
+		return m, m.hoverTick(e.X, e.Y)
 	case e.Action == tea.MouseActionPress && e.Button == tea.MouseButtonMiddle:
 		// a middle click on a tab closes it, as in a browser or an editor
 		if id, _ := hitAt(m.zones, e.X, e.Y); strings.HasPrefix(id, "row:tabfile:") {
@@ -782,6 +787,10 @@ func (m *Model) clickRow(list, at string) (tea.Model, tea.Cmd) {
 		a.GitView, a.TreeFocus, a.GitSel = true, true, i
 		if rows[i].kind == "commit" {
 			return m, nil
+		}
+		if rows[i].file.code == 'U' {
+			a.TreeFocus = false
+			return m, m.openConflicts(rows[i].file.path)
 		}
 		if again {
 			return m, m.toggleStage(rows[i])

@@ -515,6 +515,9 @@ func codeRows(st State, w, room int) []string {
 				}
 			}
 		}
+		if a.Editing && len(a.Extra) > 0 {
+			text = extraSelected(st, text, i)
+		}
 		if from, to, ok := a.selRange(); ok && a.Editing && i >= from.l && i <= to.l {
 			// the selection: from its start on its first line, to its end on its last, a cell past a line it runs on from
 			d0, d1 := 0, ansi.StringWidth(text)+1
@@ -617,7 +620,10 @@ func codeScreen(v *view.View, st State, w, h int) ([]string, [][2]string) {
 	a := st.App
 	keys := [][2]string{{"⌃b", "tree"}, {"g", "git"}, {"b", "blame"}, {"/", "find"}, {"v", "select"}, {"e", "edit"}, {"E", "$EDITOR"}}
 	if a.GitDiff != nil {
-		keys = [][2]string{{"g", "git"}, {"esc", "close diff"}}
+		keys = [][2]string{{"] [", "hunk"}, {"h", "stage hunk"}, {"g", "git"}, {"esc", "close diff"}}
+	}
+	if a.Conflict != nil && !a.TreeFocus {
+		keys = [][2]string{{"] [", "conflict"}, {"o", "ours"}, {"t", "theirs"}, {"b", "both"}, {"e", "edit"}, {"esc", "file"}}
 	}
 	switch {
 	case a.CodeAsk != nil || a.Editing:
@@ -640,6 +646,9 @@ func codeScreen(v *view.View, st State, w, h int) ([]string, [][2]string) {
 		ed = []string{codeTabs(st, ew), breadcrumb(st, ew), "", "  " + st.paint(colAmber, "cannot open: "+clean(a.FileErr))}
 	case a.FileLines == nil:
 		ed = []string{codeTabs(st, ew), breadcrumb(st, ew), "", "  " + st.faint("loading…")}
+	case a.Conflict != nil && a.Conflict.path == a.File:
+		ed = []string{codeTabs(st, ew)}
+		ed = append(ed, conflictRows(st, ew, h-1-len(ed)-1)...)
 	case a.GitDiff != nil:
 		ed = []string{codeTabs(st, ew)}
 		ed = append(ed, gitDiffRows(st, ew, h-1-len(ed)-1)...)

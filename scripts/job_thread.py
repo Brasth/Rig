@@ -56,9 +56,15 @@ def thread(repo, job_id: str) -> dict:
     for line in (job.get("activities") or [])[-MAX_ACTIVITY:]:
         if str(line).strip():
             entries.append({"who": worker, "kind": "activity", "text": str(line)})
-    inbox = job.get("inbox")
-    if isinstance(inbox, dict) and inbox.get("text"):
-        entries.append({"who": parent, "kind": "message", "text": str(inbox["text"]), "at": inbox.get("sent_at") or ""})
+    import inbox as rig_inbox
+    sent = rig_inbox.messages(Path(job["dir"]))
+    pending = job.get("inbox") if isinstance(job.get("inbox"), dict) else None
+    if not sent and pending and pending.get("text"):
+        sent = [pending]  # a job from before messages were kept: only the one still waiting
+    for msg in sent:
+        waiting = bool(pending) and pending.get("sent_at") == msg.get("sent_at") and pending.get("text") == msg.get("text")
+        entries.append({"who": parent, "kind": "message", "text": str(msg["text"]), "at": msg.get("sent_at") or "",
+                        "unread": waiting})
     ask = job.get("ask")
     if isinstance(ask, dict):
         entries.append({"who": worker, "kind": "ask", "text": str(ask.get("preview") or ask.get("tool_name") or "a permission")})

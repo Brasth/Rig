@@ -3,6 +3,22 @@
 
 
 
+## Find in the conversation, hover info, new-since dots (2026-10-21)
+
+`⌃/` finds in the conversation (matches lit, `⏎` next, `↑` previous). In the code tab, the pointer resting on a name shows the line that defines it and where. A dot on the `1 conversation` tab says an answer arrived while you were elsewhere, and one on `2 changes` that a helper finished; each goes when you look.
+
+## Add next occurrence, rename, and a terminal in rig shell (2026-10-21)
+
+In the code editor `⌃d` adds the next occurrence of the selected text (or the word at the cursor) as another selection, and typing, `⏎`, `⌫` or Delete then change every selection at once; `F2` renames every whole-word occurrence in the file. `` ⌃` `` opens your shell in a split at the foot of the screen; `⌃]` gives the keys back, `` ⌃` `` hides and shows the split.
+
+## Conflicts resolved side by side; a search result opens on the match (2026-10-21)
+
+A conflicted file (after a pull or a merge that did not go through) opens from the git view as its conflicts side by side: ours and theirs for each block, `o` keeps ours, `t` theirs, `b` both, `e` edits by hand, `]` `[` move between them. Each choice writes the file; once none is left the file is marked resolved. A file with conflict markers opened from the explorer gets the same view. `⏎` on a search result now puts the cursor on the match.
+
+## Pause a helper, stage one hunk, and the thread keeps every message (2026-10-21)
+
+`p` in the agents panel or a helper's thread pauses the helper (SIGSTOP to its process group; the board shows Paused) and `p` again lets it go on; a stop wakes a paused helper first (new API method `job.pause`). In a file's diff in the git view, `]` `[` choose a hunk and `h` stages it alone (or unstages it from the staged diff). A helper's thread now keeps every message the parent sent it, not only the one still unread (`messages.jsonl` in the job's folder).
+
 ## Pull, switch branch and buttons in the git view; inline blame (2026-10-21)
 
 The git view has a commit message box and `✓ Commit`, `↓ Pull` and `↑ Push` buttons. `P` (or the button) pulls, and a click on the branch (or `b`) lists the branches to switch to, or makes a new one from a typed name. The line the cursor is on ends with its blame, faint, as GitLens shows it: who changed it, when, and the commit.
