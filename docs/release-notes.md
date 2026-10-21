@@ -3,6 +3,10 @@
 
 
 
+## /rewind, /fork, @ files with lines, a permission mode, /export and conversation search (2026-10-21)
+
+`/rewind` puts files back as they were before a turn (all of it or one file), keeps what was there so it can be undone, and tells the parent once. `@` names a file anywhere in a message, `@file:10-40` just those lines, and the parent gets what it names (every parent). `/fork` branches a conversation from a turn into a new one. `⇧Tab` goes round ask, auto-edit and plan (claude `--permission-mode acceptEdits`, codex file approvals), shown in the status line; `/mode` does the same. `/export` writes a conversation as markdown, and `/resume` searches what was said in every conversation. New API methods `chat.rewind`, `chat.fork`, `chat.search`; `chat.transcript` carries `marks`, `can_undo` and `mode`; Settings › Keys has a Permission mode row.
+
 ## /compact for every parent, the context percentage, and a notice when a long turn ends (2026-10-21)
 
 `/compact` asks the parent for a summary and continues in a fresh conversation that starts from it, for every parent; the old one stays in `/resume`. For claude the conversation shows how full its context is and warns once at 80%. A turn that ran 20 seconds or more now notifies when it ends or fails (Settings › Notifications › A long turn ended, through the bell or the desktop notice you have on).

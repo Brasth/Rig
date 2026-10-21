@@ -1465,7 +1465,7 @@ def rewind(repo, session: str, turn: int = 0, path: str = "", dry: bool = False,
     if undo:
         meta["marks"] = (backup.get("marks") or []) + [m for m in (meta.get("marks") or []) if m not in (backup.get("marks") or [])]
         meta.pop("rewind_backup", None)
-        what = f"undid the rewind: {len(paths)} file{'s' if len(paths) != 1 else ''} are back as they were before it"
+        what = f"undid the rewind: {len(paths)} file{'s' if len(paths) != 1 else ''} put back as before it"
         note = "[Note from Rig: the user undid a rewind, so " + ", ".join(paths[:8]) + " are as they were before it.]"
     else:
         dropped = [m for m in (meta.get("marks") or []) if int(m.get("turn", 0)) >= turn] if not path else []
