@@ -250,7 +250,8 @@ type Model struct {
 	clicks      int
 	clickX      int
 	clickY      int
-	hoverX      int // the pointer, for the zone drawn underlined
+	hoverX      int    // the pointer, for the zone drawn underlined
+	hoverKey    string // the hover lookup on its way: name@x,y
 	hoverY      int
 }
 
@@ -993,6 +994,10 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.appOn() && m.st.ChatParent != "" && m.st.ChatParent != m.cmdsFor {
 			return m, m.fetchParentCommands(m.st.ChatParent) // the / menu offers this parent's skills and commands
 		}
+	case hoverMsg:
+		if m.appOn() && msg.key == m.hoverKey && msg.info != nil {
+			m.st.App.Hover = msg.info
+		}
 	case definitionMsg:
 		if m.appOn() {
 			return m, m.afterDefinition(msg)
@@ -1042,6 +1047,16 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case chatMsg:
 		m.chBusy, m.chLast = false, m.now()
+		if a := m.st.App; m.appOn() && msg.err == nil && msg.chat != nil {
+			n := len(msg.chat.Entries)
+			if a.Tab == 1 && a.Thread == "" && a.Palette == nil && !a.Panel {
+				a.SeenChat, a.NewChat = n, false
+			} else if n > a.SeenChat && a.SeenChat > 0 {
+				a.NewChat = true
+			} else if a.SeenChat == 0 {
+				a.SeenChat = n
+			}
+		}
 		if msg.err != nil {
 			m.st.ChatE = msg.err.Error()
 			return m, nil
@@ -1330,6 +1345,28 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.st.Stale, m.lastOK = "", msg.at
 		m.view = &msg.snap.View
 		m.reselect()
+		if a := m.st.App; m.appOn() {
+			// a helper that finished while the changes tab was not up: a dot on the tab until you look
+			if a.SeenJobs == nil {
+				a.SeenJobs = map[string]bool{}
+			}
+			for _, r := range m.view.Rows("Jobs") {
+				done := r.Label != "" && strings.Contains(finishedLabels, r.Label)
+				if done && !a.SeenJobs[r.ID] {
+					if a.Tab == 2 || len(a.SeenJobs) == 0 {
+						a.SeenJobs[r.ID] = true // on the tab, or the first snapshot: seen
+					} else {
+						a.NewJobs = true
+					}
+				}
+			}
+			if a.Tab == 2 {
+				for _, r := range m.view.Rows("Jobs") {
+					a.SeenJobs[r.ID] = true
+				}
+				a.NewJobs = false
+			}
+		}
 		m.noticeNewJobs()
 		if m.appOn() {
 			return m, m.bell()
@@ -1970,6 +2007,9 @@ func (m *Model) View() string {
 		}
 		m.syncCaret()
 		frame, zones := zonesOf(AppFrame(m.view, m.st, w, h), m.hoverX, m.hoverY)
+		if box, bx, by := hoverBox(m.st, w); box != nil {
+			overlay(frame, box, bx, by)
+		}
 		m.zones = zones
 		m.plain = make([]string, len(frame))
 		for i, l := range frame {

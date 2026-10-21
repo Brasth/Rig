@@ -255,6 +255,13 @@ func (m *Model) appKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.pane.Write(term.KeyBytes(k, m.pane.AppCursor()))
 		return m, nil
 	}
+	if a.ChatFind != nil && a.Tab == 1 && a.Thread == "" {
+		return m.chatFindKey(k)
+	}
+	if (key == "ctrl+/" || key == "ctrl+_") && a.Tab == 1 && a.Thread == "" && a.Palette == nil && m.st.Chat != nil {
+		a.ChatFind = &chatFind{}
+		return m, nil
+	}
 	if a.Splash > 0 {
 		a.Splash = 0 // a key goes straight to the screen
 		if k.Type == tea.KeyCtrlC {
@@ -536,6 +543,15 @@ func (m *Model) appTabKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch key {
 	case "1", "2", "3":
 		a.Tab, a.Selecting = int(key[0]-'0'), false
+		if a.Tab == 2 {
+			a.NewJobs = false
+			for _, r := range m.view.Rows("Jobs") {
+				if a.SeenJobs == nil {
+					a.SeenJobs = map[string]bool{}
+				}
+				a.SeenJobs[r.ID] = true
+			}
+		}
 		return m, tea.Batch(m.fetchDock(true), m.fetchDiff(true), m.fetchChanged(), m.loadFiles())
 	case "q":
 		return m, m.quit()

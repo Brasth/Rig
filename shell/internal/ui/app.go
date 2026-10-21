@@ -77,7 +77,12 @@ type AppState struct {
 	Extra                []span        // more selections than the cursor's: ⌃d add next occurrence, F2 rename
 	Term                 bool          // ⌃`: a shell in a split at the foot of the screen
 	TermFocus            bool          // its keys go to the shell
-	Blame                bool          // b: who last changed each line
+	ChatFind             *chatFind     // ⌃/: find in the conversation
+	Hover                *hoverInfo    // the name the pointer rests on, and where it is defined
+	SeenChat             int           // how many conversation entries were on screen last: more are new
+	SeenJobs             map[string]bool
+	NewChat, NewJobs     bool // a dot in the top bar: something arrived while you were elsewhere
+	Blame                bool // b: who last changed each line
 	BlameFor             string
 	BlameLines           []blameLine
 	Gutter               map[int]byte // the open file's lines changed since the last commit
@@ -556,6 +561,9 @@ func topBar(v *view.View, st State, w int) string {
 	}
 	left += "   " + st.zone("row:open:parent", st.tile(appParent(st))+" "+appParent(st)) // a click switches parent
 	tab := func(n int, name, extra string) string {
+		if (n == 1 && a.NewChat) || (n == 2 && a.NewJobs) {
+			extra = strings.TrimSpace(st.paint(colAccent, "●") + " " + extra) // new since you looked
+		}
 		label := st.faint(fmt.Sprint(n)) + " " + name
 		if a.Tab == n && st.Styled {
 			on := lipgloss.NewStyle().Foreground(lipgloss.Color(colText)).Bold(true).Underline(true)
@@ -644,7 +652,7 @@ func conversationBody(v *view.View, st State, w, h int) ([]string, [][2]string) 
 	if a.chatKey != key {
 		a.chatKey, a.chatLines = key, entryLines(st, st.Chat.Entries, cw)
 	}
-	lines = append(lines, a.chatLines...)
+	lines = append(lines, markMatches(st, a.chatLines, a.ChatFind)...)
 	if st.Chat.State == "running" && strings.TrimSpace(st.Chat.Partial) != "" {
 		lines = append(lines, entryLines(st, []view.ChatEntry{{Role: "assistant", Text: st.Chat.Partial}}, cw)...)
 	}
@@ -672,7 +680,11 @@ func conversationBody(v *view.View, st State, w, h int) ([]string, [][2]string) 
 		keys = [][2]string{{"⏎", "send"}, {"⌥⏎", "new line"}, {"esc", "clear"}, {"⇥", "agents"}, {"⌃k", "commands"}}
 	}
 	box := replyBox(st, cw, "Reply to "+parent, false)
-	if menu := slashMenu(st, cw); len(menu) > 0 {
+	if a.ChatFind != nil {
+		box = chatFindRow(st, cw)
+		keys = [][2]string{{"⏎", "next"}, {"↑", "previous"}, {"esc", "close"}}
+	}
+	if menu := slashMenu(st, cw); len(menu) > 0 && a.ChatFind == nil {
 		box = append(menu, box...)
 		keys = [][2]string{{"↑↓", "choose"}, {"⇥", "complete"}, {"⏎", "run"}, {"esc", "clear"}}
 	}

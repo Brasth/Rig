@@ -3,6 +3,10 @@
 
 
 
+## Find in the conversation, hover info, new-since dots (2026-10-21)
+
+`⌃/` finds in the conversation (matches lit, `⏎` next, `↑` previous). In the code tab, the pointer resting on a name shows the line that defines it and where. A dot on the `1 conversation` tab says an answer arrived while you were elsewhere, and one on `2 changes` that a helper finished; each goes when you look.
+
 ## Add next occurrence, rename, and a terminal in rig shell (2026-10-21)
 
 In the code editor `⌃d` adds the next occurrence of the selected text (or the word at the cursor) as another selection, and typing, `⏎`, `⌫` or Delete then change every selection at once; `F2` renames every whole-word occurrence in the file. `` ⌃` `` opens your shell in a split at the foot of the screen; `⌃]` gives the keys back, `` ⌃` `` hides and shows the split.
