@@ -756,7 +756,7 @@ func (m *Model) runPalette(it paletteItem, query string) tea.Cmd {
 	case "parent":
 		m.openWelcome()
 	case "new":
-		m.chatID, m.st.Chat, m.st.ChatUp = "", nil, 0
+		m.chatID, m.st.Chat, m.st.ChatUp, m.chatAdopted = "", nil, 0, true
 		a.Tab = 1
 	case "queue":
 		m.st.Prompt, a.Tab = "/queue ", 1

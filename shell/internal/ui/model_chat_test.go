@@ -12,7 +12,7 @@ import (
 )
 
 func chatOn(sessions ...string) *view.ChatStatus {
-	st := &view.ChatStatus{Enabled: true, Available: []string{"claude"}, Configured: "claude"}
+	st := &view.ChatStatus{Enabled: true, Available: []string{"claude"}, Configured: "claude", Parent: "claude"}
 	for _, id := range sessions {
 		st.Sessions = append(st.Sessions, struct {
 			ID     string `json:"id"`
@@ -235,5 +235,21 @@ func TestChatTextCannotInjectTerminalSequences(t *testing.T) {
 	out := Render(nil, st, 80, 12)
 	if strings.Contains(out, "\x1b") {
 		t.Fatalf("escape reached the frame: %q", out)
+	}
+}
+
+func TestSwitchingParentDoesNotBringTheOldConversationBack(t *testing.T) {
+	m, src := readyChat(t)
+	stale := m.fetchChat(true) // a read of claude's conversation still on its way
+	m.Update(parentSetMsg{name: "codex"})
+	if m.chatID != "" || appParent(m.st) != "codex" {
+		t.Fatalf("switched: %q %q", m.chatID, appParent(m.st))
+	}
+	src.chatView = transcript("idle", ce("user", "hi"), ce("assistant", "hello"))
+	run(stale, m)
+	m.csLast = time.Time{}
+	run(m.fetchChatStatus(), m) // the server still lists claude's conversation as the newest
+	if m.chatID != "" || m.st.Chat != nil || appParent(m.st) != "codex" {
+		t.Fatalf("claude came back: id %q parent %q", m.chatID, appParent(m.st))
 	}
 }

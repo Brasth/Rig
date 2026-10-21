@@ -200,27 +200,28 @@ type Model struct {
 	chatID     string // the session the Chat tab follows; empty until one exists
 	inputFor   string // "chat" while the input line is a chat message, else enqueue
 	// exec hands the terminal to a command and returns when it exits; tests replace it.
-	exec       func(argv []string, done func(error) tea.Msg) tea.Cmd
-	lastOK     time.Time
-	now        func() time.Time
-	newKey     func() string
-	selID      map[string]string
-	draftKey   string
-	pendingX   string // method for a confirmed stop: job.cancel or queue.cancel
-	pendingI   string // id for a confirmed stop
-	pickerSeen bool   // the picker opened by itself once, for a project with no parent
-	framed     bool   // the window has room for the mockup's border around the board
-	winW, winH int    // the window; the app uses all of it
-	dfBusy     bool
-	dfLast     time.Time
-	lastAsk    string // the request the bell last rang for
-	tdLast     time.Time
-	ringer     func() // rings the terminal bell; tests replace it
-	seenJobs   map[string]bool
-	themeFixed bool // rig shell --theme chose the theme for this board; the saved one is not loaded
-	messaging  bool // m was pressed under a request: a and d type again until the message is sent
-	spinning   bool // the spinner's tick is scheduled
-	chatStat   *view.ChatStatus
+	exec        func(argv []string, done func(error) tea.Msg) tea.Cmd
+	lastOK      time.Time
+	now         func() time.Time
+	newKey      func() string
+	selID       map[string]string
+	draftKey    string
+	pendingX    string // method for a confirmed stop: job.cancel or queue.cancel
+	pendingI    string // id for a confirmed stop
+	pickerSeen  bool   // the picker opened by itself once, for a project with no parent
+	chatAdopted bool   // a conversation was picked up, or one was left on purpose: none is picked up again
+	framed      bool   // the window has room for the mockup's border around the board
+	winW, winH  int    // the window; the app uses all of it
+	dfBusy      bool
+	dfLast      time.Time
+	lastAsk     string // the request the bell last rang for
+	tdLast      time.Time
+	ringer      func() // rings the terminal bell; tests replace it
+	seenJobs    map[string]bool
+	themeFixed  bool // rig shell --theme chose the theme for this board; the saved one is not loaded
+	messaging   bool // m was pressed under a request: a and d type again until the message is sent
+	spinning    bool // the spinner's tick is scheduled
+	chatStat    *view.ChatStatus
 }
 
 // NewModel returns a model that polls src.
@@ -496,7 +497,7 @@ func (m *Model) runSlash(text string) (tea.Cmd, bool) {
 		return m.act("queue.add", map[string]any{"text": rest, "idempotency_key": m.draftKey}, true), true
 	case "/new":
 		clear()
-		m.chatID, m.st.Chat, m.st.ChatUp = "", nil, 0
+		m.chatID, m.st.Chat, m.st.ChatUp, m.chatAdopted = "", nil, 0, true
 		m.st.Message = "new conversation: the next message starts it"
 	case "/stop":
 		clear()
@@ -891,14 +892,24 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.openPicker()
 			}
 		}
-		if m.chatID == "" && len(msg.status.Sessions) > 0 {
-			m.chatID = msg.status.Sessions[0].ID
+		// When rig shell opens, pick up the newest conversation with the parent in use. Only then: after a switch of
+		// parent or a new conversation, an old one must not come back.
+		if m.chatID == "" && !m.chatAdopted {
+			for _, s := range msg.status.Sessions {
+				if s.Parent == m.st.ChatParent {
+					m.chatID, m.chatAdopted = s.ID, true
+					break
+				}
+			}
 		}
 	case chatMsg:
 		m.chBusy, m.chLast = false, m.now()
 		if msg.err != nil {
 			m.st.ChatE = msg.err.Error()
 			return m, nil
+		}
+		if msg.chat != nil && msg.chat.Session != "" && msg.chat.Session != m.chatID {
+			return m, nil // the conversation was left (a switch of parent, a new one) while this was on its way
 		}
 		m.st.Chat, m.st.ChatE = msg.chat, ""
 		if m.appOn() {
@@ -1002,12 +1013,13 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.st.Message = "Could not save the parent: " + msg.err.Error()
 			return m, nil
 		}
+		was := appParent(m.st)
 		m.parentName, m.st.ChatParent, m.st.ChatModel = msg.name, msg.name, ""
 		if m.chatStat != nil {
 			m.chatStat.Configured = msg.name
 		}
-		if m.st.Chat != nil && m.st.Chat.Parent != msg.name {
-			m.chatID, m.st.Chat, m.st.ChatUp = "", nil, 0 // another CLI cannot resume this one's session
+		if was != msg.name || (m.st.Chat != nil && m.st.Chat.Parent != msg.name) {
+			m.chatID, m.st.Chat, m.st.ChatUp, m.chatAdopted = "", nil, 0, true // another CLI cannot resume this one's session
 		}
 		m.st.Message = "parent: " + msg.name + " (saved in .rig/harness.toml)"
 	case chatSentMsg:
@@ -1360,7 +1372,7 @@ func (m *Model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.st.LogUp, m.st.ChatUp = 0, 0
 	case "N":
 		if m.st.Tab == ChatTab || m.chatInSession() {
-			m.chatID, m.st.Chat, m.st.ChatUp = "", nil, 0
+			m.chatID, m.st.Chat, m.st.ChatUp, m.chatAdopted = "", nil, 0, true
 			m.st.Message = "next message starts a new session"
 		}
 	case "s":

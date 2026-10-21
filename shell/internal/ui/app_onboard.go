@@ -418,7 +418,7 @@ func (m *Model) problemKey(screen, key string) (tea.Model, tea.Cmd) {
 			if i := int(key[0] - '2'); i < len(others) {
 				name := others[i]
 				src := m.src
-				m.chatID, m.st.Chat = "", nil
+				m.chatID, m.st.Chat, m.chatAdopted = "", nil, true
 				return m, func() tea.Msg { return parentSetMsg{name: name, err: src.ChatSetParent(name, callTimeout)} }
 			}
 		case "esc":
