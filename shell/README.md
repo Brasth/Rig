@@ -16,7 +16,12 @@ go test ./...                               # offline once modules are cached
 bin/rig-shell --repo /path/to/repo          # interactive
 bin/rig-shell --once --size 120x36          # one frame to stdout
 bin/rig-shell --once --fixture testdata/snapshot.json --tab Queue
+bin/rig-shell --scene ../scripts/media/scenes/conversation.json --size 120x36 --color   # an app screen, for pictures
 ```
+
+`--scene FILE` draws one of the app's screens (the conversation, welcome, code, settings or doctor) from a JSON scene
+(`ui.Scene`) with no project or server; `--color` keeps the colours, in true colour, so `scripts/media` can turn the
+frame into a screenshot or a video frame. `--once` takes `--color` too.
 
 If no API server answers, it runs `rig api ensure` (override with `--rig` or
 `RIG_BIN`, disable with `--no-ensure`). The server exits after 60 idle seconds.

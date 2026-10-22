@@ -1,0 +1,42 @@
+{
+ "view": {
+  "sections": [
+   {
+    "title": "This repository",
+    "lines": [
+     {
+      "text": "● repo  running  cpu 0.3%  mem 6.1M/15.7G",
+      "tone": "ok"
+     },
+     {
+      "text": "● job job-7  running",
+      "tone": "ok"
+     }
+    ]
+   },
+   {
+    "title": "Other workspaces",
+    "lines": [
+     {
+      "text": "○ other  exited",
+      "tone": ""
+     },
+     {
+      "text": "    /work/other",
+      "tone": ""
+     }
+    ]
+   },
+   {
+    "title": "Engine",
+    "lines": [
+     {
+      "text": "host  4 cpus  15.7G memory  in use cpu 8.8% mem 544.8M",
+      "tone": ""
+     }
+    ]
+   }
+  ],
+  "attention": false
+ }
+}

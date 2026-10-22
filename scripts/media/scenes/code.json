@@ -1,0 +1,153 @@
+{
+ "theme": "light",
+ "repo": "my-repo",
+ "branch": "main",
+ "snapshot": "../boards/busy.json",
+ "now": "2026-10-22T09:12:40Z",
+ "status": {
+  "enabled": true,
+  "parent": "claude",
+  "model": "opus",
+  "effort": "high",
+  "available": [
+   "claude",
+   "codex",
+   "pi"
+  ],
+  "configured": "claude",
+  "parents": [
+   "claude",
+   "codex",
+   "grok",
+   "opencode",
+   "cursor",
+   "pi"
+  ]
+ },
+ "screen": "code",
+ "chat": {
+  "session": "c-1a2b3c4d",
+  "parent": "claude",
+  "state": "idle",
+  "turns": 1,
+  "asks": true,
+  "context_pct": 23,
+  "mode": "ask",
+  "entries": [
+   {
+    "role": "user",
+    "text": "Fix the failing tests in tests/test_cli.py",
+    "at": "2026-10-22T09:08:10Z"
+   },
+   {
+    "role": "tool",
+    "text": "Read tests/test_cli.py"
+   },
+   {
+    "role": "tool",
+    "text": "Bash pytest tests/test_cli.py -q"
+   },
+   {
+    "role": "assistant",
+    "text": "Two tests failed because `rig status` printed the workers before the parent line. I swapped the order and left the rest of the output as it was.",
+    "parent": "claude"
+   },
+   {
+    "role": "diff",
+    "text": "src/cli.py +2 −2\n@@ -118,4 +118,4 @@\n-    for name, state in workers.items():\n-        print(f\"worker: {name} ({state})\")\n     print(f\"parent: {parent}\")\n+    for name, state in workers.items():\n+        print(f\"worker: {name} ({state})\")"
+   },
+   {
+    "role": "result",
+    "text": "pytest tests/test_cli.py · 12 passed in 1.8s"
+   }
+  ],
+  "marks": [
+   {
+    "turn": 1,
+    "title": "Fix the failing tests in tests/test_cli.py",
+    "files": [
+     {
+      "path": "src/cli.py",
+      "added": 2,
+      "deleted": 2
+     }
+    ]
+   }
+  ],
+  "can_undo": false
+ },
+ "files": [
+  "README.md",
+  "pyproject.toml",
+  "src/__init__.py",
+  "src/cli.py",
+  "src/harness.py",
+  "src/queue.py",
+  "src/routing.py",
+  "src/workers.py",
+  "tests/conftest.py",
+  "tests/test_cli.py",
+  "tests/test_queue.py",
+  "tests/test_routing.py"
+ ],
+ "file": {
+  "path": "src/cli.py",
+  "line": 20,
+  "tabs": [
+   "tests/test_cli.py"
+  ],
+  "gutter": {
+   "20": "M",
+   "21": "M",
+   "22": "M"
+  },
+  "lines": [
+   "import sys",
+   "",
+   "from .harness import load_harness",
+   "from .workers import worker_states",
+   "",
+   "",
+   "def main(argv: list[str] | None = None) -> int:",
+   "    args = parse(argv if argv is not None else sys.argv[1:])",
+   "    harness = load_harness(args.repo)",
+   "    if args.command == \"status\":",
+   "        return status(harness)",
+   "    if args.command == \"jobs\":",
+   "        return jobs(harness, args)",
+   "    return 2",
+   "",
+   "",
+   "def status(harness) -> int:",
+   "    parent = harness.parent or \"none\"",
+   "    workers = worker_states(harness)",
+   "    print(f\"parent: {parent}\")",
+   "    for name, state in workers.items():",
+   "        print(f\"worker: {name} ({state})\")",
+   "    if harness.worktrees:",
+   "        print(f\"worktrees: {harness.worktrees}\")",
+   "    return 0",
+   "",
+   "",
+   "def jobs(harness, args) -> int:",
+   "    for job in harness.jobs(limit=args.limit):",
+   "        print(job.summary())",
+   "    return 0"
+  ]
+ },
+ "problems": {
+  "job_id": "job-9e4",
+  "errors": 0,
+  "warnings": 1,
+  "problems": [
+   {
+    "file": "src/cli.py",
+    "line": 23,
+    "col": 8,
+    "severity": "warning",
+    "message": "f-string without placeholders",
+    "check": "ruff"
+   }
+  ]
+ }
+}

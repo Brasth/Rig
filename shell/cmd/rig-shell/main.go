@@ -245,6 +245,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 	launcher := fs.Bool("launcher", false, "open a project: recent ones, a path, or a git URL to clone (rig shell runs this outside a Rig project)")
 	layout := fs.String("layout", os.Getenv("RIG_SHELL_LAYOUT"), "app: the design's screens (what rig shell opens); board: the jobs board (the default here)")
 	theme := fs.String("theme", os.Getenv("RIG_SHELL_THEME"), "draw this board in a theme without saving it: "+strings.Join(ui.ThemeNames(), ", "))
+	scene := fs.String("scene", "", "render one of the app's screens from a scene JSON file to stdout and exit (--size, --theme, --color apply; see scripts/media)")
+	colour := fs.Bool("color", false, "with --once or --scene: keep the colours in the output, in true colour")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -272,8 +274,11 @@ func run(args []string, stdout, stderr io.Writer) int {
 	if *launcher {
 		return runLauncher(*repo, *rigBin, stderr)
 	}
+	if *scene != "" {
+		return renderScene(stdout, stderr, *scene, *size, *theme, *colour)
+	}
 	if *once {
-		return renderOnce(stdout, stderr, *repo, *rigBin, *fixture, *wsFixture, *fleetFixture, *evFixture, *settingsFixture, *size, *tab, useASCII, !*noEnsure)
+		return renderOnce(stdout, stderr, *repo, *rigBin, *fixture, *wsFixture, *fleetFixture, *evFixture, *settingsFixture, *size, *tab, useASCII, !*noEnsure, *colour)
 	}
 	client, err := api.New(*repo)
 	if err != nil {
@@ -326,7 +331,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
-func renderOnce(stdout, stderr io.Writer, repo, rigBin, fixture, wsFixture, fleetFixture, evFixture, settingsFixture, size, tab string, ascii, ensure bool) int {
+func renderOnce(stdout, stderr io.Writer, repo, rigBin, fixture, wsFixture, fleetFixture, evFixture, settingsFixture, size, tab string, ascii, ensure, colour bool) int {
 	w, h, err := parseSize(size)
 	if err != nil {
 		fmt.Fprintln(stderr, "rig-shell:", err)
@@ -444,7 +449,37 @@ func renderOnce(stdout, stderr io.Writer, repo, rigBin, fixture, wsFixture, flee
 	case evidence != nil:
 		st.EvidenceOpen, st.EvidenceID, st.Evidence = true, evidence.JobID, evidence
 	}
+	if colour {
+		ui.ForceTrueColour()
+		st.Styled = true
+		fmt.Fprintln(stdout, strings.Join(ui.Paint(ui.Decorate(ui.RenderLines(&snap.View, st, w, h))), "\n"))
+		return 0
+	}
 	fmt.Fprintln(stdout, ui.Render(&snap.View, st, w, h))
+	return 0
+}
+
+// renderScene draws an app screen described by a scene file (ui.Scene), for screenshots and recordings.
+func renderScene(stdout, stderr io.Writer, path, size, theme string, colour bool) int {
+	w, h, err := parseSize(size)
+	if err != nil {
+		fmt.Fprintln(stderr, "rig-shell:", err)
+		return 2
+	}
+	sc, v, err := ui.LoadScene(path)
+	if err != nil {
+		fmt.Fprintln(stderr, "rig-shell:", err)
+		return 1
+	}
+	if theme != "" {
+		sc.Theme = theme // the flag wins over the file, so one scene can be drawn in every theme
+	}
+	lines, err := ui.RenderScene(sc, v, w, h, colour)
+	if err != nil {
+		fmt.Fprintln(stderr, "rig-shell:", err)
+		return 1
+	}
+	fmt.Fprintln(stdout, strings.Join(lines, "\n"))
 	return 0
 }
 

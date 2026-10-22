@@ -6,6 +6,10 @@
 
 
 
+## Screenshots and a walkthrough drawn from scenes (2026-10-22)
+
+`docs/media/` holds screenshots of every rig shell screen in light and dark, and a 24-second walkthrough (webm and mp4) of a request typed in, the parent working with helpers beside it, the diff under its answer, review and commit. None of it is captured from a screen: `rig-shell --scene FILE --color` draws an app screen from a JSON scene (the conversation, who answers, the open file, the doctor's findings, the settings) and `--once --color` the board, and `scripts/media/render.py` and `record.py` turn the frames into WebP and video with a headless Chromium and ffmpeg. The README opens on the conversation screenshot and links the walkthrough. Rebuilt prebuilt shells.
+
 ## Easier to start and to use: one-step first run, a what-next bar, help by task, plain errors, short Settings (2026-10-22)
 
 First run is one step: choose who to talk to and you are in the conversation (helpers are `/helpers`, where agents work is in Settings; pressing ⏎ through the old three steps used to start a dev container that was often not there). After a turn that changed files a bar offers Review, Commit and Undo. `/help` lists what you can do by task, errors people meet are said in plain words with the original under them, `/login` signs in again with the assistant's own command, `/doctor` notices a signed-out claude, and Settings shows a short list first with `a` for the rest. `rig shell` in a project Rig was never set up in now asks once on a terminal ("Set it up here? [Y/n]", ⏎ is yes) instead of stopping at "run rig init"; a no changes nothing and without a terminal it never asks. The context percentage no longer reads 100% after a few tool calls: it is the last call's input, with the window claude reports for its model, not every call of the turn added up.

@@ -4,7 +4,12 @@
 
 Stop babysitting AI agents. Rig is a task harness: you chat with a **parent agent**; it briefs **worker agents** over MCP, then verifies results before merge.
 
-[![Watch the Rig demo](https://img.youtube.com/vi/KuhHMH--oGk/maxresdefault.jpg)](https://youtu.be/KuhHMH--oGk)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/media/rig-shell-conversation-dark.webp">
+  <img src="docs/media/rig-shell-conversation-light.webp" width="900" alt="rig shell: the conversation with the parent agent, a turn's tool calls, its answer, the diff it made, and a bar offering Review, Commit and Undo">
+</picture>
+
+`rig shell` is the terminal app: one conversation with the parent, helpers working beside it, every change shown as a diff and checked before it lands. [Watch the 24-second walkthrough](docs/media/rig-shell-walkthrough.mp4), see [more screens](docs/media/README.md), or the [older demo of the parent and worker flow](https://youtu.be/KuhHMH--oGk).
 
 ## Setup & use
 

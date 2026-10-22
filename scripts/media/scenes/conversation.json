@@ -1,0 +1,79 @@
+{
+ "theme": "light",
+ "repo": "my-repo",
+ "branch": "main",
+ "snapshot": "../boards/busy.json",
+ "now": "2026-10-22T09:12:40Z",
+ "status": {
+  "enabled": true,
+  "parent": "claude",
+  "model": "opus",
+  "effort": "high",
+  "available": [
+   "claude",
+   "codex",
+   "pi"
+  ],
+  "configured": "claude",
+  "parents": [
+   "claude",
+   "codex",
+   "grok",
+   "opencode",
+   "cursor",
+   "pi"
+  ]
+ },
+ "screen": "conversation",
+ "chat": {
+  "session": "c-1a2b3c4d",
+  "parent": "claude",
+  "state": "idle",
+  "turns": 1,
+  "asks": true,
+  "context_pct": 23,
+  "mode": "ask",
+  "entries": [
+   {
+    "role": "user",
+    "text": "Fix the failing tests in tests/test_cli.py",
+    "at": "2026-10-22T09:08:10Z"
+   },
+   {
+    "role": "tool",
+    "text": "Read tests/test_cli.py"
+   },
+   {
+    "role": "tool",
+    "text": "Bash pytest tests/test_cli.py -q"
+   },
+   {
+    "role": "assistant",
+    "text": "Two tests failed because `rig status` printed the workers before the parent line. I swapped the order and left the rest of the output as it was.",
+    "parent": "claude"
+   },
+   {
+    "role": "diff",
+    "text": "src/cli.py +2 −2\n@@ -118,4 +118,4 @@\n-    for name, state in workers.items():\n-        print(f\"worker: {name} ({state})\")\n     print(f\"parent: {parent}\")\n+    for name, state in workers.items():\n+        print(f\"worker: {name} ({state})\")"
+   },
+   {
+    "role": "result",
+    "text": "pytest tests/test_cli.py · 12 passed in 1.8s"
+   }
+  ],
+  "marks": [
+   {
+    "turn": 1,
+    "title": "Fix the failing tests in tests/test_cli.py",
+    "files": [
+     {
+      "path": "src/cli.py",
+      "added": 2,
+      "deleted": 2
+     }
+    ]
+   }
+  ],
+  "can_undo": false
+ }
+}
