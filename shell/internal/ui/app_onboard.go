@@ -463,8 +463,7 @@ func (m *Model) problemKey(screen, key string) (tea.Model, tea.Cmd) {
 	case "signedout":
 		switch key {
 		case "1":
-			parent := appParent(m.st)
-			return m, m.exec([]string{parent}, func(err error) tea.Msg { return shellDoneMsg{err: err} })
+			return m, m.signIn()
 		case "2", "3", "4":
 			others := otherParents(m.st)
 			if i := int(key[0] - '2'); i < len(others) {
@@ -522,4 +521,43 @@ func problemScreen(st State) string {
 
 func noAgentInstalled(st State) bool {
 	return st.ChatParent == "" && st.AppSettings != nil && len(st.AppSettings.Installed) == 0
+}
+
+// loginCommand is how a parent CLI signs in, where that is known (claude auth login, codex login, opencode auth login);
+// for the others its own screen opens, which asks for it.
+func loginCommand(parent string) []string {
+	switch parent {
+	case "claude":
+		return []string{"claude", "auth", "login"}
+	case "codex":
+		return []string{"codex", "login"}
+	case "opencode":
+		return []string{"opencode", "auth", "login"}
+	}
+	return []string{parent}
+}
+
+// signIn runs the parent's own sign-in in the terminal and, when it is done, looks again.
+func (m *Model) signIn() tea.Cmd {
+	parent := appParent(m.st)
+	if parent == "" || parent == "parent" {
+		m.st.Message = "no assistant chosen yet: /parent picks one"
+		return nil
+	}
+	m.st.App.ProblemSeen = ""
+	m.st.Message = "signing in to " + parent + "…"
+	return m.exec(loginCommand(parent), func(err error) tea.Msg { return signedInMsg{err: err} })
+}
+
+type signedInMsg struct{ err error }
+
+func (m *Model) onSignedIn(msg signedInMsg) tea.Cmd {
+	parent := appParent(m.st)
+	if msg.err != nil {
+		m.st.Message = "sign-in did not finish: " + clean(msg.err.Error()) + " · /login tries again"
+	} else {
+		m.st.Message = "back from " + parent + "'s sign-in: send a message to go on"
+	}
+	m.csLast = time.Time{}
+	return tea.Batch(m.fetchChatStatus(), m.fetchChat(true))
 }

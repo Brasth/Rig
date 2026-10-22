@@ -598,6 +598,14 @@ func (m *Model) runSlash(text string) (tea.Cmd, bool) {
 			return nil, true
 		}
 		return m.openSelftest(), true
+	case "/login":
+		clear()
+		m.st.Mode, m.st.InputLabel, m.inputFor = ModeNormal, "", ""
+		if !m.appOn() {
+			m.st.Message = "/login is in the app: rig shell"
+			return nil, true
+		}
+		return m.signIn(), true
 	case "/helpers":
 		clear()
 		m.st.Mode, m.st.InputLabel, m.inputFor = ModeNormal, "", ""
@@ -1456,6 +1464,8 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.st.Message = "shell in " + clean(msg.plan.Workspace) + " (exit to return)"
 			return m, m.exec(msg.plan.Argv, func(err error) tea.Msg { return shellDoneMsg{err: err} })
 		}
+	case signedInMsg:
+		return m, m.onSignedIn(msg)
 	case shellDoneMsg:
 		m.st.Message = "shell closed"
 		if msg.err != nil {

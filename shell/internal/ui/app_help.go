@@ -25,6 +25,7 @@ var helpRows = []helpRow{
 	{"Check and keep", "Plan first, change nothing", "/plan", "slash:/plan"},
 	{"Check and keep", "Let it edit without asking each time", "⇧Tab goes round ask, auto-edit and plan", "mode-next"},
 	{"Make it yours", "Switch assistant", "/parent", "parent"},
+	{"Make it yours", "Sign in again", "/login", "slash:/login"},
 	{"Make it yours", "Pick the model or how hard it thinks", "/model · /effort", "slash:/model"},
 	{"Make it yours", "Let it hand work to other assistants", "/helpers", "slash:/helpers"},
 	{"Make it yours", "Keep a note it reads in every conversation", "/remember", "slash:/remember"},

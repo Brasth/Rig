@@ -20,7 +20,9 @@ func plainError(text, parent string) string {
 	}
 	switch {
 	case has("invalid api key", "please run /login", "not logged in", "not signed in", "unauthorized", "authentication failed", "401"):
-		return parent + " is not signed in. Sign in in " + parent + "'s own screen once (/login there), or pick another assistant with /parent."
+		return parent + " is not signed in. Type /login to sign in again, or /parent to pick another assistant."
+	case has("model not found", "unknown model", "invalid model", "model_not_found", "does not exist or you do not have access", "not a valid model"):
+		return "That model name is not one " + parent + " knows. /model lists the ones it offers."
 	case has("rate limit", "rate_limit", "429", "overloaded", "too many requests", "usage limit", "quota"):
 		return "The model is busy, or you reached a usage limit. Wait a minute and send it again."
 	case has("context length", "context window", "prompt is too long", "maximum context", "too many tokens"):

@@ -145,6 +145,7 @@ var SlashCommands = []SlashCommand{
 	{"/compact", " [FOCUS]", "continue in a fresh conversation from the parent's own summary", false, false},
 	{"/resume", "", "open an earlier conversation again", false, false},
 	{"/selftest", "", "test that each installed parent works through Rig (runs a few tiny real turns)", false, false},
+	{"/login", "", "sign in to the assistant again (opens its own sign-in here)", false, false},
 	{"/helpers", "", "choose which other assistants the parent can hand work to", false, false},
 	{"/doctor", "", "what is wrong with this project, and fix what Rig can", false, false},
 	{"/running", "", "what is running: the parent's tool call, the helpers, the terminal", false, false},
