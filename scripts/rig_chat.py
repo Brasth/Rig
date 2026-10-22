@@ -799,6 +799,9 @@ def _info(repo, meta: dict, what: str) -> str:
         return f"context: about {_tokens(used['context'])} tokens in the last turn{share}" + (
             "; /compact continues in a fresh conversation from a summary" if window and used["context"] * 100 // window >= 50 else "")
     servers = _mcp_servers(repo, parent)
+    if servers and parent == "codex":
+        return ("MCP servers for codex: " + ", ".join(servers) +
+                " · /mcp login NAME signs one in here, in your terminal (a sign-in the parent runs itself cannot finish: no browser)")
     return ("MCP servers for " + parent + ": " + ", ".join(servers)) if servers else (
         f"no MCP servers found in {parent}'s own config" if parent in ("claude", "codex") else f"{parent}'s MCP servers are in its own settings")
 
@@ -1481,13 +1484,26 @@ def remember(repo, text: str) -> dict:
     return {"path": NOTES_FILE, "lines": sum(1 for l in path.read_text(errors="replace").splitlines() if l.strip())}
 
 
+PARENT_HINTS = {
+    "codex": ("[Rig] If a tool answers Not Authorized, or asks for a sign-in, do not run `codex mcp login` yourself: in this chat "
+              "no browser can open and the sign-in ends with your turn. Tell the user to type /mcp login NAME (NAME is the "
+              "server, such as asana); it runs the sign-in in their own terminal."),
+}
+
+
 def _with_notes(repo, meta: dict, message: str) -> str:
-    """The notes go with a parent's first message: once per native session for the parents that resume their own, with
-    every message for the others (which get the conversation with every message too)."""
-    text = notes(repo)
-    if not text or (meta["parent"] in RESUMES and meta.get("native")):
+    """What goes with a parent's first message: the project notes and what Rig knows about this parent's headless mode.
+    Once per native session for the parents that resume their own, with every message for the others (which get the
+    conversation with every message too)."""
+    if meta["parent"] in RESUMES and meta.get("native"):
         return message
-    return "[Project notes the user keeps in " + NOTES_FILE + "]\n" + text + "\n\n" + message
+    parts = []
+    if PARENT_HINTS.get(meta["parent"]) and _mcp_servers(repo, meta["parent"]):
+        parts.append(PARENT_HINTS[meta["parent"]])  # only for someone who has MCP servers set up, which is who it is for
+    text = notes(repo)
+    if text:
+        parts.append("[Project notes the user keeps in " + NOTES_FILE + "]\n" + text)
+    return ("\n\n".join(parts) + "\n\n" + message) if parts else message
 
 
 def _last_user(repo, session: str) -> str:

@@ -115,6 +115,37 @@ def signed_out(repo: Path) -> dict | None:
     return None
 
 
+def codex_servers_signed_out(repo: Path) -> list[dict]:
+    """MCP servers `codex mcp list` says are not signed in, asked from the environment Rig runs codex in. Without a
+    credential Codex connects to such a server anyway, unauthenticated, and its tools answer "Not Authorized". The listing's
+    "Auth" column is read as text: a line that says "Not logged in" names its server first. If the format differs, nothing
+    is reported, never a guess."""
+    import harness
+    import shutil
+    import subprocess
+    try:
+        parent = harness.parse_harness(harness.harness_path(Path(repo)))["parent"]
+    except (OSError, ValueError, KeyError):
+        return []
+    binary = shutil.which("codex") if parent == "codex" else None
+    if not binary:
+        return []
+    try:
+        out = subprocess.run([binary, "mcp", "list"], capture_output=True, text=True, timeout=10, stdin=subprocess.DEVNULL).stdout
+    except (OSError, subprocess.SubprocessError):
+        return []
+    found = []
+    for line in out.splitlines():
+        if "not logged in" in line.lower() and line.split():
+            name = line.split()[0]
+            if name.lower() in ("name", "-", "—"):
+                continue
+            found.append(finding("codex-mcp-" + name, "warning", f"codex: {name} is not signed in",
+                                 f"Type /mcp login {name} in the shell: it runs codex's sign-in in your terminal and opens your browser. "
+                                 "(A sign-in the parent runs itself cannot finish.)"))
+    return found
+
+
 def from_doctor(repo: Path) -> list[dict]:
     """What `rig doctor` already checks, as findings: every required check that is not ready, in its own words."""
     import doctor
@@ -154,6 +185,7 @@ def findings(repo) -> dict:
     one = signed_out(repo)
     if one:
         rows.append(one)
+    rows.extend(codex_servers_signed_out(repo))
     rows.extend(from_doctor(repo))
     rows.sort(key=lambda r: LEVELS.index(r["level"]))
     return {"findings": rows, "problems": sum(1 for r in rows if r["level"] == "problem"),

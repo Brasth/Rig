@@ -641,6 +641,41 @@ class Turns(Base):
                                                  {"input_tokens": 10, "cache_read_input_tokens": 5000, "cache_creation_input_tokens": 0, "output_tokens": 1}})
         self.assertEqual(plain["usage"]["context"], 5010)
 
+    def test_mcp_for_codex_says_how_to_sign_one_in(self):
+        home = self.base / "home2"
+        (home / ".codex").mkdir(parents=True)
+        (home / ".codex" / "config.toml").write_text('[mcp_servers.asana]\nurl = "https://mcp.asana.com/v2/mcp"\n')
+        stand_in(self.bin, "codex", CODEX_STREAM)
+        with mock.patch.dict(os.environ, {"HOME": str(home)}), mock.patch.object(Path, "home", return_value=home):
+            started = rig_chat.send(self.repo, "/mcp", parent="codex")
+        text = rig_chat.transcript(self.repo, started["session"])["entries"][-1]["text"]
+        self.assertTrue(text.startswith("MCP servers for codex: asana"), text)
+        self.assertIn("/mcp login NAME signs one in here, in your terminal", text)
+
+    def test_codex_is_told_once_not_to_sign_in_to_mcp_servers_itself(self):
+        stand_in(self.bin, "codex", CODEX_STREAM)
+        plain = rig_chat.send(self.repo, "no servers here", parent="codex")["session"]
+        self.wait_idle(plain)
+        self.assertEqual(self.calls()[0]["argv"][-1], "no servers here", "without MCP servers the message is untouched")
+        home = self.base / "home3"
+        (home / ".codex").mkdir(parents=True)
+        (home / ".codex" / "config.toml").write_text('[mcp_servers.asana]\nurl = "https://mcp.asana.com/v2/mcp"\n')
+        with mock.patch.dict(os.environ, {"HOME": str(home)}), mock.patch.object(Path, "home", return_value=home):
+            session = rig_chat.send(self.repo, "get the asana ticket", parent="codex")["session"]
+            self.wait_idle(session)
+            rig_chat.send(self.repo, "and the next one", session)
+            self.wait_idle(session)
+            stand_in(self.bin, "claude", CLAUDE_STREAM)
+            other = rig_chat.send(self.repo, "hello", parent="claude")["session"]
+            self.wait_idle(other)
+        calls = self.calls()
+        first, second, third = calls[1]["argv"][-1], calls[2]["argv"][-1], calls[3]["argv"][-1]
+        self.assertIn("do not run `codex mcp login` yourself", first)
+        self.assertIn("/mcp login NAME", first)
+        self.assertTrue(first.endswith("get the asana ticket"))
+        self.assertNotIn("codex mcp login", second, "told once per native session")
+        self.assertNotIn("mcp login", third, "only where it applies")
+
     def test_a_long_patch_and_many_files_are_cut_short(self):
         files = rig_chat.turn_changes(self.repo, "", "x")
         self.assertEqual(files, [], "no trees, no changes")
