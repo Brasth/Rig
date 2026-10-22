@@ -1301,6 +1301,12 @@ func (m *Model) runPalette(it paletteItem, query string) tea.Cmd {
 		return m.openFork()
 	case it.Action == "running":
 		return m.openRunning()
+	case it.Action == "doctor":
+		return m.openDoctor()
+	case strings.HasPrefix(it.Action, "doctor-fix:"):
+		return m.doctorFix(strings.TrimPrefix(it.Action, "doctor-fix:"))
+	case strings.HasPrefix(it.Action, "doctor-info:"):
+		return m.doctorInfo(strings.TrimPrefix(it.Action, "doctor-info:"))
 	case strings.HasPrefix(it.Action, "running:"):
 		return m.goRunning(it.Action)
 	case strings.HasPrefix(it.Action, "fork:"):

@@ -2,8 +2,11 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"strings"
 	"testing"
+
+	"github.com/Brasth/Rig/shell/internal/api"
 )
 
 func TestParseSize(t *testing.T) {
@@ -107,5 +110,30 @@ func TestOnceSessionRendersTheMockupsThreeColumnsFromFixtures(t *testing.T) {
 		if !strings.Contains(text, want) {
 			t.Errorf("missing %q in\n%s", want, text)
 		}
+	}
+}
+
+func TestRetryingStartsTheServerOnceAndOnlyWhenItWasNotRunning(t *testing.T) {
+	e := &ensuringSource{} // not enabled: revive does nothing, so only the second call is observed
+	calls := 0
+	out, err := retrying(e, func() (string, error) {
+		calls++
+		if calls == 1 {
+			return "", api.ErrNotRunning
+		}
+		return "sent", nil
+	})
+	if out != "sent" || err != nil || calls != 2 {
+		t.Fatalf("a refused connection is tried again: %q %v %d", out, err, calls)
+	}
+	calls = 0
+	_, err = retrying(e, func() (string, error) { calls++; return "", errors.New("the server said no") })
+	if err == nil || calls != 1 {
+		t.Fatalf("any other error is not retried (the request may have run): %v %d", err, calls)
+	}
+	calls = 0
+	_, err = retrying(e, func() (string, error) { calls++; return "", api.ErrNotRunning })
+	if !errors.Is(err, api.ErrNotRunning) || calls != 2 {
+		t.Fatalf("still not running after one retry: it is reported, not looped: %v %d", err, calls)
 	}
 }

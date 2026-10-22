@@ -1,0 +1,122 @@
+#!/usr/bin/env python3
+"""/doctor in rig shell: plain findings, and only the fixes Rig can verify are safe."""
+from __future__ import annotations
+
+import json
+import os
+import sys
+import tempfile
+import time
+import unittest
+from pathlib import Path
+from unittest import mock
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "scripts"))
+sys.path.insert(0, str(ROOT / "tests"))
+
+import admission  # noqa: E402
+import shell_doctor  # noqa: E402
+
+ORIGINAL_FROM_DOCTOR = shell_doctor.from_doctor
+
+
+class ShellDoctor(unittest.TestCase):
+    def setUp(self):
+        self.td = tempfile.TemporaryDirectory()
+        self.addCleanup(self.td.cleanup)
+        self.repo = Path(self.td.name).resolve() / "repo"
+        (self.repo / ".git").mkdir(parents=True)
+        (self.repo / ".rig" / "jobs").mkdir(parents=True)
+        (self.repo / ".rig" / "harness.toml").write_text('parent = "codex"\n\n[project]\nenabled = true\n')
+        patch = mock.patch.object(shell_doctor, "from_doctor", return_value=[])
+        patch.start()
+        self.addCleanup(patch.stop)
+
+    def old(self, folder: Path):
+        past = time.time() - 3600
+        for path in [folder, *folder.iterdir()]:
+            os.utime(path, (past, past))
+
+    def ids(self):
+        return [row["id"] for row in shell_doctor.findings(self.repo)["findings"]]
+
+    def test_a_clean_project_has_nothing_to_report(self):
+        result = shell_doctor.findings(self.repo)
+        self.assertEqual((result["findings"], result["problems"], result["warnings"]), ([], 0, 0))
+
+    def test_a_blank_thread_file_is_found_and_removed_and_a_real_one_is_not(self):
+        thread = self.repo / ".rig" / "thread"
+        thread.write_text("\n")
+        found = shell_doctor.findings(self.repo)["findings"][0]
+        self.assertEqual((found["id"], found["level"], found["fix"]), ("blank-thread", "problem", "remove-thread"))
+        shell_doctor.apply(self.repo, "remove-thread")
+        self.assertFalse(thread.exists())
+        thread.write_text("session-1\n")
+        self.assertEqual(self.ids(), [])
+        with self.assertRaisesRegex(ValueError, "not empty any more"):
+            shell_doctor.apply(self.repo, "remove-thread")
+        self.assertTrue(thread.exists(), "a real thread is never removed")
+
+    def test_a_job_that_never_started_is_found_after_a_while_and_removed(self):
+        folder = self.repo / ".rig" / "jobs" / "hero-continue"
+        folder.mkdir()
+        (folder / "brief.md").write_text("brief")
+        self.assertEqual(self.ids(), [], "a folder just made may still be being made")
+        self.old(folder)
+        self.assertEqual(self.ids(), ["stale-hero-continue"])
+        shell_doctor.apply(self.repo, "remove-job:hero-continue")
+        self.assertFalse(folder.exists())
+
+    def test_a_job_with_a_meta_json_or_a_held_slot_is_never_removed(self):
+        done = self.repo / ".rig" / "jobs" / "done-job"
+        done.mkdir()
+        (done / "meta.json").write_text("{}")
+        self.old(done)
+        held = self.repo / ".rig" / "jobs" / "held-job"
+        held.mkdir()
+        (held / "brief.md").write_text("b")
+        self.old(held)
+        with mock.patch.object(admission, "list_reservations", return_value=[{"job_id": "held-job", "slot_held": True}]):
+            found = {row["id"]: row for row in shell_doctor.findings(self.repo)["findings"]}
+            self.assertEqual(list(found), ["held-held-job"])
+            self.assertEqual((found["held-held-job"]["level"], found["held-held-job"]["fix"]), ("problem", ""))
+            for name in ("held-job", "done-job"):
+                with self.assertRaisesRegex(ValueError, "not a stale job"):
+                    shell_doctor.apply(self.repo, "remove-job:" + name)
+        self.assertTrue(held.exists() and done.exists())
+        for bad in ("remove-job:../x", "remove-job:a/b", "remove-job:", "rm-rf"):
+            with self.assertRaises(ValueError):
+                shell_doctor.apply(self.repo, bad)
+
+    def test_unexpected_errors_are_listed_with_their_last_line_and_can_be_cleared(self):
+        log = self.repo / ".rig" / "mcp-errors.log"
+        log.write_text("--- 2026-10-22T00:00:00Z rig_session\nTraceback (most recent call last):\n  File x\nIndexError: list index out of range\n\n")
+        found = shell_doctor.findings(self.repo)["findings"][0]
+        self.assertEqual((found["id"], found["level"], found["fix"]), ("mcp-errors", "warning", "clear-errors"))
+        self.assertIn("rig_session: IndexError: list index out of range", found["detail"])
+        shell_doctor.apply(self.repo, "clear-errors")
+        self.assertEqual(self.ids(), [])
+
+    def test_doctors_own_checks_come_in_as_findings_problems_first(self):
+        rows = [{"name": "parent", "status": "missing", "required": True, "detail": "Select an installed parent CLI"},
+                {"name": "adapters", "status": "failed", "required": False, "detail": "1 adapter package is invalid"},
+                {"name": "sandbox", "status": "missing", "required": False, "detail": "devcontainer provider needs dc-cli"},
+                {"name": "browser", "status": "optional-disabled", "required": False, "detail": "opt-in unchanged"},
+                {"name": "auth", "status": "missing-evidence", "required": True, "detail": "not tested"},
+                {"name": "project", "status": "ready", "required": True, "detail": "enabled"}]
+        import doctor
+        with mock.patch.object(doctor, "build_report", return_value={"checks": rows}):
+            out = ORIGINAL_FROM_DOCTOR(self.repo)
+        self.assertEqual([(r["id"], r["level"]) for r in out], [("check-parent", "problem"), ("check-adapters", "warning")])
+        self.assertEqual(out[0]["title"], "parent: missing")
+        self.assertEqual(out[0]["fix"], "", "Rig never fixes a missing parent by itself")
+        with mock.patch.object(doctor, "build_report", side_effect=ValueError("bad harness.toml")):
+            self.assertEqual(ORIGINAL_FROM_DOCTOR(self.repo)[0]["detail"], "bad harness.toml")
+        with mock.patch.object(shell_doctor, "from_doctor", return_value=out):
+            levels = [r["level"] for r in shell_doctor.findings(self.repo)["findings"]]
+        self.assertEqual(levels, ["problem", "warning"], "sorted problems first")
+
+
+if __name__ == "__main__":
+    unittest.main()

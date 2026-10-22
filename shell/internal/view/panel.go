@@ -117,6 +117,24 @@ type ChatSession struct {
 	Updated float64 `json:"updated"` // when it was last used, as unix seconds
 }
 
+// DoctorFinding is one thing shell.doctor found wrong: what, why, and the safe fix Rig can run (empty when it is for
+// the owner to do).
+type DoctorFinding struct {
+	ID       string `json:"id"`
+	Level    string `json:"level"` // problem, warning or note
+	Title    string `json:"title"`
+	Detail   string `json:"detail"`
+	Fix      string `json:"fix"`
+	FixLabel string `json:"fix_label"`
+}
+
+// ShellDoctor is the shell.doctor result.
+type ShellDoctor struct {
+	Findings []DoctorFinding `json:"findings"`
+	Problems int             `json:"problems"`
+	Warnings int             `json:"warnings"`
+}
+
 // ChatHit is a conversation with a message that matches a search (chat.search): who said it and the words around it.
 type ChatHit struct {
 	Session string  `json:"session"`

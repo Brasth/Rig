@@ -920,8 +920,31 @@ def cancel(repo, session: str, why: str = "cancelled") -> dict:
         os.killpg(pid, signal.SIGTERM)  # the runner leads its own group, with the parent CLI inside it; the runner itself
     except (ProcessLookupError, PermissionError, TypeError):  # survives the signal to note what the turn changed
         pass
+    _kill_if_it_lingers(pid)
     append(repo, meta["id"], "system", why)
     return {"session": meta["id"], "state": "idle", "cancelled": True}
+
+
+KILL_AFTER = 8.0  # seconds a stopped turn's processes get to leave before they are killed
+
+
+def _kill_if_it_lingers(pid) -> None:
+    """A parent CLI that ignores SIGTERM must not run on after "stopped": after a while, what is left of the runner's
+    group is killed. (A pid that was reused by something else is not touched: the group must still lead with that pid.)"""
+    if not isinstance(pid, int) or pid <= 1:
+        return
+    import threading
+
+    def kill():
+        try:
+            if os.getpgid(pid) == pid:
+                os.killpg(pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError, OSError):
+            pass
+
+    timer = threading.Timer(KILL_AFTER, kill)
+    timer.daemon = True
+    timer.start()
 
 
 STEER_NOTE = ("[Note from Rig: the user interrupted your previous turn with the message below. What you had done before the "

@@ -37,6 +37,8 @@ type Source interface {
 	ChatTranscript(session string, tail int, timeout time.Duration) (*view.ChatTranscript, error)
 	ChatSend(message, session, parent string, timeout time.Duration) (*view.ChatStarted, error)
 	ChatCancel(session string, timeout time.Duration) error
+	ShellDoctor(timeout time.Duration) (*view.ShellDoctor, error)
+	ShellFix(fix string, timeout time.Duration) (string, error)
 	ChatSteer(session, message string, timeout time.Duration) (*view.ChatStarted, error)
 	ChatSearch(query string, timeout time.Duration) ([]view.ChatHit, error)
 	ChatFork(session string, turn int, timeout time.Duration) (*view.ChatForked, error)
@@ -585,6 +587,14 @@ func (m *Model) runSlash(text string) (tea.Cmd, bool) {
 			return nil, true
 		}
 		return m.openNotes(), true
+	case "/doctor":
+		clear()
+		m.st.Mode, m.st.InputLabel, m.inputFor = ModeNormal, "", ""
+		if !m.appOn() {
+			m.st.Message = "/doctor is in the app: rig shell"
+			return nil, true
+		}
+		return m.openDoctor(), true
 	case "/running":
 		clear()
 		m.st.Mode, m.st.InputLabel, m.inputFor = ModeNormal, "", ""
@@ -1352,6 +1362,10 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.chLast = time.Time{}
 		return m, m.fetchChat(true)
+	case doctorMsg:
+		return m, m.onDoctor(msg)
+	case doctorFixedMsg:
+		return m, m.onDoctorFixed(msg)
 	case chatFoundMsg:
 		return m, m.onChatFound(msg)
 	case forkedMsg:
