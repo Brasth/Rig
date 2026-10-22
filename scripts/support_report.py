@@ -41,7 +41,14 @@ def run(argv: list[str], timeout: int = 15) -> str:
     except (OSError, subprocess.SubprocessError) as error:
         return f"({' '.join(argv)} did not run: {error})"
     text = (out.stdout + (("\n[stderr]\n" + out.stderr) if out.stderr.strip() else "")).strip()
+    text = "\n".join(re.sub(r" {3,}", " | ", line)[:300] for line in text.splitlines())  # a table's padding is not information
     return text + ("" if out.returncode == 0 else f"\n[exit status {out.returncode}]")
+
+
+def rig_version() -> str:
+    """The commit of a Rig clone, or where the installed copy lives when it is not a git checkout (~/.rig)."""
+    out = run(["git", "-C", str(HERE.parent), "rev-parse", "--short", "HEAD"])
+    return out if re.fullmatch(r"[0-9a-f]{7,40}", out) else f"installed copy at {HERE.parent} (not a git checkout)"
 
 
 def tail(path: Path, limit: int = TAIL) -> str:
@@ -90,7 +97,7 @@ def build(repo) -> str:
     except (OSError, ValueError, KeyError):
         parent = ""
     parts.append(section("machine", f"{platform.platform()}\npython {platform.python_version()}\nproject: {repo.name}\nparent: {parent or '(none)'}\n"
-                         f"rig: {run(['git', '-C', str(HERE.parent), 'rev-parse', '--short', 'HEAD'])}"))
+                         f"rig: {rig_version()}"))
     parts.append(section("environment (names only)", "\n".join(f"{n}: {'set' if os.environ.get(n) else 'not set'}" for n in ENV_NAMES)))
     if parent:
         parts.append(section(f"{parent} version", run([parent, "--version"])))

@@ -7,6 +7,10 @@
 
 
 
+## Asana through codex: use the MCP server, not the connected app (2026-10-22)
+
+A support report showed `asana` set up and signed in as an MCP server in codex's config, while the parent called the ChatGPT connected app `codex_apps.asana.*` (a separate sign-in, which answered "Not Authorized"). Codex is now told which MCP servers are set up and to call the named server's own tools, not the connected app of the same name; the "Not Authorized" hint for a connected app says the same. `rig support` squeezes `codex mcp list`'s padding and names a non-git install.
+
 ## Connected apps, and a report to send when something fails (2026-10-22)
 
 A tool named `codex_apps.NAME` is a connected app (Asana, GitHub, ...) whose sign-in lives in ChatGPT, not in `codex mcp login`. A "Not Authorized" answer from one now says to reconnect it in ChatGPT under Settings → Apps with the account that can open the item; `/mcp login NAME` is kept for the servers in codex's own config. `/logs` (or `rig support`) writes `.rig/support.txt` in one go: versions, `codex login status` and `codex mcp list`, the command Rig runs, the newest tool errors with their answers, what the parent printed on stderr (now kept in `.rig/chat/<session>.parent.log`; it used to be discarded in codex's server mode), Rig's error log and the doctor's findings. Environment variables are named, never shown, and token-shaped text is replaced.

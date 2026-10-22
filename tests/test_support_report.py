@@ -69,6 +69,17 @@ class SupportReport(unittest.TestCase):
         self.assertIn("== machine ==", path.read_text())
 
 
+class Tidy(unittest.TestCase):
+    def test_a_padded_table_is_squeezed_and_a_non_git_install_is_named(self):
+        import subprocess
+        done = subprocess.CompletedProcess([], 0, stdout="Name" + " " * 80 + "Auth\nasana" + " " * 60 + "OAuth\n", stderr="")
+        with mock.patch.object(support_report.shutil, "which", return_value="/bin/x"), mock.patch.object(subprocess, "run", return_value=done):
+            out = support_report.run(["codex", "mcp", "list"])
+        self.assertEqual(out, "Name | Auth\nasana | OAuth")
+        with mock.patch.object(support_report, "run", return_value="fatal: not a git repository\n[exit status 128]"):
+            self.assertIn("not a git checkout", support_report.rig_version())
+
+
 class ParentStderrIsKept(unittest.TestCase):
     def test_parent_log_keeps_the_newest_text(self):
         import rig_chat

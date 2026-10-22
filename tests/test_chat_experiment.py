@@ -672,6 +672,8 @@ class Turns(Base):
         first, second, third = calls[1]["argv"][-1], calls[2]["argv"][-1], calls[3]["argv"][-1]
         self.assertIn("do not run `codex mcp login` yourself", first)
         self.assertIn("/mcp login NAME", first)
+        self.assertIn("MCP servers set up in codex's config: asana", first)
+        self.assertIn("not the connected app codex_apps.NAME", first)
         self.assertTrue(first.endswith("get the asana ticket"))
         self.assertNotIn("codex mcp login", second, "told once per native session")
         self.assertNotIn("mcp login", third, "only where it applies")

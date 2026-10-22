@@ -78,7 +78,7 @@ func signInHint(st State, tool, result string) string {
 	}
 	if first, _, _ := strings.Cut(strings.TrimSpace(tool), " "); strings.HasPrefix(first, "codex_apps.") {
 		// a connected app: its sign-in lives in ChatGPT, not in `codex mcp login`
-		return "reconnect " + name + " in ChatGPT: Settings → Apps, with the account that can open this item. Still the same? /logs writes a report to send."
+		return "reconnect " + name + " in ChatGPT: Settings → Apps, with the account that can open this item. If " + name + " is also in /mcp, tell the parent to use that server instead (\"use the " + name + " mcp server, not the connected app\"). Still the same? /logs writes a report to send."
 	}
 	return "sign in yourself: /mcp login " + name + " (opens your browser here). If it was a connected app, reconnect it in Codex's app settings."
 }
