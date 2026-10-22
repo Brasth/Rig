@@ -7,6 +7,12 @@
 
 
 
+## Pushing works for a new branch, and git failures say what to do (2026-10-22)
+
+- **A branch that was never pushed can be shipped.** Ship used to stop at "has no upstream branch to ship to", which is where every new feature branch starts. Now it counts what no remote branch has yet, offers `publish <branch>`, and pushes with `-u` so the branch is tracked from then on. A pull request from such a branch goes into the remote's own default branch (its HEAD, else main or master). A project with no remote says how to add one (`git remote add origin <url>`); a detached HEAD says to switch to a branch.
+- **A push never waits on a prompt.** Git runs with prompts and ssh passwords off, so a push that needs a sign-in fails at once with the reason instead of hanging for three minutes.
+- **Failures are said in words and stay on screen.** The ship screen keeps the reason under the buttons (the status line cut it): not signed in (`gh auth login`), the remote has newer commits (pull first), a protected branch (open a pull request), no connection, gh not signed in. In the git view, commit and pull failures are explained the same way: git does not know who you are (the two `git config` lines), a hook stopped the commit, nothing is staged, no upstream to pull from, conflicts, uncommitted changes in the way, an `index.lock`.
+
 ## A smoother, easier-to-read conversation (2026-10-22)
 
 - **Replies stream word by word.** While a turn runs, rig shell asks a small `chat.live` call about seven times a second (the streaming reply, the activity note, the entry count) and fetches the whole transcript only when an entry is added, the state changes or a request waits. Before, the conversation was fetched about once a second, so a reply arrived in jumps.
