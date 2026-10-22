@@ -5,6 +5,11 @@
 
 
 
+
+## Easier to start and to use: one-step first run, a what-next bar, help by task, plain errors, short Settings (2026-10-22)
+
+First run is one step: choose who to talk to and you are in the conversation (helpers are `/helpers`, where agents work is in Settings; pressing ⏎ through the old three steps used to start a dev container that was often not there). After a turn that changed files a bar offers Review, Commit and Undo. `/help` lists what you can do by task, errors people meet are said in plain words with the original under them, `/login` signs in again with the assistant's own command, `/doctor` notices a signed-out claude, and Settings shows a short list first with `a` for the rest. `rig shell` in a project Rig was never set up in now asks once on a terminal ("Set it up here? [Y/n]", ⏎ is yes) instead of stopping at "run rig init"; a no changes nothing and without a terminal it never asks. The context percentage no longer reads 100% after a few tool calls: it is the last call's input, with the window claude reports for its model, not every call of the turn added up.
+
 ## /doctor and /selftest in rig shell, and recovery from a dead server or a parent that will not stop (2026-10-22)
 
 `/doctor` lists what is wrong with the project in plain words and fixes what Rig can check is safe (an empty `.rig/thread`, a job that never started, the error log); `/selftest` runs a few tiny real turns per installed parent in a throwaway project (answer, reasoning level, model, plan, auto-edit, stop) and shows pass or fail per check live, keeping the report in `.rig/selftest.txt`. Chat and doctor calls restart a dead API server once; a stop the parent ignores is followed by a kill after 8 seconds. New API methods `shell.doctor`, `shell.fix`, `shell.selftest`, `shell.selftest_status`.

@@ -17,7 +17,8 @@ import (
 
 // Onboarding is the first-run steps after "Who do you want to talk to?".
 type Onboarding struct {
-	Step       int // 2 helpers, 3 sandbox
+	Alone      bool // /helpers: just the helpers step, which saves and ends there (first run no longer has steps after the parent)
+	Step       int  // 2 helpers, 3 sandbox
 	HelperSel  int
 	HelperOn   map[string]bool
 	At         int // helpers at once
@@ -70,7 +71,7 @@ func helpersScreen(st State, w, h int) []string {
 	o := st.App.Onboard
 	parent := appParent(st)
 	cw := min(60, w-8)
-	body := []string{"", "", st.bold("Who can " + parent + " hand work to?"), st.dim("Each helper works in its own copy of the repo."), "", ""}
+	body := []string{"", "", st.bold("Who can " + parent + " hand work to?"), st.dim("Each one works in its own copy of the project, so your files stay safe."), "", ""}
 	names := helperNames(st)
 	for i, name := range names {
 		box := st.faint("[ ]")
@@ -103,7 +104,11 @@ func helpersScreen(st State, w, h int) []string {
 		body = append(body, st.dim("No other agent is installed here; "+parent+" works on its own."), "")
 	}
 	body = append(body, "", st.dim("   up to ")+st.bold(fmt.Sprint(o.At))+st.dim(" at once · "+parent+" approves their commands"))
-	return centered(st, rigBar(st, w, 2), body, cw, w, h, [][2]string{{"space", "toggle"}, {"1-4", "at once"}, {"⏎", "continue"}, {"esc", "back"}})
+	step, enter := 2, "continue"
+	if o.Alone {
+		step, enter = 0, "save"
+	}
+	return centered(st, rigBar(st, w, step), body, cw, w, h, [][2]string{{"space", "toggle"}, {"1-4", "at once"}, {"⏎", enter}, {"esc", map[bool]string{true: "close", false: "back"}[o.Alone]}})
 }
 
 func helperNames(st State) []string {
@@ -170,7 +175,7 @@ func sandboxScreen(st State, w, h int) []string {
 // noAgentsScreen is "Let's get you an agent": nothing installed, and how to install one.
 func noAgentsScreen(st State, w, h int) []string {
 	cw := min(70, w-8)
-	body := []string{"", "", st.bold("Let's get you an agent") + "  " + st.faint("1 of 3"),
+	body := []string{"", "", st.bold("Let's get you an assistant"),
 		st.dim("no agent found on this computer · looked for claude codex opencode grok pi omp agy"), "", ""}
 	sel := clampSel(st.App.InstallSel, len(installCommands))
 	head := st.bold("› 1  install one for me") + "  " + st.paint(colGreen, "recommended")
@@ -355,6 +360,10 @@ func (m *Model) onboardKey(key string) (tea.Model, tea.Cmd) {
 				changes = append(changes, change{"queue.max_running", fmt.Sprint(o.At)})
 			}
 			o.Step = 3
+			if o.Alone {
+				a.Onboard = nil // /helpers ends here: where agents work is in Settings, for whoever wants it
+				m.st.Message = "saved: " + appParent(m.st) + " can hand work to the ones you chose"
+			}
 			if len(changes) == 0 {
 				return m, nil
 			}
@@ -371,6 +380,10 @@ func (m *Model) onboardKey(key string) (tea.Model, tea.Cmd) {
 				return appSettingsMsg{s: last}
 			}
 		case "esc":
+			if o.Alone {
+				a.Onboard = nil
+				return m, nil
+			}
 			o.Step = 0
 			m.openWelcome()
 			m.st.App.Onboard = o
@@ -404,8 +417,14 @@ func (m *Model) onboardKey(key string) (tea.Model, tea.Cmd) {
 
 // startOnboarding moves from the parent's choice to the helpers step, with the settings as they are.
 func (m *Model) startOnboarding() {
+	m.startHelpers(false)
+}
+
+// startHelpers opens the helpers step; alone is /helpers: it saves and ends there.
+func (m *Model) startHelpers(alone bool) {
 	s := m.st.AppSettings
 	if s == nil {
+		m.st.Message = "settings are still loading: try again in a moment"
 		return
 	}
 	on := map[string]bool{}
@@ -416,7 +435,7 @@ func (m *Model) startOnboarding() {
 	if s.Sandbox == "host" {
 		sel = 0
 	}
-	m.st.App.Onboard = &Onboarding{Step: 2, HelperOn: on, At: max(1, min(4, s.MaxRunning)), SandboxSel: sel}
+	m.st.App.Onboard = &Onboarding{Alone: alone, Step: 2, HelperOn: on, At: max(1, min(4, s.MaxRunning)), SandboxSel: sel}
 }
 
 // problemKey answers the no-agents, signed-out and sandbox-stopped screens.
@@ -444,8 +463,7 @@ func (m *Model) problemKey(screen, key string) (tea.Model, tea.Cmd) {
 	case "signedout":
 		switch key {
 		case "1":
-			parent := appParent(m.st)
-			return m, m.exec([]string{parent}, func(err error) tea.Msg { return shellDoneMsg{err: err} })
+			return m, m.signIn()
 		case "2", "3", "4":
 			others := otherParents(m.st)
 			if i := int(key[0] - '2'); i < len(others) {
@@ -503,4 +521,43 @@ func problemScreen(st State) string {
 
 func noAgentInstalled(st State) bool {
 	return st.ChatParent == "" && st.AppSettings != nil && len(st.AppSettings.Installed) == 0
+}
+
+// loginCommand is how a parent CLI signs in, where that is known (claude auth login, codex login, opencode auth login);
+// for the others its own screen opens, which asks for it.
+func loginCommand(parent string) []string {
+	switch parent {
+	case "claude":
+		return []string{"claude", "auth", "login"}
+	case "codex":
+		return []string{"codex", "login"}
+	case "opencode":
+		return []string{"opencode", "auth", "login"}
+	}
+	return []string{parent}
+}
+
+// signIn runs the parent's own sign-in in the terminal and, when it is done, looks again.
+func (m *Model) signIn() tea.Cmd {
+	parent := appParent(m.st)
+	if parent == "" || parent == "parent" {
+		m.st.Message = "no assistant chosen yet: /parent picks one"
+		return nil
+	}
+	m.st.App.ProblemSeen = ""
+	m.st.Message = "signing in to " + parent + "…"
+	return m.exec(loginCommand(parent), func(err error) tea.Msg { return signedInMsg{err: err} })
+}
+
+type signedInMsg struct{ err error }
+
+func (m *Model) onSignedIn(msg signedInMsg) tea.Cmd {
+	parent := appParent(m.st)
+	if msg.err != nil {
+		m.st.Message = "sign-in did not finish: " + clean(msg.err.Error()) + " · /login tries again"
+	} else {
+		m.st.Message = "back from " + parent + "'s sign-in: send a message to go on"
+	}
+	m.csLast = time.Time{}
+	return tea.Batch(m.fetchChatStatus(), m.fetchChat(true))
 }

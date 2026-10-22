@@ -536,10 +536,8 @@ func (m *Model) appKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m, tea.Batch(m.fetchDock(true), m.fetchDiff(true))
 			case (r == 'u' || r == 'h') && m.quickApply(string(r), true):
 				return m, nil
-			case r == 'g' && lastMark(m.st) != nil:
-				return m, m.openTurnChanges()
-			case r == 'c' && lastMark(m.st) != nil:
-				return m, m.askTurnCommit()
+			case (r == 'g' || r == 'c' || r == 'u') && nextBarOn(m.st):
+				return m, m.nextAction(map[rune]string{'g': "review", 'c': "commit", 'u': "undo"}[r])
 			case m.st.Chat == nil && r >= '1' && r <= '4':
 				return m, m.appSend(Suggestions[r-'1'])
 			case asking && (r == '1' || r == '2'):
@@ -1166,8 +1164,9 @@ func (m *Model) welcomeKey(key string) (tea.Model, tea.Cmd) {
 		}
 		pk.Sel = a.WelcomeSel
 		if a.FirstRun {
-			a.FirstRun = false
-			m.startOnboarding() // then who it can hand work to, and where agents work
+			// first run is one step: who to talk to, then the chat. Helpers (/helpers) and where agents work
+			// (Settings) are there for whoever wants them, and nobody has to understand them to start.
+			a.FirstRun, a.JustStarted = false, true
 		}
 		return m.pickerKey(tea.KeyMsg{Type: tea.KeyEnter})
 	case "esc":
@@ -1303,6 +1302,11 @@ func (m *Model) runPalette(it paletteItem, query string) tea.Cmd {
 		return m.openRunning()
 	case it.Action == "doctor":
 		return m.openDoctor()
+	case it.Action == "help":
+		return m.openHelp()
+	case it.Action == "attach-file" || it.Action == "review-turn" || it.Action == "commit-turn" || it.Action == "mode-next" ||
+		it.Action == "stop-turn" || it.Action == "help-keys":
+		return m.helpAction(it.Action)
 	case it.Action == "selftest":
 		return m.openSelftest()
 	case it.Action == "selftest-run":

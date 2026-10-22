@@ -266,9 +266,15 @@ def decode_event(parent: str, event) -> dict:
             out["native"] = str(event.get("session_id") or "")
             out["done"], out["error"] = True, bool(event.get("is_error"))
             used = event.get("usage") if isinstance(event.get("usage"), dict) else {}
-            seen = sum(int(used.get(k) or 0) for k in ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens"))
+            keys = ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens")
+            seen = sum(int(used.get(k) or 0) for k in keys)  # every call of the turn added up: what the turn read, not what the context holds
+            calls = used.get("iterations") if isinstance(used.get("iterations"), list) else []
+            last = next((c for c in reversed(calls) if isinstance(c, dict) and c.get("type", "message") == "message"), None)
+            held = sum(int(last.get(k) or 0) for k in keys) if last else seen  # the last call's whole input is what the context holds now
+            models = event.get("modelUsage") if isinstance(event.get("modelUsage"), dict) else {}
+            window = max([int(m.get("contextWindow") or 0) for m in models.values() if isinstance(m, dict)] or [0])
             out["usage"] = {"cost": float(event.get("total_cost_usd") or 0), "input": seen, "output": int(used.get("output_tokens") or 0),
-                            "context": seen}
+                            "context": held, "window": window}
             if out["error"]:
                 out["entries"].append({"role": "error", "text": _clean(event.get("result") or event.get("subtype") or "the parent reported an error")})
     elif parent == "codex":
@@ -692,6 +698,9 @@ def _window(meta: dict) -> int:
     """How many tokens of context the parent's model holds, when it is known: claude's, 1M for its [1m] models."""
     if meta.get("parent") != "claude":
         return 0
+    told = meta.get("usage", {}).get("window") if isinstance(meta.get("usage"), dict) else 0
+    if isinstance(told, int) and told > 0:
+        return told  # claude says its own window in each turn's result
     return 1_000_000 if "[1m]" in str(meta.get("model", "")) else 200_000
 
 
@@ -1754,7 +1763,8 @@ def run_turn(repo, session: str) -> int:
     if used:  # what the turn cost and how full the parent's context is, for /cost and /context
         total = fresh.get("usage") if isinstance(fresh.get("usage"), dict) else {}
         fresh["usage"] = {"cost": round(float(total.get("cost", 0)) + used["cost"], 6), "input": int(total.get("input", 0)) + used["input"],
-                          "output": int(total.get("output", 0)) + used["output"], "context": used["context"], "turns": int(total.get("turns", 0)) + 1}
+                          "output": int(total.get("output", 0)) + used["output"], "context": used["context"], "turns": int(total.get("turns", 0)) + 1,
+                          "window": used.get("window") or total.get("window") or 0}
     if fresh.get("compacting"):
         _finish_compaction(repo, fresh, error)
     elif used and context_percent(fresh) >= CONTEXT_WARN and not fresh.get("warned"):

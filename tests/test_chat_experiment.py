@@ -325,7 +325,7 @@ class Turns(Base):
         done = rig_chat.decode_event("claude", {"type": "result", "subtype": "success", "result": "ok", "session_id": "n1", "total_cost_usd": 0.0421,
                                                 "usage": {"input_tokens": 100, "cache_creation_input_tokens": 900, "cache_read_input_tokens": 37000,
                                                           "output_tokens": 2100}})
-        self.assertEqual(done["usage"], {"cost": 0.0421, "input": 38000, "output": 2100, "context": 38000})
+        self.assertEqual(done["usage"], {"cost": 0.0421, "input": 38000, "output": 2100, "context": 38000, "window": 0})
         codex = rig_chat.decode_event("codex", {"type": "turn.completed", "usage": {"input_tokens": 5000, "cached_input_tokens": 100, "output_tokens": 70}})
         self.assertEqual(codex["usage"]["input"], 5000)
         meta = rig_chat.new_session(self.repo, "claude")
@@ -621,6 +621,25 @@ class Turns(Base):
             self.assertIn("Project notes", call["argv"][-1])
         with self.assertRaisesRegex(rig_chat.ChatError, "/remember NOTE"):
             rig_chat.send(self.repo, "/remember", session)
+
+    def test_the_context_is_the_last_calls_input_not_every_call_of_a_tool_turn_added_up(self):
+        # a turn with five tool calls: each call re-reads the 40k cached context, so the turn's totals say 200k+
+        calls = [{"type": "message", "input_tokens": 3, "cache_read_input_tokens": 40000 + 100 * i, "cache_creation_input_tokens": 200} for i in range(6)]
+        total = {"input_tokens": 18, "cache_read_input_tokens": sum(c["cache_read_input_tokens"] for c in calls),
+                 "cache_creation_input_tokens": 1200, "output_tokens": 900, "iterations": calls}
+        done = rig_chat.decode_event("claude", {"type": "result", "subtype": "success", "result": "ok", "session_id": "n1", "total_cost_usd": 0.1,
+                                                "usage": total, "modelUsage": {"claude-sonnet-5-5": {"contextWindow": 1000000}}})
+        self.assertEqual(done["usage"]["context"], 3 + 40500 + 200, "what the context holds after the last call")
+        self.assertEqual(done["usage"]["input"], 18 + total["cache_read_input_tokens"] + 1200, "the turn's own reading still counts for cost")
+        self.assertEqual(done["usage"]["window"], 1000000, "claude says its own window")
+        meta = {"parent": "claude", "model": "", "usage": done["usage"]}
+        self.assertEqual(rig_chat.context_percent(meta), 4, "not 100% for a short chat")
+        old = dict(meta, usage={"context": 100000})
+        self.assertEqual(rig_chat.context_percent(old), 50, "without the window, claude's usual 200k")
+        # without iterations (older claude) the aggregate is all there is, as before
+        plain = rig_chat.decode_event("claude", {"type": "result", "subtype": "success", "result": "ok", "session_id": "n", "usage":
+                                                 {"input_tokens": 10, "cache_read_input_tokens": 5000, "cache_creation_input_tokens": 0, "output_tokens": 1}})
+        self.assertEqual(plain["usage"]["context"], 5010)
 
     def test_a_long_patch_and_many_files_are_cut_short(self):
         files = rig_chat.turn_changes(self.repo, "", "x")

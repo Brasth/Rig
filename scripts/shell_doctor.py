@@ -91,6 +91,30 @@ def recent_errors(repo: Path) -> dict | None:
                    " · ".join(lines) + " (full tracebacks: .rig/mcp-errors.log)", "clear-errors", "clear the log")
 
 
+def signed_out(repo: Path) -> dict | None:
+    """The project's parent is claude and `claude auth status` says it is signed out. Only claude is asked: its status
+    command and its answer are known; for the others a failed turn says it (the shell shows its own sign-in then)."""
+    import harness
+    import shutil
+    import subprocess
+    try:
+        parent = harness.parse_harness(harness.harness_path(Path(repo)))["parent"]
+    except (OSError, ValueError, KeyError):
+        return None
+    binary = shutil.which("claude") if parent == "claude" else None
+    if not binary:
+        return None
+    try:
+        out = subprocess.run([binary, "auth", "status"], capture_output=True, text=True, timeout=8, stdin=subprocess.DEVNULL)
+        logged_in = json.loads(out.stdout).get("loggedIn")
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+    if logged_in is False:
+        return finding("claude-signed-out", "problem", "claude is not signed in",
+                       "Type /login in the shell to sign in again, or /parent to pick another assistant.")
+    return None
+
+
 def from_doctor(repo: Path) -> list[dict]:
     """What `rig doctor` already checks, as findings: every required check that is not ready, in its own words."""
     import doctor
@@ -125,6 +149,9 @@ def findings(repo) -> dict:
             rows.append(one)
     rows.extend(never_started(repo))
     one = recent_errors(repo)
+    if one:
+        rows.append(one)
+    one = signed_out(repo)
     if one:
         rows.append(one)
     rows.extend(from_doctor(repo))

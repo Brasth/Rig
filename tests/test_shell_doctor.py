@@ -118,5 +118,27 @@ class ShellDoctor(unittest.TestCase):
         self.assertEqual(levels, ["problem", "warning"], "sorted problems first")
 
 
+class SignedOut(ShellDoctor):
+    def test_claude_signed_out_is_a_problem_and_only_claude_is_asked(self):
+        import subprocess
+        (self.repo / ".rig" / "harness.toml").write_text('parent = "claude"\n\n[project]\nenabled = true\n')
+        out_ok = mock.Mock(stdout=json.dumps({"loggedIn": True}))
+        out_no = mock.Mock(stdout=json.dumps({"loggedIn": False}))
+        with mock.patch("shutil.which", return_value="/usr/bin/claude"), mock.patch.object(subprocess, "run", return_value=out_no):
+            found = shell_doctor.signed_out(self.repo)
+        self.assertEqual((found["id"], found["level"], found["fix"]), ("claude-signed-out", "problem", ""))
+        self.assertIn("/login", found["detail"])
+        with mock.patch("shutil.which", return_value="/usr/bin/claude"), mock.patch.object(subprocess, "run", return_value=out_ok):
+            self.assertIsNone(shell_doctor.signed_out(self.repo))
+        with mock.patch("shutil.which", return_value="/usr/bin/claude"), mock.patch.object(subprocess, "run", side_effect=subprocess.TimeoutExpired("claude", 8)):
+            self.assertIsNone(shell_doctor.signed_out(self.repo), "no answer is not an accusation")
+        with mock.patch("shutil.which", return_value="/usr/bin/claude"), mock.patch.object(subprocess, "run", return_value=mock.Mock(stdout="not json")):
+            self.assertIsNone(shell_doctor.signed_out(self.repo))
+        (self.repo / ".rig" / "harness.toml").write_text('parent = "codex"\n\n[project]\nenabled = true\n')
+        with mock.patch("shutil.which", return_value="/usr/bin/codex"), mock.patch.object(subprocess, "run") as run:
+            self.assertIsNone(shell_doctor.signed_out(self.repo))
+            run.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()

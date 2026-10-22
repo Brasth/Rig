@@ -183,7 +183,7 @@ func TestAProjectWithNoParentIsAskedWhoToTalkTo(t *testing.T) {
 		t.Fatal("the welcome screen opens by itself")
 	}
 	out := appScreen(m)
-	for _, want := range []string{"Who do you want to talk to?", "It plans, hands work to helpers and checks it.", "› [c]  claude", "codex",
+	for _, want := range []string{"Who do you want to talk to?", "Pick one: it reads your project and does the work you ask for.", "› [c]  claude", "codex",
 		"not installed", "↑↓ choose    ⏎ continue    esc skip"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q:\n%s", want, out)
@@ -380,7 +380,7 @@ func TestSettingsChangeRealSettingsWhereTheyAreKept(t *testing.T) {
 	src.appSettings = sampleSettings()
 	run(m.runPalette(paletteItem{Action: "settings"}, ""), m)
 	out := appScreen(m)
-	for _, want := range []string{"←  Settings   [all repos]", "[general]", "agents", "routing", "toml", "Theme", "› [light]", "dracula", "all repos",
+	for _, want := range []string{"←  Settings   [all repos]", "[general]", "assistants", "notifications", "a  more settings", "Theme", "› [light]", "dracula", "all repos",
 		"Default parent", "[c] claude · auto", "When rig starts", "[last project]", "Rig in this repo", "on", "off keeps history and memory", "Updates",
 		"←→ choose    ⏎ apply    ⇥ section    g all repos / this repo"} {
 		if !strings.Contains(out, want) {
@@ -431,8 +431,8 @@ func TestSettingsChangeRealSettingsWhereTheyAreKept(t *testing.T) {
 	if last := src.settingsSaved[len(src.settingsSaved)-1]; last != [3]string{"project.enabled", "false", "repo"} {
 		t.Fatalf("saved %v", src.settingsSaved)
 	}
-	m.st.App.Settings.Section = len(SettingsSections) - 1
-	if out := appScreen(m); !strings.Contains(out, "[toml]") || !strings.Contains(out, "parent = \"claude\"") || !strings.Contains(out, "✓ valid") {
+	m.st.App.Settings.Section, m.st.App.Settings.Advanced = len(SettingsSections)-1, true
+	if out := appScreen(m); !strings.Contains(out, "[raw file]") || !strings.Contains(out, "parent = \"claude\"") || !strings.Contains(out, "✓ valid") {
 		t.Fatalf("the toml section:\n%s", out)
 	}
 	press(m, "esc")
@@ -461,7 +461,7 @@ func TestTheBellRingsOnceForANewRequest(t *testing.T) {
 	}
 }
 
-func TestFirstRunGoesFromTheParentToHelpersToTheSandbox(t *testing.T) {
+func TestFirstRunIsOneStepAndHelpersAreAskedForOnlyOnRequest(t *testing.T) {
 	t.Cleanup(func() { ApplyTheme("rig") })
 	m, src := newReady(t)
 	m.SetApp(t.TempDir())
@@ -472,35 +472,51 @@ func TestFirstRunGoesFromTheParentToHelpersToTheSandbox(t *testing.T) {
 	src.chatStatus.Available = []string{"claude", "codex"}
 	m.csLast = time.Time{}
 	run(m.fetchChatStatus(), m)
-	if !strings.Contains(appScreen(m), "1 of 3") {
-		t.Fatalf("step 1 of 3:\n%s", appScreen(m))
+	out := appScreen(m)
+	if !strings.Contains(out, "Who do you want to talk to?") || strings.Contains(out, "of 3") {
+		t.Fatalf("the first screen asks who to talk to, with no steps to count:\n%s", out)
 	}
 	run(press(m, "enter"), m)
-	out := appScreen(m)
-	for _, want := range []string{"2 of 3", "Who can claude hand work to?", "Each helper works in its own copy of the repo.", "codex", "[x]", "up to 3 at once"} {
+	if m.st.App.Onboard != nil || m.st.App.Welcome {
+		t.Fatalf("one step: choosing the parent ends the first run (helpers and the sandbox are not asked): %+v", m.st.App.Onboard)
+	}
+	if !strings.Contains(m.st.Message, "ready: ask anything") || !strings.Contains(m.st.Message, "/helpers") {
+		t.Fatalf("it says it is ready and where the rest is: %q", m.st.Message)
+	}
+	for _, s := range src.settingsSaved {
+		if s[0] == "sandbox.provider" {
+			t.Fatalf("no sandbox choice is made for anyone on the way in: %v", src.settingsSaved)
+		}
+	}
+	// /helpers asks only that: who it can hand work to, saved at once, and no sandbox step after it
+	m.st.Message = ""
+	follow(m, m.appSend("/helpers"), 0)
+	out = appScreen(m)
+	for _, want := range []string{"Who can claude hand work to?", "Each one works in its own copy of the project", "codex", "[x]", "up to 3 at once", "⏎ save"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q:\n%s", want, out)
 		}
 	}
+	if strings.Contains(out, "of 3") {
+		t.Fatalf("no step counting:\n%s", out)
+	}
+	src.settingsSaved = nil
 	press(m, "down", " ", "2")
 	run(press(m, "enter"), m)
 	saved := map[string]string{}
 	for _, s := range src.settingsSaved {
 		saved[s[0]] = s[1]
 	}
-	if saved["workers.codex"] != "false" || saved["queue.max_running"] != "2" {
-		t.Fatalf("helpers and how many at once saved: %v", src.settingsSaved)
+	if saved["workers.codex"] != "false" || saved["queue.max_running"] != "2" || m.st.App.Onboard != nil {
+		t.Fatalf("helpers and how many at once saved, and it ends there: %v %+v", src.settingsSaved, m.st.App.Onboard)
 	}
-	out = appScreen(m)
-	for _, want := range []string{"3 of 3", "Where should agents work?", "New sandbox", "recommended", "This machine", "! no boundary around your files", "⏎ start sandbox"} {
-		if !strings.Contains(out, want) {
-			t.Errorf("missing %q:\n%s", want, out)
-		}
+	if !strings.Contains(m.st.Message, "saved: claude can hand work") {
+		t.Fatalf("it says what it saved: %q", m.st.Message)
 	}
-	press(m, "down")
-	run(press(m, "enter"), m)
-	if last := src.settingsSaved[len(src.settingsSaved)-1]; last != [3]string{"sandbox.provider", "host", "repo"} || m.st.App.Onboard != nil {
-		t.Fatalf("this machine saved and the steps done: %v", src.settingsSaved)
+	follow(m, m.appSend("/helpers"), 0)
+	run(press(m, "esc"), m)
+	if m.st.App.Onboard != nil {
+		t.Fatal("esc closes /helpers")
 	}
 }
 
@@ -511,7 +527,7 @@ func TestNoAgentShowsHowToInstallOne(t *testing.T) {
 	run(m.fetchAppSettings(), m)
 	m.st.ChatParent = ""
 	out := appScreen(m)
-	for _, want := range []string{"Let's get you an agent  1 of 3", "› 1  install one for me  recommended", "[c] claude  claude pro/max   [c] codex  chatgpt",
+	for _, want := range []string{"Let's get you an assistant", "› 1  install one for me  recommended", "[c] claude  claude pro/max   [c] codex  chatgpt",
 		"on this computer · $ npm install -g @anthropic-ai/claude-code", "←→ agent", "⏎ install claude", "r scan again"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q:\n%s", want, out)

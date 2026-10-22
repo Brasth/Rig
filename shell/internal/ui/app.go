@@ -29,6 +29,7 @@ type AppState struct {
 	PanelHidden          bool // ⇥ hid the docked panel (160 columns and up)
 	Palette              *Palette
 	Welcome              bool // the "Who do you want to talk to?" screen
+	JustStarted          bool // the parent just chosen on the first run: its note says it is ready
 	WelcomeSel           int
 	NewJob               *view.Row // a helper the parent has just started, shown once
 	Help                 bool
@@ -155,6 +156,7 @@ type Palette struct {
 	Resume bool // /resume: the conversations of this repository, to open one again
 	Fork   bool // /fork: the turns of this conversation, each to branch from
 	// Running is /running: the parent's tool call, the helpers at work (Jobs, as they were when it opened), the terminal.
+	Help     bool // /help: what to do, by task
 	SelfTest bool // /selftest: does each installed parent work through Rig, flag by flag
 	Doctor   bool // /doctor: what is wrong with the project, each with its fix
 	Running  bool
@@ -742,6 +744,10 @@ func conversationBody(v *view.View, st State, w, h int) ([]string, [][2]string) 
 		keys = [][2]string{{"⏎", "send"}, {"⌥⏎", "new line"}, {"esc", "clear"}, {"⇥", "agents"}, {"⌃k", "commands"}}
 	}
 	box := append(attachedRows(st, cw), replyBox(st, cw, "Reply to "+parent, false)...)
+	if nextBarOn(st) {
+		box = append(nextBar(st, cw), box...) // what to do with the files the last turn changed
+		keys = append([][2]string{{"g", "review"}, {"c", "commit"}, {"u", "undo"}}, keys...)
+	}
 	if a.ChatFind != nil {
 		box = chatFindRow(st, cw)
 		keys = [][2]string{{"⏎", "next"}, {"↑", "previous"}, {"esc", "close"}}
@@ -817,8 +823,17 @@ func entryLines(st State, entries []view.ChatEntry, cw int) []string {
 			lines = append(lines, resultLine(st, e.Text, cw, colour))
 			continue
 		case "error":
-			for _, l := range wrap(e.Text, cw-2, "") {
-				lines = append(lines, st.paint(colAmber, "! "+l))
+			if plain := plainError(e.Text, errParent(st, e)); plain != "" {
+				for _, l := range wrap(plain, cw-2, "") {
+					lines = append(lines, st.paint(colAmber, "! "+l))
+				}
+				for _, l := range wrap(clean(e.Text), cw-4, "") {
+					lines = append(lines, st.faint("    "+l)) // the original, for whoever needs it
+				}
+			} else {
+				for _, l := range wrap(e.Text, cw-2, "") {
+					lines = append(lines, st.paint(colAmber, "! "+l))
+				}
 			}
 			if i == lastErr {
 				lines = append(lines, st.faint("  /doctor shows what is wrong with the project and fixes what it can"))
@@ -985,7 +1000,7 @@ func emptyBody(v *view.View, st State, w, h int) ([]string, [][2]string) {
 	repo := appProject(v, st.App)
 	lines := []string{"", "", ""}
 	lines = append(lines, st.tile(parent)+"  "+st.bold("What should we work on in "+repo+"?"))
-	lines = append(lines, st.dim(parent+" plans, starts helpers when needed, checks and applies."), "")
+	lines = append(lines, st.dim(parent+" reads your project and makes the changes you ask for. Just say what you want."), "")
 	lines = append(lines, attachedRows(st, cw)...)
 	lines = append(lines, roundBox(st, boxRows(st, cw, "ask "+parent+" anything about "+repo), cw, true)...)
 	if menu := slashMenu(st, cw); len(menu) > 0 {
@@ -1029,13 +1044,9 @@ func lastWord(s string) string {
 func welcomeScreen(st State, w, h int) []string {
 	a := st.App
 	logo := st.bold("r") + st.paint("#6d4aff", "•") + st.paint("#0d9488", "•") + st.paint("#db2777", "•")
-	right := ""
-	if a.FirstRun {
-		right = stepDots(st, 1)
-	}
-	lines := []string{spread("   "+logo+"   "+st.bold("rig"), "", right, w), fit("", w)}
+	lines := []string{spread("   "+logo+"   "+st.bold("rig"), "", "", w), fit("", w)} // one step: no counting dots
 	cw := min(60, w-8)
-	body := []string{"", "", st.bold("Who do you want to talk to?"), st.dim("It plans, hands work to helpers and checks it."), "", ""}
+	body := []string{"", "", st.bold("Who do you want to talk to?"), st.dim("Pick one: it reads your project and does the work you ask for."), "", ""}
 	items := WelcomeItems(st)
 	for i, it := range items {
 		if !it.Installed {
@@ -1255,6 +1266,9 @@ func paletteItems(st State) []paletteItem {
 	if st.App.Palette.SelfTest {
 		return selftestItems(st, q)
 	}
+	if st.App.Palette.Help {
+		return helpItems(st, q)
+	}
 	if st.App.Palette.Symbols {
 		return symbolItems(st, q)
 	}
@@ -1368,7 +1382,7 @@ func lastApplied(st State) *struct {
 // PaletteCommands are Ctrl-K's commands: label, detail, action.
 var PaletteCommands = [][3]string{
 	{"undo last apply", "revert the newest applied work", "undo-last"},
-	{"hold all applies", "keep every helper's work from being applied", "hold-all"},
+	{"pause every helper's changes", "none of their work is kept until you let it (/help has the rest)", "hold-all"},
 	{"switch parent", "choose who you talk to", "parent"},
 	{"ship changes", "push, or open a pull request", "ship"},
 	{"new conversation", "start again with the parent", "new"},
@@ -1380,6 +1394,7 @@ var PaletteCommands = [][3]string{
 	{"rewind files", "put files back as they were before a turn (/rewind)", "rewind"},
 	{"search the code", "text in every file (⌃f)", "search"},
 	{"find references", "every use of the name at the cursor (F7)", "references"},
+	{"what can I do? (help)", "the things to do, in plain words (/help)", "help"},
 	{"test every parent (selftest)", "tiny real turns per installed parent: answer, reasoning level, model, plan, auto-edit, stop (/selftest)", "selftest"},
 	{"what is wrong (doctor)", "problems with this project in plain words, with the fix for each Rig can run (/doctor)", "doctor"},
 	{"what is running", "the parent's tool call, the helpers at work, the terminal (/running)", "running"},
@@ -1409,6 +1424,9 @@ func paletteBox(v *view.View, st State, pw int) []string {
 		}
 		if st.App.Palette.Effort {
 			text = "  " + st.faint("›") + " ▏" + st.faint("how much "+appParent(st)+" reasons: low, medium, high…")
+		}
+		if st.App.Palette.Help {
+			text = "  " + st.faint("?") + " ▏" + st.faint("what do you want to do? type a word, ⏎ does it or shows the command")
 		}
 		if st.App.Palette.SelfTest {
 			text = "  " + st.faint("✓") + " ▏" + st.faint("does each installed parent work through Rig? ⏎ on the first row runs the tests")

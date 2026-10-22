@@ -720,6 +720,10 @@ func (m *Model) clickRow(list, at string) (tea.Model, tea.Cmd) {
 		}
 	case "section":
 		if sc := a.Settings; sc != nil {
+			if at == "adv" {
+				toggleAdvanced(sc)
+				return m, nil
+			}
 			sc.Section, sc.Row, sc.Pick = i, 0, ""
 		}
 	case "setting":
@@ -798,6 +802,8 @@ func (m *Model) clickRow(list, at string) (tea.Model, tea.Cmd) {
 				return m, m.openTree(r.path, r.dir)
 			}
 		}
+	case "next":
+		return m, m.nextAction(at) // the bar under a turn that changed files: review, commit or undo
 	case "gitbtn":
 		// the git view's buttons and its branch and message box: each does what its key does
 		key := map[string]string{"commit": "c", "pull": "P", "push": "p", "branch": "b"}[at]

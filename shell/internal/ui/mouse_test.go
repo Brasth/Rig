@@ -132,6 +132,7 @@ func TestClickingASettingsChoiceAppliesIt(t *testing.T) {
 	m, src := mouseModel(t)
 	src.appSettings = sampleSettings()
 	run(m.runPalette(paletteItem{Action: "settings"}, ""), m)
+	clickOn(t, m, "more settings") // the short list first; the rest is one click away
 	clickOn(t, m, "editor")
 	if SettingsSections[m.st.App.Settings.Section] != "editor" {
 		t.Fatalf("the clicked section: %d", m.st.App.Settings.Section)

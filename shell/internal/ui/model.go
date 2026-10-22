@@ -598,6 +598,23 @@ func (m *Model) runSlash(text string) (tea.Cmd, bool) {
 			return nil, true
 		}
 		return m.openSelftest(), true
+	case "/login":
+		clear()
+		m.st.Mode, m.st.InputLabel, m.inputFor = ModeNormal, "", ""
+		if !m.appOn() {
+			m.st.Message = "/login is in the app: rig shell"
+			return nil, true
+		}
+		return m.signIn(), true
+	case "/helpers":
+		clear()
+		m.st.Mode, m.st.InputLabel, m.inputFor = ModeNormal, "", ""
+		if !m.appOn() {
+			m.st.Message = "/helpers is in the app: rig shell"
+			return nil, true
+		}
+		m.startHelpers(true)
+		return nil, true
 	case "/doctor":
 		clear()
 		m.st.Mode, m.st.InputLabel, m.inputFor = ModeNormal, "", ""
@@ -633,6 +650,9 @@ func (m *Model) runSlash(text string) (tea.Cmd, bool) {
 	case "/help":
 		clear()
 		m.st.Mode, m.st.InputLabel, m.inputFor = ModeNormal, "", ""
+		if m.appOn() {
+			return m.openHelp(), true // what to do, by task; "every key" is its last row
+		}
 		m.st.HelpOpen = true
 	case "/theme":
 		clear()
@@ -1335,6 +1355,10 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.chatStat.Configured = msg.name
 		}
 		m.st.Message = "parent: " + msg.name + " (saved in .rig/harness.toml)"
+		if m.st.App != nil && m.st.App.JustStarted {
+			m.st.App.JustStarted = false
+			m.st.Message = "ready: ask anything · /helpers lets it hand work to other assistants"
+		}
 		if m.chatID != "" && m.st.Chat != nil && m.st.Chat.Parent != msg.name {
 			// the conversation goes on: the new parent is told what was said with your next message
 			m.st.Message = msg.name + " takes this conversation over from " + m.st.Chat.Parent + " with your next message"
@@ -1440,6 +1464,8 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.st.Message = "shell in " + clean(msg.plan.Workspace) + " (exit to return)"
 			return m, m.exec(msg.plan.Argv, func(err error) tea.Msg { return shellDoneMsg{err: err} })
 		}
+	case signedInMsg:
+		return m, m.onSignedIn(msg)
 	case shellDoneMsg:
 		m.st.Message = "shell closed"
 		if msg.err != nil {
