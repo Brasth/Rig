@@ -29,6 +29,7 @@ type AppState struct {
 	PanelHidden          bool // ⇥ hid the docked panel (160 columns and up)
 	Palette              *Palette
 	Welcome              bool // the "Who do you want to talk to?" screen
+	JustStarted          bool // the parent just chosen on the first run: its note says it is ready
 	WelcomeSel           int
 	NewJob               *view.Row // a helper the parent has just started, shown once
 	Help                 bool
@@ -1029,13 +1030,9 @@ func lastWord(s string) string {
 func welcomeScreen(st State, w, h int) []string {
 	a := st.App
 	logo := st.bold("r") + st.paint("#6d4aff", "•") + st.paint("#0d9488", "•") + st.paint("#db2777", "•")
-	right := ""
-	if a.FirstRun {
-		right = stepDots(st, 1)
-	}
-	lines := []string{spread("   "+logo+"   "+st.bold("rig"), "", right, w), fit("", w)}
+	lines := []string{spread("   "+logo+"   "+st.bold("rig"), "", "", w), fit("", w)} // one step: no counting dots
 	cw := min(60, w-8)
-	body := []string{"", "", st.bold("Who do you want to talk to?"), st.dim("It plans, hands work to helpers and checks it."), "", ""}
+	body := []string{"", "", st.bold("Who do you want to talk to?"), st.dim("Pick one: it reads your project and does the work you ask for."), "", ""}
 	items := WelcomeItems(st)
 	for i, it := range items {
 		if !it.Installed {

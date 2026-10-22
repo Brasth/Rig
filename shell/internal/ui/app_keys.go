@@ -1166,8 +1166,9 @@ func (m *Model) welcomeKey(key string) (tea.Model, tea.Cmd) {
 		}
 		pk.Sel = a.WelcomeSel
 		if a.FirstRun {
-			a.FirstRun = false
-			m.startOnboarding() // then who it can hand work to, and where agents work
+			// first run is one step: who to talk to, then the chat. Helpers (/helpers) and where agents work
+			// (Settings) are there for whoever wants them, and nobody has to understand them to start.
+			a.FirstRun, a.JustStarted = false, true
 		}
 		return m.pickerKey(tea.KeyMsg{Type: tea.KeyEnter})
 	case "esc":
