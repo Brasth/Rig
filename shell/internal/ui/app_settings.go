@@ -130,7 +130,7 @@ func settingRows(st State, section string) []setRow {
 		return []setRow{
 			{Label: "Helper commands", Key: "approvals", Options: []string{parent + " decides"}, Value: parent + " decides", Stacked: true,
 				Note: "  " + parent + " allows routine commands and asks you about risky ones."},
-			{Label: parent + " applies checked work", Right: st.paint(colGreen, "on"), Group: true, Note: "you can undo any of it with u, or hold a helper with h"},
+			{Label: parent + " keeps work that passed its checks", Right: st.paint(colGreen, "on"), Group: true, Note: "you can undo any of it with u, or hold a helper with h"},
 		}
 	case "sandbox":
 		image := ""

@@ -1302,6 +1302,11 @@ func (m *Model) runPalette(it paletteItem, query string) tea.Cmd {
 		return m.openRunning()
 	case it.Action == "doctor":
 		return m.openDoctor()
+	case it.Action == "help":
+		return m.openHelp()
+	case it.Action == "attach-file" || it.Action == "review-turn" || it.Action == "commit-turn" || it.Action == "mode-next" ||
+		it.Action == "stop-turn" || it.Action == "help-keys":
+		return m.helpAction(it.Action)
 	case it.Action == "selftest":
 		return m.openSelftest()
 	case it.Action == "selftest-run":

@@ -128,7 +128,7 @@ var SlashCommands = []SlashCommand{
 	{"/stop", "", "stop the parent's running turn", false, false},
 	{"/jobs", "", "the Jobs tab", false, false},
 	{"/env", "", "the container, ports and worktrees", false, false},
-	{"/help", "", "every key", false, false},
+	{"/help", "", "what you can do, in plain words (and every key)", false, false},
 	{"/theme", " NAME", "rig, light, dark, material or dracula", false, false},
 	{"/settings", "", "theme, agents, routing, sandbox", false, false},
 	{"/plan", " [TEXT|off|go]", "the parent plans and changes nothing; off or go ends it", false, false},

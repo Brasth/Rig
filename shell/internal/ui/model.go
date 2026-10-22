@@ -642,6 +642,9 @@ func (m *Model) runSlash(text string) (tea.Cmd, bool) {
 	case "/help":
 		clear()
 		m.st.Mode, m.st.InputLabel, m.inputFor = ModeNormal, "", ""
+		if m.appOn() {
+			return m.openHelp(), true // what to do, by task; "every key" is its last row
+		}
 		m.st.HelpOpen = true
 	case "/theme":
 		clear()
