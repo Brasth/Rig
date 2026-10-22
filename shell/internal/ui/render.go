@@ -267,11 +267,33 @@ func workingLine(st State) string {
 			break
 		}
 	}
+	if note := workingNote(st); note != "" {
+		line += " · " + note
+	}
 	line = " " + string(frame) + " " + line + " · /stop stops it"
 	if st.Styled {
 		return lipgloss.NewStyle().Foreground(lipgloss.Color(colAccent)).Render(line)
 	}
 	return line
+}
+
+// quietAfter is how long a running turn may say nothing before the line says so.
+const quietAfter = 90 * time.Second
+
+// workingNote is what the parent is up to when it is not answering: what it reported (reconnecting, compacting), or, when
+// it has said nothing for a while, that it is quiet, so a long wait is not mistaken for a hang or for nothing happening.
+func workingNote(st State) string {
+	if st.Chat.Activity != "" {
+		return st.Chat.Activity
+	}
+	if st.Now.IsZero() || st.Chat.Partial != "" || len(st.Chat.Entries) == 0 {
+		return ""
+	}
+	last := st.Chat.Entries[len(st.Chat.Entries)-1]
+	if at, err := time.Parse(time.RFC3339, last.At); err == nil && st.Now.Sub(at) > quietAfter {
+		return "quiet for " + elapsed(st.Now.Sub(at)) + ": it may be waiting on the model or compacting"
+	}
+	return ""
 }
 
 func elapsed(d time.Duration) string {

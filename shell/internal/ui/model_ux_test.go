@@ -305,3 +305,31 @@ func TestTheTitleNamesTheParentsModel(t *testing.T) {
 		t.Fatal("the mockup's \"Parent · claude opus\"")
 	}
 }
+
+func TestTheWorkingLineSaysWhatTheParentIsDoingWhenItIsNotAnswering(t *testing.T) {
+	m, src, _ := chatSession(t)
+	now := time.Date(2026, 10, 21, 12, 0, 42, 0, time.UTC)
+	m.now = func() time.Time { return now }
+	src.chatView = transcript("running", view.ChatEntry{Role: "user", Text: "why", At: "2026-10-21T12:00:00Z"})
+	src.chatView.Activity = "reconnecting 3/5 · the connection to the model dropped"
+	m.chBusy = false
+	run(m.fetchChat(true), m)
+	if out := m.View(); !strings.Contains(out, "working… 42s · reconnecting 3/5") {
+		t.Fatalf("the reconnect shows on the working line:\n%s", out)
+	}
+	// no report and a long silence: the line says it is quiet rather than looking like nothing is happening
+	src.chatView = transcript("running", view.ChatEntry{Role: "user", Text: "why", At: "2026-10-21T12:00:00Z"})
+	m.now = func() time.Time { return now.Add(3 * time.Minute) }
+	m.chBusy = false
+	run(m.fetchChat(true), m)
+	if out := m.View(); !strings.Contains(out, "quiet for 3m 42s") {
+		t.Fatalf("a long silence is named:\n%s", out)
+	}
+	// a short silence is not worth a note
+	m.now = func() time.Time { return now }
+	m.chBusy = false
+	run(m.fetchChat(true), m)
+	if out := m.View(); strings.Contains(out, "quiet for") {
+		t.Fatalf("no note for a short wait:\n%s", out)
+	}
+}
