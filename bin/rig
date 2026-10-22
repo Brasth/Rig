@@ -1632,6 +1632,7 @@ main() {
     worktrees) python3 "$(py_script worktrees.py)" "$@" --repo "$PWD" ;;
     web) python3 "$(py_script web_board.py)" "$@" --repo "$PWD" ;;
     chat) python3 "$(py_script rig_chat.py)" "$@" ;;
+    support) python3 "$(py_script support_report.py)" --repo "$(repo_root)" "$@" ;;
     adapters)
       if [[ "${1:-}" == "check" ]]; then shift; python3 "$(py_script adapter_check.py)" "$@"
       else python3 "$(py_script adapters.py)" "$@"; fi ;;

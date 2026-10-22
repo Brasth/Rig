@@ -626,6 +626,14 @@ func (m *Model) runSlash(text string) (tea.Cmd, bool) {
 		}
 		m.startHelpers(true)
 		return nil, true
+	case "/logs":
+		clear()
+		m.st.Mode, m.st.InputLabel, m.inputFor = ModeNormal, "", ""
+		if !m.appOn() {
+			m.st.Message = "/logs is in the app: rig shell"
+			return nil, true
+		}
+		return m.exec([]string{"sh", "-c", "rig support; printf '\\n⏎ goes back to rig shell '; read _"}, func(err error) tea.Msg { return shellDoneMsg{err: err} }), true
 	case "/doctor":
 		clear()
 		m.st.Mode, m.st.InputLabel, m.inputFor = ModeNormal, "", ""

@@ -67,10 +67,20 @@ func TestANotAuthorizedAnswerFromATeamsToolPointsToSigningInYourself(t *testing.
 		ce("assistant", "Please reconnect the Asana app."))
 	run(m.fetchChat(true), m)
 	out := appScreen(m)
-	for _, want := range []string{"→ sign in yourself: /mcp login asana", "reconnect it in Codex's app settings"} {
+	for _, want := range []string{"reconnect asana in ChatGPT: Settings", "/logs writes a report"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("missing %q:\n%s", want, out)
 		}
+	}
+	if strings.Contains(out, "/mcp login asana") {
+		t.Fatalf("a connected app is not signed in with /mcp login:\n%s", out)
+	}
+	// a server of the config's own is signed in with /mcp login
+	src.chatView = transcript("idle", ce("user", "x"), ce("tool", "github.create_issue"), ce("result", "Not Authorized"))
+	m.chBusy = false
+	run(m.fetchChat(true), m)
+	if out := appScreen(m); !strings.Contains(out, "sign in yourself: /mcp login github") {
+		t.Fatalf("missing the /mcp login hint:\n%s", out)
 	}
 	// no hint for an ordinary result, a tool without a server, or another parent
 	for name, entries := range map[string][]string{"fine": {"codex_apps.asana.get_task", "task 12: ok"}, "no server": {"Bash", "401 Unauthorized"}} {
@@ -87,5 +97,15 @@ func TestANotAuthorizedAnswerFromATeamsToolPointsToSigningInYourself(t *testing.
 	run(m.fetchChat(true), m)
 	if strings.Contains(appScreen(m), "sign in yourself") {
 		t.Error("only codex's sign-in is known: no hint for another parent")
+	}
+}
+
+func TestLogsWritesTheSupportReportInTheTerminal(t *testing.T) {
+	m, _ := appModel(t)
+	var argv []string
+	m.exec = func(a []string, _ func(error) tea.Msg) tea.Cmd { argv = a; return nil }
+	follow(m, m.appSend("/logs"), 0)
+	if len(argv) != 3 || !strings.Contains(argv[2], "rig support") {
+		t.Fatalf("/logs runs rig support in the terminal, ran %v", argv)
 	}
 }

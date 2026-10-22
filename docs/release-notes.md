@@ -7,6 +7,10 @@
 
 
 
+## Connected apps, and a report to send when something fails (2026-10-22)
+
+A tool named `codex_apps.NAME` is a connected app (Asana, GitHub, ...) whose sign-in lives in ChatGPT, not in `codex mcp login`. A "Not Authorized" answer from one now says to reconnect it in ChatGPT under Settings → Apps with the account that can open the item; `/mcp login NAME` is kept for the servers in codex's own config. `/logs` (or `rig support`) writes `.rig/support.txt` in one go: versions, `codex login status` and `codex mcp list`, the command Rig runs, the newest tool errors with their answers, what the parent printed on stderr (now kept in `.rig/chat/<session>.parent.log`; it used to be discarded in codex's server mode), Rig's error log and the doctor's findings. Environment variables are named, never shown, and token-shaped text is replaced.
+
 ## "Not Authorized" from an MCP server through codex in rig shell (2026-10-22)
 
 `/mcp login NAME` signs in to an MCP server in your own terminal (`codex mcp login NAME`), because a sign-in the parent runs inside a turn cannot finish (no browser, the callback listener ends with the turn). A tool that answers not authorized now carries a line saying so, codex is told once not to try the sign-in itself (only when it has MCP servers), `/mcp` says how, and `/doctor` lists servers codex shows as not logged in.
