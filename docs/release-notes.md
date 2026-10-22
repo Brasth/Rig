@@ -7,6 +7,13 @@
 
 
 
+## Selecting and copying exactly what you want (2026-10-22)
+
+- **A drag stays in the conversation.** A selection that begins in the conversation column takes nothing from the panels beside it, so dragging down a long answer no longer copies the agents list or the evidence column too.
+- **Double-click takes a word, triple-click the line**, within the column, and copies it. A word does not carry the full stop or comma after it.
+- **What is copied is the text, not the drawing.** A code block copies as markdown (its gutter and corners become the fence, with its language), a quote loses its bar, a table keeps its bars.
+- **`/copy`** copies the last answer, and **`/copy code`** just its last code block (while it is still streaming in, what there is so far).
+
 ## Codex through its app-server, and a list of what each assistant can do (2026-10-22)
 
 - **Codex runs through `codex app-server`**, the protocol Codex's own IDE extensions use, instead of `codex exec` or `codex mcp-server`. Every item arrives with its fields (commands and their output, file changes, MCP calls and their errors, searches, plans, helpers), the reply streams as deltas, approvals are codex's own requests answered in Rig, and a cancel sends `turn/interrupt` so the turn ends as interrupted and the thread stays valid. Reconnects, compaction and thinking show on the working line, usage and the context window feed `/context` and `/cost`, and a failed turn says why in words (usage limit reached, context full, connection lost). If app-server does not start, or does not know the conversation (one begun under the older server mode), Rig falls through to `codex mcp-server`, then `codex exec`; `RIG_CODEX_APPSERVER=0` turns it off. `rig support` says which transport the newest conversation used. Codex starts one app-server per turn for now; a server kept alive between turns is the next step.
