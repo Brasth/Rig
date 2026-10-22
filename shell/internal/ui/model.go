@@ -35,6 +35,7 @@ type Source interface {
 	ChatCommands(parent string, timeout time.Duration) (*view.ParentCommands, error)
 	ChatModels(parent string, timeout time.Duration) (*view.ParentModels, error)
 	ChatTranscript(session string, tail int, timeout time.Duration) (*view.ChatTranscript, error)
+	ChatLive(session string, timeout time.Duration) (*view.ChatLive, error)
 	ChatSend(message, session, parent string, timeout time.Duration) (*view.ChatStarted, error)
 	ChatCancel(session string, timeout time.Duration) error
 	SelfTestStart(parents []string, timeout time.Duration) (*view.SelfTestStarted, error)
@@ -63,6 +64,7 @@ const (
 	chatEvery      = time.Second
 	chatLiveEvery  = 300 * time.Millisecond // while the parent answers, so its reply streams in
 	spinEvery      = 100 * time.Millisecond
+	liveEvery      = 150 * time.Millisecond // while a turn runs: how often the streaming reply is asked for
 	chatStatEvery  = 10 * time.Second
 	logFetchRows   = 200
 	callTimeout    = 5 * time.Second
@@ -71,6 +73,13 @@ const (
 )
 
 type tickMsg struct{}
+
+// liveTickMsg paces the small chat.live asks while a turn runs; liveMsg carries one answer.
+type liveTickMsg struct{}
+type liveMsg struct {
+	live *view.ChatLive
+	err  error
+}
 
 type snapshotMsg struct {
 	snap *view.Snapshot
@@ -203,6 +212,9 @@ type Model struct {
 	lgLast     time.Time
 	chBusy     bool
 	chLast     time.Time
+	chCount    int  // entries the last full transcript held in all; chat.live says when that moved
+	liveBusy   bool // a chat.live ask is in flight
+	liveOn     bool // the live ticks are running
 	csBusy     bool
 	csLast     time.Time
 	dkBusy     bool
@@ -892,6 +904,15 @@ func (m *Model) fetchChat(force bool) tea.Cmd {
 	}
 }
 
+// liveStart begins the fast chat.live ticks when a turn is running and they are not already going.
+func (m *Model) liveStart() tea.Cmd {
+	if m.liveOn || m.st.Chat == nil || m.st.Chat.State != "running" {
+		return nil
+	}
+	m.liveOn = true
+	return tea.Tick(liveEvery, func(time.Time) tea.Msg { return liveTickMsg{} })
+}
+
 // paneSize is the room the Session tab gives a program: the middle column, or the whole body under the rule.
 func (m *Model) paneSize() (cols, rows int) {
 	if cols, rows, ok := SessionPaneSize(m.w, m.h); ok {
@@ -1116,6 +1137,7 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.st.ChatOn = true
 		m.chatStat = msg.status
 		m.st.ChatSessions = msg.status.Sessions
+		m.st.ChatWarnings = msg.status.Warnings
 		m.st.ChatParent, m.st.ChatModel, m.st.ChatEffort = msg.status.Parent, msg.status.Model, msg.status.Effort
 		if m.parentName != "" && m.parentName != msg.status.Parent {
 			m.st.ChatParent, m.st.ChatModel, m.st.ChatEffort = m.parentName, "", "" // its model is in its own settings, not read for this one
@@ -1223,9 +1245,38 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		prev := m.st.Chat
 		m.st.Chat, m.st.ChatE = msg.chat, ""
+		if msg.chat != nil {
+			m.chCount = msg.chat.Count
+		}
 		if m.appOn() {
 			m.rememberChat()
-			return m, tea.Batch(m.spin(), m.bell(), m.afterTurn(prev, msg.chat), m.drainOutbox())
+			return m, tea.Batch(m.spin(), m.bell(), m.afterTurn(prev, msg.chat), m.drainOutbox(), m.liveStart())
+		}
+		return m, tea.Batch(m.spin(), m.liveStart())
+	case liveTickMsg:
+		if m.st.Chat == nil || m.st.Chat.State != "running" || m.chatID == "" {
+			m.liveOn = false
+			return m, nil
+		}
+		cmds := []tea.Cmd{tea.Tick(liveEvery, func(time.Time) tea.Msg { return liveTickMsg{} })}
+		if !m.liveBusy {
+			m.liveBusy = true
+			src, id := m.src, m.chatID
+			cmds = append(cmds, func() tea.Msg {
+				l, err := src.ChatLive(id, callTimeout)
+				return liveMsg{live: l, err: err}
+			})
+		}
+		return m, tea.Batch(cmds...)
+	case liveMsg:
+		m.liveBusy = false
+		c := m.st.Chat
+		if msg.err != nil || msg.live == nil || c == nil || msg.live.Session != m.chatID || msg.live.Session != c.Session {
+			return m, nil
+		}
+		c.Partial, c.Activity = msg.live.Partial, msg.live.Activity
+		if msg.live.State != "running" || msg.live.Count != m.chCount || msg.live.Ask != (c.Ask != nil) {
+			return m, m.fetchChat(true) // something besides the reply changed: take the whole transcript
 		}
 		return m, m.spin()
 	case splashTickMsg:

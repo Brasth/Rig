@@ -148,6 +148,10 @@ func (e *ensuringSource) ChatModels(parent string, timeout time.Duration) (*view
 	return retrying(e, func() (*view.ParentModels, error) { return e.client.ChatModels(parent, timeout) })
 }
 
+func (e *ensuringSource) ChatLive(session string, timeout time.Duration) (*view.ChatLive, error) {
+	return retrying(e, func() (*view.ChatLive, error) { return e.client.ChatLive(session, timeout) })
+}
+
 func (e *ensuringSource) ChatTranscript(session string, tail int, timeout time.Duration) (*view.ChatTranscript, error) {
 	return retrying(e, func() (*view.ChatTranscript, error) { return e.client.ChatTranscript(session, tail, timeout) })
 }

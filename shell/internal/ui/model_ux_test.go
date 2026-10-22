@@ -333,3 +333,42 @@ func TestTheWorkingLineSaysWhatTheParentIsDoingWhenItIsNotAnswering(t *testing.T
 		t.Fatalf("no note for a short wait:\n%s", out)
 	}
 }
+
+func TestTheReplyStreamsFromSmallLiveAsksAndTheWholeTranscriptComesWhenSomethingElseChanges(t *testing.T) {
+	m, src, _ := chatSession(t)
+	src.chatView = transcript("running", view.ChatEntry{Role: "user", Text: "why", At: "2026-10-21T12:00:00Z"})
+	src.chatView.Count = 1
+	m.chBusy = false
+	if cmd := m.fetchChat(true); cmd == nil {
+		t.Fatal("a full fetch")
+	} else {
+		_, cmd2 := m.Update(cmd())
+		if cmd2 == nil || !m.liveOn {
+			t.Fatal("a running turn starts the live ticks")
+		}
+	}
+	reads := len(src.chatReads)
+	src.live = &view.ChatLive{Session: m.chatID, State: "running", Count: 1, Partial: "Because the", Activity: "reconnecting 2/5"}
+	_, cmd := m.Update(liveTickMsg{})
+	follow(m, cmd, 0)
+	if src.liveReads == 0 || m.st.Chat.Partial != "Because the" || m.st.Chat.Activity != "reconnecting 2/5" {
+		t.Fatalf("the live ask carries the reply and the activity: reads=%d chat=%+v", src.liveReads, m.st.Chat)
+	}
+	if len(src.chatReads) != reads {
+		t.Fatal("a reply that only grew is not worth the whole transcript")
+	}
+	// a tool line arrived: the count moved, so the whole transcript is fetched
+	src.live = &view.ChatLive{Session: m.chatID, State: "running", Count: 2, Partial: ""}
+	src.chatView = transcript("running", view.ChatEntry{Role: "user", Text: "why"}, ce("tool", "ran ls"))
+	src.chatView.Count = 2
+	_, cmd = m.Update(liveTickMsg{})
+	follow(m, cmd, 0)
+	if len(src.chatReads) == reads {
+		t.Fatal("a new entry fetches the whole transcript")
+	}
+	// the turn ends: the live ticks stop
+	m.st.Chat.State = "idle"
+	if _, cmd := m.Update(liveTickMsg{}); cmd != nil || m.liveOn {
+		t.Fatal("no ticks once the turn is over")
+	}
+}

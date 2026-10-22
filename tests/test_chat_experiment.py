@@ -703,6 +703,20 @@ class Turns(Base):
         rig_chat._write_json(rig_chat._meta_path(self.repo, session), meta)
         self.assertEqual(rig_chat.transcript(self.repo, session)["activity"], "")
 
+    def test_live_is_small_and_the_transcript_counts_its_entries(self):
+        session = rig_chat.new_session(self.repo, "codex")["id"]
+        rig_chat.append(self.repo, session, "user", "hello")
+        meta = rig_chat.read_meta(self.repo, session)
+        meta.update(state="running", runner_pid=os.getpid())
+        rig_chat._write_json(rig_chat._meta_path(self.repo, session), meta)
+        (rig_chat.chat_dir(self.repo) / session).mkdir(parents=True, exist_ok=True)  # the runner makes it
+        rig_chat.write_partial(self.repo, session, "Because the")
+        rig_chat.write_activity(self.repo, session, "reconnecting 2/5")
+        live = rig_chat.live(self.repo, session)
+        self.assertEqual((live["state"], live["count"], live["partial"], live["activity"], live["ask"]), ("running", 1, "Because the", "reconnecting 2/5", False))
+        self.assertNotIn("entries", live)
+        self.assertEqual(rig_chat.transcript(self.repo, session)["count"], 1)
+
     def test_a_long_patch_and_many_files_are_cut_short(self):
         files = rig_chat.turn_changes(self.repo, "", "x")
         self.assertEqual(files, [], "no trees, no changes")

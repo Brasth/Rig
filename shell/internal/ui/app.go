@@ -743,7 +743,7 @@ func conversationBody(v *view.View, st State, w, h int) ([]string, [][2]string) 
 	if st.Prompt != "" {
 		keys = [][2]string{{"⏎", "send"}, {"⌥⏎", "new line"}, {"esc", "clear"}, {"⇥", "agents"}, {"⌃k", "commands"}}
 	}
-	box := append(attachedRows(st, cw), replyBox(st, cw, "Reply to "+parent, false)...)
+	box := append(warnRows(st, cw), append(attachedRows(st, cw), replyBox(st, cw, "Reply to "+parent, false)...)...)
 	if nextBarOn(st) {
 		box = append(nextBar(st, cw), box...) // what to do with the files the last turn changed
 		keys = append([][2]string{{"g", "review"}, {"c", "commit"}, {"u", "undo"}}, keys...)
@@ -795,11 +795,7 @@ func entryLines(st State, entries []view.ChatEntry, cw int) []string {
 		case "user":
 			lines = append(lines, bubble(st, e.Text, cw)...)
 		case "assistant":
-			for _, raw := range strings.Split(strings.TrimRight(e.Text, "\n"), "\n") {
-				for _, l := range wrap(plainMarkdown(sanitize(raw)), cw, "") {
-					lines = append(lines, st.dim(l))
-				}
-			}
+			lines = append(lines, mdLines(st, e.Text, cw)...)
 		case "tool":
 			lastTool = e.Text
 			lines = append(lines, toolLineWith(st, e.Text, cw, toolProgress(st, e)))

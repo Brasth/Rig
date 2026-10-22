@@ -82,6 +82,7 @@ type State struct {
 	Styled         bool               // apply colour and reverse video to list rows; golden tests leave it off
 	ChatModel      string             // the parent's model, for the title "Parent · claude opus"
 	ChatEffort     string             // the reasoning level chosen for the parent, shown after the model
+	ChatWarnings   []string           // what Rig knows will trip the next turn, shown above the reply box
 	ChatSessions   []view.ChatSession // the conversations of this repository, the one used last first, for /resume
 	Theme          string             // the colour theme in use; empty is the default, rig
 	ThemeScope     string             // where it is kept: "all" repos, this "repo", "default" or "this board" (rig shell --theme)
