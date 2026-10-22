@@ -743,6 +743,10 @@ func conversationBody(v *view.View, st State, w, h int) ([]string, [][2]string) 
 		keys = [][2]string{{"⏎", "send"}, {"⌥⏎", "new line"}, {"esc", "clear"}, {"⇥", "agents"}, {"⌃k", "commands"}}
 	}
 	box := append(attachedRows(st, cw), replyBox(st, cw, "Reply to "+parent, false)...)
+	if nextBarOn(st) {
+		box = append(nextBar(st, cw), box...) // what to do with the files the last turn changed
+		keys = append([][2]string{{"g", "review"}, {"c", "commit"}, {"u", "undo"}}, keys...)
+	}
 	if a.ChatFind != nil {
 		box = chatFindRow(st, cw)
 		keys = [][2]string{{"⏎", "next"}, {"↑", "previous"}, {"esc", "close"}}

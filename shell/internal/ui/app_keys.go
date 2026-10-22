@@ -536,10 +536,8 @@ func (m *Model) appKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m, tea.Batch(m.fetchDock(true), m.fetchDiff(true))
 			case (r == 'u' || r == 'h') && m.quickApply(string(r), true):
 				return m, nil
-			case r == 'g' && lastMark(m.st) != nil:
-				return m, m.openTurnChanges()
-			case r == 'c' && lastMark(m.st) != nil:
-				return m, m.askTurnCommit()
+			case (r == 'g' || r == 'c' || r == 'u') && nextBarOn(m.st):
+				return m, m.nextAction(map[rune]string{'g': "review", 'c': "commit", 'u': "undo"}[r])
 			case m.st.Chat == nil && r >= '1' && r <= '4':
 				return m, m.appSend(Suggestions[r-'1'])
 			case asking && (r == '1' || r == '2'):
