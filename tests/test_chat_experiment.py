@@ -678,6 +678,31 @@ class Turns(Base):
         self.assertNotIn("codex mcp login", second, "told once per native session")
         self.assertNotIn("mcp login", third, "only where it applies")
 
+    def test_a_reconnect_and_a_compaction_are_activity_not_the_end_of_the_turn(self):
+        note = "Reconnecting... 2/5 (stream disconnected before completion: websocket closed by server before response.completed)"
+        for entries, error in ((rig_chat._codex_event({"type": "stream_error", "message": note})[0], False),
+                               (rig_chat.decode_event("codex", {"type": "error", "message": note}), False)):
+            rows = entries["entries"] if isinstance(entries, dict) else entries
+            self.assertEqual([r["role"] for r in rows], ["activity"])
+            self.assertTrue(rows[0]["text"].startswith("reconnecting 2/5"), rows)
+        self.assertFalse(rig_chat.decode_event("codex", {"type": "error", "message": note})["error"], "a retry notice is not a failure")
+        self.assertTrue(rig_chat.decode_event("codex", {"type": "error", "message": "stream disconnected, giving up"})["error"])
+        self.assertEqual(rig_chat._codex_event({"type": "context_compacted"})[0][0]["role"], "activity")
+        started = rig_chat.decode_event("codex", {"type": "item.started", "item": {"type": "context_compaction"}})
+        self.assertIn("compacting its context", started["entries"][0]["text"])
+
+    def test_the_transcript_carries_the_activity_only_while_the_turn_runs(self):
+        session = rig_chat.new_session(self.repo, "codex")["id"]
+        rig_chat.write_activity(self.repo, session, "reconnecting 3/5")
+        meta = rig_chat.read_meta(self.repo, session)
+        meta["state"] = "running"
+        meta["runner_pid"] = os.getpid()
+        rig_chat._write_json(rig_chat._meta_path(self.repo, session), meta)
+        self.assertEqual(rig_chat.transcript(self.repo, session)["activity"], "reconnecting 3/5")
+        meta["state"] = "idle"
+        rig_chat._write_json(rig_chat._meta_path(self.repo, session), meta)
+        self.assertEqual(rig_chat.transcript(self.repo, session)["activity"], "")
+
     def test_a_long_patch_and_many_files_are_cut_short(self):
         files = rig_chat.turn_changes(self.repo, "", "x")
         self.assertEqual(files, [], "no trees, no changes")

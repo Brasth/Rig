@@ -293,6 +293,10 @@ def decode_event(parent: str, event) -> dict:
         kind = event.get("type")
         if kind == "thread.started":
             out["native"] = str(event.get("thread_id") or "")
+        elif kind in ("item.completed", "item.started") and compaction_note((event.get("item") or {}).get("type") if isinstance(event.get("item"), dict) else "", kind == "item.started"):
+            out["entries"].append({"role": "activity", "text": compaction_note(event["item"]["type"], kind == "item.started")})
+        elif kind == "error" and retry_note(event.get("message")):
+            out["entries"].append({"role": "activity", "text": retry_note(event.get("message"))})
         elif kind in ("item.completed", "item.started"):
             item = event.get("item") if isinstance(event.get("item"), dict) else {}
             if item.get("type") == "agent_message" and kind == "item.completed" and str(item.get("text") or "").strip():
@@ -567,6 +571,7 @@ def transcript(repo, session, tail: int = 200) -> dict:
             "can_undo": isinstance(meta.get("rewind_backup"), dict),
             "entries": rows, "ask": pending_ask(repo, meta["id"]),
             "partial": _partial(repo, meta) if meta["state"] == "running" else "",
+            "activity": _activity(repo, meta["id"]) if meta["state"] == "running" else "",
             "asks": bool(meta.get("asks", meta["parent"] in ASKS))}
 
 
@@ -579,6 +584,45 @@ def _partial(repo, meta) -> str:
         return _clean(_partial_path(repo, meta["id"]).read_text(errors="replace"))
     except OSError:
         return ""
+
+
+def _activity_path(repo, session) -> Path:
+    return chat_dir(repo) / session / "activity.txt"
+
+
+def write_activity(repo, session, text: str) -> None:
+    """What the parent is doing that is not an answer yet ("reconnecting 3/5", "compacting its context"), shown on the
+    working line. Empty clears it."""
+    path = _activity_path(repo, session)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(_clean(text, 120))
+    except OSError:
+        pass
+
+
+def _activity(repo, session) -> str:
+    try:
+        return _activity_path(repo, session).read_text(errors="replace").strip()
+    except OSError:
+        return ""
+
+
+_RECONNECT = re.compile(r"(?i)^\s*reconnecting\W+(\d+\s*/\s*\d+)")
+
+
+def retry_note(message) -> str:
+    """"reconnecting 3/5" for a codex stream-retry notice ("Reconnecting... 3/5 (stream disconnected ...)"), else empty.
+    Such a notice says the parent is still trying: it is not the end of the turn."""
+    found = _RECONNECT.match(str(message or ""))
+    return ("reconnecting " + re.sub(r"\s+", "", found.group(1)) + " · the connection to the model dropped") if found else ""
+
+
+def compaction_note(kind, started: bool) -> str:
+    """A note for codex's own context compaction, from an event or item type that names it."""
+    if "compact" not in str(kind or "").lower():
+        return ""
+    return "compacting its context… (long conversations pause here)" if started else "context compacted"
 
 
 def write_partial(repo, session, text: str) -> None:
@@ -1202,7 +1246,11 @@ def _codex_event(msg: dict) -> tuple[list[dict], str, bool]:
     if kind == "patch_apply_begin":
         changes = msg.get("changes") if isinstance(msg.get("changes"), dict) else {}
         return [{"role": "tool", "text": _clean("edited " + ", ".join(sorted(changes)) if changes else "edited files", 200)}], "", False
-    if kind in ("error", "stream_error"):
+    if kind == "stream_error" or (kind == "error" and retry_note(msg.get("message"))):
+        return [{"role": "activity", "text": retry_note(msg.get("message")) or _clean(msg.get("message") or "reconnecting")}], "", False
+    if compaction_note(kind, True):
+        return [{"role": "activity", "text": compaction_note(kind, str(kind).endswith(("begin", "started")) or kind == "context_compaction")}], "", False
+    if kind == "error":
         return [{"role": "error", "text": _clean(msg.get("message") or "the parent reported an error")}], "", False
     if kind == "task_complete":
         return [], "", True
@@ -1306,6 +1354,10 @@ def run_codex_server(repo: Path, session: str, message: str, meta: dict, folder:
                 if sid:
                     meta["native"] = sid
                 for entry in entries:
+                    if entry["role"] == "activity":
+                        write_activity(repo, session, entry["text"])
+                        continue
+                    write_activity(repo, session, "")
                     if entry["role"] == "chunk":
                         streamed += entry["text"]
                         write_partial(repo, session, streamed)
@@ -1351,6 +1403,7 @@ def run_codex_server(repo: Path, session: str, message: str, meta: dict, folder:
         return True, error, written
     finally:
         write_partial(repo, session, "")
+        write_activity(repo, session, "")
         stop()
 
 
@@ -1776,6 +1829,10 @@ def run_turn(repo, session: str) -> int:
         if decoded["native"]:
             meta["native"] = decoded["native"]
         for entry in decoded["entries"]:
+            if entry["role"] == "activity":
+                write_activity(repo, session, entry["text"])
+                continue
+            write_activity(repo, session, "")
             if entry["role"] == "chunk":
                 chunks.append(entry["text"])
                 write_partial(repo, session, "".join(chunks))
@@ -1792,6 +1849,7 @@ def run_turn(repo, session: str) -> int:
         if decoded.get("usage"):
             used = decoded["usage"]
     flush()
+    write_activity(repo, session, "")
     if not count and raw:
         import jobs  # a stream this decoder did not recognise: read it the way Rig reads that CLI's job log
         lines = jobs.decode_log_text("".join(raw), worker=parent)

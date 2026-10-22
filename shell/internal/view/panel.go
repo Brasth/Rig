@@ -351,8 +351,10 @@ type ChatTranscript struct {
 	Ask     *ChatAsk    `json:"ask"`     // the parent's permission request waiting for the owner, if any
 	Asks    bool        `json:"asks"`    // this parent's headless mode can ask for permission at all
 	Partial string      `json:"partial"` // the answer streaming in, before it joins the entries
-	Plan    bool        `json:"plan"`    // /plan: the parent plans and changes nothing
-	Native  string      `json:"native"`  // the parent CLI's own id for this conversation
+	// Activity is what the parent is doing that is not an answer yet: "reconnecting 3/5", "compacting its context".
+	Activity string `json:"activity"`
+	Plan     bool   `json:"plan"`   // /plan: the parent plans and changes nothing
+	Native   string `json:"native"` // the parent CLI's own id for this conversation
 	// Successor is the conversation /compact started from this one's summary; ContextPct how full the parent's context
 	// is after its last turn (nil from a server that does not say, -1 when it is not known).
 	Successor  string `json:"successor"`

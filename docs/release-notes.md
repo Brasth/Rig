@@ -7,6 +7,10 @@
 
 
 
+## The working line says what codex is doing (2026-10-22)
+
+When codex loses its connection to the model ("Reconnecting... 2/5 (stream disconnected before completion ...)") the working line now says `reconnecting 2/5`, and while it compacts its context it says so, instead of stacking amber error lines. A reconnect notice used to mark the whole turn as failed; it is now only a note, and a real failure still is one. When a turn has said nothing for 90 seconds the line says `quiet for 3m 42s: it may be waiting on the model or compacting`, so a long wait is not mistaken for nothing happening (`/stop` still stops it). The compaction wording is matched on codex's event names and is not yet confirmed against a live compaction.
+
 ## Project MCP servers come first (2026-10-22)
 
 Rig now reads the project's own MCP servers (`.codex/config.toml` for codex, `.mcp.json` for claude) as well as the global ones. The parent is told which servers are "this project's" and to use those over a global server of the same name; `/mcp` marks them the same way. `rig support` lists each server with where it is set up, and for codex whether this project is trusted (codex ignores a project's `.codex/config.toml` for a project it does not trust).
