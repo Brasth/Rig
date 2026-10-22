@@ -19,6 +19,7 @@ type HistoryState struct{ Sel int }
 
 // ShipState is the ship screen: pull request or push, and the title being edited.
 type ShipState struct {
+	Err     string // why the last push or pull request did not go through, in words, kept on screen
 	Push    bool
 	Title   string
 	Editing bool
@@ -240,12 +241,20 @@ func shipScreen(st State, w, h int) []string {
 		body = append(body, "", st.dim("Nothing to ship: "+clean(st.ShipE)))
 	case s == nil:
 		body = append(body, "", st.faint("loading…"))
-	case s.Upstream == "":
-		body = append(body, "", st.dim(s.Branch+" has no upstream branch to ship to."))
+	case s.Branch == "":
+		body = append(body, "", st.bold("No branch"), st.dim("HEAD is detached: switch to a branch (b in the git view), then ship."))
+	case s.Remote == "" && s.Upstream == "":
+		body = append(body, "", st.bold("No remote to ship to"), st.dim("Add one in your terminal, then come back:"), "", "  "+st.bold("git remote add origin <url>"))
+	case len(s.Ahead) == 0 && s.Upstream == "":
+		body = append(body, "", st.bold("Nothing to ship"), st.dim(s.Branch+" has no commits "+s.Remote+" lacks."))
 	case len(s.Ahead) == 0:
 		body = append(body, "", st.bold("Nothing to ship"), st.dim(s.Branch+" is level with "+s.Upstream+"."))
 	default:
-		body = append(body, "", st.bold(fmt.Sprintf("Ship %d changes", len(s.Ahead)))+"  "+st.faint(fmt.Sprintf("%s is %d ahead of %s", s.Branch, len(s.Ahead), s.Upstream)), "")
+		where := fmt.Sprintf("%s is %d ahead of %s", s.Branch, len(s.Ahead), s.Upstream)
+		if s.Upstream == "" {
+			where = fmt.Sprintf("%s is new: %s does not have it yet", s.Branch, s.Remote)
+		}
+		body = append(body, "", st.bold(fmt.Sprintf("Ship %d changes", len(s.Ahead)))+"  "+st.faint(where), "")
 		// Each commit as the helper's task when done today knows it, the hashes in one column after the longest.
 		shown := s.Ahead[:min(len(s.Ahead), 12)]
 		subjects, whos := make([]string, len(shown)), make([]string, len(shown))
@@ -282,7 +291,7 @@ func shipScreen(st State, w, h int) []string {
 			return st.faint(" " + text + " ")
 		}
 		body = append(body, "", "", st.bold("›")+" "+st.zone("row:ship:pr", chip("open pull request", !sh.Push))+"   "+
-			st.zone("row:ship:push", chip("push to "+s.Branch, sh.Push)))
+			st.zone("row:ship:push", chip(pushLabel(s), sh.Push)))
 		if !sh.Push {
 			title := sh.Title
 			if title == "" {
@@ -311,6 +320,16 @@ func shipScreen(st State, w, h int) []string {
 		}
 		marks = append(marks, st.faint("agents never push; you do"))
 		body = append(body, "", strings.Join(marks, "  "))
+		if sh.Err != "" {
+			body = append(body, "")
+			for i, l := range wrap(sh.Err, cw-4, "") {
+				lead := "  "
+				if i == 0 {
+					lead = st.paint(colAmber, "! ")
+				}
+				body = append(body, lead+st.paint(colAmber, l))
+			}
+		}
 		enter := "open pull request"
 		if sh.Push {
 			enter = "push"
@@ -410,19 +429,20 @@ func (m *Model) shipKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			sh.Editing = true
 		}
 	case "enter":
-		if s == nil || len(s.Ahead) == 0 || s.Upstream == "" {
+		if s == nil || len(s.Ahead) == 0 || (s.Upstream == "" && !s.Publish) {
 			return m, nil
 		}
+		sh.Err = ""
 		title := sh.Title
 		if title == "" {
 			title = s.Title
 		}
 		if sh.Push {
 			m.pendingX, m.pendingI = "ship.push", ""
-			m.st.Mode, m.st.Prompt = ModeConfirm, fmt.Sprintf("Push %d commits to %s?", len(s.Ahead), s.Upstream)
+			m.st.Mode, m.st.Prompt = ModeConfirm, fmt.Sprintf("Push %d commits to %s?", len(s.Ahead), pushTarget(s))
 		} else {
 			m.pendingX, m.pendingI = "ship.pr", title
-			m.st.Mode, m.st.Prompt = ModeConfirm, "Push to "+s.PRBranch+" and open a pull request?"
+			m.st.Mode, m.st.Prompt = ModeConfirm, "Push to "+s.PRBranch+" and open a pull request into "+baseOf(s)+"?"
 		}
 	}
 	return m, nil
@@ -435,4 +455,30 @@ func (m *Model) fetchTodayEvery() tea.Cmd {
 	}
 	m.tdLast = m.now()
 	return m.fetchToday()
+}
+
+// pushTarget is where a push goes: the upstream, or for a branch never pushed, the new branch on the remote.
+func pushTarget(s *view.ShipStatus) string {
+	if s.Upstream != "" {
+		return s.Upstream
+	}
+	return s.Remote + "/" + s.Branch
+}
+
+func pushLabel(s *view.ShipStatus) string {
+	if s.Upstream == "" {
+		return "publish " + s.Branch
+	}
+	return "push to " + s.Branch
+}
+
+func baseOf(s *view.ShipStatus) string {
+	if s.Upstream != "" {
+		_, b, _ := strings.Cut(s.Upstream, "/")
+		return b
+	}
+	if s.Base != "" {
+		return s.Base
+	}
+	return "main"
 }

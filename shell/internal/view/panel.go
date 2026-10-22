@@ -325,6 +325,10 @@ type ShipStatus struct {
 	Checks    []Check `json:"checks"`
 	PRBranch  string  `json:"pr_branch"`
 	GH        bool    `json:"gh"`
+	// Remote is where this ships to; Publish: the branch was never pushed, so pushing creates it there (and tracks it).
+	Remote  string `json:"remote"`
+	Publish bool   `json:"publish"`
+	Base    string `json:"base"` // the branch a pull request goes into
 }
 
 // ThemeReply is ui.theme and ui.set_theme: the board's theme and where it is kept ("all", "repo" or "default").

@@ -1300,7 +1300,10 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.st.ShipE = msg.err.Error()
 		}
 	case appliedMsg:
-		if msg.err != nil {
+		if msg.err != nil && m.appOn() && m.st.App.ShipScreen != nil {
+			m.st.App.ShipScreen.Err = msg.err.Error() // the ship screen keeps the reason in full: a status line cuts it
+			m.st.Message = "It did not go through: the reason is on screen"
+		} else if msg.err != nil {
 			m.st.Message = "Could not do that: " + msg.err.Error()
 		} else {
 			m.st.Message = msg.text

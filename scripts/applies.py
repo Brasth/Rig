@@ -31,12 +31,35 @@ class ApplyError(ValueError):
 
 
 def _env() -> dict:
-    return {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    env["GIT_TERMINAL_PROMPT"] = "0"  # a push that needs a password fails with a reason; it never waits on a prompt nobody sees
+    env["GIT_SSH_COMMAND"] = "ssh -o BatchMode=yes"
+    return env
+
+
+def explain_push(error: str, remote: str = "") -> str:
+    """A git push failure in plain words, with what to do. Unknown failures keep git's own last lines."""
+    low = error.lower()
+    where = f" to {remote}" if remote else ""
+    if any(w in low for w in ("authentication failed", "could not read username", "terminal prompts disabled", "permission denied (publickey)",
+                              "could not read password", "invalid credentials", "401", "403")):
+        return (f"git is not signed in{where}. Sign in once in your terminal (GitHub: `gh auth login`, or run `git push` there and "
+                "enter your credentials), then push again.")
+    if any(w in low for w in ("non-fast-forward", "fetch first", "tip of your current branch is behind", "updates were rejected")):
+        return "the remote has commits you do not have. Pull first (P in the git view), then push again."
+    if "protected branch" in low or "gh006" in low or "gh013" in low:
+        return "that branch is protected, so a direct push is refused. Open a pull request instead."
+    if any(w in low for w in ("no configured push destination", "does not appear to be a git repository", "no such remote", "no remote")):
+        return "this project has no remote to push to. Add one in your terminal: git remote add origin <url>"
+    if any(w in low for w in ("could not resolve host", "connection timed out", "connection refused", "network is unreachable", "timed out")):
+        return f"could not reach the remote{where}: check the connection and try again."
+    lines = [l.strip() for l in error.strip().splitlines() if l.strip() and not l.startswith("hint:")]
+    return " ".join(lines[-2:]) if lines else "git push failed"
 
 
 def _git(repo: Path, *args, check=True, timeout=60) -> subprocess.CompletedProcess:
     done = subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True, errors="replace",
-                          timeout=timeout, env=_env())
+                          timeout=timeout, env=_env(), stdin=subprocess.DEVNULL)
     if check and done.returncode != 0:
         tail = (done.stderr or done.stdout).strip().splitlines()
         raise ApplyError(tail[-1] if tail else f"git {args[0]} failed")
@@ -273,15 +296,40 @@ def hold(repo, job_id: str, on: bool = True) -> dict:
 _SLUG = re.compile(r"[^a-z0-9]+")
 
 
+def _remote(repo: Path, upstream: str = "") -> str:
+    """The remote to ship to: the upstream's, else origin, else the only one."""
+    if upstream:
+        return upstream.split("/", 1)[0]
+    names = _git(repo, "remote", check=False).stdout.split()
+    return "origin" if "origin" in names else (names[0] if len(names) == 1 else "")
+
+
+def _default_branch(repo: Path, remote: str) -> str:
+    """The branch a pull request goes into: the remote's HEAD, else main or master when the remote has it."""
+    head = _git(repo, "symbolic-ref", "--quiet", "--short", f"refs/remotes/{remote}/HEAD", check=False).stdout.strip()
+    if head:
+        return head.split("/", 1)[1]
+    for name in ("main", "master"):
+        if _git(repo, "rev-parse", "--verify", "--quiet", f"refs/remotes/{remote}/{name}", check=False).returncode == 0:
+            return name
+    return "main"
+
+
 def ship_status(repo) -> dict:
-    """What is ahead of the upstream branch, and the pull request it would make."""
+    """What is ahead of the upstream branch, and the pull request it would make. A branch that was never pushed has no upstream:
+    what is ahead is then what no remote branch has yet, and pushing publishes it (publish: true)."""
     repo = Path(repo).resolve()
     branch = _git(repo, "symbolic-ref", "--quiet", "--short", "HEAD", check=False).stdout.strip()
     upstream = _git(repo, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}", check=False).stdout.strip()
+    remote = _remote(repo, upstream)
     rows = []
     if upstream:
         log = _git(repo, "log", "--format=%h%x09%s", f"{upstream}..HEAD", check=False).stdout
-        rows = [{"commit": c, "subject": s} for c, _, s in (line.partition("\t") for line in log.splitlines()) if c]
+    elif remote and branch:
+        log = _git(repo, "log", "--format=%h%x09%s", "HEAD", "--not", f"--remotes={remote}", check=False).stdout
+    else:
+        log = ""
+    rows = [{"commit": c, "subject": s} for c, _, s in (line.partition("\t") for line in log.splitlines()) if c]
     # A helper's merge is shown as its task, which the parent wrote; its checks count toward the ones shown here.
     applied = {r["commit"]: r for r in today(repo, since=0)["rows"] if r["state"] == "applied" and r["commit"]}
     tasks, checks = [], {}
@@ -297,32 +345,51 @@ def ship_status(repo) -> dict:
     slug = _SLUG.sub("-", (named[0] if named else "changes").lower()).strip("-")[:40] or "changes"
     gh = subprocess.run(["sh", "-c", "command -v gh"], capture_output=True).returncode == 0
     return {"branch": branch, "upstream": upstream, "ahead": rows, "title": title, "title_from": "tasks" if tasks else "commits",
-            "checks": [{"name": k, "ok": v} for k, v in checks.items()], "pr_branch": f"rig/{slug}", "gh": gh}
+            "checks": [{"name": k, "ok": v} for k, v in checks.items()], "pr_branch": f"rig/{slug}", "gh": gh,
+            "remote": remote, "publish": bool(not upstream and remote and branch), "base": _default_branch(repo, remote) if remote else ""}
+
+
+def _push(repo: Path, remote: str, *args) -> None:
+    try:
+        _git(repo, "push", *args, timeout=180)
+    except subprocess.TimeoutExpired as error:
+        raise ApplyError(f"the push to {remote} took longer than three minutes; check the connection and try again") from error
+    except ApplyError as error:
+        raise ApplyError(explain_push(str(error), remote)) from error
 
 
 def ship(repo, mode: str, title: str = "", body: str = "") -> dict:
     """Push the commits ahead (mode "push"), or push them to a new branch and open a pull request ("pr")."""
     repo = Path(repo).resolve()
     status = ship_status(repo)
-    if not status["upstream"]:
-        raise ApplyError(f"{status['branch'] or 'this branch'} has no upstream branch to ship to")
+    if not status["branch"]:
+        raise ApplyError("HEAD is detached, so there is no branch to ship; switch to a branch first")
+    if not status["remote"]:
+        raise ApplyError(explain_push("no configured push destination"))
     if not status["ahead"]:
-        raise ApplyError("nothing to ship: the branch is not ahead of its upstream")
-    remote = status["upstream"].split("/", 1)[0]
+        raise ApplyError("nothing to ship: the branch has no commits the remote lacks")
+    remote = status["remote"]
     if mode == "push":
-        _git(repo, "push", remote, f"HEAD:{status['upstream'].split('/', 1)[1]}", timeout=180)
-        return {"shipped": "push", "to": status["upstream"]}
+        if status["upstream"]:
+            _push(repo, remote, remote, f"HEAD:{status['upstream'].split('/', 1)[1]}")
+            return {"shipped": "push", "to": status["upstream"]}
+        _push(repo, remote, "-u", remote, status["branch"])  # first push of this branch: publish it and track it
+        return {"shipped": "push", "to": f"{remote}/{status['branch']}", "published": True}
     if mode != "pr":
         raise ApplyError("mode is push or pr")
     if not status["gh"]:
-        raise ApplyError("opening a pull request needs the gh CLI")
+        raise ApplyError("opening a pull request needs the gh CLI (https://cli.github.com), then `gh auth login`; push still works")
     head = status["pr_branch"]
-    _git(repo, "push", remote, f"HEAD:refs/heads/{head}", timeout=180)
+    _push(repo, remote, remote, f"HEAD:refs/heads/{head}")
     title = (title or status["title"] or "Changes from rig").strip()[:200]
     body = body or "\n".join(f"- {r['subject']}" for r in status["ahead"])
-    done = subprocess.run(["gh", "pr", "create", "--head", head, "--base", status["upstream"].split("/", 1)[1], "--title", title,
-                           "--body", body], cwd=str(repo), capture_output=True, text=True, timeout=120)
+    base = status["upstream"].split("/", 1)[1] if status["upstream"] else status["base"]
+    done = subprocess.run(["gh", "pr", "create", "--head", head, "--base", base, "--title", title,
+                           "--body", body], cwd=str(repo), capture_output=True, text=True, timeout=120, stdin=subprocess.DEVNULL)
     if done.returncode != 0:
         tail = (done.stderr or done.stdout).strip().splitlines()
+        low = (done.stderr or "").lower()
+        if "auth" in low or "gh auth login" in low:
+            raise ApplyError("gh is not signed in. Run `gh auth login` in your terminal, then open the pull request again.")
         raise ApplyError("gh pr create failed: " + (tail[-1] if tail else "unknown error"))
     return {"shipped": "pr", "url": done.stdout.strip().splitlines()[-1] if done.stdout.strip() else ""}

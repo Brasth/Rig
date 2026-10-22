@@ -2,6 +2,7 @@ package ui
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -708,6 +709,56 @@ func TestShipPushesOrOpensAPullRequestAfterAQuestion(t *testing.T) {
 	run(press(m, "y"), m)
 	if last := src.calls[len(src.calls)-1]; last.params["mode"] != "push" {
 		t.Fatalf("push: %v", src.calls)
+	}
+}
+
+func shipFrom(t *testing.T, js string) *view.ShipStatus {
+	t.Helper()
+	var ship view.ShipStatus
+	if err := json.Unmarshal([]byte(js), &ship); err != nil {
+		t.Fatal(err)
+	}
+	return &ship
+}
+
+func TestABranchNeverPushedCanBePublishedAndAFailureStaysOnScreen(t *testing.T) {
+	m, src := appModel(t)
+	src.today = sampleToday()
+	src.shipStatus = shipFrom(t, `{"branch": "feature/x", "upstream": "", "remote": "origin", "publish": true, "base": "main", "gh": true, "title": "T", "pr_branch": "rig/t",
+		"title_from": "commits", "ahead": [{"commit": "abc1234", "subject": "add x"}]}`)
+	run(m.runPalette(paletteItem{Action: "ship"}, ""), m)
+	out := appScreen(m)
+	for _, want := range []string{"Ship 1 changes", "feature/x is new: origin does not have it yet", "publish feature/x"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q:\n%s", want, out)
+		}
+	}
+	press(m, "right")
+	run(press(m, "enter"), m)
+	if !strings.Contains(m.st.Prompt, "origin/feature/x") {
+		t.Fatalf("it asks where it will publish: %q", m.st.Prompt)
+	}
+	run(press(m, "y"), m)
+	if last := src.calls[len(src.calls)-1]; last.method != "ship.run" || last.params["mode"] != "push" {
+		t.Fatalf("a new branch pushes: %v", src.calls)
+	}
+	// a failure is kept on the ship screen in full, not left to a status line that cuts it
+	m.Update(appliedMsg{err: errors.New("git is not signed in to origin. Sign in once in your terminal (GitHub: `gh auth login`), then push again.")})
+	if out := appScreen(m); !strings.Contains(out, "! git is not signed in to origin") || !strings.Contains(out, "gh auth login") {
+		t.Fatalf("the reason stays on the ship screen:\n%s", out)
+	}
+	if !strings.Contains(m.st.Message, "reason is on screen") {
+		t.Fatalf("the status line points at it: %q", m.st.Message)
+	}
+}
+
+func TestShipWithNoRemoteSaysHowToAddOne(t *testing.T) {
+	m, src := appModel(t)
+	src.today = sampleToday()
+	src.shipStatus = shipFrom(t, `{"branch": "main", "upstream": "", "remote": "", "ahead": []}`)
+	run(m.runPalette(paletteItem{Action: "ship"}, ""), m)
+	if out := appScreen(m); !strings.Contains(out, "No remote to ship to") || !strings.Contains(out, "git remote add origin <url>") {
+		t.Fatalf("it says how to add a remote:\n%s", out)
 	}
 }
 

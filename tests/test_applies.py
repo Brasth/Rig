@@ -115,6 +115,43 @@ class Applies(Gate):
         self.assertEqual(applies.ship(self.repo, "push")["shipped"], "push")
         self.assertEqual(applies.ship_status(self.repo)["ahead"], [])
 
+    def test_a_branch_never_pushed_can_be_published(self):
+        remote = Path(self.temp.name) / "remote2.git"
+        subprocess.run(["git", "init", "-q", "--bare", str(remote)], check=True)
+        main = git(self.repo, "symbolic-ref", "--short", "HEAD").strip()
+        git(self.repo, "remote", "add", "origin", str(remote))
+        git(self.repo, "push", "-q", "-u", "origin", main)
+        git(self.repo, "checkout", "-q", "-b", "feature/new")
+        (self.repo / "published.txt").write_text("new\n")
+        git(self.repo, "add", "published.txt")
+        git(self.repo, "commit", "-q", "-m", "add b")
+        status = applies.ship_status(self.repo)
+        self.assertEqual((status["upstream"], status["remote"], status["publish"], status["base"]), ("", "origin", True, main))
+        self.assertEqual([r["subject"] for r in status["ahead"]], ["add b"], "what no remote branch has yet")
+        done = applies.ship(self.repo, "push")
+        self.assertEqual((done["to"], done.get("published")), ("origin/feature/new", True))
+        self.assertEqual(git(self.repo, "rev-parse", "--abbrev-ref", "@{upstream}").strip(), "origin/feature/new", "tracked from now on")
+        self.assertEqual(applies.ship_status(self.repo)["ahead"], [])
+
+    def test_a_project_with_no_remote_says_how_to_add_one(self):
+        git(self.repo, "checkout", "-q", "-b", "solo")
+        with self.assertRaisesRegex(applies.ApplyError, "git remote add origin"):
+            applies.ship(self.repo, "push")
+
+    def test_push_failures_are_said_in_plain_words(self):
+        for text, want in (("fatal: Authentication failed for 'https://github.com/x/y.git/'", "gh auth login"),
+                           ("fatal: could not read Username for 'https://github.com': terminal prompts disabled", "gh auth login"),
+                           ("! [rejected] main -> main (non-fast-forward)", "Pull first"),
+                           ("remote: error: GH006: Protected branch update failed", "pull request instead"),
+                           ("fatal: Could not resolve host: github.com", "could not reach the remote"),
+                           ("something odd\nreally odd", "something odd really odd")):
+            self.assertIn(want, applies.explain_push(text, "origin"), text)
+
+    def test_a_push_never_waits_on_a_prompt(self):
+        env = applies._env()
+        self.assertEqual(env["GIT_TERMINAL_PROMPT"], "0")
+        self.assertIn("BatchMode=yes", env["GIT_SSH_COMMAND"])
+
     def test_over_the_api(self):
         self.start("w1", edit={"a.txt": self.lines(l1="ONE")})
         self.accept("w1")

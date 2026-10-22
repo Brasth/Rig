@@ -332,7 +332,7 @@ func (m *Model) gitAct(note string, run func(repo string) error) tea.Cmd {
 func (m *Model) afterGit(msg gitDoneMsg) tea.Cmd {
 	a := m.st.App
 	if msg.err != nil {
-		m.st.Message = "git: " + clean(msg.err.Error())
+		m.st.Message = "git: " + clean(explainGit(msg.err.Error()))
 	} else {
 		m.st.Message = msg.note
 	}
