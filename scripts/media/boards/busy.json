@@ -1,0 +1,95 @@
+{
+ "view": {
+  "version": 1,
+  "header": {
+   "project": "my-repo",
+   "attention": 0,
+   "running": 2,
+   "slots": 2,
+   "cap": 3
+  },
+  "tabs": [
+   {
+    "name": "Jobs",
+    "count": 2,
+    "attention": 0
+   },
+   {
+    "name": "Queue",
+    "count": 1,
+    "attention": 0
+   },
+   {
+    "name": "Workflows",
+    "count": 0,
+    "attention": 0
+   }
+  ],
+  "jobs": [
+   {
+    "id": "job-81c",
+    "title": "Rate limit POST /login",
+    "label": "Running",
+    "tone": "active",
+    "glyph": "●",
+    "second": "editing src/middleware/limit.ts",
+    "explanation": "Worker process is executing.",
+    "worker": "codex",
+    "detail": [
+     "job-81c",
+     "status working",
+     "agent  codex   model gpt-5.5-codex",
+     "sandbox devcontainer · a3f9c1d2e4b5 · node:22-bookworm",
+     "verification unknown / not accepted",
+     "role   implement",
+     "task   Rate limit POST /login",
+     "doing  editing src/middleware/limit.ts"
+    ],
+    "ask": false,
+    "attention": false
+   },
+   {
+    "id": "job-9e4",
+    "title": "Tests for the limiter",
+    "label": "Checking",
+    "tone": "active",
+    "glyph": "●",
+    "second": "running npm test -- limit",
+    "explanation": "A verification check or reviewer is running.",
+    "worker": "pi",
+    "detail": [
+     "job-9e4",
+     "status verifying",
+     "agent  pi   model unknown",
+     "verification unknown / not accepted",
+     "role   test",
+     "task   Tests for the limiter",
+     "doing  running npm test -- limit"
+    ],
+    "ask": false,
+    "attention": false
+   }
+  ],
+  "queue": [
+   {
+    "id": "q-0a1",
+    "title": "Docs for the rate limit",
+    "label": "Queued",
+    "tone": "history",
+    "glyph": "·",
+    "second": "waiting: Awaiting parent scope and claim · prefers claude",
+    "explanation": "Awaiting parent scope and claim",
+    "worker": "claude",
+    "summary": "p2",
+    "detail": [
+     "q-0a1",
+     "status pending",
+     "task   Docs for the rate limit"
+    ],
+    "attention": false
+   }
+  ],
+  "workflows": []
+ },
+ "captured_wall": 1760000000.0
+}

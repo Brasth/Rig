@@ -24,3 +24,6 @@ shell/bin/
 
 /bin/rig-shell
 /ui/
+
+# scripts/media builds the clone's rig-shell here for screenshots
+scripts/media/.build/

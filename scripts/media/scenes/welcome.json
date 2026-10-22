@@ -1,0 +1,55 @@
+{
+ "theme": "light",
+ "repo": "my-repo",
+ "branch": "main",
+ "snapshot": "../boards/busy.json",
+ "now": "2026-10-22T09:12:40Z",
+ "status": {
+  "enabled": true,
+  "parent": "claude",
+  "model": "opus",
+  "effort": "high",
+  "available": [
+   "claude",
+   "codex",
+   "pi"
+  ],
+  "configured": "claude",
+  "parents": [
+   "claude",
+   "codex",
+   "grok",
+   "opencode",
+   "cursor",
+   "pi"
+  ]
+ },
+ "screen": "welcome",
+ "sel": 0,
+ "parents": [
+  {
+   "Name": "claude",
+   "Installed": true
+  },
+  {
+   "Name": "codex",
+   "Installed": true
+  },
+  {
+   "Name": "pi",
+   "Installed": true
+  },
+  {
+   "Name": "grok",
+   "Installed": false
+  },
+  {
+   "Name": "opencode",
+   "Installed": false
+  },
+  {
+   "Name": "cursor",
+   "Installed": false
+  }
+ ]
+}

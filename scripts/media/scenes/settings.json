@@ -1,0 +1,205 @@
+{
+ "theme": "light",
+ "repo": "my-repo",
+ "branch": "main",
+ "snapshot": "../boards/busy.json",
+ "now": "2026-10-22T09:12:40Z",
+ "status": {
+  "enabled": true,
+  "parent": "claude",
+  "model": "opus",
+  "effort": "high",
+  "available": [
+   "claude",
+   "codex",
+   "pi"
+  ],
+  "configured": "claude",
+  "parents": [
+   "claude",
+   "codex",
+   "grok",
+   "opencode",
+   "cursor",
+   "pi"
+  ]
+ },
+ "screen": "settings",
+ "chat": {
+  "session": "c-1a2b3c4d",
+  "parent": "claude",
+  "state": "idle",
+  "turns": 1,
+  "asks": true,
+  "context_pct": 23,
+  "mode": "ask",
+  "entries": [
+   {
+    "role": "user",
+    "text": "Fix the failing tests in tests/test_cli.py",
+    "at": "2026-10-22T09:08:10Z"
+   },
+   {
+    "role": "tool",
+    "text": "Read tests/test_cli.py"
+   },
+   {
+    "role": "tool",
+    "text": "Bash pytest tests/test_cli.py -q"
+   },
+   {
+    "role": "assistant",
+    "text": "Two tests failed because `rig status` printed the workers before the parent line. I swapped the order and left the rest of the output as it was.",
+    "parent": "claude"
+   },
+   {
+    "role": "diff",
+    "text": "src/cli.py +2 −2\n@@ -118,4 +118,4 @@\n-    for name, state in workers.items():\n-        print(f\"worker: {name} ({state})\")\n     print(f\"parent: {parent}\")\n+    for name, state in workers.items():\n+        print(f\"worker: {name} ({state})\")"
+   },
+   {
+    "role": "result",
+    "text": "pytest tests/test_cli.py · 12 passed in 1.8s"
+   }
+  ],
+  "marks": [
+   {
+    "turn": 1,
+    "title": "Fix the failing tests in tests/test_cli.py",
+    "files": [
+     {
+      "path": "src/cli.py",
+      "added": 2,
+      "deleted": 2
+     }
+    ]
+   }
+  ],
+  "can_undo": false
+ },
+ "sel": 0,
+ "row": 1,
+ "app_settings": {
+  "theme": "light",
+  "theme_scope": "all",
+  "themes": [
+   "rig",
+   "light",
+   "dark",
+   "material",
+   "dracula"
+  ],
+  "bell": true,
+  "bell_scope": "all",
+  "parent": "claude",
+  "enabled": true,
+  "workers": {
+   "claude": true,
+   "codex": true,
+   "pi": true,
+   "grok": false,
+   "opencode": false,
+   "cursor": false
+  },
+  "installed": [
+   "claude",
+   "codex",
+   "pi"
+  ],
+  "max_running": 3,
+  "objective": "balanced",
+  "routing_mode": "smart",
+  "sandbox": "devcontainer",
+  "worktrees": "on",
+  "worktree_container": "shared",
+  "harness": ".rig/harness.toml",
+  "harness_text": "",
+  "problems": [],
+  "global": "~/.rig/config.toml",
+  "editor": "code",
+  "shell": "zsh",
+  "start": "last",
+  "ship": "pr",
+  "tab_size": 4,
+  "format_on_save": true,
+  "keys": {
+   "next_occurrence": "ctrl+d",
+   "find_in_chat": "ctrl+/",
+   "terminal": "ctrl+`",
+   "rename": "f2",
+   "definition": "f12",
+   "references": "shift+f12",
+   "permission_mode": "shift+tab"
+  },
+  "notify_needs": true,
+  "notify_done": true,
+  "notify_applied": false,
+  "desktop": true,
+  "routing_table": [
+   {
+    "task": "implement",
+    "kind": "code",
+    "worker": "codex",
+    "parent": false,
+    "model": "gpt-5.5-codex"
+   },
+   {
+    "task": "test",
+    "kind": "code",
+    "worker": "pi",
+    "parent": false,
+    "model": ""
+   },
+   {
+    "task": "review",
+    "kind": "review",
+    "worker": "claude",
+    "parent": true,
+    "model": "opus"
+   }
+  ],
+  "models": {
+   "claude": "opus",
+   "codex": "gpt-5.5-codex"
+  },
+  "parent_models": {
+   "claude": {
+    "model": "opus",
+    "scope": "all",
+    "own": "sonnet",
+    "suggest": [
+     "opus",
+     "sonnet",
+     "haiku"
+    ]
+   },
+   "codex": {
+    "model": "",
+    "scope": "",
+    "own": "gpt-5.5-codex",
+    "suggest": [
+     "gpt-5.5-codex",
+     "gpt-5.5"
+    ]
+   }
+  },
+  "parent_efforts": {
+   "claude": {
+    "effort": "high",
+    "scope": "all",
+    "levels": [
+     "low",
+     "medium",
+     "high",
+     "max"
+    ]
+   }
+  },
+  "runs_today": 14,
+  "rig_version": "2026.10.22",
+  "dc_version": "0.23.0",
+  "gh": true,
+  "gh_user": "huy",
+  "clone_dir": "~/code",
+  "sign_commits": false
+ }
+}
