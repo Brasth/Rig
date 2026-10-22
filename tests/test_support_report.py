@@ -69,6 +69,23 @@ class SupportReport(unittest.TestCase):
         self.assertIn("== machine ==", path.read_text())
 
 
+class ProjectServers(SupportReport):
+    def test_a_project_server_is_marked_and_beats_a_global_one_of_the_same_name(self):
+        import rig_chat
+        home = Path(self.td.name) / "home"
+        (home / ".codex").mkdir(parents=True)
+        (home / ".codex" / "config.toml").write_text('[mcp_servers.asana]\nurl = "https://global"\n[mcp_servers.clerk]\nurl = "https://c"\n'
+                                                     f'[projects."{self.repo}"]\ntrust_level = "trusted"\n')
+        (self.repo / ".codex").mkdir()
+        (self.repo / ".codex" / "config.toml").write_text('[mcp_servers.asana]\nurl = "https://project"\n')
+        with mock.patch.object(Path, "home", return_value=home):
+            self.assertEqual(rig_chat._mcp_sources(self.repo, "codex"), {"asana": "project", "clerk": "global"})
+            self.assertEqual(rig_chat._mcp_list(self.repo, "codex"), "asana (this project's), clerk")
+            text = support_report.build(self.repo)
+        self.assertIn("asana: project", text)
+        self.assertIn("trust for this project: trusted", text)
+
+
 class Tidy(unittest.TestCase):
     def test_a_padded_table_is_squeezed_and_a_non_git_install_is_named(self):
         import subprocess

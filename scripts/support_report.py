@@ -51,6 +51,16 @@ def rig_version() -> str:
     return out if re.fullmatch(r"[0-9a-f]{7,40}", out) else f"installed copy at {HERE.parent} (not a git checkout)"
 
 
+def codex_trust(repo: Path) -> str:
+    """What ~/.codex/config.toml says about trusting this project: trusted, untrusted, or no entry."""
+    try:
+        import child_mcp
+        projects = child_mcp._load_toml(Path.home() / ".codex" / "config.toml").get("projects") or {}
+        return str((projects.get(str(repo)) or {}).get("trust_level") or "no entry")
+    except (OSError, ValueError, AttributeError):
+        return "unknown"
+
+
 def tail(path: Path, limit: int = TAIL) -> str:
     try:
         return path.read_text(errors="replace")[-limit:].strip() or "(empty)"
@@ -109,6 +119,13 @@ def build(repo) -> str:
     elif parent == "claude":
         parts.append(section("claude auth status", run(["claude", "auth", "status"])))
         parts.append(section("how Rig runs claude (headless)", " ".join(rig_chat.argv_claude("<your message>", "", {}))))
+    if parent:
+        sources = rig_chat._mcp_sources(repo, parent)
+        lines = [f"{name}: {scope}" for name, scope in sources.items()] or ["(none found)"]
+        if parent == "codex":
+            lines.append(f"project config .codex/config.toml: {'present' if (repo / '.codex' / 'config.toml').is_file() else 'absent'}"
+                         f" (codex reads it only for a project it trusts); trust for this project: {codex_trust(repo)}")
+        parts.append(section(f"{parent}'s MCP servers and where each is set up", "\n".join(lines)))
     chat = newest_chat(repo)
     if chat:
         errors = tool_errors(chat)

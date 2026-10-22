@@ -7,6 +7,10 @@
 
 
 
+## Project MCP servers come first (2026-10-22)
+
+Rig now reads the project's own MCP servers (`.codex/config.toml` for codex, `.mcp.json` for claude) as well as the global ones. The parent is told which servers are "this project's" and to use those over a global server of the same name; `/mcp` marks them the same way. `rig support` lists each server with where it is set up, and for codex whether this project is trusted (codex ignores a project's `.codex/config.toml` for a project it does not trust).
+
 ## Asana through codex: use the MCP server, not the connected app (2026-10-22)
 
 A support report showed `asana` set up and signed in as an MCP server in codex's config, while the parent called the ChatGPT connected app `codex_apps.asana.*` (a separate sign-in, which answered "Not Authorized"). Codex is now told which MCP servers are set up and to call the named server's own tools, not the connected app of the same name; the "Not Authorized" hint for a connected app says the same. `rig support` squeezes `codex mcp list`'s padding and names a non-git install.
