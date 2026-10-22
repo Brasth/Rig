@@ -159,9 +159,11 @@ while True: time.sleep(0.1)
             child = None
             try:
                 deadline = time.monotonic() + 3
-                while not ready.exists() and time.monotonic() < deadline:
+                while time.monotonic() < deadline:
+                    if ready.exists() and ready.read_text().strip():
+                        break  # the file exists before the child has written its pid into it
                     time.sleep(0.01)
-                self.assertTrue(ready.exists())
+                self.assertTrue(ready.exists() and ready.read_text().strip(), "the child never wrote its pid")
                 child = int(ready.read_text())
                 identity = admission.process_identity(proc.pid)
                 descendant = admission.process_identity(child)
