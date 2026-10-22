@@ -105,6 +105,8 @@ type ChatStatus struct {
 	Effort   string        `json:"effort"`
 	Parents  []string      `json:"parents"` // every parent the chat can run
 	Sessions []ChatSession `json:"sessions"`
+	// Warnings are one-line causes of a failing next turn that Rig already knows ("clerk is not signed in · type /mcp login clerk").
+	Warnings []string `json:"warnings"`
 }
 
 // ChatSession is one conversation in chat.status: what it was about and when it was last used, for /resume.
@@ -340,6 +342,16 @@ type ChatEntry struct {
 	Parent string `json:"parent"` // the parent at the time: who said an assistant line
 }
 
+// ChatLive is chat.live: what changes while a turn runs. Count and State say when the whole transcript is worth fetching.
+type ChatLive struct {
+	Session  string `json:"session"`
+	State    string `json:"state"`
+	Count    int    `json:"count"`
+	Partial  string `json:"partial"`
+	Activity string `json:"activity"`
+	Ask      bool   `json:"ask"`
+}
+
 // ChatTranscript is chat.transcript.
 type ChatTranscript struct {
 	Session string      `json:"session"`
@@ -348,6 +360,7 @@ type ChatTranscript struct {
 	Turns   int         `json:"turns"`
 	Note    string      `json:"note"`
 	Entries []ChatEntry `json:"entries"`
+	Count   int         `json:"count"`   // how many entries the session holds in all (Entries is the tail)
 	Ask     *ChatAsk    `json:"ask"`     // the parent's permission request waiting for the owner, if any
 	Asks    bool        `json:"asks"`    // this parent's headless mode can ask for permission at all
 	Partial string      `json:"partial"` // the answer streaming in, before it joins the entries

@@ -569,10 +569,22 @@ def transcript(repo, session, tail: int = 200) -> dict:
             "marks": [{"turn": m.get("turn", 0), "at": m.get("at", ""), "title": m.get("title", ""), "files": m.get("files", [])}
                       for m in (meta.get("marks") or []) if isinstance(m, dict)],
             "can_undo": isinstance(meta.get("rewind_backup"), dict),
-            "entries": rows, "ask": pending_ask(repo, meta["id"]),
+            "entries": rows, "count": _count(repo, meta["id"]), "ask": pending_ask(repo, meta["id"]),
             "partial": _partial(repo, meta) if meta["state"] == "running" else "",
             "activity": _activity(repo, meta["id"]) if meta["state"] == "running" else "",
             "asks": bool(meta.get("asks", meta["parent"] in ASKS))}
+
+
+def live(repo, session) -> dict:
+    """What changes while a turn runs, and nothing else: the streaming reply, the activity note, how many entries there are
+    and whether a request waits. rig shell asks this several times a second and fetches the whole transcript only when
+    the count or the state moves."""
+    require_enabled(repo)
+    meta = read_meta(repo, session)
+    running = meta["state"] == "running"
+    return {"session": meta["id"], "state": meta["state"], "count": _count(repo, meta["id"]),
+            "partial": _partial(repo, meta) if running else "", "activity": _activity(repo, meta["id"]) if running else "",
+            "ask": pending_ask(repo, meta["id"]) is not None}
 
 
 def _partial_path(repo, session) -> Path:
@@ -646,8 +658,14 @@ def status(repo) -> dict:
     chosen, _ = ui_settings.chosen_model(repo, parent)
     effort, _ = ui_settings.chosen_effort(repo, parent)
     result = {"enabled": on, "parents": sorted(HEADLESS), "available": available, "sessions": [], "parent": parent,
-              "configured": configured, "model": chosen or parent_model(parent), "model_chosen": bool(chosen), "effort": effort}
+              "configured": configured, "model": chosen or parent_model(parent), "model_chosen": bool(chosen), "effort": effort,
+              "warnings": []}
     if on:
+        try:
+            import turn_warnings
+            result["warnings"] = turn_warnings.current(repo)
+        except Exception:  # noqa: BLE001 - warnings are a courtesy
+            pass
         rows = [{"id": s["id"], "parent": s["parent"], "state": s["state"], "turns": s.get("turns", 0),
                  "title": _title(repo, s["id"]), "updated": _updated(repo, s["id"])} for s in sessions(repo)[:60]]
         result["sessions"] = sorted(rows, key=lambda row: row["updated"], reverse=True)  # the one used last first, for /resume

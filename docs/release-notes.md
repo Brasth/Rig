@@ -7,6 +7,12 @@
 
 
 
+## A smoother, easier-to-read conversation (2026-10-22)
+
+- **Replies stream word by word.** While a turn runs, rig shell asks a small `chat.live` call about seven times a second (the streaming reply, the activity note, the entry count) and fetches the whole transcript only when an entry is added, the state changes or a request waits. Before, the conversation was fetched about once a second, so a reply arrived in jumps.
+- **Replies are drawn, not shown raw.** Markdown in a reply is drawn: headings, bullets and numbered lists with hanging indents, quotes, rules, tables in aligned columns, `code` and **bold**, and fenced code blocks with a gutter that keep their lines (long ones wrap, none are cut). A reply still streaming in is drawn the same way; an unclosed code block reads as code until it closes.
+- **Warnings before a turn fails.** A line above the reply box names what Rig already knows will trip the next message: an MCP server codex has not signed in (`/mcp login NAME`), a project's own `.codex/config.toml` that codex ignores because the project is not trusted, claude signed out. They come from a cache refreshed in the background every five minutes, so they never slow the box.
+
 ## The working line says what codex is doing (2026-10-22)
 
 When codex loses its connection to the model ("Reconnecting... 2/5 (stream disconnected before completion ...)") the working line now says `reconnecting 2/5`, and while it compacts its context it says so, instead of stacking amber error lines. A reconnect notice used to mark the whole turn as failed; it is now only a note, and a real failure still is one. When a turn has said nothing for 90 seconds the line says `quiet for 3m 42s: it may be waiting on the model or compacting`, so a long wait is not mistaken for nothing happening (`/stop` still stops it). The compaction wording is matched on codex's event names and is not yet confirmed against a live compaction.

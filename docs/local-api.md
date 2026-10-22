@@ -40,6 +40,7 @@ repository. Owner tokens are never returned, and workers may not serve the API.
 | `chat.cancel` | yes | none | EXPERIMENT: stop a chat session's running turn (params: session) |
 | `chat.commands` | no | none | The parent's own skills and slash commands, for the shell's / menu (params: parent) |
 | `chat.fork` | yes | none | EXPERIMENT: start a new chat session that begins as a copy of this one up to a turn (params: session, turn) |
+| `chat.live` | no | none | EXPERIMENT: what changes while a turn runs: the streaming reply, activity, entry count, state (params: session) |
 | `chat.models` | no | none | Every model the parent CLI lists or Rig knows for it, for the shell's /model (params: parent) |
 | `chat.parent` | yes | none | Name the project's parent CLI in .rig/harness.toml, as rig use does (params: name) |
 | `chat.rewind` | yes | none | EXPERIMENT: put the working tree back as it was before a chat turn (params: session, turn, path, dry, undo) |

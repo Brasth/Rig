@@ -256,6 +256,15 @@ func (c *Client) ChatTranscript(session string, tail int, timeout time.Duration)
 	return &out, nil
 }
 
+// ChatLive fetches only what changes while a turn runs.
+func (c *Client) ChatLive(session string, timeout time.Duration) (*view.ChatLive, error) {
+	var out view.ChatLive
+	if err := c.Call("chat.live", map[string]any{"session": session}, timeout, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 // ChatSend starts one turn; an empty session starts a new one, with parent (a name the server checks) or the
 // project's own parent. The answer arrives in the transcript.
 func (c *Client) ChatSend(message, session, parent string, timeout time.Duration) (*view.ChatStarted, error) {
