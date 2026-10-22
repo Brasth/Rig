@@ -140,5 +140,41 @@ class SignedOut(ShellDoctor):
             run.assert_not_called()
 
 
+class CodexServers(ShellDoctor):
+    LISTING = ("Name    Url                         Bearer Token Env Var  Status   Auth\n"
+               "asana   https://mcp.asana.com/v2/mcp  -                     enabled  Not logged in\n"
+               "github  https://api.example/mcp       GH_TOKEN              enabled  Bearer token\n"
+               "figma   https://mcp.figma.com/mcp     -                     enabled  OAuth\n")
+
+    def codex_project(self):
+        (self.repo / ".rig" / "harness.toml").write_text('parent = "codex"\n\n[project]\nenabled = true\n')
+
+    def test_a_server_codex_lists_as_not_logged_in_is_named_with_the_command_to_sign_in(self):
+        import subprocess
+        self.codex_project()
+        with mock.patch("shutil.which", return_value="/usr/bin/codex"), \
+                mock.patch.object(subprocess, "run", return_value=mock.Mock(stdout=self.LISTING)) as run:
+            found = shell_doctor.codex_servers_signed_out(self.repo)
+        self.assertEqual(run.call_args.args[0], ["/usr/bin/codex", "mcp", "list"])
+        self.assertEqual([(f["id"], f["level"], f["fix"]) for f in found], [("codex-mcp-asana", "warning", "")])
+        self.assertIn("/mcp login asana", found[0]["detail"])
+
+    def test_nothing_is_reported_for_an_unknown_format_another_parent_or_no_codex(self):
+        import subprocess
+        self.codex_project()
+        with mock.patch("shutil.which", return_value="/usr/bin/codex"), \
+                mock.patch.object(subprocess, "run", return_value=mock.Mock(stdout="something else entirely\nasana ok\n")):
+            self.assertEqual(shell_doctor.codex_servers_signed_out(self.repo), [])
+        with mock.patch("shutil.which", return_value="/usr/bin/codex"), \
+                mock.patch.object(subprocess, "run", side_effect=subprocess.TimeoutExpired("codex", 10)):
+            self.assertEqual(shell_doctor.codex_servers_signed_out(self.repo), [])
+        with mock.patch("shutil.which", return_value=None):
+            self.assertEqual(shell_doctor.codex_servers_signed_out(self.repo), [])
+        (self.repo / ".rig" / "harness.toml").write_text('parent = "claude"\n\n[project]\nenabled = true\n')
+        with mock.patch("shutil.which", return_value="/usr/bin/codex"), mock.patch.object(subprocess, "run") as run:
+            self.assertEqual(shell_doctor.codex_servers_signed_out(self.repo), [])
+            run.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()

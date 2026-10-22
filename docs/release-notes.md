@@ -6,6 +6,11 @@
 
 
 
+
+## "Not Authorized" from an MCP server through codex in rig shell (2026-10-22)
+
+`/mcp login NAME` signs in to an MCP server in your own terminal (`codex mcp login NAME`), because a sign-in the parent runs inside a turn cannot finish (no browser, the callback listener ends with the turn). A tool that answers not authorized now carries a line saying so, codex is told once not to try the sign-in itself (only when it has MCP servers), `/mcp` says how, and `/doctor` lists servers codex shows as not logged in.
+
 ## Screenshots and a walkthrough drawn from scenes (2026-10-22)
 
 `docs/media/` holds screenshots of every rig shell screen in light and dark, and a 24-second walkthrough (webm and mp4) of a request typed in, the parent working with helpers beside it, the diff under its answer, review and commit. None of it is captured from a screen: `rig-shell --scene FILE --color` draws an app screen from a JSON scene (the conversation, who answers, the open file, the doctor's findings, the settings) and `--once --color` the board, and `scripts/media/render.py` and `record.py` turn the frames into WebP and video with a headless Chromium and ffmpeg. The README opens on the conversation screenshot and links the walkthrough. Rebuilt prebuilt shells.

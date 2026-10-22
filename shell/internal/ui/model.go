@@ -598,6 +598,17 @@ func (m *Model) runSlash(text string) (tea.Cmd, bool) {
 			return nil, true
 		}
 		return m.openSelftest(), true
+	case "/mcp":
+		if first, _, _ := strings.Cut(rest, " "); first != "login" {
+			return nil, false // /mcp on its own lists the servers: the server answers it
+		}
+		clear()
+		m.st.Mode, m.st.InputLabel, m.inputFor = ModeNormal, "", ""
+		if !m.appOn() {
+			m.st.Message = "/mcp login is in the app: rig shell"
+			return nil, true
+		}
+		return m.mcpLogin(strings.TrimSpace(strings.TrimPrefix(rest, "login"))), true
 	case "/login":
 		clear()
 		m.st.Mode, m.st.InputLabel, m.inputFor = ModeNormal, "", ""
@@ -1464,6 +1475,8 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.st.Message = "shell in " + clean(msg.plan.Workspace) + " (exit to return)"
 			return m, m.exec(msg.plan.Argv, func(err error) tea.Msg { return shellDoneMsg{err: err} })
 		}
+	case mcpSignedInMsg:
+		return m, m.onMcpSignedIn(msg)
 	case signedInMsg:
 		return m, m.onSignedIn(msg)
 	case shellDoneMsg:

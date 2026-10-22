@@ -771,6 +771,7 @@ func entryLines(st State, entries []view.ChatEntry, cw int) []string {
 		several = several || e.Role == "switch"
 	}
 	last := ""
+	lastTool := "" // the tool line before a result: whose answer it is
 	lastErr := -1
 	for i, e := range entries {
 		if e.Role == "error" {
@@ -800,6 +801,7 @@ func entryLines(st State, entries []view.ChatEntry, cw int) []string {
 				}
 			}
 		case "tool":
+			lastTool = e.Text
 			lines = append(lines, toolLineWith(st, e.Text, cw, toolProgress(st, e)))
 			continue
 		case "diff":
@@ -821,6 +823,11 @@ func entryLines(st State, entries []view.ChatEntry, cw int) []string {
 				colour = colAmber
 			}
 			lines = append(lines, resultLine(st, e.Text, cw, colour))
+			if hint := signInHint(st, lastTool, e.Text); hint != "" {
+				for _, l := range wrap(hint, cw-8, "") {
+					lines = append(lines, "    "+st.paint(colAmber, "→ ")+st.dim(l))
+				}
+			}
 			continue
 		case "error":
 			if plain := plainError(e.Text, errParent(st, e)); plain != "" {
