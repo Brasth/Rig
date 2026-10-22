@@ -3,6 +3,11 @@
 
 
 
+
+## Fix: "list index out of range" on rig_session and rig_job_launch (2026-10-22)
+
+An empty or blank `.rig/thread` file (left by a status line that had no session id yet) made every `rig_job_launch` and `rig_session` fail with `list index out of range`, and left a half-made job folder (`brief.md`, no `meta.json`) plus a held reservation behind. An empty thread file now means "no thread". Any unexpected error while a launch is being set up now ends as a failed job with its reason and drops the reservation, instead of leaving a job that "never started". If you hit this before updating: delete `.rig/thread` in the project and remove the job folder it names under `.rig/jobs/`. Unexpected errors in an MCP tool or in launch setup now also say where they came from (`list index out of range (IndexError at jobs.py:113 in current_thread)`) and append the full traceback to `.rig/mcp-errors.log` (newest 64 KB kept), so a report of one carries what is needed to find it.
+
 ## Send now while the parent works, see what is running, commit a turn's files, notes for the parent (2026-10-21)
 
 With a message queued behind the parent's turn, `⏎` again sends it now: the turn stops, keeps and shows what it changed, and the parent goes on from the message. A running tool call shows how long it has taken, and `/running` lists the parent's tool, the helpers and the terminal, `x` stopping one. After a turn, `g` shows just its files in the git view and `c` commits only those with a message from the answer. `/remember NOTE` keeps notes in `.rig/notes.md` that go with every conversation's first message; `/notes` opens them. New API method `chat.steer`.
