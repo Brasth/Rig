@@ -750,6 +750,18 @@ class JobBoard(unittest.TestCase):
         shown = jobs.format_show(only_a[0])
         self.assertIn("thread  parent-thread-a", shown)
 
+    def test_an_empty_thread_file_is_no_thread_and_launch_and_session_still_work(self):
+        saved = {k: os.environ.pop(k, None) for k in jobs.THREAD_ENV}
+        try:
+            (self.repo / ".rig").mkdir(exist_ok=True)
+            for body in ("", "\n", "  \n\n"):
+                (self.repo / ".rig" / "thread").write_text(body)
+                self.assertEqual(jobs.current_thread(self.repo), "", repr(body))
+        finally:
+            for key, val in saved.items():
+                if val is not None:
+                    os.environ[key] = val
+
     def test_remember_thread_from_statusline(self):
         saved = {k: os.environ.pop(k, None) for k in jobs.THREAD_ENV}
         try:

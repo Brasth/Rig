@@ -584,6 +584,8 @@ def launch(repo, **kwargs) -> dict:
             raise LaunchError("job directory already exists") from error
         except (OSError, LaunchError, SystemExit, context_packages.ContextPackageError) as error:
             abort_setup(str(error) or "launch setup failed", error)
+        except Exception as error:  # a bug in setup: still no half-made job (a brief and no meta) and no reservation left held
+            abort_setup(f"launch setup failed: {type(error).__name__}: {error}", error)
         extra = {
             "RIG_LIVE": "1",
             "RIG_ROLE": role,

@@ -110,9 +110,10 @@ def current_thread(repo: Path | None = None) -> str:
     path = thread_file(repo)
     if path.is_file():
         try:
-            return path.read_text(errors="replace").strip().splitlines()[0].strip()
+            lines = path.read_text(errors="replace").strip().splitlines()
         except OSError:
             return ""
+        return lines[0].strip() if lines else ""  # an empty thread file is no thread, not an error
     return ""
 
 

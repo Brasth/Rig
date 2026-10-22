@@ -816,6 +816,27 @@ class WorkerLaunchTests(unittest.TestCase):
         )
         return folder
 
+    def test_a_blank_thread_file_does_not_break_launch_or_session(self):
+        for key in jobs.THREAD_ENV:
+            os.environ.pop(key, None)
+        (self.repo / ".rig" / "thread").write_text("\n")
+        self._seed_terminal("prior-blank", status="ok", files=["b.py"])
+        launched = self._launch("next-blank", files=["b.py"], continues_job_id="prior-blank")
+        self.assertEqual(launched["job_id"], "next-blank")
+        self.assertTrue((self.repo / ".rig" / "jobs" / "next-blank" / "meta.json").is_file())
+        session = rig_mcp.call_tool("rig_session", {"repo": str(self.repo), "case": "fix the hero banner", "role": "implement"})
+        self.assertFalse(session.get("isError"), session)
+
+    def test_an_unexpected_error_in_launch_setup_leaves_a_failed_job_and_no_held_reservation(self):
+        with mock.patch.object(worker_launch.child_mcp, "write_job_mcp", side_effect=IndexError("list index out of range")):
+            with self.assertRaisesRegex(worker_launch.LaunchError, "launch setup failed: IndexError: list index out of range"):
+                self._launch("next-bug", files=["b.py"])
+        folder = self.repo / ".rig" / "jobs" / "next-bug"
+        self.assertTrue((folder / "meta.json").is_file(), "a failed job, not a brief with no meta")
+        self.assertEqual(json.loads((folder / "meta.json").read_text()).get("status"), "fail")
+        held = [row for row in admission.list_reservations(self.repo) if row.get("job_id") == "next-bug" and row.get("slot_held")]
+        self.assertEqual(held, [], "the reservation is dropped")
+
     def test_continues_job_id_requires_existing_terminal_job(self):
         with self.assertRaisesRegex(worker_launch.LaunchError, "does not exist"):
             worker_launch.launch(

@@ -142,7 +142,7 @@ def print_success() -> None:
                 text=True,
                 timeout=5,
             )
-            version = (result.stdout or result.stderr or "").strip().splitlines()[0] if result.returncode == 0 else ""
+            version = next(iter((result.stdout or result.stderr or "").strip().splitlines()), "") if result.returncode == 0 else ""
         except (OSError, subprocess.TimeoutExpired, IndexError):
             version = ""
     if version:
