@@ -147,6 +147,18 @@ def chat_dir(repo) -> Path:
     return Path(repo).resolve() / ".rig" / "chat"
 
 
+def parent_log(repo, session, text: str) -> None:
+    """What the parent printed on its own stderr, kept in .rig/chat/<session>.parent.log for `rig support` (newest 64 KB)."""
+    if not text.strip():
+        return
+    try:
+        path = chat_dir(repo) / f"{session}.parent.log"
+        old = path.read_text(errors="replace") if path.is_file() else ""
+        path.write_text((old + f"--- {time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())}\n" + text.rstrip() + "\n")[-64_000:])
+    except OSError:
+        pass
+
+
 def _session_id(value: str) -> str:
     if not SESSION.fullmatch(str(value or "")):
         raise ChatError("session must look like c-1a2b3c4d")
@@ -1196,11 +1208,18 @@ def run_codex_server(repo: Path, session: str, message: str, meta: dict, folder:
     import ask
     binary = shutil.which("codex")
     try:
+        errlog = (chat_dir(repo) / f"{session}.parent.log").open("a")
+    except OSError:
+        errlog = subprocess.DEVNULL
+    try:
         proc = subprocess.Popen([binary, "mcp-server"], cwd=str(repo), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                stderr=subprocess.DEVNULL, text=True, errors="replace",
+                                stderr=errlog, text=True, errors="replace",
                                 env={**os.environ, "RIG_PARENT": "codex", "RIG_OWNER_SESSION": session})
     except OSError:
         return False, False, 0
+    finally:
+        if errlog is not subprocess.DEVNULL:
+            errlog.close()  # the child holds its own copy
     _CHILD.append(proc)
     lines = _Lines(proc.stdout)
 
@@ -1486,8 +1505,9 @@ def remember(repo, text: str) -> dict:
 
 PARENT_HINTS = {
     "codex": ("[Rig] If a tool answers Not Authorized, or asks for a sign-in, do not run `codex mcp login` yourself: in this chat "
-              "no browser can open and the sign-in ends with your turn. Tell the user to type /mcp login NAME (NAME is the "
-              "server, such as asana); it runs the sign-in in their own terminal."),
+              "no browser can open and the sign-in ends with your turn. For a tool named codex_apps.NAME (a connected app, such as "
+              "asana) tell the user to reconnect the app in ChatGPT's settings under Apps, with the account that can open the item; "
+              "for any other server tell the user to type /mcp login NAME, which runs the sign-in in their own terminal."),
 }
 
 
@@ -1758,6 +1778,7 @@ def run_turn(repo, session: str) -> int:
             write("assistant", _clean("\n".join(lines)))
     stderr = proc.stderr.read()
     code = proc.wait()
+    parent_log(repo, session, stderr)
     _record_changes(repo, session, before)
     if parent in ASKS:
         _write_json(folder / "meta.json", {"status": "idle"})  # a late answer to this turn's request is refused
