@@ -1518,8 +1518,12 @@ def _with_notes(repo, meta: dict, message: str) -> str:
     if meta["parent"] in RESUMES and meta.get("native"):
         return message
     parts = []
-    if PARENT_HINTS.get(meta["parent"]) and _mcp_servers(repo, meta["parent"]):
+    servers = _mcp_servers(repo, meta["parent"]) if PARENT_HINTS.get(meta["parent"]) else []
+    if servers:
         parts.append(PARENT_HINTS[meta["parent"]])  # only for someone who has MCP servers set up, which is who it is for
+        if meta["parent"] == "codex":  # a connected app of the same name is signed in apart from the server and can say Not Authorized
+            parts.append("[Rig] MCP servers set up in codex's config: " + ", ".join(sorted(set(servers))) + ". When the user names one "
+                         "(\"use asana mcp\"), call that server's own tools, not the connected app codex_apps.NAME of the same name.")
     text = notes(repo)
     if text:
         parts.append("[Project notes the user keeps in " + NOTES_FILE + "]\n" + text)
