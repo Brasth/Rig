@@ -380,7 +380,7 @@ func TestSettingsChangeRealSettingsWhereTheyAreKept(t *testing.T) {
 	src.appSettings = sampleSettings()
 	run(m.runPalette(paletteItem{Action: "settings"}, ""), m)
 	out := appScreen(m)
-	for _, want := range []string{"←  Settings   [all repos]", "[general]", "agents", "routing", "toml", "Theme", "› [light]", "dracula", "all repos",
+	for _, want := range []string{"←  Settings   [all repos]", "[general]", "assistants", "notifications", "a  more settings", "Theme", "› [light]", "dracula", "all repos",
 		"Default parent", "[c] claude · auto", "When rig starts", "[last project]", "Rig in this repo", "on", "off keeps history and memory", "Updates",
 		"←→ choose    ⏎ apply    ⇥ section    g all repos / this repo"} {
 		if !strings.Contains(out, want) {
@@ -431,8 +431,8 @@ func TestSettingsChangeRealSettingsWhereTheyAreKept(t *testing.T) {
 	if last := src.settingsSaved[len(src.settingsSaved)-1]; last != [3]string{"project.enabled", "false", "repo"} {
 		t.Fatalf("saved %v", src.settingsSaved)
 	}
-	m.st.App.Settings.Section = len(SettingsSections) - 1
-	if out := appScreen(m); !strings.Contains(out, "[toml]") || !strings.Contains(out, "parent = \"claude\"") || !strings.Contains(out, "✓ valid") {
+	m.st.App.Settings.Section, m.st.App.Settings.Advanced = len(SettingsSections)-1, true
+	if out := appScreen(m); !strings.Contains(out, "[raw file]") || !strings.Contains(out, "parent = \"claude\"") || !strings.Contains(out, "✓ valid") {
 		t.Fatalf("the toml section:\n%s", out)
 	}
 	press(m, "esc")

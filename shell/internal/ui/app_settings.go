@@ -16,10 +16,39 @@ import (
 // SettingsSections are the design's sections, without billing.
 var SettingsSections = []string{"general", "agents", "routing", "approvals", "sandbox", "editor", "keys", "git", "notify", "toml"}
 
+// basicSections are the ones that show first: what most people change. The others (how work is routed, approvals, the
+// sandbox, the editor, keys, the raw file) are one key away.
+var basicSections = map[string]bool{"general": true, "agents": true, "git": true, "notify": true}
+
+// sectionNames are the sections' names as shown, in plain words.
+var sectionNames = map[string]string{"agents": "assistants", "notify": "notifications", "git": "git and saving", "toml": "raw file",
+	"routing": "who does what", "approvals": "approvals"}
+
+func sectionShown(sc *SettingsScreen, name string) bool { return sc.Advanced || basicSections[name] }
+
+func sectionLabel(name string) string {
+	if n := sectionNames[name]; n != "" {
+		return n
+	}
+	return name
+}
+
+// stepSection moves to the next (or previous) section that shows.
+func stepSection(sc *SettingsScreen, dir int) {
+	for n := 0; n < len(SettingsSections); n++ {
+		sc.Section = (sc.Section + dir + len(SettingsSections)) % len(SettingsSections)
+		if sectionShown(sc, SettingsSections[sc.Section]) {
+			break
+		}
+	}
+	sc.Row = 0
+}
+
 // SettingsScreen is where the Settings screen is.
 type SettingsScreen struct {
-	Section int
-	Row     int
+	Advanced bool // the short list (general, assistants, notifications, git) is what shows until `a` asks for the rest
+	Section  int
+	Row      int
 	// Pick is the value ←→ has moved to on the chosen row: shown, but nothing changes until ⏎ applies it
 	Pick string
 }
@@ -290,18 +319,27 @@ func settingsScreenLines(v *view.View, st State, w, h int) []string {
 	head := "   " + st.zone("key:esc", st.faint("←")+"  "+st.bold("Settings")) + "   " + chipOn(st, scope) + "  " + st.faint(other) + "  " + st.faint(file)
 	var tabs []string
 	for i, name := range SettingsSections {
+		if !sectionShown(sc, name) {
+			continue
+		}
+		label := sectionLabel(name)
 		if i == sc.Section {
 			if st.Styled {
-				tabs = append(tabs, lipgloss.NewStyle().Foreground(lipgloss.Color(colText)).Bold(true).Underline(true).Render(name))
+				tabs = append(tabs, lipgloss.NewStyle().Foreground(lipgloss.Color(colText)).Bold(true).Underline(true).Render(label))
 			} else {
-				tabs = append(tabs, "["+name+"]")
+				tabs = append(tabs, "["+label+"]")
 			}
 		} else {
-			tabs = append(tabs, st.faint(name))
+			tabs = append(tabs, st.faint(label))
 		}
 		tabs[len(tabs)-1] = st.zone(fmt.Sprintf("row:section:%d", i), tabs[len(tabs)-1])
 	}
-	lines := []string{spread(head, "", "", w), center(strings.Join(tabs, "   "), w)}
+	more := "more settings"
+	if sc.Advanced {
+		more = "fewer settings"
+	}
+	more = st.zone("row:section:adv", st.dim("a  "+more)) + "   " // at the head's right, so the tabs keep their room
+	lines := []string{spread(head, "", more, w), center(strings.Join(tabs, "   "), w)}
 	cw := min(76, w-8)
 	body := []string{""}
 	if t := settingsTitles[section]; t[0] != "" {
@@ -598,6 +636,7 @@ func (m *Model) openSettings(section string) tea.Cmd {
 	for i, s := range SettingsSections {
 		if s == section {
 			sc.Section = i
+			sc.Advanced = !basicSections[s] // asked for by name: the rest shows too
 		}
 	}
 	m.st.App.Settings = sc
@@ -621,9 +660,11 @@ func (m *Model) settingsKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "esc", "q":
 		a.Settings = nil
 	case "tab":
-		sc.Section, sc.Row = (sc.Section+1)%len(SettingsSections), 0
+		stepSection(sc, 1)
 	case "shift+tab":
-		sc.Section, sc.Row = (sc.Section+len(SettingsSections)-1)%len(SettingsSections), 0
+		stepSection(sc, -1)
+	case "a":
+		toggleAdvanced(sc)
 	case "up", "k":
 		sc.Row = clampSel(sc.Row-1, len(rows))
 	case "down", "j":
@@ -845,7 +886,7 @@ func settingsKeys(section string) [][2]string {
 	case "editor", "keys", "git":
 		return [][2]string{{"←→", "choose"}, {"⏎", "apply"}, {"⇥", "section"}, {"esc", "back"}}
 	case "notify":
-		return [][2]string{{"space", "on/off"}, {"g", "all repos / this repo"}, {"⇥", "section"}, {"esc", "back"}}
+		return [][2]string{{"space", "on/off"}, {"g", "all repos / this repo"}, {"⇥", "section"}, {"a", "more"}, {"esc", "back"}}
 	case "toml":
 		return [][2]string{{"E", "edit in $EDITOR"}, {"⇥", "section"}, {"esc", "back"}}
 	}
@@ -874,4 +915,12 @@ func picked(st State, name string) string {
 		return " " + lipgloss.NewStyle().Foreground(lipgloss.Color(colText)).Bold(true).Underline(true).Render(name) + " "
 	}
 	return "<" + name + ">"
+}
+
+// toggleAdvanced shows or hides the sections beyond the short list; a hidden one that was open goes back to general.
+func toggleAdvanced(sc *SettingsScreen) {
+	sc.Advanced = !sc.Advanced
+	if !sectionShown(sc, SettingsSections[sc.Section]) {
+		sc.Section, sc.Row = 0, 0
+	}
 }

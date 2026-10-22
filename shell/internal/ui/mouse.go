@@ -720,6 +720,10 @@ func (m *Model) clickRow(list, at string) (tea.Model, tea.Cmd) {
 		}
 	case "section":
 		if sc := a.Settings; sc != nil {
+			if at == "adv" {
+				toggleAdvanced(sc)
+				return m, nil
+			}
 			sc.Section, sc.Row, sc.Pick = i, 0, ""
 		}
 	case "setting":
