@@ -773,25 +773,41 @@ def _tokens(n: int) -> str:
     return f"{n / 1000:.1f}k" if n >= 1000 else str(n)
 
 
-def _mcp_servers(repo, parent: str) -> list[str]:
-    """The MCP servers the parent has configured, as its own files name them."""
-    names: list[str] = []
+def _mcp_sources(repo, parent: str) -> dict[str, str]:
+    """The MCP servers the parent has configured and where each comes from: "project" (the project's own file) or
+    "global" (the user's). A name in both is the project's, which is the one the parent should use."""
+    found: dict[str, str] = {}
     home = Path.home()
+    repo = Path(repo)
     try:
         if parent == "claude":
-            for path in (Path(repo) / ".mcp.json", home / ".claude.json"):
+            for path, scope in ((home / ".claude.json", "global"), (repo / ".mcp.json", "project")):
                 try:
                     data = json.loads(path.read_text())
                 except (OSError, ValueError):
                     continue
-                names += list((data.get("mcpServers") or {}))
-                names += list(((data.get("projects") or {}).get(str(Path(repo).resolve())) or {}).get("mcpServers") or {})
+                for name in (data.get("mcpServers") or {}):
+                    found[name] = scope
+                for name in (((data.get("projects") or {}).get(str(repo.resolve())) or {}).get("mcpServers") or {}):
+                    found[name] = "project"
         elif parent == "codex":
             import child_mcp
-            names += list(child_mcp._load_toml(home / ".codex" / "config.toml").get("mcp_servers") or {})
+            for path, scope in ((home / ".codex" / "config.toml", "global"), (repo / ".codex" / "config.toml", "project")):
+                for name in (child_mcp._load_toml(path).get("mcp_servers") or {}):
+                    found[name] = scope
     except (OSError, ValueError, AttributeError):
         pass
-    return sorted(dict.fromkeys(names))
+    return dict(sorted(found.items()))
+
+
+def _mcp_servers(repo, parent: str) -> list[str]:
+    """The MCP servers the parent has configured, as its own files name them."""
+    return list(_mcp_sources(repo, parent))
+
+
+def _mcp_list(repo, parent: str) -> str:
+    """"asana (project), clerk": the servers, each project one marked, so it is clear which file a server comes from."""
+    return ", ".join(name + (" (this project's)" if scope == "project" else "") for name, scope in _mcp_sources(repo, parent).items())
 
 
 def _info(repo, meta: dict, what: str) -> str:
@@ -812,9 +828,9 @@ def _info(repo, meta: dict, what: str) -> str:
             "; /compact continues in a fresh conversation from a summary" if window and used["context"] * 100 // window >= 50 else "")
     servers = _mcp_servers(repo, parent)
     if servers and parent == "codex":
-        return ("MCP servers for codex: " + ", ".join(servers) +
+        return ("MCP servers for codex: " + _mcp_list(repo, parent) +
                 " · /mcp login NAME signs one in here, in your terminal (a sign-in the parent runs itself cannot finish: no browser)")
-    return ("MCP servers for " + parent + ": " + ", ".join(servers)) if servers else (
+    return ("MCP servers for " + parent + ": " + _mcp_list(repo, parent)) if servers else (
         f"no MCP servers found in {parent}'s own config" if parent in ("claude", "codex") else f"{parent}'s MCP servers are in its own settings")
 
 
@@ -1522,8 +1538,9 @@ def _with_notes(repo, meta: dict, message: str) -> str:
     if servers:
         parts.append(PARENT_HINTS[meta["parent"]])  # only for someone who has MCP servers set up, which is who it is for
         if meta["parent"] == "codex":  # a connected app of the same name is signed in apart from the server and can say Not Authorized
-            parts.append("[Rig] MCP servers set up in codex's config: " + ", ".join(sorted(set(servers))) + ". When the user names one "
-                         "(\"use asana mcp\"), call that server's own tools, not the connected app codex_apps.NAME of the same name.")
+            parts.append("[Rig] MCP servers set up in codex's config: " + _mcp_list(repo, "codex") + ". When the user names one "
+                         "(\"use asana mcp\"), call that server's own tools, not the connected app codex_apps.NAME of the same name. "
+                         "A server marked (this project's) is this project's own: use it, not a global server of the same name.")
     text = notes(repo)
     if text:
         parts.append("[Project notes the user keeps in " + NOTES_FILE + "]\n" + text)
