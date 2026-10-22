@@ -2,6 +2,7 @@
 """Record the rig shell walkthrough as a video, from scenes rather than a screen.
 
     python3 scripts/media/record.py                 # docs/media/rig-shell-walkthrough.{webm,mp4} and its poster
+    python3 scripts/media/record.py --mobile        # the phone version: 60x36 cells, 720x936, rig-shell-walkthrough-mobile.*
     python3 scripts/media/record.py --theme dark --fps 12 --out /tmp/clip
 
 The story below is a list of moments: the screen as a scene (what ``rig-shell --scene`` draws), with typing and the
@@ -27,6 +28,8 @@ HERE = Path(__file__).resolve().parent
 OUT = frame.ROOT / "docs" / "media"
 SIZE = "120x36"
 PX = (1280, 800)
+MOBILE_SIZE = "60x36"
+MOBILE_PX = (720, 936)
 TYPE_EVERY = 0.045  # seconds per typed character
 WORD_EVERY = 0.07  # seconds per streamed word
 SPIN_EVERY = 0.25  # the working spinner's frames
@@ -119,12 +122,16 @@ def main() -> int:
     ap.add_argument("--out", type=Path, default=OUT)
     ap.add_argument("--name", default="rig-shell-walkthrough")
     ap.add_argument("--fps", type=int, default=24, help="the clip's frame rate; frames are held, not repeated, so this only sets smoothness")
+    ap.add_argument("--mobile", action="store_true", help="a portrait clip for phones: 60x36 cells in 720x936")
     ap.add_argument("--no-build", action="store_true")
     args = ap.parse_args()
+    size, px = (MOBILE_SIZE, MOBILE_PX) if args.mobile else (SIZE, PX)
+    if args.mobile and args.name == "rig-shell-walkthrough":
+        args.name += "-mobile"
     if not shutil.which("ffmpeg"):
         sys.exit("ffmpeg is needed")
     shell = frame.shell_binary(build=not args.no_build)
-    cols, rows = frame.size_of(SIZE)
+    cols, rows = frame.size_of(size)
     args.out.mkdir(parents=True, exist_ok=True)
     frames = story(args.theme)
     with tempfile.TemporaryDirectory() as tmp:
@@ -133,11 +140,11 @@ def main() -> int:
         concat = []
         total = 0.0
         for i, (scene, seconds) in enumerate(frames):
-            lines = frame.render_scene(shell, scene, SIZE)
+            lines = frame.render_scene(shell, scene, size)
             key = frame.digest(lines)
             if key not in drawn:
                 png = tmpdir / f"f{len(drawn):04d}.png"
-                frame.screenshot(frame.page_html(lines, cols, rows, PX), png, PX, scale=1)
+                frame.screenshot(frame.page_html(lines, cols, rows, px), png, px, scale=1)
                 drawn[key] = png
                 print(f"\rframe {i + 1}/{len(frames)} ({len(drawn)} distinct)", end="", file=sys.stderr)
             concat.append(f"file '{drawn[key]}'\nduration {seconds:.3f}")
@@ -153,10 +160,10 @@ def main() -> int:
         subprocess.run(common + ["-c:v", "libx264", "-preset", "slow", "-crf", "23", "-tune", "stillimage", "-movflags", "+faststart", "-an",
                                  str(args.out / f"{args.name}.mp4")], check=True)
         # the poster: the frame with the finished turn, the Review / Commit / Undo bar and the diff
-        poster_lines = frame.render_scene(shell, frames[-4][0], SIZE)
+        poster_lines = frame.render_scene(shell, frames[-4][0], size)
         png = tmpdir / "poster.png"
-        frame.screenshot(frame.page_html(poster_lines, cols, rows, PX), png, PX, scale=2)
-        frame.to_webp(png, args.out / f"{args.name}-poster.webp", width=PX[0], quality=82)
+        frame.screenshot(frame.page_html(poster_lines, cols, rows, px), png, px, scale=2)
+        frame.to_webp(png, args.out / f"{args.name}-poster.webp", width=px[0], quality=82)
     for ext in ("webm", "mp4", "poster.webp"):
         p = args.out / f"{args.name}{'-' if ext.endswith('webp') else '.'}{ext}"
         print(f"wrote {p.name} ({p.stat().st_size // 1024} KB)")

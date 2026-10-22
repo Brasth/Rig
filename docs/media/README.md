@@ -17,8 +17,10 @@ same on every machine and is remade in a minute after the shell changes. The sce
 | `rig-shell-env-{light,dark}.webp` | The Env tab: the dev container, its ports, per-job worktrees and the fleet |
 | `rig-shell-walkthrough.{webm,mp4}` | 24 seconds: first run, a request typed in, the parent working with helpers beside it, the answer and its diff, review on the code tab, commit |
 | `rig-shell-walkthrough-poster.webp` | The clip's poster: the finished turn with its diff and the bar |
+| `rig-shell-{conversation,panel,code,doctor,welcome,settings}-{light,dark}-m.webp` | Phone versions of the screens: the same scene drawn at 60×36 cells (the shell's narrow layout) in 720×936, so the text stays readable on a 320 to 430 pixel screen. `-m@2x.webp` is 1440×1872 |
+| `rig-shell-walkthrough-mobile.{webm,mp4}` and `-poster.webp` | The same walkthrough as a 720×936 portrait clip for phones |
 
-Every screenshot is 120×36 cells drawn into 1440×900 pixels; `@2x` is the same picture at 2880×1800 for high-density
+Every desktop screenshot is 120×36 cells drawn into 1440×900 pixels; `@2x` is the same picture at 2880×1800 for high-density
 screens. The clip is 1280×800, with no sound.
 
 ## Remaking them
@@ -27,7 +29,12 @@ screens. The clip is 1280×800, with no sound.
 python3 scripts/media/render.py                 # every screenshot, light and dark
 python3 scripts/media/render.py conversation --theme dark --png
 python3 scripts/media/record.py                 # the walkthrough, webm and mp4, and its poster
+python3 scripts/media/record.py --mobile        # the portrait phone clip (screens get -m versions from render.py by itself)
 ```
+
+Use the `-m` files for screens narrower than about 700 CSS pixels (a `<picture>` source with `media="(max-width:700px)"`); a
+120-column picture shrunk to a phone is about 2 pixels of text per row. Video cannot switch by `media` in Chrome or Firefox,
+so a page carries both clips and shows one by CSS, with `preload="none"` so the hidden one costs nothing.
 
 Needs Go 1.24+ (the clone's shell is built; set `RIG_SHELL_BIN` to use another), a Chromium (Playwright's
 `headless_shell` under `/opt/pw-browsers` or `~/.cache/ms-playwright` is found by itself; else set `RIG_CHROME`),
