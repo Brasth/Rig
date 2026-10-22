@@ -829,13 +829,14 @@ class WorkerLaunchTests(unittest.TestCase):
 
     def test_an_unexpected_error_in_launch_setup_leaves_a_failed_job_and_no_held_reservation(self):
         with mock.patch.object(worker_launch.child_mcp, "write_job_mcp", side_effect=IndexError("list index out of range")):
-            with self.assertRaisesRegex(worker_launch.LaunchError, "launch setup failed: IndexError: list index out of range"):
+            with self.assertRaisesRegex(worker_launch.LaunchError, r"launch setup failed: list index out of range \(IndexError at "):
                 self._launch("next-bug", files=["b.py"])
         folder = self.repo / ".rig" / "jobs" / "next-bug"
         self.assertTrue((folder / "meta.json").is_file(), "a failed job, not a brief with no meta")
         self.assertEqual(json.loads((folder / "meta.json").read_text()).get("status"), "fail")
         held = [row for row in admission.list_reservations(self.repo) if row.get("job_id") == "next-bug" and row.get("slot_held")]
         self.assertEqual(held, [], "the reservation is dropped")
+        self.assertIn("IndexError", (self.repo / ".rig" / "mcp-errors.log").read_text(), "the traceback is kept for whoever reads it")
 
     def test_continues_job_id_requires_existing_terminal_job(self):
         with self.assertRaisesRegex(worker_launch.LaunchError, "does not exist"):

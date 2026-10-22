@@ -525,7 +525,12 @@ def call_tool(name: str, args: dict, on_tick=None, *, wait_paths: list[Path] | N
     except SystemExit as exc:
         return _err(str(exc) or "rig error")
     except Exception as exc:  # noqa: BLE001 — MCP must not crash the parent
-        return _err(str(exc))
+        import crash_log
+        try:
+            crash_log.record(repo, name, exc)
+        except NameError:  # the failure came before the project was resolved
+            pass
+        return _err(crash_log.describe(exc))
 
 _FRAMING = "lsp"
 _out_lock = threading.Lock()
