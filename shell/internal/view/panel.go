@@ -107,6 +107,8 @@ type ChatStatus struct {
 	Sessions []ChatSession `json:"sessions"`
 	// Warnings are one-line causes of a failing next turn that Rig already knows ("clerk is not signed in · type /mcp login clerk").
 	Warnings []string `json:"warnings"`
+	// Limits are what this assistant cannot do here, or does differently from its own TUI, one line each (scripts/parent_caps.py).
+	Limits []string `json:"limits"`
 }
 
 // ChatSession is one conversation in chat.status: what it was about and when it was last used, for /resume.

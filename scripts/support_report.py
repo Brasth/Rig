@@ -129,6 +129,11 @@ def build(repo) -> str:
     chat = newest_chat(repo)
     if chat:
         errors = tool_errors(chat)
+        try:
+            meta = json.loads(chat.with_suffix(".json").read_text())
+            parts.append(section("how codex ran the newest conversation", str(meta.get("transport") or "codex exec (the plain headless mode)")))
+        except (OSError, ValueError):
+            pass
         parts.append(section(f"tool errors in {chat.name} (newest {TOOL_ERRORS})", "\n".join(errors) or "(none looked like a failure)"))
         parts.append(section("what the parent printed on stderr", tail(chat.with_name(chat.stem + ".parent.log"))))
     else:

@@ -1138,6 +1138,7 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.chatStat = msg.status
 		m.st.ChatSessions = msg.status.Sessions
 		m.st.ChatWarnings = msg.status.Warnings
+		m.st.ChatLimits = msg.status.Limits
 		m.st.ChatParent, m.st.ChatModel, m.st.ChatEffort = msg.status.Parent, msg.status.Model, msg.status.Effort
 		if m.parentName != "" && m.parentName != msg.status.Parent {
 			m.st.ChatParent, m.st.ChatModel, m.st.ChatEffort = m.parentName, "", "" // its model is in its own settings, not read for this one
