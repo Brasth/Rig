@@ -99,3 +99,19 @@ func TestSettingsShowTheShortListFirstAndTheRestOnRequest(t *testing.T) {
 		t.Fatal("/settings keys opens it and shows the rest")
 	}
 }
+
+func TestHelpSaysWhatTheAssistantCannotDoHere(t *testing.T) {
+	st := State{ChatParent: "grok", ChatLimits: []string{"Asks before running a command or editing: grok's headless mode cannot ask", "How full the context is: grok does not report it"}}
+	var got []paletteItem
+	for _, it := range helpItems(st, "") {
+		if strings.HasPrefix(it.Section, "What grok cannot do here") {
+			got = append(got, it)
+		}
+	}
+	if len(got) != 2 || got[0].Label != "Asks before running a command or editing" || !strings.Contains(got[0].Detail, "cannot ask") {
+		t.Fatalf("the gaps are listed in help: %+v", got)
+	}
+	if rows := helpItems(st, "context"); len(rows) != 1 || !strings.Contains(rows[0].Label, "context") {
+		t.Fatalf("they can be searched: %+v", rows)
+	}
+}

@@ -255,11 +255,22 @@ def decode_event(parent: str, event) -> dict:
         kind = event.get("type")
         if kind == "system" and event.get("subtype") == "init":
             out["native"] = str(event.get("session_id") or "")
+        elif kind == "system" and "retry" in str(event.get("subtype") or ""):
+            # the API call failed and claude is trying again: how far along, as the other parents' reconnects say it
+            attempt, most = event.get("attempt"), event.get("max_retries")
+            out["entries"].append({"role": "activity", "text": (f"retrying {attempt}/{most}" if attempt and most else "retrying")
+                                   + " · the request to the model failed"})
+        elif kind == "system" and ("compact" in str(event.get("subtype") or "") or "compact" in str(event.get("status") or "")):
+            done = "boundary" in str(event.get("subtype") or "")
+            out["entries"].append({"role": "activity", "text": compaction_note("compact", not done)})
         elif kind == "stream_event":  # --include-partial-messages: the answer's text as it is written
             inner = event.get("event") if isinstance(event.get("event"), dict) else {}
             delta = inner.get("delta") if isinstance(inner.get("delta"), dict) else {}
+            block = inner.get("content_block") if isinstance(inner.get("content_block"), dict) else {}
             if inner.get("type") == "content_block_delta" and delta.get("type") == "text_delta" and isinstance(delta.get("text"), str):
                 out["entries"].append({"role": "chunk", "text": delta["text"]})
+            elif inner.get("type") == "content_block_start" and block.get("type") in ("thinking", "redacted_thinking"):
+                out["entries"].append({"role": "activity", "text": "thinking…"})
         elif kind == "assistant":
             content = (event.get("message") or {}).get("content")
             for block in content if isinstance(content, list) else []:
@@ -659,7 +670,12 @@ def status(repo) -> dict:
     effort, _ = ui_settings.chosen_effort(repo, parent)
     result = {"enabled": on, "parents": sorted(HEADLESS), "available": available, "sessions": [], "parent": parent,
               "configured": configured, "model": chosen or parent_model(parent), "model_chosen": bool(chosen), "effort": effort,
-              "warnings": []}
+              "warnings": [], "limits": []}
+    try:
+        import parent_caps
+        result["limits"] = parent_caps.limits(parent)
+    except ImportError:
+        pass
     if on:
         try:
             import turn_warnings
@@ -1285,6 +1301,249 @@ def _codex_approval_preview(params: dict) -> tuple[str, dict, str]:
     return "Exec", {"command": text}, text
 
 
+# -- codex through its app-server -------------------------------------------
+# `codex app-server` is the protocol Codex's IDE extensions use: threads, turns and items, each item started, streamed and
+# completed, approvals as requests the client answers, real interrupts. Compared with `codex mcp-server` it names every
+# item with its fields, so nothing is guessed from text. See scripts/codex_appserver.py for the transport.
+
+_REPLY_ERRORS = {"ContextWindowExceeded": "the conversation no longer fits in codex's context: /compact continues it in a fresh one",
+                 "UsageLimitExceeded": "the usage limit for this plan is reached: wait for it to reset, or switch to another assistant",
+                 "HttpConnectionFailed": "could not reach codex's servers: check the connection and send again",
+                 "ResponseStreamConnectionFailed": "the connection to the model dropped and did not come back: send again",
+                 "ResponseStreamDisconnected": "the connection to the model dropped and did not come back: send again"}
+
+
+def _item_text(value) -> str:
+    """The words in an MCP tool result: its text content, else its error message."""
+    if isinstance(value, dict):
+        if isinstance(value.get("content"), list):
+            return "\n".join(str(b.get("text") or "") for b in value["content"] if isinstance(b, dict))
+        return str(value.get("message") or value.get("text") or "")
+    return str(value or "")
+
+
+def _appserver_usage(params: dict) -> dict | None:
+    """Token use from thread/tokenUsage/updated; the payload is not documented, so read what is there and nothing else."""
+    usage = params.get("tokenUsage") if isinstance(params.get("tokenUsage"), dict) else params
+    total = usage.get("total") if isinstance(usage.get("total"), dict) else {}
+    last = usage.get("last") if isinstance(usage.get("last"), dict) else {}
+    def number(row, *names):
+        for name in names:
+            if isinstance(row.get(name), (int, float)):
+                return int(row[name])
+        return 0
+    context = number(last, "inputTokens", "input_tokens") or number(total, "inputTokens", "input_tokens")
+    if not context:
+        return None
+    return {"cost": 0.0, "input": number(total, "inputTokens", "input_tokens") or context, "output": number(total, "outputTokens", "output_tokens"),
+            "context": context, "window": number(usage, "modelContextWindow", "contextWindow")}
+
+
+def _appserver_event(method: str, params: dict) -> dict:
+    """{'entries': [...], 'done': bool, 'error': bool, 'usage': dict | None} for one app-server notification."""
+    out = {"entries": [], "done": False, "error": False, "usage": None}
+    item = params.get("item") if isinstance(params.get("item"), dict) else {}
+    kind = str(item.get("type") or "")
+    if method == "item/agentMessage/delta":
+        text = params.get("delta")
+        if isinstance(text, str) and text:
+            out["entries"].append({"role": "chunk", "text": text})
+    elif method == "item/started":
+        if kind == "commandExecution":
+            out["entries"].append({"role": "tool", "text": _clean("ran " + str(item.get("command") or ""), 200)})
+        elif kind == "fileChange":
+            paths = [str(c.get("path")) for c in item.get("changes", []) if isinstance(c, dict) and c.get("path")]
+            out["entries"].append({"role": "tool", "text": _clean("edited " + ", ".join(paths) if paths else "edited files", 200)})
+        elif kind == "mcpToolCall":
+            out["entries"].append({"role": "tool", "text": _clean(f"{item.get('server', 'mcp')}.{item.get('tool', 'tool')}", 200)})
+        elif kind == "dynamicToolCall":
+            out["entries"].append({"role": "tool", "text": _clean(str(item.get("tool") or "tool"), 200)})
+        elif kind == "webSearch":
+            out["entries"].append({"role": "tool", "text": _clean("search " + str(item.get("query") or ""), 200)})
+        elif kind == "collabToolCall":
+            out["entries"].append({"role": "tool", "text": _clean("helper " + str(item.get("tool") or ""), 200)})
+        elif kind == "reasoning":
+            out["entries"].append({"role": "activity", "text": "thinking…"})
+        elif compaction_note(kind, True):
+            out["entries"].append({"role": "activity", "text": compaction_note(kind, True)})
+    elif method == "item/completed":
+        if kind == "agentMessage" and str(item.get("text") or "").strip():
+            out["entries"].append({"role": "assistant", "text": _clean(item["text"])})
+        elif kind == "plan" and str(item.get("text") or "").strip():
+            out["entries"].append({"role": "assistant", "text": _clean(item["text"])})
+        elif kind == "commandExecution":
+            code = item.get("exitCode")
+            failed = (isinstance(code, int) and code != 0) or item.get("status") in ("failed", "declined")
+            if failed or str(item.get("aggregatedOutput") or "").strip():  # a command that said nothing needs no line
+                out["entries"].append(_result_line(item.get("aggregatedOutput"), failed))
+        elif kind in ("mcpToolCall", "dynamicToolCall"):
+            failed = bool(item.get("error")) or item.get("status") == "failed" or item.get("success") is False
+            text = _item_text(item.get("error") if item.get("error") else item.get("result") or item.get("contentItems"))
+            out["entries"].append(_result_line(text, failed))
+        elif kind == "fileChange" and item.get("status") in ("failed", "declined"):
+            out["entries"].append(_result_line("the edit was not applied", True))
+        elif kind == "contextCompaction":
+            out["entries"].append({"role": "activity", "text": compaction_note(kind, False)})
+        elif kind == "reasoning":
+            out["entries"].append({"role": "activity", "text": ""})
+    elif method == "turn/plan/updated":
+        steps = params.get("plan") if isinstance(params.get("plan"), list) else []
+        if steps:
+            out["entries"].append({"role": "tool", "text": f"plan {len(steps)} steps"})
+    elif method == "thread/tokenUsage/updated":
+        out["usage"] = _appserver_usage(params)
+    elif method == "error":
+        err = params.get("error") if isinstance(params.get("error"), dict) else {}
+        message = str(err.get("message") or params.get("message") or "")
+        info = err.get("codexErrorInfo")
+        name = info if isinstance(info, str) else (next(iter(info), "") if isinstance(info, dict) else "")
+        if params.get("willRetry") or retry_note(message):
+            out["entries"].append({"role": "activity", "text": retry_note(message) or "reconnecting · the connection to the model dropped"})
+        else:
+            out["entries"].append({"role": "error", "text": _clean(_REPLY_ERRORS.get(name) or message or "codex reported an error")})
+            out["error"] = True
+    elif method == "turn/completed":
+        turn = params.get("turn") if isinstance(params.get("turn"), dict) else {}
+        out["done"] = True
+        if turn.get("status") == "failed":
+            err = turn.get("error") if isinstance(turn.get("error"), dict) else {}
+            info = err.get("codexErrorInfo")
+            name = info if isinstance(info, str) else (next(iter(info), "") if isinstance(info, dict) else "")
+            out["error"] = True
+            out["entries"].append({"role": "error", "text": _clean(_REPLY_ERRORS.get(name) or err.get("message") or "the turn failed")})
+    return out
+
+
+def _appserver_approval(method: str, params: dict, meta: dict, folder: Path) -> dict:
+    """The answer to an approval request from codex: asked of the owner through the same ask files as the other parents."""
+    import ask
+    if method == "item/fileChange/requestApproval":
+        paths = str(params.get("grantRoot") or params.get("reason") or "files")
+        tool, inp, preview = "Edit", {"path": paths}, "edit " + paths
+        auto = bool(meta.get("edits")) and not meta.get("plan")  # the edits mode: file changes go through, commands still ask
+    elif method == "item/commandExecution/requestApproval":
+        command = params.get("command")
+        text = " ".join(map(str, command)) if isinstance(command, list) else str(command or params.get("reason") or "")
+        tool, inp, preview, auto = "Exec", {"command": text}, text, False
+    else:
+        tool, inp, preview, auto = "Exec", {"command": str(params.get("reason") or method)}, str(params.get("reason") or method), False
+    if auto:
+        return {"behavior": "allow"}
+    ask.write_ask(folder, tool, inp, str(params.get("itemId") or ""), preview)
+    reply = ask.wait_reply(folder)
+    ask.consume_ask(folder)
+    return reply
+
+
+def run_codex_appserver(repo: Path, session: str, message: str, meta: dict, folder: Path) -> tuple[bool, bool, int]:
+    """One turn through `codex app-server`. Returns (started, error, entries written); not started (it did not start, or
+    refused the thread or the turn before anything was written) means the next way of running codex is used."""
+    import codex_appserver as cas
+    binary = shutil.which("codex")
+    if os.environ.get("RIG_CODEX_APPSERVER") == "0" or not binary:
+        return False, False, 0
+    try:
+        errlog = (chat_dir(repo) / f"{session}.parent.log").open("a")
+    except OSError:
+        errlog = subprocess.DEVNULL
+    try:
+        server = cas.AppServer([binary, "app-server"], repo, {**os.environ, "RIG_PARENT": "codex", "RIG_OWNER_SESSION": session}, errlog)
+    except OSError:
+        return False, False, 0
+    finally:
+        if errlog is not subprocess.DEVNULL:
+            errlog.close()
+    _CHILD.append(server)  # a cancel's SIGTERM reaches terminate(): an interrupt of the turn first
+    try:
+        server.request("initialize", {"clientInfo": {"name": "rig-chat", "title": "Rig", "version": "1"}}, timeout=CODEX_START_SECONDS)
+        server.notify("initialized", {})
+        native = str(meta.get("native") or "")
+        if native:
+            thread = server.request("thread/resume", {"threadId": native}, timeout=CODEX_START_SECONDS)
+        else:
+            start = {"cwd": str(repo)}
+            if meta.get("plan"):
+                start["sandbox"] = "readOnly"
+            if meta.get("model"):
+                start["model"] = meta["model"]
+            thread = server.request("thread/start", start, timeout=CODEX_START_SECONDS)
+        thread_id = str((thread.get("thread") or {}).get("id") or "")
+        if not thread_id:
+            raise cas.AppServerError("no thread id")
+        turn_params = {"threadId": thread_id, "input": [{"type": "text", "text": message}]}
+        if meta.get("model"):
+            turn_params["model"] = meta["model"]
+        if meta.get("effort"):
+            turn_params["effort"] = meta["effort"]
+        turn = server.request("turn/start", turn_params, timeout=CODEX_START_SECONDS)
+    except cas.AppServerError:
+        server.close()
+        return False, False, 0
+    meta["native"] = thread_id
+    server.thread_id = thread_id
+    server.turn_id = str((turn.get("turn") or {}).get("id") or "")
+    written, error, streamed, used = 0, False, "", None
+    try:
+        while True:
+            msg = server.get()
+            if msg is None:
+                if _was_stopped(repo, session):
+                    break
+                error = True
+                append(repo, session, "error", "codex app-server stopped before the turn finished")
+                written += 1
+                break
+            if "method" in msg and "id" in msg:  # a request from codex: an approval, or something this client does not serve
+                method = str(msg["method"])
+                params = msg.get("params") if isinstance(msg.get("params"), dict) else {}
+                if method in ("item/commandExecution/requestApproval", "item/fileChange/requestApproval", "item/permissions/requestApproval"):
+                    reply = _appserver_approval(method, params, meta, folder)
+                    allow = reply.get("behavior") == "allow"
+                    if method == "item/permissions/requestApproval":
+                        server.respond(msg["id"], {"permissions": params.get("permissions") if allow and isinstance(params.get("permissions"), dict) else {}})
+                    else:
+                        server.respond(msg["id"], {"decision": "accept" if allow else "decline"})
+                elif method == "mcpServer/elicitation/request":
+                    server.respond(msg["id"], {"action": "decline", "content": None})
+                else:
+                    server.respond(msg["id"], error="not supported by rig chat")
+                continue
+            if "method" not in msg:
+                continue
+            decoded = _appserver_event(str(msg["method"]), msg.get("params") if isinstance(msg.get("params"), dict) else {})
+            if decoded["usage"]:
+                used = decoded["usage"]
+            for entry in decoded["entries"]:
+                if entry["role"] == "activity":
+                    write_activity(repo, session, entry["text"])
+                    continue
+                write_activity(repo, session, "")
+                if entry["role"] == "chunk":
+                    streamed += entry["text"]
+                    write_partial(repo, session, streamed)
+                    continue
+                if entry["role"] == "assistant":
+                    streamed = ""
+                    write_partial(repo, session, "")
+                if written < MAX_ENTRIES:
+                    append(repo, session, entry["role"], entry["text"])
+                    written += 1
+            error = error or decoded["error"]
+            if decoded["done"]:
+                break
+    finally:
+        write_partial(repo, session, "")
+        write_activity(repo, session, "")
+        server.close()
+    if used and _meta_path(repo, session).exists():  # what the turn cost and how full codex's context is, for /cost and /context
+        fresh = read_meta(repo, session)
+        total = fresh.get("usage") if isinstance(fresh.get("usage"), dict) else {}
+        fresh["usage"] = {"cost": 0.0, "input": int(total.get("input", 0)) + used["input"], "output": int(total.get("output", 0)) + used["output"],
+                          "context": used["context"], "turns": int(total.get("turns", 0)) + 1, "window": used.get("window") or total.get("window") or 0}
+        _write_json(_meta_path(repo, session), fresh)
+    return True, error, written
+
+
 def run_codex_server(repo: Path, session: str, message: str, meta: dict, folder: Path) -> tuple[bool, bool, int]:
     """One turn through `codex mcp-server`. Returns (started, error, entries written); not started means use exec."""
     import ask
@@ -1789,7 +2048,13 @@ def run_turn(repo, session: str) -> int:
         meta["native"] = turn["new_id"]  # grok takes the id we give it, and later turns resume it
     before = _tree(repo)  # what the working tree is before the parent starts, to show what its turn changed
     if parent == "codex" and shutil.which("codex"):
-        started, error, _ = run_codex_server(repo, session, message, meta, folder)
+        started = error = False
+        transport = ""
+        for run_codex in (run_codex_appserver, run_codex_server):  # the richest protocol first; each falls through when it does not start
+            started, error, _ = run_codex(repo, session, message, meta, folder)
+            if started:
+                transport = "app-server" if run_codex is run_codex_appserver else "mcp-server"
+                break
         if started:
             _record_changes(repo, session, before)
             _write_json(folder / "meta.json", {"status": "idle"})
@@ -1800,7 +2065,7 @@ def run_turn(repo, session: str) -> int:
                 return 0
             fresh = read_meta(repo, session) if _meta_path(repo, session).exists() else meta
             fresh.update(native=meta.get("native", ""), state="failed" if error else "idle", runner_pid=0,
-                         note="see the transcript" if error else "", asks=True, model=meta.get("model", ""))
+                         note="see the transcript" if error else "", asks=True, model=meta.get("model", ""), transport=transport)
             if fresh.get("note") == "cancelled":
                 fresh["state"] = "idle"
             if fresh.get("compacting"):

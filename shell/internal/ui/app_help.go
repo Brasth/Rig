@@ -45,6 +45,13 @@ func helpItems(st State, q string) []paletteItem {
 		}
 		out = append(out, paletteItem{r.Section, r.Label, r.How, r.Action})
 	}
+	for _, l := range st.ChatLimits {
+		if q != "" && !strings.Contains(strings.ToLower(l), q) {
+			continue
+		}
+		label, how, _ := strings.Cut(l, ": ")
+		out = append(out, paletteItem{"What " + appParent(st) + " cannot do here", label, how, ""})
+	}
 	if len(out) == 0 {
 		out = append(out, paletteItem{"help", "nothing matches", "try another word, or ? for every key", ""})
 	}

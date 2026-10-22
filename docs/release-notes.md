@@ -7,6 +7,12 @@
 
 
 
+## Codex through its app-server, and a list of what each assistant can do (2026-10-22)
+
+- **Codex runs through `codex app-server`**, the protocol Codex's own IDE extensions use, instead of `codex exec` or `codex mcp-server`. Every item arrives with its fields (commands and their output, file changes, MCP calls and their errors, searches, plans, helpers), the reply streams as deltas, approvals are codex's own requests answered in Rig, and a cancel sends `turn/interrupt` so the turn ends as interrupted and the thread stays valid. Reconnects, compaction and thinking show on the working line, usage and the context window feed `/context` and `/cost`, and a failed turn says why in words (usage limit reached, context full, connection lost). If app-server does not start, or does not know the conversation (one begun under the older server mode), Rig falls through to `codex mcp-server`, then `codex exec`; `RIG_CODEX_APPSERVER=0` turns it off. `rig support` says which transport the newest conversation used. Codex starts one app-server per turn for now; a server kept alive between turns is the next step.
+- **Claude** shows `retrying 2/10`, compaction and thinking on the working line when its stream reports them.
+- **What each assistant can do:** `docs/native-parity.md` lists, for codex, claude, grok, opencode, pi, omp and agy, what you do in the assistant's own TUI and whether rig shell does it the same (yes), differently (partly) or cannot (no, and why). It is generated from `scripts/parent_caps.py`, a test keeps it current, and `/help` lists the current assistant's gaps under "What <assistant> cannot do here". The rows for the assistants other than codex and claude are read from how Rig runs them and are not yet checked against the live CLIs.
+
 ## Pushing works for a new branch, and git failures say what to do (2026-10-22)
 
 - **A branch that was never pushed can be shipped.** Ship used to stop at "has no upstream branch to ship to", which is where every new feature branch starts. Now it counts what no remote branch has yet, offers `publish <branch>`, and pushes with `-u` so the branch is tracked from then on. A pull request from such a branch goes into the remote's own default branch (its HEAD, else main or master). A project with no remote says how to add one (`git remote add origin <url>`); a detached HEAD says to switch to a branch.

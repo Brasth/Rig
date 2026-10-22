@@ -72,7 +72,7 @@ class Base(unittest.TestCase):
         self.bin = self.base / "bin"
         self.record = self.base / "record.jsonl"
         self.env = mock.patch.dict(os.environ, {"PATH": f"{self.bin}{os.pathsep}/usr/bin{os.pathsep}/bin", "STANDIN_RECORD": str(self.record),
-                                                "RIG_EXPERIMENT_CHAT": "1"})
+                                                "RIG_EXPERIMENT_CHAT": "1", "RIG_CODEX_APPSERVER": "0"})  # the older codex paths; app-server has its own tests
         self.env.start()
         for key in ("RIG_JOB_ID", "RIG_JOB_DIR"):
             os.environ.pop(key, None)
@@ -678,6 +678,19 @@ class Turns(Base):
         self.assertNotIn("codex mcp login", second, "told once per native session")
         self.assertNotIn("mcp login", third, "only where it applies")
 
+    def test_claude_retries_compaction_and_thinking_show_as_activity(self):
+        events = [{"type": "system", "subtype": "api_retry", "attempt": 2, "max_retries": 10},
+                  {"type": "system", "subtype": "status", "status": "compacting"},
+                  {"type": "system", "subtype": "compact_boundary"},
+                  {"type": "stream_event", "event": {"type": "content_block_start", "content_block": {"type": "thinking"}}}]
+        texts = [rig_chat.decode_event("claude", e)["entries"][0] for e in events]
+        self.assertTrue(all(t["role"] == "activity" for t in texts), texts)
+        self.assertEqual([t["text"] for t in texts][0], "retrying 2/10 · the request to the model failed")
+        self.assertIn("compacting its context", texts[1]["text"])
+        self.assertEqual(texts[2]["text"], "context compacted")
+        self.assertEqual(texts[3]["text"], "thinking…")
+        self.assertFalse(rig_chat.decode_event("claude", events[0])["error"], "a retry is not a failure")
+
     def test_a_reconnect_and_a_compaction_are_activity_not_the_end_of_the_turn(self):
         note = "Reconnecting... 2/5 (stream disconnected before completion: websocket closed by server before response.completed)"
         for entries, error in ((rig_chat._codex_event({"type": "stream_error", "message": note})[0], False),
@@ -1139,6 +1152,179 @@ class CodexServer(Base):
         texts = [(e["role"], e["text"]) for e in done["entries"]]
         self.assertIn(("system", "denied: npm i -D supertest"), texts)
         self.assertIn(("assistant", "decision was denied"), texts)
+
+
+CODEX_APPSERVER = r'''#!PYTHON
+import json, os, sys, time
+record = os.environ["STANDIN_RECORD"]
+with open(record, "a") as stream:
+    stream.write(json.dumps({"argv": sys.argv[1:], "cwd": os.getcwd()}) + "\n")
+if sys.argv[1:] != ["app-server"]:
+    sys.exit(2)
+def send(obj):
+    print(json.dumps(obj), flush=True)
+def read():
+    line = sys.stdin.readline()
+    return json.loads(line) if line else None
+def log(row):
+    with open(record + ".rpc", "a") as stream:
+        stream.write(json.dumps(row) + "\n")
+mode = os.environ.get("APPSERVER_MODE", "")
+while True:
+    msg = read()
+    if msg is None:
+        break
+    log({"method": msg.get("method"), "params": msg.get("params")})
+    method, rid, params = msg.get("method"), msg.get("id"), msg.get("params") or {}
+    if method == "initialize":
+        if mode == "refuse":
+            send({"id": rid, "error": {"code": -1, "message": "no app-server for you"}})
+        else:
+            send({"id": rid, "result": {"userAgent": "stand-in"}})
+    elif method == "thread/start":
+        send({"id": rid, "result": {"thread": {"id": "thr-1"}}})
+    elif method == "thread/resume":
+        if params["threadId"] != "thr-1":
+            send({"id": rid, "error": {"code": -2, "message": "no such thread"}})
+        else:
+            send({"id": rid, "result": {"thread": {"id": "thr-1"}}})
+    elif method == "turn/start":
+        send({"id": rid, "result": {"turn": {"id": "turn-1", "status": "inProgress"}}})
+        prompt = params["input"][0]["text"]
+        send({"method": "turn/started", "params": {"turn": {"id": "turn-1"}}})
+        send({"method": "error", "params": {"error": {"message": "Reconnecting... 2/5 (stream disconnected)"}, "willRetry": True}})
+        send({"method": "item/started", "params": {"item": {"type": "commandExecution", "id": "i1", "command": "cat a.txt"}}})
+        decision = "none"
+        if "needs approval" in prompt:
+            send({"id": "a1", "method": "item/commandExecution/requestApproval", "params": {"itemId": "i1", "threadId": "thr-1", "turnId": "turn-1",
+                                                                                              "command": "npm i -D supertest", "cwd": "/"}})
+            answer = read()
+            decision = answer["result"]["decision"]
+        if "STALL" in prompt:
+            continue  # the turn never finishes by itself: an interrupt is what ends it
+        send({"method": "item/completed", "params": {"item": {"type": "commandExecution", "id": "i1", "command": "cat a.txt",
+                                                              "aggregatedOutput": "alpha\nbeta\n", "exitCode": 0, "status": "completed"}}})
+        send({"method": "item/started", "params": {"item": {"type": "mcpToolCall", "id": "i2", "server": "asana", "tool": "get_task"}}})
+        send({"method": "item/completed", "params": {"item": {"type": "mcpToolCall", "id": "i2", "server": "asana", "tool": "get_task",
+                                                              "status": "failed", "error": {"message": "Not Authorized"}}}})
+        send({"method": "item/agentMessage/delta", "params": {"itemId": "i3", "delta": "decision was "}})
+        send({"method": "item/completed", "params": {"item": {"type": "agentMessage", "id": "i3", "text": "decision was " + decision}}})
+        send({"method": "thread/tokenUsage/updated", "params": {"threadId": "thr-1", "tokenUsage": {
+            "total": {"inputTokens": 1200, "outputTokens": 40}, "last": {"inputTokens": 1200}, "modelContextWindow": 200000}}})
+        send({"method": "turn/completed", "params": {"turn": {"id": "turn-1", "status": "completed"}}})
+    elif method == "turn/interrupt":
+        send({"id": rid, "result": {}})
+        send({"method": "turn/completed", "params": {"turn": {"id": "turn-1", "status": "interrupted"}}})
+'''
+
+
+class CodexAppServer(Base):
+    def setUp(self):
+        super().setUp()
+        os.environ["RIG_CODEX_APPSERVER"] = "1"  # setUp's env patch restores it afterwards
+        self.bin.mkdir(parents=True, exist_ok=True)
+        path = self.bin / "codex"
+        path.write_text(CODEX_APPSERVER.replace("#!PYTHON", "#!" + sys.executable))
+        path.chmod(0o755)
+
+    def rpc(self):
+        path = Path(str(self.record) + ".rpc")
+        return [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
+
+    def test_a_turn_runs_through_the_app_server_and_every_item_reaches_the_conversation(self):
+        started = rig_chat.send(self.repo, "what is in a.txt?", parent="codex")
+        view = self.wait_idle(started["session"])
+        self.assertEqual([(e["role"], e["text"]) for e in view["entries"]],
+                         [("user", "what is in a.txt?"), ("tool", "ran cat a.txt"), ("result", "alpha  (+1 lines)"), ("tool", "asana.get_task"),
+                          ("result-error", "Not Authorized"), ("assistant", "decision was none")])
+        self.assertEqual([c["argv"] for c in self.calls(server_attempts=True)], [["app-server"]], "the richest protocol, and nothing else needed")
+        methods = [r["method"] for r in self.rpc()]
+        self.assertEqual(methods, ["initialize", "initialized", "thread/start", "turn/start"])
+        start = self.rpc()[2]["params"]
+        self.assertEqual(start["cwd"], str(self.repo))
+        self.assertTrue(view["asks"])
+        meta = rig_chat.read_meta(self.repo, started["session"])
+        self.assertEqual((meta["native"], meta["transport"]), ("thr-1", "app-server"), "the support report says how codex ran")
+        self.assertEqual((meta["usage"]["context"], meta["usage"]["window"], meta["usage"]["output"]), (1200, 200000, 40), "/context and /cost work for codex")
+
+    def test_a_second_turn_resumes_the_thread(self):
+        started = rig_chat.send(self.repo, "first", parent="codex")
+        self.wait_idle(started["session"])
+        rig_chat.send(self.repo, "second", started["session"])
+        self.wait_idle(started["session"])
+        resumes = [r for r in self.rpc() if r["method"] == "thread/resume"]
+        self.assertEqual([r["params"] for r in resumes], [{"threadId": "thr-1"}])
+        turns = [r["params"]["input"][0]["text"] for r in self.rpc() if r["method"] == "turn/start"]
+        self.assertTrue(turns[0].endswith("first") and turns[1].endswith("second"), turns)
+
+    def test_model_and_effort_go_with_the_turn_and_plan_mode_is_read_only(self):
+        import ui_settings
+        with mock.patch.dict(os.environ, {"RIG_HOME": str(self.base / "rig-home")}):
+            ui_settings.save(self.repo, "parent_model.codex", "gpt-x", "all")
+            ui_settings.save(self.repo, "parent_effort.codex", "high", "all")
+            started = rig_chat.send(self.repo, "hi", parent="codex")
+            self.wait_idle(started["session"])
+        turn = [r["params"] for r in self.rpc() if r["method"] == "turn/start"][0]
+        self.assertEqual((turn["model"], turn["effort"]), ("gpt-x", "high"))
+        plan = rig_chat.new_session(self.repo, "codex")["id"]
+        meta = rig_chat.read_meta(self.repo, plan)
+        meta["plan"] = True
+        rig_chat._write_json(rig_chat._meta_path(self.repo, plan), meta)
+        rig_chat.send(self.repo, "just plan", plan)
+        self.wait_idle(plan)
+        starts = [r["params"] for r in self.rpc() if r["method"] == "thread/start"]
+        self.assertNotIn("sandbox", starts[0])
+        self.assertEqual(starts[1]["sandbox"], "readOnly", "plan mode: codex may read and change nothing")
+
+    def test_codexs_approval_waits_in_the_chat_and_the_answer_reaches_it(self):
+        started = rig_chat.send(self.repo, "this needs approval", parent="codex")
+        deadline = time.monotonic() + 20
+        view = rig_chat.transcript(self.repo, started["session"])
+        while not view["ask"] and time.monotonic() < deadline:
+            time.sleep(0.05)
+            view = rig_chat.transcript(self.repo, started["session"])
+        self.assertEqual((view["ask"]["tool"], view["ask"]["preview"]), ("Exec", "npm i -D supertest"))
+        rig_chat.answer(self.repo, started["session"], view["ask"]["id"], "deny")
+        done = self.wait_idle(started["session"])
+        self.assertIn(("assistant", "decision was decline"), [(e["role"], e["text"]) for e in done["entries"]])
+
+    def test_a_cancel_interrupts_the_turn_instead_of_killing_codex(self):
+        started = rig_chat.send(self.repo, "please STALL", parent="codex")
+        deadline = time.monotonic() + 20
+        while time.monotonic() < deadline and not any(r["method"] == "turn/start" for r in self.rpc()):
+            time.sleep(0.05)
+        time.sleep(0.5)
+        rig_chat.cancel(self.repo, started["session"])
+        self.wait_idle(started["session"])
+        self.assertIn("turn/interrupt", [r["method"] for r in self.rpc()])
+
+    def test_when_the_app_server_refuses_the_older_paths_take_over(self):
+        os.environ["APPSERVER_MODE"] = "refuse"
+        self.addCleanup(os.environ.pop, "APPSERVER_MODE", None)
+        started = rig_chat.send(self.repo, "hi", parent="codex")
+        self.wait_idle(started["session"])
+        self.assertEqual([c["argv"][:1] for c in self.calls(server_attempts=True)], [["app-server"], ["mcp-server"], ["exec"]])
+
+    def test_a_thread_the_app_server_does_not_know_falls_back_before_anything_is_written(self):
+        session = rig_chat.new_session(self.repo, "codex")["id"]
+        meta = rig_chat.read_meta(self.repo, session)
+        meta["native"] = "conv-from-the-older-server"
+        rig_chat._write_json(rig_chat._meta_path(self.repo, session), meta)
+        rig_chat.send(self.repo, "hi", session)
+        self.wait_idle(session)
+        self.assertEqual([c["argv"][:1] for c in self.calls(server_attempts=True)][:2], [["app-server"], ["mcp-server"]])
+
+    def test_the_decoder_names_failures_and_retries_in_words(self):
+        retry = rig_chat._appserver_event("error", {"error": {"message": "Reconnecting... 3/5 (x)"}, "willRetry": True})
+        self.assertEqual((retry["entries"][0]["role"], retry["error"]), ("activity", False))
+        limit = rig_chat._appserver_event("turn/completed", {"turn": {"status": "failed", "error": {"message": "x", "codexErrorInfo": "UsageLimitExceeded"}}})
+        self.assertTrue(limit["done"] and limit["error"])
+        self.assertIn("usage limit", limit["entries"][0]["text"])
+        full = rig_chat._appserver_event("error", {"error": {"message": "x", "codexErrorInfo": {"ContextWindowExceeded": {}}}})
+        self.assertIn("/compact", full["entries"][0]["text"])
+        compacting = rig_chat._appserver_event("item/started", {"item": {"type": "contextCompaction"}})
+        self.assertIn("compacting its context", compacting["entries"][0]["text"])
+        self.assertEqual(rig_chat._appserver_event("turn/completed", {"turn": {"status": "interrupted"}}), {"entries": [], "done": True, "error": False, "usage": None})
 
 
 class NoParentSet(Base):
