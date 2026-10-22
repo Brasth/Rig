@@ -117,6 +117,52 @@ type ChatSession struct {
 	Updated float64 `json:"updated"` // when it was last used, as unix seconds
 }
 
+// DoctorFinding is one thing shell.doctor found wrong: what, why, and the safe fix Rig can run (empty when it is for
+// the owner to do).
+type DoctorFinding struct {
+	ID       string `json:"id"`
+	Level    string `json:"level"` // problem, warning or note
+	Title    string `json:"title"`
+	Detail   string `json:"detail"`
+	Fix      string `json:"fix"`
+	FixLabel string `json:"fix_label"`
+}
+
+// ShellDoctor is the shell.doctor result.
+type ShellDoctor struct {
+	Findings []DoctorFinding `json:"findings"`
+	Problems int             `json:"problems"`
+	Warnings int             `json:"warnings"`
+}
+
+// SelfTestCheck is one check of a parent in the self-test: waiting, running, pass, warn, fail or skip.
+type SelfTestCheck struct {
+	ID      string  `json:"id"`
+	Label   string  `json:"label"`
+	Status  string  `json:"status"`
+	Detail  string  `json:"detail"`
+	Seconds float64 `json:"seconds"`
+}
+
+// SelfTestParent is the checks of one installed parent.
+type SelfTestParent struct {
+	Name   string          `json:"name"`
+	Checks []SelfTestCheck `json:"checks"`
+}
+
+// SelfTest is the shell.selftest_status result: the report as far as it has got.
+type SelfTest struct {
+	State   string           `json:"state"` // none, running, done or stopped
+	Running bool             `json:"running"`
+	Parents []SelfTestParent `json:"parents"`
+}
+
+// SelfTestStarted is the shell.selftest result.
+type SelfTestStarted struct {
+	Started bool   `json:"started"`
+	Reason  string `json:"reason"`
+}
+
 // ChatHit is a conversation with a message that matches a search (chat.search): who said it and the words around it.
 type ChatHit struct {
 	Session string  `json:"session"`

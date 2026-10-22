@@ -101,6 +101,10 @@ type AppState struct {
 	Wrap                 bool           // ⌥z: long lines wrap while reading
 	Recent               []string       // the files opened lately, newest first, for ⌃p
 	SymIndex             *symIndex      // every symbol of the repository, for # in the palette
+	SelfTest             *view.SelfTest // /selftest: the report as far as it has got
+	SelfTestE            string
+	Findings             *view.ShellDoctor // /doctor: what shell.doctor found, nil while it is being asked
+	FindingsE            string
 	Found                []view.ChatHit // /resume: the conversations with a message that matches what was typed (FoundQ)
 	FoundQ               string
 	Tasks                []taskItem  // the repository's scripts and targets, for ⌃k › run a task
@@ -151,9 +155,11 @@ type Palette struct {
 	Resume bool // /resume: the conversations of this repository, to open one again
 	Fork   bool // /fork: the turns of this conversation, each to branch from
 	// Running is /running: the parent's tool call, the helpers at work (Jobs, as they were when it opened), the terminal.
-	Running bool
-	Jobs    []view.Row
-	Rewind  bool // /rewind: the turns that changed files, each to put back (RewindTurn: the one chosen, whose files are listed)
+	SelfTest bool // /selftest: does each installed parent work through Rig, flag by flag
+	Doctor   bool // /doctor: what is wrong with the project, each with its fix
+	Running  bool
+	Jobs     []view.Row
+	Rewind   bool // /rewind: the turns that changed files, each to put back (RewindTurn: the one chosen, whose files are listed)
 	// RewindTurn and RewindPlan are the second step: the chosen turn and what putting it back would change.
 	RewindTurn int
 	RewindPlan *view.ChatRewound
@@ -759,7 +765,13 @@ func entryLines(st State, entries []view.ChatEntry, cw int) []string {
 		several = several || e.Role == "switch"
 	}
 	last := ""
-	for _, e := range entries {
+	lastErr := -1
+	for i, e := range entries {
+		if e.Role == "error" {
+			lastErr = i
+		}
+	}
+	for i, e := range entries {
 		role := e.Role
 		if role == "tool" || role == "result" || role == "result-error" || role == "diff" {
 			role = last // a tool call and its answer do not end the parent's answer
@@ -807,6 +819,9 @@ func entryLines(st State, entries []view.ChatEntry, cw int) []string {
 		case "error":
 			for _, l := range wrap(e.Text, cw-2, "") {
 				lines = append(lines, st.paint(colAmber, "! "+l))
+			}
+			if i == lastErr {
+				lines = append(lines, st.faint("  /doctor shows what is wrong with the project and fixes what it can"))
 			}
 		default:
 			for _, l := range wrap(clean(e.Text), cw-4, "") {
@@ -1234,6 +1249,12 @@ func paletteItems(st State) []paletteItem {
 	if st.App.Palette.Running {
 		return runningItems(st, q)
 	}
+	if st.App.Palette.Doctor {
+		return doctorItems(st, q)
+	}
+	if st.App.Palette.SelfTest {
+		return selftestItems(st, q)
+	}
 	if st.App.Palette.Symbols {
 		return symbolItems(st, q)
 	}
@@ -1359,6 +1380,8 @@ var PaletteCommands = [][3]string{
 	{"rewind files", "put files back as they were before a turn (/rewind)", "rewind"},
 	{"search the code", "text in every file (⌃f)", "search"},
 	{"find references", "every use of the name at the cursor (F7)", "references"},
+	{"test every parent (selftest)", "tiny real turns per installed parent: answer, reasoning level, model, plan, auto-edit, stop (/selftest)", "selftest"},
+	{"what is wrong (doctor)", "problems with this project in plain words, with the fix for each Rig can run (/doctor)", "doctor"},
 	{"what is running", "the parent's tool call, the helpers at work, the terminal (/running)", "running"},
 	{"run a task", "a script, make or just target, or the tests, in the terminal", "tasks"},
 	{"run the test at the cursor", "go, pytest, jest, vitest or cargo (F9)", "test"},
@@ -1386,6 +1409,12 @@ func paletteBox(v *view.View, st State, pw int) []string {
 		}
 		if st.App.Palette.Effort {
 			text = "  " + st.faint("›") + " ▏" + st.faint("how much "+appParent(st)+" reasons: low, medium, high…")
+		}
+		if st.App.Palette.SelfTest {
+			text = "  " + st.faint("✓") + " ▏" + st.faint("does each installed parent work through Rig? ⏎ on the first row runs the tests")
+		}
+		if st.App.Palette.Doctor {
+			text = "  " + st.faint("✚") + " ▏" + st.faint("what is wrong with this project: ⏎ fixes it where Rig can, else says what to do")
 		}
 		if st.App.Palette.Running {
 			text = "  " + st.faint("⟳") + " ▏" + st.faint("what is running: ⏎ goes to it, x stops it")

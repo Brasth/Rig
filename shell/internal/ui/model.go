@@ -37,6 +37,10 @@ type Source interface {
 	ChatTranscript(session string, tail int, timeout time.Duration) (*view.ChatTranscript, error)
 	ChatSend(message, session, parent string, timeout time.Duration) (*view.ChatStarted, error)
 	ChatCancel(session string, timeout time.Duration) error
+	SelfTestStart(parents []string, timeout time.Duration) (*view.SelfTestStarted, error)
+	SelfTestStatus(timeout time.Duration) (*view.SelfTest, error)
+	ShellDoctor(timeout time.Duration) (*view.ShellDoctor, error)
+	ShellFix(fix string, timeout time.Duration) (string, error)
 	ChatSteer(session, message string, timeout time.Duration) (*view.ChatStarted, error)
 	ChatSearch(query string, timeout time.Duration) ([]view.ChatHit, error)
 	ChatFork(session string, turn int, timeout time.Duration) (*view.ChatForked, error)
@@ -213,56 +217,57 @@ type Model struct {
 	chatID     string // the session the Chat tab follows; empty until one exists
 	inputFor   string // "chat" while the input line is a chat message, else enqueue
 	// exec hands the terminal to a command and returns when it exits; tests replace it.
-	exec        func(argv []string, done func(error) tea.Msg) tea.Cmd
-	lastOK      time.Time
-	now         func() time.Time
-	newKey      func() string
-	selID       map[string]string
-	draftKey    string
-	pendingX    string // method for a confirmed stop: job.cancel or queue.cancel
-	pendingI    string // id for a confirmed stop
-	pickerSeen  bool   // the picker opened by itself once, for a project with no parent
-	chatAdopted bool   // a conversation was picked up, or one was left on purpose: none is picked up again
-	searching   bool   // a /resume message search is out; the next waits for it
-	framed      bool   // the window has room for the mockup's border around the board
-	winW, winH  int    // the window; the app uses all of it
-	dfBusy      bool
-	dfLast      time.Time
-	lastAsk     string // the request the bell last rang for
-	tdLast      time.Time
-	ringer      func()                   // rings the terminal bell; tests replace it
-	notifier    func(title, text string) // a desktop notice through the terminal (OSC 9 and 777); tests replace it
-	splashFrom  time.Time                // when the splash began
-	seenApplied map[string]bool          // the applied work done today already known, so only new applies notify
-	seenJobs    map[string]bool
-	themeFixed  bool // rig shell --theme chose the theme for this board; the saved one is not loaded
-	messaging   bool // m was pressed under a request: a and d type again until the message is sent
-	spinning    bool // the spinner's tick is scheduled
-	chatStat    *view.ChatStatus
-	cmdsFor     string    // the parent whose skills and commands the / menu has
-	modelsAt    time.Time // when the parent's models were last listed
-	edited      string    // the box as the editor last left it (app_edit.go)
-	history     []string  // what was sent from the box, oldest first, for ↑
-	histAt      int       // the message ↑ brought back; -1 while typing
-	histDraft   string    // what was being typed before ↑
-	histFor     string    // the conversation history was seeded from
-	zones       []hitZone // where the last frame's clickable places are (mouse.go)
-	plain       []string  // the last frame's text, for copying a selection
-	press, sel  *textSel  // where the button went down, and the text dragged over since
-	clip        string    // what the code editor copied or cut, for ⌃v
-	codeDrag    bool      // the button went down in a file being edited: dragging selects
-	boxDrag     bool      // the button went down in the reply box: dragging selects its text
-	boxFrom     int       // where in the box's text it went down
-	clickAt     time.Time // the last press, for a double click
-	clickN      int       // presses in a row at one place: 2 a double click, 3 a triple one
-	jumpBack    []jumpTo  // where go to definition came from, for ⌃t
-	clicks      int
-	clickX      int
-	clickY      int
-	hoverX      int    // the pointer, for the zone drawn underlined
-	hoverKey    string // the hover lookup on its way: name@x,y
-	probLast    time.Time
-	hoverY      int
+	exec            func(argv []string, done func(error) tea.Msg) tea.Cmd
+	lastOK          time.Time
+	now             func() time.Time
+	newKey          func() string
+	selID           map[string]string
+	draftKey        string
+	pendingX        string // method for a confirmed stop: job.cancel or queue.cancel
+	pendingI        string // id for a confirmed stop
+	pickerSeen      bool   // the picker opened by itself once, for a project with no parent
+	chatAdopted     bool   // a conversation was picked up, or one was left on purpose: none is picked up again
+	searching       bool   // a /resume message search is out; the next waits for it
+	framed          bool   // the window has room for the mockup's border around the board
+	winW, winH      int    // the window; the app uses all of it
+	dfBusy          bool
+	dfLast          time.Time
+	lastAsk         string // the request the bell last rang for
+	tdLast          time.Time
+	ringer          func()                   // rings the terminal bell; tests replace it
+	notifier        func(title, text string) // a desktop notice through the terminal (OSC 9 and 777); tests replace it
+	splashFrom      time.Time                // when the splash began
+	seenApplied     map[string]bool          // the applied work done today already known, so only new applies notify
+	seenJobs        map[string]bool
+	themeFixed      bool // rig shell --theme chose the theme for this board; the saved one is not loaded
+	messaging       bool // m was pressed under a request: a and d type again until the message is sent
+	selftestTicking bool // a /selftest refresh is waiting on its timer
+	spinning        bool // the spinner's tick is scheduled
+	chatStat        *view.ChatStatus
+	cmdsFor         string    // the parent whose skills and commands the / menu has
+	modelsAt        time.Time // when the parent's models were last listed
+	edited          string    // the box as the editor last left it (app_edit.go)
+	history         []string  // what was sent from the box, oldest first, for ↑
+	histAt          int       // the message ↑ brought back; -1 while typing
+	histDraft       string    // what was being typed before ↑
+	histFor         string    // the conversation history was seeded from
+	zones           []hitZone // where the last frame's clickable places are (mouse.go)
+	plain           []string  // the last frame's text, for copying a selection
+	press, sel      *textSel  // where the button went down, and the text dragged over since
+	clip            string    // what the code editor copied or cut, for ⌃v
+	codeDrag        bool      // the button went down in a file being edited: dragging selects
+	boxDrag         bool      // the button went down in the reply box: dragging selects its text
+	boxFrom         int       // where in the box's text it went down
+	clickAt         time.Time // the last press, for a double click
+	clickN          int       // presses in a row at one place: 2 a double click, 3 a triple one
+	jumpBack        []jumpTo  // where go to definition came from, for ⌃t
+	clicks          int
+	clickX          int
+	clickY          int
+	hoverX          int    // the pointer, for the zone drawn underlined
+	hoverKey        string // the hover lookup on its way: name@x,y
+	probLast        time.Time
+	hoverY          int
 }
 
 // NewModel returns a model that polls src.
@@ -585,6 +590,22 @@ func (m *Model) runSlash(text string) (tea.Cmd, bool) {
 			return nil, true
 		}
 		return m.openNotes(), true
+	case "/selftest":
+		clear()
+		m.st.Mode, m.st.InputLabel, m.inputFor = ModeNormal, "", ""
+		if !m.appOn() {
+			m.st.Message = "/selftest is in the app: rig shell"
+			return nil, true
+		}
+		return m.openSelftest(), true
+	case "/doctor":
+		clear()
+		m.st.Mode, m.st.InputLabel, m.inputFor = ModeNormal, "", ""
+		if !m.appOn() {
+			m.st.Message = "/doctor is in the app: rig shell"
+			return nil, true
+		}
+		return m.openDoctor(), true
 	case "/running":
 		clear()
 		m.st.Mode, m.st.InputLabel, m.inputFor = ModeNormal, "", ""
@@ -1352,6 +1373,16 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.chLast = time.Time{}
 		return m, m.fetchChat(true)
+	case selftestMsg:
+		return m, m.onSelftest(msg)
+	case selftestTickMsg:
+		return m, m.onSelftestTick()
+	case selftestStartedMsg:
+		return m, m.onSelftestStarted(msg)
+	case doctorMsg:
+		return m, m.onDoctor(msg)
+	case doctorFixedMsg:
+		return m, m.onDoctorFixed(msg)
 	case chatFoundMsg:
 		return m, m.onChatFound(msg)
 	case forkedMsg:

@@ -298,6 +298,47 @@ func (c *Client) ChatFork(session string, turn int, timeout time.Duration) (*vie
 	return &out, nil
 }
 
+// SelfTestStart starts the self-test in the background (parents empty: every installed one).
+func (c *Client) SelfTestStart(parents []string, timeout time.Duration) (*view.SelfTestStarted, error) {
+	var out view.SelfTestStarted
+	if parents == nil {
+		parents = []string{}
+	}
+	if err := c.Call("shell.selftest", map[string]any{"parents": parents}, timeout, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// SelfTestStatus is the self-test's report as far as it has got.
+func (c *Client) SelfTestStatus(timeout time.Duration) (*view.SelfTest, error) {
+	var out view.SelfTest
+	if err := c.Call("shell.selftest_status", map[string]any{}, timeout, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// ShellDoctor lists what is wrong with the project, in plain words, with the safe fix for each that has one.
+func (c *Client) ShellDoctor(timeout time.Duration) (*view.ShellDoctor, error) {
+	var out view.ShellDoctor
+	if err := c.Call("shell.doctor", map[string]any{}, timeout, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// ShellFix runs one fix a finding named and says what it did.
+func (c *Client) ShellFix(fix string, timeout time.Duration) (string, error) {
+	var out struct {
+		Done string `json:"done"`
+	}
+	if err := c.Call("shell.fix", map[string]any{"fix": fix}, timeout, &out); err != nil {
+		return "", err
+	}
+	return out.Done, nil
+}
+
 // ChatSteer interrupts a session's running turn with a message the parent goes on from (a plain send when idle).
 func (c *Client) ChatSteer(session, message string, timeout time.Duration) (*view.ChatStarted, error) {
 	var out view.ChatStarted

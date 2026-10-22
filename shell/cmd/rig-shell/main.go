@@ -76,6 +76,17 @@ func (e *ensuringSource) revive() {
 	_ = api.Ensure(e.repo, e.rigBin, 5*time.Second)
 }
 
+// retrying runs a call, and when the server was not running (the connection was refused, so the request never arrived)
+// starts it and runs the call once more.
+func retrying[T any](e *ensuringSource, call func() (T, error)) (T, error) {
+	out, err := call()
+	if ui.IsNotRunning(err) {
+		e.revive()
+		return call()
+	}
+	return out, err
+}
+
 func (e *ensuringSource) Snapshot(start, rows int, timeout time.Duration) (*view.Snapshot, error) {
 	snap, err := e.client.Snapshot(start, rows, timeout)
 	if ui.IsNotRunning(err) {
@@ -126,39 +137,52 @@ func (e *ensuringSource) Shell(id string, timeout time.Duration) (*view.ShellPla
 }
 
 func (e *ensuringSource) ChatStatus(timeout time.Duration) (*view.ChatStatus, error) {
-	return e.client.ChatStatus(timeout)
+	return retrying(e, func() (*view.ChatStatus, error) { return e.client.ChatStatus(timeout) })
 }
 
 func (e *ensuringSource) ChatCommands(parent string, timeout time.Duration) (*view.ParentCommands, error) {
-	return e.client.ChatCommands(parent, timeout)
+	return retrying(e, func() (*view.ParentCommands, error) { return e.client.ChatCommands(parent, timeout) })
 }
 
 func (e *ensuringSource) ChatModels(parent string, timeout time.Duration) (*view.ParentModels, error) {
-	return e.client.ChatModels(parent, timeout)
+	return retrying(e, func() (*view.ParentModels, error) { return e.client.ChatModels(parent, timeout) })
 }
 
 func (e *ensuringSource) ChatTranscript(session string, tail int, timeout time.Duration) (*view.ChatTranscript, error) {
-	return e.client.ChatTranscript(session, tail, timeout)
+	return retrying(e, func() (*view.ChatTranscript, error) { return e.client.ChatTranscript(session, tail, timeout) })
 }
 
 func (e *ensuringSource) ChatSend(message, session, parent string, timeout time.Duration) (*view.ChatStarted, error) {
-	return e.client.ChatSend(message, session, parent, timeout)
+	return retrying(e, func() (*view.ChatStarted, error) { return e.client.ChatSend(message, session, parent, timeout) })
 }
 
+func (e *ensuringSource) SelfTestStart(parents []string, timeout time.Duration) (*view.SelfTestStarted, error) {
+	return retrying(e, func() (*view.SelfTestStarted, error) { return e.client.SelfTestStart(parents, timeout) })
+}
+func (e *ensuringSource) SelfTestStatus(timeout time.Duration) (*view.SelfTest, error) {
+	return retrying(e, func() (*view.SelfTest, error) { return e.client.SelfTestStatus(timeout) })
+}
+func (e *ensuringSource) ShellDoctor(timeout time.Duration) (*view.ShellDoctor, error) {
+	return retrying(e, func() (*view.ShellDoctor, error) { return e.client.ShellDoctor(timeout) })
+}
+func (e *ensuringSource) ShellFix(fix string, timeout time.Duration) (string, error) {
+	return retrying(e, func() (string, error) { return e.client.ShellFix(fix, timeout) })
+}
 func (e *ensuringSource) ChatSteer(session, message string, timeout time.Duration) (*view.ChatStarted, error) {
-	return e.client.ChatSteer(session, message, timeout)
+	return retrying(e, func() (*view.ChatStarted, error) { return e.client.ChatSteer(session, message, timeout) })
 }
 func (e *ensuringSource) ChatSearch(query string, timeout time.Duration) ([]view.ChatHit, error) {
-	return e.client.ChatSearch(query, timeout)
+	return retrying(e, func() ([]view.ChatHit, error) { return e.client.ChatSearch(query, timeout) })
 }
 func (e *ensuringSource) ChatFork(session string, turn int, timeout time.Duration) (*view.ChatForked, error) {
-	return e.client.ChatFork(session, turn, timeout)
+	return retrying(e, func() (*view.ChatForked, error) { return e.client.ChatFork(session, turn, timeout) })
 }
 func (e *ensuringSource) ChatRewind(session string, turn int, path string, dry, undo bool, timeout time.Duration) (*view.ChatRewound, error) {
-	return e.client.ChatRewind(session, turn, path, dry, undo, timeout)
+	return retrying(e, func() (*view.ChatRewound, error) { return e.client.ChatRewind(session, turn, path, dry, undo, timeout) })
 }
 func (e *ensuringSource) ChatCancel(session string, timeout time.Duration) error {
-	return e.client.ChatCancel(session, timeout)
+	_, err := retrying(e, func() (struct{}, error) { return struct{}{}, e.client.ChatCancel(session, timeout) })
+	return err
 }
 
 func (e *ensuringSource) JobDiff(id string, timeout time.Duration) (*view.JobDiff, error) {

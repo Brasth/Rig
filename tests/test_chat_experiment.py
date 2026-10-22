@@ -821,6 +821,25 @@ class Turns(Base):
         self.wait_idle(session)
         self.assertNotIn("interrupted", self.calls()[-1]["argv"][-1])
 
+    def test_a_parent_that_ignores_sigterm_is_killed_after_a_stop(self):
+        stand_in(self.bin, "claude", CLAUDE_STREAM, hang_child=True, sleep=300)
+        script = self.bin / "claude"
+        script.write_text(script.read_text().replace("import json, os, subprocess, sys, time\n",
+                                                       "import json, os, subprocess, sys, time, signal\nsignal.signal(signal.SIGTERM, signal.SIG_IGN)\n", 1))
+        started = rig_chat.send(self.repo, "long job")
+        pids = Path(str(self.record) + ".pids")
+        deadline = time.monotonic() + 20
+        while time.monotonic() < deadline and not pids.exists():
+            time.sleep(0.05)
+        agent, child = (int(x) for x in pids.read_text().split())
+        with mock.patch.object(rig_chat, "KILL_AFTER", 0.5):
+            rig_chat.cancel(self.repo, started["session"])
+        deadline = time.monotonic() + 8
+        while time.monotonic() < deadline and (rig_chat._alive(agent) or rig_chat._alive(child)):
+            time.sleep(0.1)
+        for pid in (agent, child):
+            self.assertFalse(rig_chat._alive(pid), f"{pid} ignored the stop and was not killed")
+
     def test_a_dead_runner_is_reported_failed_not_running_forever(self):
         stand_in(self.bin, "claude", CLAUDE_STREAM, sleep=300)
         started = rig_chat.send(self.repo, "x")

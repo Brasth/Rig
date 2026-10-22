@@ -69,6 +69,14 @@ type fakeSource struct {
 	chatAnswerErr   error
 	chatCancelled   []string
 	steered         []string
+	selftestStarts  []string
+	selftestPolls   int
+	selftest        *view.SelfTest
+	doctors         int
+	doctor          *view.ShellDoctor
+	doctorErr       error
+	fixes           []string
+	fixErr          error
 	searches        []string
 	hits            []view.ChatHit
 	forks           []string
@@ -202,6 +210,31 @@ func (f *fakeSource) ChatSetParent(name string, _ time.Duration) error {
 func (f *fakeSource) ChatCancel(session string, _ time.Duration) error {
 	f.chatCancelled = append(f.chatCancelled, session)
 	return nil
+}
+func (f *fakeSource) SelfTestStart(parents []string, _ time.Duration) (*view.SelfTestStarted, error) {
+	f.selftestStarts = append(f.selftestStarts, strings.Join(parents, ","))
+	return &view.SelfTestStarted{Started: true}, nil
+}
+func (f *fakeSource) SelfTestStatus(_ time.Duration) (*view.SelfTest, error) {
+	f.selftestPolls++
+	if f.selftest == nil {
+		return &view.SelfTest{State: "none"}, nil
+	}
+	return f.selftest, nil
+}
+func (f *fakeSource) ShellDoctor(_ time.Duration) (*view.ShellDoctor, error) {
+	f.doctors++
+	if f.doctorErr != nil {
+		return nil, f.doctorErr
+	}
+	return f.doctor, nil
+}
+func (f *fakeSource) ShellFix(fix string, _ time.Duration) (string, error) {
+	f.fixes = append(f.fixes, fix)
+	if f.fixErr != nil {
+		return "", f.fixErr
+	}
+	return "done: " + fix, nil
 }
 func (f *fakeSource) ChatSteer(session, message string, _ time.Duration) (*view.ChatStarted, error) {
 	f.steered = append(f.steered, message)
