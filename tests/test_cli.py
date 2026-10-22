@@ -64,6 +64,71 @@ class ShellAliasesCli(unittest.TestCase):
             self.assertEqual((done.returncode, done.stdout), (0, want.stdout), done.stderr)
 
 
+class ShellOffersToSetUp(unittest.TestCase):
+    """rig shell in a project Rig was never set up in asks once, on a terminal, and sets it up only on a yes."""
+
+    def setUp(self):
+        self.td = tempfile.TemporaryDirectory()
+        self.addCleanup(self.td.cleanup)
+        self.repo = Path(self.td.name) / "repo"
+        (self.repo / ".git").mkdir(parents=True)
+
+    def on_a_terminal(self, answer: str | None, *args: str) -> tuple[int, str]:
+        import pty
+        import select
+        env = {**os.environ, "RIG_HOME": str(ROOT), "PATH": f"{ROOT / 'bin'}:{os.environ.get('PATH', '')}", "RIG_SKIP_UPDATE_CHECK": "1",
+               "RIG_SKIP_MODEL_CATALOG": "1", "RIG_SHELL_BIN": "/bin/true", "RIG_INSTALL_TRANSACTION": "1"}
+        master, slave = pty.openpty()
+        proc = subprocess.Popen([str(RIG), "shell", *args], cwd=self.repo, env=env, stdin=slave, stdout=slave, stderr=slave, close_fds=True)
+        os.close(slave)
+        out, sent, deadline = b"", False, time.monotonic() + 30
+        while time.monotonic() < deadline:
+            ready, _, _ = select.select([master], [], [], 0.2)
+            if ready:
+                try:
+                    chunk = os.read(master, 4096)
+                except OSError:
+                    break
+                if not chunk:
+                    break
+                out += chunk
+            if answer is not None and not sent and b"[Y/n]" in out:
+                os.write(master, answer.encode())
+                sent = True
+            if proc.poll() is not None and not ready:
+                break
+        proc.wait(timeout=10)
+        os.close(master)
+        return proc.returncode, out.decode(errors="replace")
+
+    def test_a_yes_sets_the_project_up_and_goes_on(self):
+        code, out = self.on_a_terminal("y\n", "print", "--no-tmux")
+        self.assertIn("Rig is not set up in", out)
+        self.assertIn("[Y/n]", out)
+        self.assertIn("Rig is set up here.", out)
+        self.assertEqual(code, 0, out)
+        self.assertTrue((self.repo / ".rig" / "harness.toml").is_file())
+
+    def test_enter_alone_means_yes(self):
+        code, out = self.on_a_terminal("\n", "print", "--no-tmux")
+        self.assertEqual(code, 0, out)
+        self.assertTrue((self.repo / ".rig" / "harness.toml").is_file())
+
+    def test_a_no_changes_nothing_and_says_how_to_do_it_later(self):
+        code, out = self.on_a_terminal("n\n", "print", "--no-tmux")
+        self.assertNotEqual(code, 0)
+        self.assertIn("run rig init", out)
+        self.assertFalse((self.repo / ".rig").exists(), "nothing is added when the answer is no")
+        self.assertFalse((self.repo / "AGENTS.md").exists())
+
+    def test_without_a_terminal_it_never_asks_or_sets_up(self):
+        done = run_rig(self.repo, "shell", "print", "--no-tmux", env={"RIG_SHELL_BIN": "/bin/true"}, stdin="y\n")
+        self.assertNotEqual(done.returncode, 0)
+        self.assertIn("run rig init", done.stderr)
+        self.assertNotIn("[Y/n]", done.stdout + done.stderr)
+        self.assertFalse((self.repo / ".rig").exists())
+
+
 class ProjectLifecycleCli(unittest.TestCase):
     def setUp(self):
         self.td = tempfile.TemporaryDirectory()

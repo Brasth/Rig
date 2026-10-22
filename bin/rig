@@ -556,6 +556,20 @@ project_guard() {
   if [[ "$state" != "enabled" ]]; then echo "Rig is disabled for this project; run rig on" >&2; return 1; fi
 }
 
+# `rig shell` in a project Rig was never set up in: on a terminal, ask once and set it up on a yes (the same as rig init, so
+# nothing is added without the owner saying so); anywhere else, or on a no, the usual "run rig init" message stands.
+offer_init() {
+  [[ -t 0 && -t 1 ]] || return 1
+  local root answer
+  root="$(repo_root)"
+  printf 'Rig is not set up in %s yet.\nSet it up here? It adds a .rig folder (settings and notes) and a short note in AGENTS.md. [Y/n] ' "$root"
+  read -r answer || return 1
+  case "${answer:-y}" in
+    y|Y|yes|YES|Yes) bash "${BASH_SOURCE[0]}" init >/dev/null || return 1; printf 'Rig is set up here.\n' ;;
+    *) return 1 ;;
+  esac
+}
+
 cmd_project_toggle() {
   local want="$1" root harness agents state
   root="$(repo_root)"; harness="$root/.rig/harness.toml"; agents="$root/AGENTS.md"
@@ -1593,6 +1607,9 @@ main() {
     on) cmd_project_toggle on; return ;;
     off) cmd_project_toggle off; return ;;
   esac
+  if [[ "$cmd" == "shell" && "${1:-}" != "build" ]] && [[ "$(project_state)" == "uninitialized" ]]; then
+    offer_init || true
+  fi
   case "$cmd" in init|setup|update|status|doctor|jobs|worktrees|adapters|tui|memory|timeline|recovery|task|workflows|workflow|queue|routing|billing|help|-h|--help|"") ;; *) [[ "$cmd:${1:-}" == "shell:build" ]] || project_guard || return ;; esac
   case "$cmd" in
     ui) python3 "$(py_script rig_ui.py)" "$@" ;;
