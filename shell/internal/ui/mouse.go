@@ -261,7 +261,8 @@ func (m *Model) mouse(e tea.MouseMsg) (tea.Model, tea.Cmd) {
 			return m, nil // in the reply box or a file being edited: the cursor goes there, as in an editor
 		}
 		// a press only marks where: lifting the button there clicks, dragging away selects text
-		m.press, m.sel = &textSel{ax: e.X, ay: e.Y, bx: e.X, by: e.Y}, nil
+		cx0, cx1 := m.clipFor(e.X)
+		m.press, m.sel = &textSel{ax: e.X, ay: e.Y, bx: e.X, by: e.Y, cx0: cx0, cx1: cx1}, nil
 		if strings.HasPrefix(m.st.Message, "copied ") {
 			m.st.Message = ""
 		}
@@ -317,6 +318,14 @@ func (m *Model) mouse(e tea.MouseMsg) (tea.Model, tea.Cmd) {
 				m.st.Message = fmt.Sprintf("copied %d characters", len([]rune(text)))
 			}
 		default:
+			if m.clicks >= 2 {
+				if _, onZone := m.zoneAt(press.ax, press.ay); !onZone {
+					if text := m.wordOrLineAt(press, m.clicks); text != "" && Copy(text) {
+						m.st.Message = fmt.Sprintf("copied %d characters", len([]rune(text)))
+						return m, nil
+					}
+				}
+			}
 			m.hoverX, m.hoverY = press.ax, press.ay
 			return m.click(press.ax, press.ay)
 		}
@@ -471,7 +480,10 @@ func runeAtCell(line string, col, tab int) int {
 }
 
 // textSel is a stretch of the screen dragged over, from where the button went down (a) to where it is (b).
-type textSel struct{ ax, ay, bx, by int }
+type textSel struct {
+	ax, ay, bx, by int
+	cx0, cx1       int // when cx1 > 0, only the cells of [cx0, cx1) are selected: the column the drag began in
+}
 
 // span is the selection as reading order: its first cell and its last, inclusive.
 func (s textSel) span() (x0, y0, x1, y1 int) {
@@ -494,6 +506,9 @@ func (s textSel) cols(y, w int) (int, int, bool) {
 	if y == y1 {
 		to = x1 + 1
 	}
+	if s.cx1 > 0 { // a drag that began in the conversation takes nothing from the panels beside it
+		from, to = max(from, s.cx0), min(to, s.cx1)
+	}
 	return from, min(to, w), from < to
 }
 
@@ -507,6 +522,7 @@ func selectedText(plain []string, s textSel) string {
 		}
 		rows = append(rows, strings.TrimRight(ansi.Cut(line, from, to), " "))
 	}
+	rows = undecorate(rows)
 	// the conversation sits in the middle of the window: the margin all its rows share is not part of the text
 	// (a first row begun mid-line has no margin: the rest share theirs)
 	first := 0
@@ -850,4 +866,51 @@ func (m *Model) clickRow(list, at string) (tea.Model, tea.Cmd) {
 		return m, m.fetchGitDiff(rows[i].file.path, rows[i].kind == "staged")
 	}
 	return m, nil
+}
+
+// clipFor is the cells a selection that begins at column x may take: the conversation's column when x is inside it, else all.
+func (m *Model) clipFor(x int) (int, int) {
+	if a := m.st.App; a != nil && a.ChatW > 0 && x >= a.ChatX && x < a.ChatX+a.ChatW {
+		return a.ChatX, a.ChatX + a.ChatW
+	}
+	return 0, 0
+}
+
+// wordOrLineAt is the text of the word (two clicks) or the whole line (three) under the press, within its column, as drawn.
+func (m *Model) wordOrLineAt(p *textSel, clicks int) string {
+	if p.ay < 0 || p.ay >= len(m.plain) {
+		return ""
+	}
+	var cells []rune // one rune per cell: a wide rune fills the cells after its first with a blank
+	for _, r := range m.plain[p.ay] {
+		cells = append(cells, r)
+		for i := 1; i < ansi.StringWidth(string(r)); i++ {
+			cells = append(cells, ' ')
+		}
+	}
+	lo, hi := 0, len(cells)
+	if p.cx1 > 0 {
+		lo, hi = max(0, p.cx0), min(len(cells), p.cx1)
+	}
+	if p.ax < lo || p.ax >= hi {
+		return ""
+	}
+	from, to := lo, hi
+	if clicks == 2 {
+		if cells[p.ax] == ' ' {
+			return ""
+		}
+		from, to = p.ax, p.ax+1
+		for from > lo && cells[from-1] != ' ' {
+			from--
+		}
+		for to < hi && cells[to] != ' ' {
+			to++
+		}
+		// the marks a sentence leaves on a word are not part of it
+		for to > from+1 && strings.ContainsRune(".,;:!?)\"'", cells[to-1]) {
+			to--
+		}
+	}
+	return selectedText([]string{string(cells[from:to])}, textSel{ax: 0, ay: 0, bx: to - from - 1, by: 0})
 }

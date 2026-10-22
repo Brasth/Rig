@@ -646,6 +646,11 @@ func (m *Model) runSlash(text string) (tea.Cmd, bool) {
 			return nil, true
 		}
 		return m.exec([]string{"sh", "-c", "rig support; printf '\\n⏎ goes back to rig shell '; read _"}, func(err error) tea.Msg { return shellDoneMsg{err: err} }), true
+	case "/copy":
+		clear()
+		m.st.Mode, m.st.InputLabel, m.inputFor = ModeNormal, "", ""
+		m.st.Message = copyLast(m.st, rest)
+		return nil, true
 	case "/doctor":
 		clear()
 		m.st.Mode, m.st.InputLabel, m.inputFor = ModeNormal, "", ""

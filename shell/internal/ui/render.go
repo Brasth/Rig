@@ -150,6 +150,7 @@ var SlashCommands = []SlashCommand{
 	{"/login", "", "sign in to the assistant again (opens its own sign-in here)", false, false},
 	{"/helpers", "", "choose which other assistants the parent can hand work to", false, false},
 	{"/logs", "", "write one report file (.rig/support.txt) to send when something does not work", false, false},
+	{"/copy", " [code]", "copy the last answer (or just its last code block) to the clipboard", false, false},
 	{"/doctor", "", "what is wrong with this project, and fix what Rig can", false, false},
 	{"/running", "", "what is running: the parent's tool call, the helpers, the terminal", false, false},
 	{"/mode", " [ask|edits|plan]", "how much the parent may do without asking (⇧Tab goes round)", false, false},

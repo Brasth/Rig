@@ -37,6 +37,7 @@ type AppState struct {
 	ConfirmLead          string   // a question u or h asked: confirmed with ⏎; the letter typed into the reply box, or "\x00"
 	Splash               int      // the splash's frame while rig shell opens; 0 once it is gone
 	ChatMax, LogMax      int      // how far the conversation and a thread can scroll up, as last drawn
+	ChatX, ChatW         int      // the conversation's column as last drawn (0 wide when it is not on screen), so a selection stays inside it
 	chatKey              string   // what chatLines were made for
 	chatLines            []string // the transcript's lines, kept between frames
 	logKey               string   // and a thread's
@@ -433,6 +434,7 @@ func AppFrame(v *view.View, st State, w, h int) []string {
 // appBody is the screen inside AppFrame's margin.
 func appBody(v *view.View, st State, w, h int) []string {
 	a := st.App
+	a.ChatX, a.ChatW = 0, 0
 	confirm := func(lines []string) []string {
 		switch {
 		case st.Mode == ModeConfirm:
@@ -668,6 +670,7 @@ func replyBox(st State, w int, placeholder string, lit bool) []string {
 func conversationBody(v *view.View, st State, w, h int) ([]string, [][2]string) {
 	cw := min(appColumn, w-8)
 	x := (w - cw) / 2
+	st.App.ChatX, st.App.ChatW = x, cw
 	parent := appParent(st)
 	var lines []string
 	lines = append(lines, "")
