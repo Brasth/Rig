@@ -144,6 +144,7 @@ var SlashCommands = []SlashCommand{
 	{"/clear", "", "start a new conversation", false, false},
 	{"/compact", " [FOCUS]", "continue in a fresh conversation from the parent's own summary", false, false},
 	{"/resume", "", "open an earlier conversation again", false, false},
+	{"/selftest", "", "test that each installed parent works through Rig (runs a few tiny real turns)", false, false},
 	{"/doctor", "", "what is wrong with this project, and fix what Rig can", false, false},
 	{"/running", "", "what is running: the parent's tool call, the helpers, the terminal", false, false},
 	{"/mode", " [ask|edits|plan]", "how much the parent may do without asking (⇧Tab goes round)", false, false},

@@ -85,6 +85,8 @@ LOCAL_METHODS = {
     "chat.answer": (True, "Allow or deny the parent's pending permission request in a chat session (params: session, ask_id, decision)"),
     "log.follow": (False, "Tail of a job's log as plain text; without an id, the job worth watching (params: id, lines)"),
     "shell.doctor": (False, "What is wrong with this project in plain words, each finding with the safe fix Rig can run (id, level, title, detail, fix)"),
+    "shell.selftest": (True, "Start a self-test in the background: tiny real turns per installed parent (answer, reasoning level, model, plan, auto-edit, stop), in a throwaway project; it costs what short prompts cost (params: parents)"),
+    "shell.selftest_status": (False, "The self-test's report as far as it has got (state, running, parents with checks)"),
     "shell.fix": (True, "Run one safe fix a shell.doctor finding named (params: fix)"),
     "shell.parent": (False, "The command that runs the parent CLI in a board pane, or why there is none (params: parent)"),
     "env.shell": (False, "The dc exec --no-start command for an interactive shell in a job's container, or why there is none (params: id)"),
@@ -197,7 +199,7 @@ class Api:
             return self._board_snapshot(request_id, params)
         if method == "workspace.status":
             return self._workspace(request_id, params)
-        if method in ("job.evidence", "job.diff", "job.thread", "job.pause", "job.problems", "fleet.status", "settings.view", "env.recovery", "env.recover", "log.follow", "env.shell", "shell.parent", "shell.doctor", "shell.fix",
+        if method in ("job.evidence", "job.diff", "job.thread", "job.pause", "job.problems", "fleet.status", "settings.view", "env.recovery", "env.recover", "log.follow", "env.shell", "shell.parent", "shell.doctor", "shell.fix", "shell.selftest", "shell.selftest_status",
                       "chat.status", "chat.transcript", "chat.send", "chat.cancel", "chat.rewind", "chat.fork", "chat.search", "chat.steer", "chat.answer", "chat.commands", "chat.models", "chat.parent", "ui.theme", "ui.set_theme", "settings.app", "settings.set",
                       "applies.today", "applies.undo", "applies.redo", "applies.hold", "ship.status", "ship.run"):
             return self._environment(request_id, method, params)
@@ -320,6 +322,15 @@ def _environment(self, request_id, method, params):
         elif method == "shell.doctor":
             import shell_doctor
             result = shell_doctor.findings(self.repo)
+        elif method == "shell.selftest":
+            parents = params.get("parents", [])
+            if not isinstance(parents, list) or not all(isinstance(p, str) for p in parents):
+                return _reply(request_id, error=_error(INVALID_PARAMS, "parents must be a list of parent CLI names"))
+            import selftest
+            result = selftest.start(self.repo, parents)
+        elif method == "shell.selftest_status":
+            import selftest
+            result = selftest.read_report(self.repo)
         elif method == "shell.fix":
             fix = params.get("fix", "")
             if not isinstance(fix, str) or not fix:

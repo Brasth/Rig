@@ -1303,6 +1303,10 @@ func (m *Model) runPalette(it paletteItem, query string) tea.Cmd {
 		return m.openRunning()
 	case it.Action == "doctor":
 		return m.openDoctor()
+	case it.Action == "selftest":
+		return m.openSelftest()
+	case it.Action == "selftest-run":
+		return m.startSelftest()
 	case strings.HasPrefix(it.Action, "doctor-fix:"):
 		return m.doctorFix(strings.TrimPrefix(it.Action, "doctor-fix:"))
 	case strings.HasPrefix(it.Action, "doctor-info:"):

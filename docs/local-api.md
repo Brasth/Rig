@@ -63,7 +63,11 @@ repository. Owner tokens are never returned, and workers may not serve the API.
 | `settings.app` | no | none | The board's Settings screen: the values it can change and where each is kept |
 | `settings.set` | yes | none | Change one of the board's settings (params: key, value, scope all|repo) |
 | `settings.view` | no | none | Settings tab: what this repository's .rig/harness.toml makes effective, ready to render and read-only |
+| `shell.doctor` | no | none | What is wrong with this project in plain words, each finding with the safe fix Rig can run (id, level, title, detail, fix) |
+| `shell.fix` | yes | none | Run one safe fix a shell.doctor finding named (params: fix) |
 | `shell.parent` | no | none | The command that runs the parent CLI in a board pane, or why there is none (params: parent) |
+| `shell.selftest` | yes | none | Start a self-test in the background: tiny real turns per installed parent (answer, reasoning level, model, plan, auto-edit, stop), in a throwaway project; it costs what short prompts cost (params: parents) |
+| `shell.selftest_status` | no | none | The self-test's report as far as it has got (state, running, parents with checks) |
 | `ship.run` | yes | none | Push what is ahead, or open a pull request with gh (params: mode push|pr, title, body) |
 | `ship.status` | no | none | What is ahead of the upstream branch, and the pull request it would make |
 | `ui.request` | yes | none | Companion operations (snapshot, enqueue, stop, reply, details, sessions) on the hosted UI service |

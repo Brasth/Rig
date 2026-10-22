@@ -156,6 +156,12 @@ func (e *ensuringSource) ChatSend(message, session, parent string, timeout time.
 	return retrying(e, func() (*view.ChatStarted, error) { return e.client.ChatSend(message, session, parent, timeout) })
 }
 
+func (e *ensuringSource) SelfTestStart(parents []string, timeout time.Duration) (*view.SelfTestStarted, error) {
+	return retrying(e, func() (*view.SelfTestStarted, error) { return e.client.SelfTestStart(parents, timeout) })
+}
+func (e *ensuringSource) SelfTestStatus(timeout time.Duration) (*view.SelfTest, error) {
+	return retrying(e, func() (*view.SelfTest, error) { return e.client.SelfTestStatus(timeout) })
+}
 func (e *ensuringSource) ShellDoctor(timeout time.Duration) (*view.ShellDoctor, error) {
 	return retrying(e, func() (*view.ShellDoctor, error) { return e.client.ShellDoctor(timeout) })
 }
