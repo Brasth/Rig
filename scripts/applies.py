@@ -358,8 +358,8 @@ def _push(repo: Path, remote: str, *args) -> None:
         raise ApplyError(explain_push(str(error), remote)) from error
 
 
-def ship(repo, mode: str, title: str = "", body: str = "") -> dict:
-    """Push the commits ahead (mode "push"), or push them to a new branch and open a pull request ("pr")."""
+def ship(repo, mode: str, title: str = "", body: str = "", draft: bool = False) -> dict:
+    """Push the commits ahead (mode "push"), or push them to a new branch and open a pull request ("pr"), as a draft if asked."""
     repo = Path(repo).resolve()
     status = ship_status(repo)
     if not status["branch"]:
@@ -385,7 +385,7 @@ def ship(repo, mode: str, title: str = "", body: str = "") -> dict:
     body = body or "\n".join(f"- {r['subject']}" for r in status["ahead"])
     base = status["upstream"].split("/", 1)[1] if status["upstream"] else status["base"]
     done = subprocess.run(["gh", "pr", "create", "--head", head, "--base", base, "--title", title,
-                           "--body", body], cwd=str(repo), capture_output=True, text=True, timeout=120, stdin=subprocess.DEVNULL)
+                           "--body", body, *(["--draft"] if draft else [])], cwd=str(repo), capture_output=True, text=True, timeout=120, stdin=subprocess.DEVNULL)
     if done.returncode != 0:
         tail = (done.stderr or done.stdout).strip().splitlines()
         low = (done.stderr or "").lower()

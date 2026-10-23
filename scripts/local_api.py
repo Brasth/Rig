@@ -84,6 +84,9 @@ LOCAL_METHODS = {
     "limits.get": (False, "Each provider's plan meters (percent used per window, when it resets), the routing note and whether the parent should hand over or go back"),
     "limits.report": (True, "Keep what a provider's status line or hook says about its plan (params: provider, used_pct, resets_at, window)"),
     "limits.handover": (True, "Hand the parent role to another installed parent, or back to the project's own, remembering which (params: to)"),
+    "issues.get": (False, "Issue to PR: whether it is on, the label, and each issue's step (planned, approved, queued, shipped, declined)"),
+    "issues.poll": (True, "One pass over the issues labelled for Rig with your own gh login: post plans, read your thumbs-up, queue approved work"),
+    "issues.ship": (True, "Open the draft pull request for a queued issue from what is ahead (params: number)"),
     "ui.theme": (False, "The board's colour theme and where it is kept (all repos or this repo)"),
     "ui.set_theme": (True, "Keep the board's colour theme for all repos or this repo (params: theme, scope all|repo)"),
     "chat.parent": (True, "Name the project's parent CLI in .rig/harness.toml, as rig use does (params: name)"),
@@ -205,7 +208,7 @@ class Api:
         if method == "workspace.status":
             return self._workspace(request_id, params)
         if method in ("job.evidence", "job.diff", "job.thread", "job.pause", "job.problems", "fleet.status", "settings.view", "env.recovery", "env.recover", "log.follow", "env.shell", "shell.parent", "shell.doctor", "shell.fix", "shell.selftest", "shell.selftest_status",
-                      "chat.status", "chat.transcript", "chat.live", "chat.send", "chat.cancel", "chat.rewind", "chat.fork", "chat.search", "chat.steer", "chat.answer", "chat.commands", "chat.models", "chat.parent", "ui.theme", "ui.set_theme", "settings.app", "settings.set", "settings.write_harness", "limits.get", "limits.report", "limits.handover",
+                      "chat.status", "chat.transcript", "chat.live", "chat.send", "chat.cancel", "chat.rewind", "chat.fork", "chat.search", "chat.steer", "chat.answer", "chat.commands", "chat.models", "chat.parent", "ui.theme", "ui.set_theme", "settings.app", "settings.set", "settings.write_harness", "limits.get", "limits.report", "limits.handover", "issues.get", "issues.poll", "issues.ship",
                       "applies.today", "applies.undo", "applies.redo", "applies.hold", "ship.status", "ship.run"):
             return self._environment(request_id, method, params)
         if method in ("ui.request", "events.list", "events.ack"):
@@ -377,6 +380,23 @@ def _environment(self, request_id, method, params):
                 if mode not in ("push", "pr") or not isinstance(title, str) or not isinstance(body, str):
                     return _reply(request_id, error=_error(INVALID_PARAMS, "mode is push or pr; title and body are strings"))
                 result = applies.ship(self.repo, mode, title, body)
+        elif method in ("issues.get", "issues.poll", "issues.ship"):
+            import applies
+            import harness
+            import issue_to_pr
+            parsed = harness.parse_harness(harness.harness_path(self.repo))
+            try:
+                if method == "issues.poll":
+                    enabled = [n for n, on in parsed["workers"].items() if str(on).lower() == "true"]
+                    issue_to_pr.poll(self.repo, parent=parsed["parent"] or "claude", enabled=enabled)
+                elif method == "issues.ship":
+                    number = params.get("number")
+                    if type(number) is not int:
+                        return _reply(request_id, error=_error(INVALID_PARAMS, "number is the issue number"))
+                    issue_to_pr.ship(self.repo, number)
+            except (issue_to_pr.IssueError, applies.ApplyError) as error:
+                return _reply(request_id, error=_error(INVALID_PARAMS, str(error)))
+            result = issue_to_pr.view(self.repo)
         elif method in ("limits.get", "limits.report", "limits.handover"):
             import harness
             import plan_limits

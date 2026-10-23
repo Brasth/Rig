@@ -55,6 +55,9 @@ repository. Owner tokens are never returned, and workers may not serve the API.
 | `events.ack` | yes | none | Acknowledge one notice, or all, for a companion session |
 | `events.list` | no | none | Notices for a companion session: approvals, finished work, verification, stop progress |
 | `fleet.status` | no | none | Fleet panel: workspace containers on the engine with observed CPU and memory, ready to render |
+| `issues.get` | no | none | Issue to PR: whether it is on, the label, and each issue's step (planned, approved, queued, shipped, declined) |
+| `issues.poll` | yes | none | One pass over the issues labelled for Rig with your own gh login: post plans, read your thumbs-up, queue approved work |
+| `issues.ship` | yes | none | Open the draft pull request for a queued issue from what is ahead (params: number) |
 | `job.diff` | no | none | What one job changed, as a unified diff with per-file counts (params: id) |
 | `job.evidence` | no | none | Evidence drawer for one job: where it ran, change, contract, checks, ports (params: id) |
 | `job.pause` | yes | none | Pause a running helper (SIGSTOP to its process group) or let it go on (params: id, on) |
