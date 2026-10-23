@@ -60,6 +60,9 @@ repository. Owner tokens are never returned, and workers may not serve the API.
 | `job.pause` | yes | none | Pause a running helper (SIGSTOP to its process group) or let it go on (params: id, on) |
 | `job.problems` | no | none | Problems a job's failed checks found (file, line, severity, message); no id: the newest job with any (params: id) |
 | `job.thread` | no | none | A helper's thread with the parent: its brief, what it did, messages, its question and result (params: id) |
+| `limits.get` | no | none | Each provider's plan meters (percent used per window, when it resets), the routing note and whether the parent should hand over or go back |
+| `limits.handover` | yes | none | Hand the parent role to another installed parent, or back to the project's own, remembering which (params: to) |
+| `limits.report` | yes | none | Keep what a provider's status line or hook says about its plan (params: provider, used_pct, resets_at, window) |
 | `log.follow` | no | none | Tail of a job's log as plain text; without an id, the job worth watching (params: id, lines) |
 | `settings.app` | no | none | The board's Settings screen: the values it can change and where each is kept |
 | `settings.set` | yes | none | Change one of the board's settings (params: key, value, scope all|repo) |
