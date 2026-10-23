@@ -48,6 +48,13 @@ SETTINGS = {
     "ui.notify_applied": ("ui", "notify_applied", _BOOL, ("all", "repo")),
     "ui.notify_done": ("ui", "notify_done", _BOOL, ("all", "repo")),
     "ui.desktop": ("ui", "desktop", _BOOL, ("all", "repo")),
+    # the code view's keymap and minimap, kept for all repos so the window and the terminal show the same ones
+    "ui.keymap": ("ui", "keymap", ("vscode", "vim", "emacs"), ("all",)),
+    "ui.minimap": ("ui", "minimap", _BOOL, ("all",)),
+    # what to do when you are away, the sound that goes with a notice, and the branch name a pull request is opened from
+    "ui.away": ("ui", "away", ("keep_going", "pause"), ("all", "repo")),
+    "ui.sound": ("ui", "sound", ("soft", "none"), ("all", "repo")),
+    "ui.branch": ("ui", "branch", ("rig/{topic}", "{topic}", "feature/{topic}"), ("all", "repo")),
 }
 for _name in harness.WORKERS:
     SETTINGS[f"workers.{_name}"] = ("workers", _name, _BOOL, ("repo",))
@@ -171,6 +178,8 @@ def read(repo) -> dict:
         "notify_needs": _ui(repo, "notify_needs", "true") == "true", "notify_applied": _ui(repo, "notify_applied", "false") == "true",
         "notify_done": _ui(repo, "notify_done", "true") == "true",
         "desktop": _ui(repo, "desktop", "false") == "true",
+        "keymap": _ui(repo, "keymap", "vscode"), "minimap": _ui(repo, "minimap", "true") == "true",
+        "away": _ui(repo, "away", "keep_going"), "sound": _ui(repo, "sound", "soft"), "branch": _ui(repo, "branch", "rig/{topic}"),
         "routing_table": _routing_table(parsed, installed, parsed["parent"] or "claude"),
         "models": {name: (route_model(name) or "auto") for name in harness.WORKERS},
         "parent_models": {name: parent_model_info(repo, name) for name in MODEL_PARENTS},

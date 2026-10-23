@@ -76,6 +76,23 @@ class Settings(unittest.TestCase):
         self.assertEqual([r["task"] for r in view["routing_table"]][:2], ["plan and review", "features"])
         self.assertEqual(view["clone_dir"], (os.environ.get("RIG_CODE_DIR") or str(Path.home() / "code")).replace(str(Path.home()), "~"))
 
+    def test_editor_and_notice_preferences_round_trip(self):
+        view = ui_settings.read(self.repo)
+        self.assertEqual((view["keymap"], view["minimap"], view["away"], view["sound"], view["branch"]),
+                         ("vscode", True, "keep_going", "soft", "rig/{topic}"))
+        ui_settings.save(self.repo, "ui.keymap", "vim", "all")
+        ui_settings.save(self.repo, "ui.minimap", False, "all")
+        ui_settings.save(self.repo, "ui.away", "pause", "all")
+        ui_settings.save(self.repo, "ui.sound", "none", "repo")
+        ui_settings.save(self.repo, "ui.branch", "feature/{topic}", "repo")
+        view = ui_settings.read(self.repo)
+        self.assertEqual((view["keymap"], view["minimap"], view["away"], view["sound"], view["branch"]),
+                         ("vim", False, "pause", "none", "feature/{topic}"))
+        with self.assertRaises(ui_settings.SettingsError):
+            ui_settings.save(self.repo, "ui.keymap", "vim", "repo")
+        with self.assertRaises(ui_settings.SettingsError):
+            ui_settings.save(self.repo, "ui.branch", "anything", "all")
+
     def test_rig_shell_opens_the_last_project_when_asked(self):
         import json
         import rig_shell
