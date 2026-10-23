@@ -81,6 +81,9 @@ LOCAL_METHODS = {
     "settings.app": (False, "The board's Settings screen: the values it can change and where each is kept"),
     "settings.set": (True, "Change one of the board's settings (params: key, value, scope all|repo)"),
     "settings.write_harness": (True, "Replace this repository's .rig/harness.toml with edited text, if it is valid; the error names the line (params: text)"),
+    "limits.get": (False, "Each provider's plan meters (percent used per window, when it resets), the routing note and whether the parent should hand over or go back"),
+    "limits.report": (True, "Keep what a provider's status line or hook says about its plan (params: provider, used_pct, resets_at, window)"),
+    "limits.handover": (True, "Hand the parent role to another installed parent, or back to the project's own, remembering which (params: to)"),
     "ui.theme": (False, "The board's colour theme and where it is kept (all repos or this repo)"),
     "ui.set_theme": (True, "Keep the board's colour theme for all repos or this repo (params: theme, scope all|repo)"),
     "chat.parent": (True, "Name the project's parent CLI in .rig/harness.toml, as rig use does (params: name)"),
@@ -202,7 +205,7 @@ class Api:
         if method == "workspace.status":
             return self._workspace(request_id, params)
         if method in ("job.evidence", "job.diff", "job.thread", "job.pause", "job.problems", "fleet.status", "settings.view", "env.recovery", "env.recover", "log.follow", "env.shell", "shell.parent", "shell.doctor", "shell.fix", "shell.selftest", "shell.selftest_status",
-                      "chat.status", "chat.transcript", "chat.live", "chat.send", "chat.cancel", "chat.rewind", "chat.fork", "chat.search", "chat.steer", "chat.answer", "chat.commands", "chat.models", "chat.parent", "ui.theme", "ui.set_theme", "settings.app", "settings.set", "settings.write_harness",
+                      "chat.status", "chat.transcript", "chat.live", "chat.send", "chat.cancel", "chat.rewind", "chat.fork", "chat.search", "chat.steer", "chat.answer", "chat.commands", "chat.models", "chat.parent", "ui.theme", "ui.set_theme", "settings.app", "settings.set", "settings.write_harness", "limits.get", "limits.report", "limits.handover",
                       "applies.today", "applies.undo", "applies.redo", "applies.hold", "ship.status", "ship.run"):
             return self._environment(request_id, method, params)
         if method in ("ui.request", "events.list", "events.ack"):
@@ -374,6 +377,28 @@ def _environment(self, request_id, method, params):
                 if mode not in ("push", "pr") or not isinstance(title, str) or not isinstance(body, str):
                     return _reply(request_id, error=_error(INVALID_PARAMS, "mode is push or pr; title and body are strings"))
                 result = applies.ship(self.repo, mode, title, body)
+        elif method in ("limits.get", "limits.report", "limits.handover"):
+            import harness
+            import plan_limits
+            import rig_chat
+            import shutil
+            parsed = harness.parse_harness(harness.harness_path(self.repo))
+            installed = [name for name in plan_limits.PROVIDERS if shutil.which(name)]
+            if method == "limits.report":
+                try:
+                    plan_limits.report(params.get("provider"), params.get("used_pct"), params.get("resets_at"), str(params.get("window") or ""))
+                except ValueError as error:
+                    return _reply(request_id, error=_error(INVALID_PARAMS, str(error)))
+            elif method == "limits.handover":
+                name = params.get("to")
+                if name not in installed:
+                    return _reply(request_id, error=_error(INVALID_PARAMS, f"to is an installed parent: {', '.join(installed) or 'none installed'}"))
+                original = plan_limits.state(self.repo).get("original") or parsed["parent"]
+                rig_chat.require_enabled(self.repo)
+                rig_chat.set_parent(self.repo, name)
+                plan_limits.remember_handover(self.repo, original, name)
+                parsed = harness.parse_harness(harness.harness_path(self.repo))
+            result = plan_limits.view(self.repo, parsed["parent"], installed)
         elif method in ("settings.app", "settings.set", "settings.write_harness"):
             import ui_settings
             if method == "settings.app":

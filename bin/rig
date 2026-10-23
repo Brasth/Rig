@@ -45,6 +45,8 @@ usage: rig <command> [args]
   setup [--shell-ui] [--shell bash|zsh] [--rc-file PATH] [--cua-driver|--no-cua-driver] [--browser-skill|--no-browser-skill] [--mimo|--no-mimo] [--shell-binary|--no-shell-binary]
     Optional desktop/browser components ask once (default No); their shared skills install only after opt-in.
   ui [open|status|enable|disable|stop]
+  limits [show]                           plan meters per provider, and whether the parent should hand over
+  limits report PROVIDER PERCENT [--window NAME] [--resets EPOCH]
   uninstall [--dry-run] [--repo PATH]
   update                                  guided (TTY); without a TTY prints exact commands, changes nothing
   update --latest [--dry-run] [--yes]     pin official main to one full SHA, preview, apply on consent
@@ -1613,6 +1615,7 @@ main() {
   case "$cmd" in init|setup|update|status|doctor|jobs|worktrees|adapters|tui|memory|timeline|recovery|task|workflows|workflow|queue|routing|billing|help|-h|--help|"") ;; *) [[ "$cmd:${1:-}" == "shell:build" ]] || project_guard || return ;; esac
   case "$cmd" in
     ui) python3 "$(py_script rig_ui.py)" "$@" ;;
+    limits) python3 "$(py_script plan_limits.py)" "$@" --repo "$(repo_root)" ;;
     api) python3 "$(py_script local_api.py)" "$@" --repo "$(repo_root)" ;;
     shell)
       if [[ "${1:-}" == "build" ]]; then
