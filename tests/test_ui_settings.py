@@ -147,5 +147,45 @@ class Settings(unittest.TestCase):
         self.assertEqual(call("settings.set", {"key": "ui.bell"})["error"]["code"], local_api.INVALID_PARAMS)
 
 
+class WriteHarness(unittest.TestCase):
+    setUp = Settings.setUp
+    tearDown = Settings.tearDown
+
+    def test_a_valid_edit_replaces_the_file_and_is_read_back(self):
+        text = 'parent = "claude"\n\n[project]\nenabled = true\n\n[queue]\nmax_running = 5\n'
+        view = ui_settings.write_harness(self.repo, text)
+        self.assertEqual(self.harness.read_text(), text)
+        self.assertEqual(view["max_running"], 5)
+
+    def test_a_missing_final_newline_is_added(self):
+        ui_settings.write_harness(self.repo, '[project]\nenabled = true')
+        self.assertTrue(self.harness.read_text().endswith("\n"))
+
+    def test_broken_toml_is_refused_with_its_line_and_nothing_changes(self):
+        before = self.harness.read_text()
+        with self.assertRaises(ui_settings.SettingsError) as raised:
+            ui_settings.write_harness(self.repo, '[project]\nenabled = true\n\n[queue]\nmax_running 5\n')
+        self.assertIn("line 5", str(raised.exception))
+        self.assertEqual(self.harness.read_text(), before)
+        self.assertEqual([p["line"] for p in ui_settings.check_harness('a = 1\nb = \n')], [2])
+
+    def test_a_section_rig_reads_as_a_problem_is_refused(self):
+        before = self.harness.read_text()
+        with self.assertRaises(ui_settings.SettingsError):
+            ui_settings.write_harness(self.repo, '[project]\nenabled = true\n\n[sandbox]\nprovider = "nowhere"\n')
+        self.assertEqual(self.harness.read_text(), before)
+
+    def test_it_never_creates_a_harness_and_takes_only_text(self):
+        self.harness.unlink()
+        with self.assertRaises(ui_settings.SettingsError):
+            ui_settings.write_harness(self.repo, "[project]\nenabled = true\n")
+        self.assertFalse(self.harness.exists())
+        self.harness.write_text("[project]\nenabled = true\n")
+        with self.assertRaises(ui_settings.SettingsError):
+            ui_settings.write_harness(self.repo, "x" * 200_001)
+        with self.assertRaises(ui_settings.SettingsError):
+            ui_settings.write_harness(self.repo, None)
+
+
 if __name__ == "__main__":
     unittest.main()
