@@ -54,6 +54,8 @@ SETTINGS = {
     # what to do when you are away, the sound that goes with a notice, and the branch name a pull request is opened from
     "ui.away": ("ui", "away", ("keep_going", "pause"), ("all", "repo")),
     "ui.sound": ("ui", "sound", ("soft", "none"), ("all", "repo")),
+    # Issue to PR: whether Rig plans the issues labelled for it, kept for this project
+    "issues.enabled": ("issues", "enabled", _BOOL, ("repo",)),
     "ui.branch": ("ui", "branch", ("rig/{topic}", "{topic}", "feature/{topic}"), ("all", "repo")),
 }
 for _name in harness.WORKERS:
@@ -179,6 +181,7 @@ def read(repo) -> dict:
         "notify_done": _ui(repo, "notify_done", "true") == "true",
         "desktop": _ui(repo, "desktop", "false") == "true",
         "keymap": _ui(repo, "keymap", "vscode"), "minimap": _ui(repo, "minimap", "true") == "true",
+        "issues_enabled": _read_key(path, "issues", "enabled") == "true",
         "away": _ui(repo, "away", "keep_going"), "sound": _ui(repo, "sound", "soft"), "branch": _ui(repo, "branch", "rig/{topic}"),
         "routing_table": _routing_table(parsed, installed, parsed["parent"] or "claude"),
         "models": {name: (route_model(name) or "auto") for name in harness.WORKERS},
