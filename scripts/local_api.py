@@ -80,6 +80,7 @@ LOCAL_METHODS = {
     "ship.run": (True, "Push what is ahead, or open a pull request with gh (params: mode push|pr, title, body)"),
     "settings.app": (False, "The board's Settings screen: the values it can change and where each is kept"),
     "settings.set": (True, "Change one of the board's settings (params: key, value, scope all|repo)"),
+    "settings.write_harness": (True, "Replace this repository's .rig/harness.toml with edited text, if it is valid; the error names the line (params: text)"),
     "ui.theme": (False, "The board's colour theme and where it is kept (all repos or this repo)"),
     "ui.set_theme": (True, "Keep the board's colour theme for all repos or this repo (params: theme, scope all|repo)"),
     "chat.parent": (True, "Name the project's parent CLI in .rig/harness.toml, as rig use does (params: name)"),
@@ -201,7 +202,7 @@ class Api:
         if method == "workspace.status":
             return self._workspace(request_id, params)
         if method in ("job.evidence", "job.diff", "job.thread", "job.pause", "job.problems", "fleet.status", "settings.view", "env.recovery", "env.recover", "log.follow", "env.shell", "shell.parent", "shell.doctor", "shell.fix", "shell.selftest", "shell.selftest_status",
-                      "chat.status", "chat.transcript", "chat.live", "chat.send", "chat.cancel", "chat.rewind", "chat.fork", "chat.search", "chat.steer", "chat.answer", "chat.commands", "chat.models", "chat.parent", "ui.theme", "ui.set_theme", "settings.app", "settings.set",
+                      "chat.status", "chat.transcript", "chat.live", "chat.send", "chat.cancel", "chat.rewind", "chat.fork", "chat.search", "chat.steer", "chat.answer", "chat.commands", "chat.models", "chat.parent", "ui.theme", "ui.set_theme", "settings.app", "settings.set", "settings.write_harness",
                       "applies.today", "applies.undo", "applies.redo", "applies.hold", "ship.status", "ship.run"):
             return self._environment(request_id, method, params)
         if method in ("ui.request", "events.list", "events.ack"):
@@ -373,10 +374,15 @@ def _environment(self, request_id, method, params):
                 if mode not in ("push", "pr") or not isinstance(title, str) or not isinstance(body, str):
                     return _reply(request_id, error=_error(INVALID_PARAMS, "mode is push or pr; title and body are strings"))
                 result = applies.ship(self.repo, mode, title, body)
-        elif method in ("settings.app", "settings.set"):
+        elif method in ("settings.app", "settings.set", "settings.write_harness"):
             import ui_settings
             if method == "settings.app":
                 result = ui_settings.read(self.repo)
+            elif method == "settings.write_harness":
+                text = params.get("text")
+                if not isinstance(text, str):
+                    return _reply(request_id, error=_error(INVALID_PARAMS, "text is the new harness.toml"))
+                result = ui_settings.write_harness(self.repo, text)
             else:
                 key, value, scope = params.get("key"), params.get("value"), params.get("scope", "repo")
                 if not isinstance(key, str) or not isinstance(value, (str, bool, int)) or scope not in ("all", "repo"):

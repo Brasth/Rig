@@ -48,6 +48,13 @@ SETTINGS = {
     "ui.notify_applied": ("ui", "notify_applied", _BOOL, ("all", "repo")),
     "ui.notify_done": ("ui", "notify_done", _BOOL, ("all", "repo")),
     "ui.desktop": ("ui", "desktop", _BOOL, ("all", "repo")),
+    # the code view's keymap and minimap, kept for all repos so the window and the terminal show the same ones
+    "ui.keymap": ("ui", "keymap", ("vscode", "vim", "emacs"), ("all",)),
+    "ui.minimap": ("ui", "minimap", _BOOL, ("all",)),
+    # what to do when you are away, the sound that goes with a notice, and the branch name a pull request is opened from
+    "ui.away": ("ui", "away", ("keep_going", "pause"), ("all", "repo")),
+    "ui.sound": ("ui", "sound", ("soft", "none"), ("all", "repo")),
+    "ui.branch": ("ui", "branch", ("rig/{topic}", "{topic}", "feature/{topic}"), ("all", "repo")),
 }
 for _name in harness.WORKERS:
     SETTINGS[f"workers.{_name}"] = ("workers", _name, _BOOL, ("repo",))
@@ -171,6 +178,8 @@ def read(repo) -> dict:
         "notify_needs": _ui(repo, "notify_needs", "true") == "true", "notify_applied": _ui(repo, "notify_applied", "false") == "true",
         "notify_done": _ui(repo, "notify_done", "true") == "true",
         "desktop": _ui(repo, "desktop", "false") == "true",
+        "keymap": _ui(repo, "keymap", "vscode"), "minimap": _ui(repo, "minimap", "true") == "true",
+        "away": _ui(repo, "away", "keep_going"), "sound": _ui(repo, "sound", "soft"), "branch": _ui(repo, "branch", "rig/{topic}"),
         "routing_table": _routing_table(parsed, installed, parsed["parent"] or "claude"),
         "models": {name: (route_model(name) or "auto") for name in harness.WORKERS},
         "parent_models": {name: parent_model_info(repo, name) for name in MODEL_PARENTS},
@@ -335,6 +344,60 @@ def _runs_today(repo: Path) -> int:
         except OSError:
             continue
     return count
+
+
+MAX_HARNESS = 200_000
+_AT_LINE = re.compile(r"\(at line (\d+), column (\d+)\)")
+
+
+def check_harness(text: str) -> list[dict]:
+    """What is wrong with a harness.toml before it is saved: not TOML (with the line), or TOML Rig's own parser reads as
+    a problem in a section it checks. Each item is {"line": n, "message": text}; an empty list means it may be saved."""
+    import tempfile
+    import tomllib
+    problems: list[dict] = []
+    try:
+        tomllib.loads(text)
+    except tomllib.TOMLDecodeError as error:
+        found = _AT_LINE.search(str(error))
+        problems.append({"line": int(found.group(1)) if found else 1,
+                         "message": _AT_LINE.sub("", str(error)).strip() or "this is not valid TOML"})
+        return problems
+    with tempfile.TemporaryDirectory() as folder:
+        path = Path(folder) / "harness.toml"
+        path.write_text(text)
+        parsed = harness.parse_harness(path)
+    for name in ("project", "sandbox", "worktrees", "mcp"):
+        message = parsed[name].get("error")
+        if message:
+            problems.append({"line": _section_line(text, name), "message": message})
+    return problems
+
+
+def _section_line(text: str, section: str) -> int:
+    """The line of a section's header, or 1 when the file has none."""
+    for number, raw in enumerate(text.splitlines(), 1):
+        if raw.strip().startswith(f"[{section}"):
+            return number
+    return 1
+
+
+def write_harness(repo, text) -> dict:
+    """Replace this project's .rig/harness.toml with what was edited, if it is valid. Nothing is written otherwise, and the
+    error names the line. Never creates a harness: a new one would turn Rig on for the project."""
+    if not isinstance(text, str) or len(text) > MAX_HARNESS:
+        raise SettingsError("the harness must be text of at most 200,000 characters")
+    repo = Path(repo).resolve()
+    path = harness.harness_path(repo)
+    if not path.is_file():
+        raise SettingsError("this project has no .rig/harness.toml; run rig init first")
+    problems = check_harness(text)
+    if problems:
+        raise SettingsError("; ".join(f"line {p['line']}: {p['message']}" for p in problems))
+    temporary = path.with_name(path.name + ".tmp")
+    temporary.write_text(text if text.endswith("\n") else text + "\n")
+    os.replace(temporary, path)
+    return read(repo)
 
 
 def save(repo, key: str, value, scope: str = "repo") -> dict:

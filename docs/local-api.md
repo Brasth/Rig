@@ -64,6 +64,7 @@ repository. Owner tokens are never returned, and workers may not serve the API.
 | `settings.app` | no | none | The board's Settings screen: the values it can change and where each is kept |
 | `settings.set` | yes | none | Change one of the board's settings (params: key, value, scope all|repo) |
 | `settings.view` | no | none | Settings tab: what this repository's .rig/harness.toml makes effective, ready to render and read-only |
+| `settings.write_harness` | yes | none | Replace this repository's .rig/harness.toml with edited text, if it is valid; the error names the line (params: text) |
 | `shell.doctor` | no | none | What is wrong with this project in plain words, each finding with the safe fix Rig can run (id, level, title, detail, fix) |
 | `shell.fix` | yes | none | Run one safe fix a shell.doctor finding named (params: fix) |
 | `shell.parent` | no | none | The command that runs the parent CLI in a board pane, or why there is none (params: parent) |
