@@ -9,6 +9,7 @@ initializes, enables, installs or repairs a project by itself. `apply(repo, fix_
 from __future__ import annotations
 
 import json
+import os
 import time
 from pathlib import Path
 
@@ -91,9 +92,15 @@ def recent_errors(repo: Path) -> dict | None:
                    " · ".join(lines) + " (full tracebacks: .rig/mcp-errors.log)", "clear-errors", "clear the log")
 
 
+# claude signs in without a browser when one of these is set; then "signed out" is not a problem to report
+CLAUDE_KEY_VARS = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE_USE_BEDROCK",
+                   "CLAUDE_CODE_USE_VERTEX")
+
+
 def signed_out(repo: Path) -> dict | None:
     """The project's parent is claude and `claude auth status` says it is signed out. Only claude is asked: its status
-    command and its answer are known; for the others a failed turn says it (the shell shows its own sign-in then)."""
+    command and its answer are known; for the others a failed turn says it (the shell shows its own sign-in then).
+    Not asked when claude has a key in the environment (an API key, a token, Bedrock or Vertex): that is how it signs in."""
     import harness
     import shutil
     import subprocess
@@ -102,7 +109,7 @@ def signed_out(repo: Path) -> dict | None:
     except (OSError, ValueError, KeyError):
         return None
     binary = shutil.which("claude") if parent == "claude" else None
-    if not binary:
+    if not binary or any((os.environ.get(name) or "").strip() for name in CLAUDE_KEY_VARS):
         return None
     try:
         out = subprocess.run([binary, "auth", "status"], capture_output=True, text=True, timeout=8, stdin=subprocess.DEVNULL)
