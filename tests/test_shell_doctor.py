@@ -119,6 +119,22 @@ class ShellDoctor(unittest.TestCase):
 
 
 class SignedOut(ShellDoctor):
+    def setUp(self):
+        super().setUp()
+        cleared = {name: "" for name in shell_doctor.CLAUDE_KEY_VARS}
+        self.keys = mock.patch.dict(os.environ, cleared)
+        self.keys.start()
+        self.addCleanup(self.keys.stop)
+
+    def test_a_key_in_the_environment_is_a_way_to_sign_in_so_claude_is_not_asked(self):
+        import subprocess
+        (self.repo / ".rig" / "harness.toml").write_text('parent = "claude"\n\n[project]\nenabled = true\n')
+        out_no = mock.Mock(stdout=json.dumps({"loggedIn": False}))
+        with mock.patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-test"}), mock.patch("shutil.which", return_value="/usr/bin/claude"), \
+                mock.patch.object(subprocess, "run", return_value=out_no) as run:
+            self.assertIsNone(shell_doctor.signed_out(self.repo))
+            run.assert_not_called()
+
     def test_claude_signed_out_is_a_problem_and_only_claude_is_asked(self):
         import subprocess
         (self.repo / ".rig" / "harness.toml").write_text('parent = "claude"\n\n[project]\nenabled = true\n')
