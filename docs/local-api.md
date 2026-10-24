@@ -54,6 +54,8 @@ repository. Owner tokens are never returned, and workers may not serve the API.
 | `env.shell` | no | none | The dc exec --no-start command for an interactive shell in a job's container, or why there is none (params: id) |
 | `events.ack` | yes | none | Acknowledge one notice, or all, for a companion session |
 | `events.list` | no | none | Notices for a companion session: approvals, finished work, verification, stop progress |
+| `fleet.map` | no | none | Fleet change: which of this repository and another uses which, from manifests and imports (params: with, the other repository's path) |
+| `fleet.ship` | yes | none | Open linked draft pull requests in this repository and another with one shared description (params: with, title, body) |
 | `fleet.status` | no | none | Fleet panel: workspace containers on the engine with observed CPU and memory, ready to render |
 | `issues.get` | no | none | Issue to PR: whether it is on, the label, and each issue's step (planned, approved, queued, shipped, declined) |
 | `issues.poll` | yes | none | One pass over the issues labelled for Rig with your own gh login: post plans, read your thumbs-up, queue approved work |

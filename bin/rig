@@ -46,6 +46,7 @@ usage: rig <command> [args]
     Optional desktop/browser components ask once (default No); their shared skills install only after opt-in.
   ui [open|status|enable|disable|stop]
   limits [show]                           plan meters per provider, and whether the parent should hand over
+  fleet map|ship REPO REPO [--title T]    one change across two repos: who calls what, linked draft PRs with one description
   issues [show|poll|ship N]              Issue to PR: plan labelled GitHub issues, queue what you approve, ship a draft PR
   limits report PROVIDER PERCENT [--window NAME] [--resets EPOCH]
   uninstall [--dry-run] [--repo PATH]
@@ -1613,9 +1614,10 @@ main() {
   if [[ "$cmd" == "shell" && "${1:-}" != "build" ]] && [[ "$(project_state)" == "uninitialized" ]]; then
     offer_init || true
   fi
-  case "$cmd" in init|setup|update|status|doctor|jobs|worktrees|adapters|tui|memory|timeline|recovery|task|workflows|workflow|queue|routing|billing|help|-h|--help|"") ;; *) [[ "$cmd:${1:-}" == "shell:build" ]] || project_guard || return ;; esac
+  case "$cmd" in init|setup|update|fleet|status|doctor|jobs|worktrees|adapters|tui|memory|timeline|recovery|task|workflows|workflow|queue|routing|billing|help|-h|--help|"") ;; *) [[ "$cmd:${1:-}" == "shell:build" ]] || project_guard || return ;; esac
   case "$cmd" in
     ui) python3 "$(py_script rig_ui.py)" "$@" ;;
+    fleet) python3 "$(py_script fleet_change.py)" "$@" ;;
     issues) python3 "$(py_script issue_to_pr.py)" "$@" --repo "$(repo_root)" ;;
     limits) python3 "$(py_script plan_limits.py)" "$@" --repo "$(repo_root)" ;;
     api) python3 "$(py_script local_api.py)" "$@" --repo "$(repo_root)" ;;
