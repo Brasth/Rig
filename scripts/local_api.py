@@ -747,6 +747,13 @@ def ensure(repo, idle: float = 60.0) -> bool:
     return True
 
 
+def ensure_current(repo, idle: float = 60.0) -> bool:
+    """ensure(), but a server already running another Rig's code (an older install's, or one started before an update)
+    is replaced first, so the methods a client calls are the ones this Rig has. Returns True when a server was started."""
+    replaced = replace_outdated(repo)
+    return ensure(repo, idle) or replaced
+
+
 def call(repo, method, params=None, timeout=10.0) -> dict:
     """Client helper: returns the full JSON-RPC response."""
     endpoint, token_path = runtime_paths(Path(repo).resolve())
@@ -820,7 +827,7 @@ def main(argv=None) -> int:
         return 1
     if args.command == "ensure":
         # Start a detached idle-limited server if needed and wait until it answers.
-        local_api_started = ensure(args.repo, idle=args.idle or 60.0)
+        local_api_started = ensure_current(args.repo, idle=args.idle or 60.0)
         deadline = time.monotonic() + args.timeout
         while time.monotonic() < deadline:
             try:

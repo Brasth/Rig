@@ -269,6 +269,15 @@ class HostedCompanion(Served):
         self.proc.wait(timeout=10)
         self.assertFalse(endpoint.exists())
 
+    def test_ensure_replaces_a_server_running_other_code_then_starts_the_current_one(self):
+        calls = []
+        with mock.patch.object(local_api, "replace_outdated", side_effect=lambda repo: calls.append("replace") or True), \
+                mock.patch.object(local_api, "ensure", side_effect=lambda repo, idle=60.0: calls.append("ensure") or False):
+            self.assertTrue(local_api.ensure_current(self.repo), "a replaced server counts as started")
+        self.assertEqual(calls, ["replace", "ensure"])
+        with mock.patch.object(local_api, "replace_outdated", return_value=False), mock.patch.object(local_api, "ensure", return_value=False):
+            self.assertFalse(local_api.ensure_current(self.repo), "the right server already runs")
+
     def test_old_control_socket_is_gone(self):
         self.start()
         self.assertFalse((local_api.runtime_paths(self.repo)[0].parent / "control.sock").exists())
