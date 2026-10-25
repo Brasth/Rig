@@ -84,6 +84,8 @@ LOCAL_METHODS = {
     "limits.get": (False, "Each provider's plan meters (percent used per window, when it resets), the routing note and whether the parent should hand over or go back"),
     "limits.report": (True, "Keep what a provider's status line or hook says about its plan (params: provider, used_pct, resets_at, window)"),
     "limits.handover": (True, "Hand the parent role to another installed parent, or back to the project's own, remembering which (params: to)"),
+    "fleet.map": (False, "Fleet change: which of this repository and another uses which, from manifests and imports (params: with, the other repository's path)"),
+    "fleet.ship": (True, "Open linked draft pull requests in this repository and another with one shared description (params: with, title, body)"),
     "issues.get": (False, "Issue to PR: whether it is on, the label, and each issue's step (planned, approved, queued, shipped, declined)"),
     "issues.poll": (True, "One pass over the issues labelled for Rig with your own gh login: post plans, read your thumbs-up, queue approved work"),
     "issues.ship": (True, "Open the draft pull request for a queued issue from what is ahead (params: number)"),
@@ -208,7 +210,7 @@ class Api:
         if method == "workspace.status":
             return self._workspace(request_id, params)
         if method in ("job.evidence", "job.diff", "job.thread", "job.pause", "job.problems", "fleet.status", "settings.view", "env.recovery", "env.recover", "log.follow", "env.shell", "shell.parent", "shell.doctor", "shell.fix", "shell.selftest", "shell.selftest_status",
-                      "chat.status", "chat.transcript", "chat.live", "chat.send", "chat.cancel", "chat.rewind", "chat.fork", "chat.search", "chat.steer", "chat.answer", "chat.commands", "chat.models", "chat.parent", "ui.theme", "ui.set_theme", "settings.app", "settings.set", "settings.write_harness", "limits.get", "limits.report", "limits.handover", "issues.get", "issues.poll", "issues.ship",
+                      "chat.status", "chat.transcript", "chat.live", "chat.send", "chat.cancel", "chat.rewind", "chat.fork", "chat.search", "chat.steer", "chat.answer", "chat.commands", "chat.models", "chat.parent", "ui.theme", "ui.set_theme", "settings.app", "settings.set", "settings.write_harness", "limits.get", "limits.report", "limits.handover", "issues.get", "issues.poll", "issues.ship", "fleet.map", "fleet.ship",
                       "applies.today", "applies.undo", "applies.redo", "applies.hold", "ship.status", "ship.run"):
             return self._environment(request_id, method, params)
         if method in ("ui.request", "events.list", "events.ack"):
@@ -380,6 +382,23 @@ def _environment(self, request_id, method, params):
                 if mode not in ("push", "pr") or not isinstance(title, str) or not isinstance(body, str):
                     return _reply(request_id, error=_error(INVALID_PARAMS, "mode is push or pr; title and body are strings"))
                 result = applies.ship(self.repo, mode, title, body)
+        elif method in ("fleet.map", "fleet.ship"):
+            import applies
+            import fleet_change
+            other = params.get("with")
+            if not isinstance(other, str) or not other:
+                return _reply(request_id, error=_error(INVALID_PARAMS, "with is the other repository's path"))
+            try:
+                paths = fleet_change.check_repos([str(self.repo), other])
+                if method == "fleet.map":
+                    result = fleet_change.calls(paths)
+                else:
+                    title, body = params.get("title"), params.get("body", "")
+                    if not isinstance(title, str) or not isinstance(body, str):
+                        return _reply(request_id, error=_error(INVALID_PARAMS, "title and body are strings"))
+                    result = fleet_change.ship(paths, title, body)
+            except (fleet_change.FleetError, applies.ApplyError) as error:
+                return _reply(request_id, error=_error(INVALID_PARAMS, str(error)))
         elif method in ("issues.get", "issues.poll", "issues.ship"):
             import applies
             import harness
