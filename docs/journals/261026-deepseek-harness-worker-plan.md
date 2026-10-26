@@ -1,6 +1,6 @@
 # Plan: DeepSeek Harness (`dsh`) as a Rig worker
 
-Status: proposal, 2026-10-26. Nothing here is built. Written from Rig's code and from DeepSeek's published README
+Status: 2026-10-26. Steps 1 and 2 are built on the unverified assumptions (below); Step 0 is the script `scripts/dsh-probe.sh`, to be run once with the real `dsh` and a key; Steps 3 and 4 wait for its result. The adapter ships as `examples/adapters/deepseek` and is installed by `rig dsh-worker install`, because the runtime installer copies only the built-in adapter folders. Written from Rig's code and from DeepSeek's published README
 and CLI reference; the parts marked **unverified** need one run with the real `dsh` binary and a DeepSeek key, which
 the environment this was written in does not have.
 

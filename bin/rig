@@ -1622,9 +1622,10 @@ main() {
   if [[ "$cmd" == "shell" && "${1:-}" != "build" ]] && [[ "$(project_state)" == "uninitialized" ]]; then
     offer_init || true
   fi
-  case "$cmd" in init|setup|update|fleet|status|doctor|jobs|worktrees|adapters|tui|memory|timeline|recovery|task|workflows|workflow|queue|routing|billing|help|-h|--help|"") ;; *) [[ "$cmd:${1:-}" == "shell:build" ]] || project_guard || return ;; esac
+  case "$cmd" in init|setup|update|fleet|dsh-worker|status|doctor|jobs|worktrees|adapters|tui|memory|timeline|recovery|task|workflows|workflow|queue|routing|billing|help|-h|--help|"") ;; *) [[ "$cmd:${1:-}" == "shell:build" ]] || project_guard || return ;; esac
   case "$cmd" in
     ui) python3 "$(py_script rig_ui.py)" "$@" ;;
+    dsh-worker) python3 "$(py_script rig_dsh.py)" "$@" ;;
     fleet) python3 "$(py_script fleet_change.py)" "$@" ;;
     issues) python3 "$(py_script issue_to_pr.py)" "$@" --repo "$(repo_root)" ;;
     limits) python3 "$(py_script plan_limits.py)" "$@" --repo "$(repo_root)" ;;

@@ -280,6 +280,11 @@ class Conformance(unittest.TestCase):
                      "cancel stops the process tree", "container mode needs a credential choice"):
             self.assertIn(name, results)
 
+    def test_the_deepseek_adapter_conforms_and_matches_what_rig_dsh_installs(self):
+        import rig_dsh
+        self.run_check(EXAMPLES / "deepseek")
+        self.assertEqual(json.loads((EXAMPLES / "deepseek" / "adapter.json").read_text()), rig_dsh.MANIFEST)
+
     def test_an_env_delivered_plain_output_adapter_conforms(self):
         self.run_check(FIXTURES / "env-plain")
 
