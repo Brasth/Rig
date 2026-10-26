@@ -267,6 +267,14 @@ copy_rig_tree() {
 
 py_script() {
   local name="$1" p
+  # A Rig carried inside an app (RIG_BUNDLED=1) runs its own scripts, never an older install's in $RIG_HOME/scripts
+  if [[ "${RIG_BUNDLED:-}" == "1" ]]; then
+    p="$(rig_source_root)/scripts/$name"
+    if [[ -f "$p" ]]; then
+      printf '%s\n' "$p"
+      return 0
+    fi
+  fi
   p="$(rig_home)/scripts/$name"
   if [[ -f "$p" ]]; then
     printf '%s\n' "$p"
