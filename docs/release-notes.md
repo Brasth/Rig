@@ -1,5 +1,12 @@
 # Release Notes
 
+## DeepSeek Harness as a worker (2026-10-26)
+
+- **`worker = "deepseek"`** runs a job with DeepSeek Harness (`dsh`). `rig dsh-worker install` writes the adapter package to `~/.config/rig/adapters/deepseek/`; enable it with `[workers] deepseek = true`. It is an adapter worker: chosen by name, never by smart routing, host mode only, no resume, and no model flag (`dsh` takes its model from its profile).
+- **How it runs:** `rig dsh-worker` starts `dsh --profile headless --patch JOB/dsh.patch.yml "<brief>"` in the job's checkout. The patch adds Rig's job-scoped MCP servers for that run only; your `dsh` profiles and credentials are untouched, `DSH_TELEMETRY_MODE=DISABLED` is set, and the permission mode is `workspace-write`. It needs `dsh` on PATH (`npm install -g @deepseek-ai/dsh`) and `DEEPSEEK_API_KEY` (or `dsh` signed in).
+- **`rig doctor`** gains a `deepseek` row once the adapter is installed: `dsh` found, credentials present. The window app lists DeepSeek Harness among the agents (key variable `DEEPSEEK_API_KEY`, so an exported key needs no browser sign-in) and its Install runs `npm install -g @deepseek-ai/dsh` then `rig dsh-worker install`.
+- **Not yet verified against a real `dsh`:** the MCP patch row shape, that `--patch` applies on top of the `headless` profile, and that headless never waits for an approval. `scripts/dsh-probe.sh` checks all three. `dsh` is a developer preview and its contract may change.
+
 
 
 

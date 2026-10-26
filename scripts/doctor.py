@@ -6,6 +6,7 @@ import argparse
 import hashlib
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -283,6 +284,21 @@ def adapter_check() -> dict | None:
                  required=False)
 
 
+def deepseek_check() -> dict | None:
+    """Reported only when the deepseek adapter (rig dsh-worker install) is installed: dsh on PATH and a key to use it with."""
+    import adapters
+    if adapters.get("deepseek") is None:
+        return None
+    dsh = shutil.which("dsh")
+    home = Path(os.environ.get("DSH_HOME") or Path.home() / ".dsh")
+    key = bool((os.environ.get("DEEPSEEK_API_KEY") or "").strip()) or (home / ".credentials.yaml").is_file()
+    if not dsh:
+        return check("deepseek", "missing", "worker 'deepseek' is installed but dsh is not on PATH (npm install -g @deepseek-ai/dsh)", required=False)
+    if not key:
+        return check("deepseek", "missing", f"dsh found at {dsh} but no DeepSeek credentials: export DEEPSEEK_API_KEY or sign in with dsh once", required=False)
+    return check("deepseek", "ready", f"worker 'deepseek': dsh at {dsh}, credentials present (headless approvals and MCP are checked by scripts/dsh-probe.sh)", required=False)
+
+
 def shell_check() -> dict:
     """Optional: the Go board binary and whether it matches the installed core."""
     import rig_shell
@@ -433,6 +449,9 @@ def build_report(repo: Path, *, task: str = "coding", parent: str = "", model: s
     adapter_row = adapter_check()
     if adapter_row:
         checks.append(adapter_row)
+    deepseek_row = deepseek_check()
+    if deepseek_row:
+        checks.append(deepseek_row)
     chat_row = chat_check(repo)
     if chat_row:
         checks.append(chat_row)

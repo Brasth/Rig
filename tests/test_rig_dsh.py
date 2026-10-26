@@ -61,6 +61,48 @@ class Install(unittest.TestCase):
                     os.environ["XDG_CONFIG_HOME"] = old
 
 
+class Doctor(unittest.TestCase):
+    def test_the_deepseek_check_appears_only_with_the_adapter_and_says_what_is_missing(self):
+        import doctor
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as td:
+            env = {"XDG_CONFIG_HOME": td, "DSH_HOME": str(Path(td) / "dsh-home"), "DEEPSEEK_API_KEY": ""}
+            with mock.patch.dict(os.environ, env):
+                self.assertIsNone(doctor.deepseek_check(), "no adapter, no row")
+                rig_dsh.install_adapter()
+                with mock.patch("shutil.which", return_value=None):
+                    row = doctor.deepseek_check()
+                self.assertEqual(row["status"], "missing")
+                self.assertIn("dsh is not on PATH", row["detail"])
+                with mock.patch("shutil.which", return_value="/bin/dsh"):
+                    self.assertIn("no DeepSeek credentials", doctor.deepseek_check()["detail"])
+                    with mock.patch.dict(os.environ, {"DEEPSEEK_API_KEY": "k"}):
+                        self.assertEqual(doctor.deepseek_check()["status"], "ready")
+
+    def test_settings_counts_the_worker_installed_when_dsh_is(self):
+        import ui_settings
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td) / "repo"
+            (repo / ".git").mkdir(parents=True)
+            (repo / ".rig").mkdir()
+            (repo / ".rig" / "harness.toml").write_text('parent = "claude"\n\n[project]\nenabled = true\n')
+            env = {"XDG_CONFIG_HOME": td, "RIG_HOME": str(Path(td) / "home")}
+            with mock.patch.dict(os.environ, env):
+                rig_dsh.install_adapter()
+                import harness
+                import importlib
+                importlib.reload(harness)  # WORKERS is read once at import: pick up the adapter just installed
+                try:
+                    with mock.patch("shutil.which", side_effect=lambda n: "/bin/dsh" if n == "dsh" else None):
+                        self.assertIn("deepseek", ui_settings.read(repo)["installed"])
+                    with mock.patch("shutil.which", return_value=None):
+                        self.assertNotIn("deepseek", ui_settings.read(repo)["installed"])
+                finally:
+                    os.environ.pop("XDG_CONFIG_HOME", None)
+                    importlib.reload(harness)
+
+
 class Running(unittest.TestCase):
     def setUp(self):
         self.td = tempfile.TemporaryDirectory()

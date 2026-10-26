@@ -127,6 +127,8 @@ def main(argv=None) -> int:
     argv = sys.argv[1:] if argv is None else list(argv)
     if argv[:1] == ["install"]:
         folder = install_adapter()
+        if not shutil.which("dsh"):
+            print("note: dsh is not on PATH yet: npm install -g @deepseek-ai/dsh", file=sys.stderr)
         print(f"installed the deepseek adapter in {folder}\nenable it in .rig/harness.toml:  [workers]  deepseek = true\nthen launch with worker = \"deepseek\"")
         return 0
     parser = argparse.ArgumentParser(prog="rig dsh-worker")

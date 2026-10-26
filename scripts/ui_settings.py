@@ -153,7 +153,8 @@ def read(repo) -> dict:
     theme = ui_theme.read(repo)
     bell_here = _read_key(path, "ui", "bell")
     bell_all = _read_key(ui_theme.global_path(), "ui", "bell")
-    installed = sorted(name for name in harness.WORKERS if shutil.which(name))
+    # DeepSeek Harness is a worker through an adapter: it is present when its own CLI, dsh, is
+    installed = sorted(name for name in harness.WORKERS if shutil.which("dsh" if name == "deepseek" else name))
     try:
         text = path.read_text(errors="replace")
     except OSError:
