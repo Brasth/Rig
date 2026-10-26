@@ -1,0 +1,52 @@
+{
+  "schema": 1,
+  "name": "deepseek",
+  "binary": "rig",
+  "provider": "deepseek",
+  "command": [
+    "{binary}",
+    "dsh-worker",
+    "--work",
+    "{work}",
+    "--brief-file",
+    "{brief_file}",
+    "--job-dir",
+    "{job_dir}",
+    "{model_args}",
+    "{effort_args}",
+    "{mcp}",
+    "{permissions}"
+  ],
+  "model_args": [
+    "--model",
+    "{model}"
+  ],
+  "effort_args": [
+    "--effort",
+    "{effort}"
+  ],
+  "mcp": {
+    "mode": "flag",
+    "argv": [
+      "--mcp-config",
+      "{mcp_path}"
+    ]
+  },
+  "permissions": {
+    "host": [
+      "--mode",
+      "host"
+    ],
+    "container": [
+      "--mode",
+      "container"
+    ]
+  },
+  "container": {
+    "supported": false,
+    "credential_paths": []
+  },
+  "output": {
+    "decoder": "plain"
+  }
+}
