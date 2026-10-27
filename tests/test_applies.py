@@ -111,7 +111,7 @@ class Applies(Gate):
         self.assertEqual(status["upstream"], f"origin/{branch}")
         self.assertEqual(status["title_from"], "tasks", "the merge is shown as the parent's task")
         self.assertTrue(status["ahead"])
-        self.assertTrue(status["pr_branch"].startswith("rig/"))
+        self.assertRegex(status["pr_branch"], r"^[a-z]+/[a-z0-9-]{1,45}$")
         self.assertEqual(applies.ship(self.repo, "push")["shipped"], "push")
         self.assertEqual(applies.ship_status(self.repo)["ahead"], [])
 

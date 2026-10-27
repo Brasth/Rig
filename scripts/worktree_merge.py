@@ -102,6 +102,18 @@ def gate(repo, job_dir):
     return result
 
 
+def _merge_message(root, folder, branch) -> str:
+    """'Merge <the job commit's subject>' with the job as a footer, so history reads as what changed; the old
+    'rig: merge job <id>' when the job commit has no subject to borrow."""
+    try:
+        subject = os.fsdecode(worktrees._git(root, "log", "-1", "--format=%s", branch)).strip()
+    except Exception:
+        subject = ""
+    if not subject or subject.startswith("rig job "):
+        return f"rig: merge job {folder.name}"
+    return f"Merge {subject}\n\nRig-Job: {folder.name}\n"
+
+
 def merge(repo, job_dir, snapshot_id=""):
     """Gate, then merge the job's branch into the base checkout and clean up. Idempotent once merged."""
     root, folder = Path(repo).resolve(), Path(job_dir).resolve()
@@ -128,7 +140,7 @@ def merge(repo, job_dir, snapshot_id=""):
             merge_commit = ""
         else:
             done = subprocess.run(["git", "-C", str(root), *MERGE_IDENTITY, "merge", "--no-ff", "-m",
-                                   f"rig: merge job {folder.name}", record["branch"]],
+                                   _merge_message(root, folder, record["branch"]), record["branch"]],
                                   capture_output=True, text=True, timeout=120,
                                   env={k: v for k, v in os.environ.items() if not k.startswith("GIT_")})
             if done.returncode != 0:

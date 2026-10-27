@@ -79,7 +79,7 @@ class Settings(unittest.TestCase):
     def test_editor_and_notice_preferences_round_trip(self):
         view = ui_settings.read(self.repo)
         self.assertEqual((view["keymap"], view["minimap"], view["away"], view["sound"], view["branch"]),
-                         ("vscode", True, "keep_going", "soft", "rig/{topic}"))
+                         ("vscode", True, "keep_going", "soft", "{type}/{slug}"))
         ui_settings.save(self.repo, "ui.keymap", "vim", "all")
         ui_settings.save(self.repo, "ui.minimap", False, "all")
         ui_settings.save(self.repo, "ui.away", "pause", "all")

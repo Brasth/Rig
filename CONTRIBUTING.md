@@ -6,6 +6,18 @@ Branch from `main`, keep docs and protocol text accurate, and open a focused pul
 - README above-the-fold is for first-time visitors. Keep Install, Smart routing, Adaptive workflows, and Verification details intact below the fold.
 - Deeper contracts live in `docs/usage.md`, `docs/smart-routing.md`, and `.agents/skills/delegate-harness/SKILL.md`.
 
+## Commits, branches and pull requests
+
+Rig writes git text in this form, and contributors use it too (`rig git lint` checks a message; `rig git hook` installs it as a
+`commit-msg` hook):
+
+- **Subject:** `type(scope): imperative summary`, 50 characters (never over 72), no trailing full stop. Types: `feat`, `fix`,
+  `docs`, `style`, `refactor`, `perf`, `test`, `build`, `ci`, `chore`, `revert`. The scope is optional: the module or folder.
+- **Body:** after a blank line, wrapped at 72, saying why rather than what.
+- **Footers:** after another blank line, e.g. `Closes #12`, `Rig-Job: <id>`.
+- **Branch:** `type/short-kebab-slug`, lowercase, at most 50 characters (`feat/plan-meters`, `fix/parent-not-installed`).
+- **Pull request:** a title in the subject form (72 at most) and a body of Summary, Why and Checks (or the repository's own template).
+
 ## Managed agent guidance
 
 Edit `docs/agent-protocol.md`, then run `python3 scripts/generate_protocol.py`.

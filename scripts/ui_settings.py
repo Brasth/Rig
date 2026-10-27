@@ -56,7 +56,9 @@ SETTINGS = {
     "ui.sound": ("ui", "sound", ("soft", "none"), ("all", "repo")),
     # Issue to PR: whether Rig plans the issues labelled for it, kept for this project
     "issues.enabled": ("issues", "enabled", _BOOL, ("repo",)),
-    "ui.branch": ("ui", "branch", ("rig/{topic}", "{topic}", "feature/{topic}"), ("all", "repo")),
+    "ui.branch": ("ui", "branch", ("{type}/{slug}", "rig/{topic}", "{topic}", "feature/{topic}"), ("all", "repo")),
+    # how commit subjects read: "type(scope): summary" (Conventional Commits) or the summary alone
+    "git.commit_style": ("git", "commit_style", ("conventional", "plain"), ("all", "repo")),
 }
 for _name in harness.WORKERS:
     SETTINGS[f"workers.{_name}"] = ("workers", _name, _BOOL, ("repo",))
@@ -183,7 +185,8 @@ def read(repo) -> dict:
         "desktop": _ui(repo, "desktop", "false") == "true",
         "keymap": _ui(repo, "keymap", "vscode"), "minimap": _ui(repo, "minimap", "true") == "true",
         "issues_enabled": _read_key(path, "issues", "enabled") == "true",
-        "away": _ui(repo, "away", "keep_going"), "sound": _ui(repo, "sound", "soft"), "branch": _ui(repo, "branch", "rig/{topic}"),
+        "away": _ui(repo, "away", "keep_going"), "sound": _ui(repo, "sound", "soft"), "branch": _ui(repo, "branch", "{type}/{slug}"),
+        "commit_style": _ui(repo, "commit_style", "conventional", section="git"),
         "routing_table": _routing_table(parsed, installed, parsed["parent"] or "claude"),
         "models": {name: (route_model(name) or "auto") for name in harness.WORKERS},
         "parent_models": {name: parent_model_info(repo, name) for name in MODEL_PARENTS},
@@ -266,9 +269,9 @@ def route_model(worker: str) -> str:
         return ""
 
 
-def _ui(repo: Path, key: str, default: str) -> str:
-    """A [ui] value: this repo's, else the one kept for all repos, else the default."""
-    return (_read_key(harness.harness_path(repo), "ui", key) or _read_key(ui_theme.global_path(), "ui", key)
+def _ui(repo: Path, key: str, default: str, section: str = "ui") -> str:
+    """A [ui] (or other section's) value: this repo's, else the one kept for all repos, else the default."""
+    return (_read_key(harness.harness_path(repo), section, key) or _read_key(ui_theme.global_path(), section, key)
             or default)
 
 
