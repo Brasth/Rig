@@ -315,6 +315,19 @@ def _default_branch(repo: Path, remote: str) -> str:
     return "main"
 
 
+def _pr_title(named: list[str], conf: dict) -> str:
+    """A pull request title of at most 72 characters: the first task as 'type(scope): summary', and how many others rode along.
+    A commit subject that already follows the convention is kept."""
+    import git_style
+    if not named:
+        return ""
+    first = named[0]
+    more = f" (+{len(named) - 1} more)" if len(named) > 1 else ""
+    if git_style.CONVENTIONAL.match(first) and len(first) + len(more) <= git_style.HARD:
+        return first + more
+    return git_style.subject(first, (), conf["style"], git_style.HARD - len(more)) + more
+
+
 def ship_status(repo) -> dict:
     """What is ahead of the upstream branch, and the pull request it would make. A branch that was never pushed has no upstream:
     what is ahead is then what no remote branch has yet, and pushing publishes it (publish: true)."""
@@ -332,20 +345,36 @@ def ship_status(repo) -> dict:
     rows = [{"commit": c, "subject": s} for c, _, s in (line.partition("\t") for line in log.splitlines()) if c]
     # A helper's merge is shown as its task, which the parent wrote; its checks count toward the ones shown here.
     applied = {r["commit"]: r for r in today(repo, since=0)["rows"] if r["state"] == "applied" and r["commit"]}
-    tasks, checks = [], {}
+    tasks, checks, jobs = [], {}, []
     for row in rows:
         job = next((applied[c] for c in applied if row["commit"].startswith(c) or c.startswith(row["commit"])), None)
         if job:
             tasks.append(job["title"])
+            jobs.append(job)
             for check in job.get("checks", []):
                 checks[check["name"]] = checks.get(check["name"], True) and check["ok"]
-    subjects = [r["subject"] for r in rows if not r["subject"].startswith(("rig: merge job", "Revert "))] or [r["subject"] for r in rows]
+    subjects = [r["subject"] for r in rows if not r["subject"].startswith(("rig: merge job", "Merge ", "Revert "))] or [r["subject"] for r in rows]
     named = tasks or subjects
-    title = "; ".join(named[:3])[:72] if named else ""
-    slug = _SLUG.sub("-", (named[0] if named else "changes").lower()).strip("-")[:40] or "changes"
+    import git_style
+    conf = git_style.config(repo)
+    title = _pr_title(named, conf)
+    items = []
+    for job in jobs:
+        full, _worker = git_style.task_of(repo / ".rig" / "jobs" / job["job_id"])
+        items.append({"subject": git_style.subject(full, (), conf["style"], conf["limit"]), "job": job["job_id"],
+                      "why": "\n".join(full.splitlines()[1:]).strip()[:400]})
+    if not items:
+        items = [{"subject": s} for s in subjects[:8]]
+    template = ""
+    for name in (".github/pull_request_template.md", ".github/PULL_REQUEST_TEMPLATE.md", "PULL_REQUEST_TEMPLATE.md", "docs/PULL_REQUEST_TEMPLATE.md"):
+        if (repo / name).is_file():
+            template = (repo / name).read_text(errors="replace")[:4000]
+            break
+    pr_body = git_style.pull_request_body(items, [{"name": k, "ok": v} for k, v in checks.items()], template) if items else ""
+    pr_branch = git_style.branch_name(conf["branch"], named[0] if named else "changes")
     gh = subprocess.run(["sh", "-c", "command -v gh"], capture_output=True).returncode == 0
     return {"branch": branch, "upstream": upstream, "ahead": rows, "title": title, "title_from": "tasks" if tasks else "commits",
-            "checks": [{"name": k, "ok": v} for k, v in checks.items()], "pr_branch": f"rig/{slug}", "gh": gh,
+            "checks": [{"name": k, "ok": v} for k, v in checks.items()], "pr_branch": pr_branch, "body": pr_body, "gh": gh,
             "remote": remote, "publish": bool(not upstream and remote and branch), "base": _default_branch(repo, remote) if remote else ""}
 
 
@@ -382,7 +411,7 @@ def ship(repo, mode: str, title: str = "", body: str = "", draft: bool = False) 
     head = status["pr_branch"]
     _push(repo, remote, remote, f"HEAD:refs/heads/{head}")
     title = (title or status["title"] or "Changes from rig").strip()[:200]
-    body = body or "\n".join(f"- {r['subject']}" for r in status["ahead"])
+    body = body or status["body"] or "\n".join(f"- {r['subject']}" for r in status["ahead"])
     base = status["upstream"].split("/", 1)[1] if status["upstream"] else status["base"]
     done = subprocess.run(["gh", "pr", "create", "--head", head, "--base", base, "--title", title,
                            "--body", body, *(["--draft"] if draft else [])], cwd=str(repo), capture_output=True, text=True, timeout=120, stdin=subprocess.DEVNULL)

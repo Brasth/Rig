@@ -129,7 +129,10 @@ class Lifecycle(Base):
         (Path(record["path"]) / "new.txt").write_text("new\n")
         committed = worktrees.commit_job(self.repo, folder)
         self.assertNotEqual(committed["branch_head"], record["base_head"])
-        self.assertEqual(git(self.repo, "log", "-1", "--format=%an %s", "rig/j1"), "rig rig job j1")
+        message = git(self.repo, "log", "-1", "--format=%an|%B", "rig/j1")
+        self.assertTrue(message.startswith("rig|"), message)
+        self.assertRegex(message.split("|", 1)[1].splitlines()[0], r"^[a-z]+(\([a-z0-9._/-]+\))?: \S.{0,60}$")
+        self.assertIn("Rig-Job: j1", message)
         self.assertEqual((self.repo / "a.txt").read_text(), "one\ntwo\nthree\n")
         again = worktrees.commit_job(self.repo, folder)
         self.assertEqual(again["branch_head"], committed["branch_head"], "nothing new: no second commit")
@@ -196,6 +199,22 @@ class Continuation(Base):
         git(self.repo, "worktree", "remove", "--force", record["path"])
         with self.assertRaisesRegex(worktrees.WorktreeError, "is gone"):
             worktrees.plan(self.repo, "c2", continues="p2")
+
+    def test_a_job_with_a_task_commits_and_merges_with_readable_messages(self):
+        import worktree_merge
+        folder = self.start("t1")
+        (folder / "meta.json").write_text(json.dumps({"task": "Please add rate limiting to login", "worker": "codex"}))
+        record = worktrees.create_job(self.repo, folder)
+        (Path(record["path"]) / "login.py").write_text("limit = 5\n")
+        worktrees.commit_job(self.repo, folder)
+        commit = git(self.repo, "log", "-1", "--format=%B", "rig/t1")
+        self.assertEqual(commit.splitlines()[0], "feat(login): add rate limiting to login")
+        self.assertIn("Rig-Job: t1", commit)
+        self.assertIn("Rig-Worker: codex", commit)
+        worktree_merge.merge(self.repo, folder)
+        merge = git(self.repo, "log", "-1", "--format=%B")
+        self.assertEqual(merge.splitlines()[0], "Merge feat(login): add rate limiting to login")
+        self.assertIn("Rig-Job: t1", merge)
 
     def test_a_merged_predecessor_gives_the_successor_a_fresh_worktree(self):
         import worktree_merge

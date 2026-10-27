@@ -1,5 +1,13 @@
 # Release Notes
 
+## Readable commits, branches and pull requests (2026-10-27)
+
+- **One style for the git text Rig writes** (Conventional Commits, `scripts/git_style.py`): a job's commit is `type(scope): summary` (50 characters, imperative, cut at a word, no full stop) with a wrapped body and `Rig-Job` / `Rig-Worker` footers; the merge commit that applies it is `Merge type(scope): summary` with `Rig-Job`; the pull request title is the first task in that form (72 at most, `(+N more)` when several rode along); the body is Summary, Why, Checks and the jobs, followed by the repository's own pull request template when it has one. The type comes from the task's words and the files it touched; the scope from the file or folder.
+- **Branches** for pull requests follow `[ui] branch`: `{type}/{slug}` (new default, at most 50 characters), `rig/{topic}`, `{topic}` or `feature/{topic}`. The setting is now used by ship (it was stored and ignored before).
+- **`[git] commit_style = "plain"`** keeps the imperative short summary without the type; `[git] subject_limit` changes the 50 (up to 72). Both can be set in Settings › Git and shipping.
+- **`rig git lint`** checks a message, a `--file` or a `--range` against the same rules; **`rig git hook`** installs it as a `commit-msg` hook (an existing hook that is not Rig's is never replaced); **`rig git preview "task"`** shows the subject and branch a task would get.
+- Old history keeps its messages. `Undo` still reverts the merge commit, so applying work still makes exactly one.
+
 ## DeepSeek Harness as a worker (2026-10-26)
 
 - **`worker = "deepseek"`** runs a job with DeepSeek Harness (`dsh`). `rig dsh-worker install` writes the adapter package to `~/.config/rig/adapters/deepseek/`; enable it with `[workers] deepseek = true`. It is an adapter worker: chosen by name, never by smart routing, host mode only, no resume, and no model flag (`dsh` takes its model from its profile).

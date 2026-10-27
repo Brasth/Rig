@@ -358,6 +358,18 @@ def _join_worktree(root, folder, continues, shared):
     return record
 
 
+def _job_message(repo, folder, record, files):
+    """The job's commit message: 'type(scope): summary' from its task and the files it touched, with the job as a footer.
+    Falls back to the old text when the task cannot be read."""
+    try:
+        import git_style
+        task, worker = git_style.task_of(folder)
+        conf = git_style.config(repo)
+        return git_style.message(task, files, [('Rig-Job', record['job_id']), ('Rig-Worker', worker)], conf['style'], conf['limit'])
+    except Exception:
+        return f'rig job {record["job_id"]}'
+
+
 def commit_job(repo, job_dir):
     """Commit what the worker left in its worktree so the merge gate has a commit. Never merges."""
     folder = Path(job_dir).resolve()
@@ -366,8 +378,9 @@ def commit_job(repo, job_dir):
         raise WorktreeError('this job has no worktree')
     work = record['path']
     _git(work, 'add', '-A', timeout=120)
-    if _git(work, 'diff', '--cached', '--name-only').strip():
-        _git(work, *COMMIT_IDENTITY, 'commit', '-q', '-m', f'rig job {record["job_id"]}', timeout=120)
+    changed = os.fsdecode(_git(work, 'diff', '--cached', '--name-only')).strip()
+    if changed:
+        _git(work, *COMMIT_IDENTITY, 'commit', '-q', '-m', _job_message(repo, folder, record, changed.splitlines()), timeout=120)
     record['branch_head'] = os.fsdecode(_git(work, 'rev-parse', 'HEAD')).strip()
     _write_record(folder, record)
     return record
