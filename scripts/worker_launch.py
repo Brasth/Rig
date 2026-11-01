@@ -460,7 +460,7 @@ def launch(repo, **kwargs) -> dict:
         writer_job_ids = [writer_job_id, *(writer_job_ids or [])]
     if role_kind == "review":
         try:
-            context, problem = rig_route._writer_context(
+            writer_ctx, problem = rig_route._writer_context(
                 writer_job_id=writer_job_id, writer_cli=writer_cli, writer_model=writer_model,
                 writer_provider=writer_provider, review_mode=review_mode, repo=repo,
                 writer_job_ids=writer_job_ids, writer_snapshot_ids=writer_snapshot_ids,
@@ -470,19 +470,19 @@ def launch(repo, **kwargs) -> dict:
             raise LaunchError(str(error)) from error
         if review_mode == "independent" and problem:
             raise LaunchError(problem)
-        independence, rejection = rig_route._review_model(model, context)
+        independence, rejection = rig_route._review_model(model, writer_ctx)
         if rejection and review_mode == "independent":
             raise LaunchError(rejection)
-        writer_snapshot_id = writer_snapshot_id or context.get("writer_snapshot_id") or ""
-        writer_cli = writer_cli or context.get("writer_cli") or ""
-        writer_model = writer_model or context.get("writer_model") or ""
-        writer_provider = writer_provider or context.get("writer_provider") or ""
-        if context.get("writer_job_ids"):
-            writer_job_ids = context["writer_job_ids"]
-        if context.get("writer_snapshot_ids"):
-            writer_snapshot_ids = context["writer_snapshot_ids"]
-        if context.get("writer_providers"):
-            writer_providers = context["writer_providers"]
+        writer_snapshot_id = writer_snapshot_id or writer_ctx.get("writer_snapshot_id") or ""
+        writer_cli = writer_cli or writer_ctx.get("writer_cli") or ""
+        writer_model = writer_model or writer_ctx.get("writer_model") or ""
+        writer_provider = writer_provider or writer_ctx.get("writer_provider") or ""
+        if writer_ctx.get("writer_job_ids"):
+            writer_job_ids = writer_ctx["writer_job_ids"]
+        if writer_ctx.get("writer_snapshot_ids"):
+            writer_snapshot_ids = writer_ctx["writer_snapshot_ids"]
+        if writer_ctx.get("writer_providers"):
+            writer_providers = writer_ctx["writer_providers"]
     wrapper = installed_wrapper()
     owner_session = _require_string(kwargs.get("owner_session"), "owner_session").strip()
     initiating_owner = None
