@@ -631,6 +631,21 @@ class WorkerLaunchTests(unittest.TestCase):
         self.assertEqual(meta["workflow_id"], "wf1")
         self.assertEqual(claimed["job_id"], "res-claim")
 
+    def test_review_launch_without_context_package_does_not_attach_writer_context(self):
+        result = self._launch("review-plain", role="review", access="read", model="claude-sonnet-4-6",
+                              worker="claude")
+        folder = self.repo / ".rig" / "jobs" / "review-plain"
+        self.assertNotIn("context_package", result)
+        self.assertFalse((folder / "evidence" / "context-package.json").exists())
+
+    def test_review_launch_with_context_package_attaches_that_package(self):
+        import context_packages
+        ref = context_packages.build(self.repo, {"files": [{"path": "b.py", "reason": "Reference only"}]})["context_package"]
+        result = self._launch("review-ctx", role="review", access="read", model="claude-sonnet-4-6",
+                              worker="claude", context_package=ref)
+        self.assertEqual(result["context_package"], ref)
+        self.assertTrue((self.repo / ".rig" / "jobs" / "review-ctx" / "evidence" / "context-package.json").is_file())
+
     def test_verify_launch_keeps_writer_provenance_without_review_gate(self):
         result = self._launch(
             "verify-node", role="verify", access="read", files=["a.py"],
