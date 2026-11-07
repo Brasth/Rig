@@ -59,6 +59,20 @@ class CrashLog(unittest.TestCase):
             self.assertIn("rig_status", log)
             self.assertIn("Traceback (most recent call last)", log)
 
+    def test_an_expected_rejection_is_an_error_without_a_logged_traceback(self):
+        import admission
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            (repo / ".rig").mkdir()
+            (repo / ".rig" / "harness.toml").write_text('parent = "codex"\n\n[project]\nenabled = true\n')
+            def reject(*a, **k):
+                raise admission.AdmissionError("overlapping workflow writer scopes")
+            with mock.patch.object(rig_mcp.rig_harness, "format_status", side_effect=reject):
+                result = rig_mcp.call_tool("rig_status", {"repo": str(repo)})
+            self.assertTrue(result.get("isError"))
+            self.assertEqual(result["content"][0]["text"], "overlapping workflow writer scopes")
+            self.assertFalse((repo / ".rig" / crash_log.LOG_NAME).exists())
+
     def test_the_log_keeps_only_the_newest(self):
         with tempfile.TemporaryDirectory() as tmp:
             for i in range(400):
