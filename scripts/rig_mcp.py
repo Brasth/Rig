@@ -525,6 +525,9 @@ def call_tool(name: str, args: dict, on_tick=None, *, wait_paths: list[Path] | N
     except SystemExit as exc:
         return _err(str(exc) or "rig error")
     except Exception as exc:  # noqa: BLE001 — MCP must not crash the parent
+        import admission, change_evidence, verification
+        if isinstance(exc, (admission.AdmissionError, change_evidence.EvidenceError, verification.VerificationError)):
+            return _err(str(exc))  # an expected rejection of the input, not a crash: no traceback in mcp-errors.log
         import crash_log
         try:
             crash_log.record(repo, name, exc)
