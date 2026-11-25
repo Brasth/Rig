@@ -616,7 +616,7 @@ class InitPresence(unittest.TestCase):
             "ids": ["opencode-go/glm-5.3-flash"], "fetched_at": time.time(), "status": "ok"}}))
         for name in ("opencode", "omp", "pi", "agy"):
             models = {"opencode": "opencode-go/glm-5.3-flash", "omp": "grok-4.6",
-                      "pi": "grok-4.6", "agy": "gemini-3.8-flash-high"}
+                      "pi": "grok-4.6", "agy": "gemini-4-hydrogen-high"}
             proc = run_rig(
                 self.repo,
                 "job",
@@ -724,7 +724,7 @@ class InitPresence(unittest.TestCase):
         self.assertIn("OpenCode (`opencode`), OMP (`omp`), Pi (`pi`), and Antigravity (`agy`) can be the parent", text)
         self.assertIn("When live parent is agy, do not use nested agy `/agent` dispatch", text)
         self.assertIn("openai/gpt-6-luna", text)
-        self.assertIn("gemini-3.8-flash-high", text)
+        self.assertIn("gemini-4-hydrogen-high", text)
         self.assertIn("~/.rig/cache/model-catalogs.json", text)
         self.assertIn("profiles require exact selectors or declared aliases", text)
         self.assertIn("Never spawn a worker whose harness flag is false", text)

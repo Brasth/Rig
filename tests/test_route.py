@@ -272,8 +272,8 @@ class Pick(unittest.TestCase):
         self.assertIsNone(route.assert_child_model("openai/gpt-5.4-mini"))
         self.assertIsNone(route.assert_child_model("openai/gpt-6-luna"))
         self.assertIsNone(route.assert_child_model("openai/gpt-5.6-terra"))
-        self.assertIsNone(route.assert_child_model("gemini-3.8-flash-high"))
-        self.assertIsNone(route.assert_child_model("gemini-3.1-pro-high"))
+        self.assertIsNone(route.assert_child_model("gemini-4-hydrogen-high"))
+        self.assertIsNone(route.assert_child_model("gemini-4-carbon-high"))
         self.assertIsNotNone(route.assert_child_model("claude-fable-5"))
         self.assertIsNotNone(route.assert_child_model("openai/gpt-5.6-sol"))
 
@@ -358,12 +358,12 @@ class Pick(unittest.TestCase):
         self.assertEqual(route.model_for("pi", "implement"), ("grok-4.6", "high"))
         self.assertEqual(route.model_for("pi", "hard"), ("grok-4.6", "high"))
         self.assertEqual(route.model_for("pi", "review"), ("claude-opus-5-5", "high"))
-        self.assertEqual(route.model_for("agy", "explore"), ("gemini-3.8-flash-low", "low"))
-        self.assertEqual(route.model_for("agy", "mini"), ("gemini-3.8-flash-low", "low"))
-        self.assertEqual(route.model_for("agy", "bulk"), ("gemini-3.8-flash-low", "low"))
-        self.assertEqual(route.model_for("agy", "implement"), ("gemini-3.8-flash-high", "high"))
-        self.assertEqual(route.model_for("agy", "hard"), ("gemini-3.1-pro-high", "high"))
-        self.assertEqual(route.model_for("agy", "review"), ("gemini-3.1-pro-high", "high"))
+        self.assertEqual(route.model_for("agy", "explore"), ("gemini-4-hydrogen-low", "low"))
+        self.assertEqual(route.model_for("agy", "mini"), ("gemini-4-hydrogen-low", "low"))
+        self.assertEqual(route.model_for("agy", "bulk"), ("gemini-4-hydrogen-low", "low"))
+        self.assertEqual(route.model_for("agy", "implement"), ("gemini-4-hydrogen-high", "high"))
+        self.assertEqual(route.model_for("agy", "hard"), ("gemini-4-neon-high", "high"))
+        self.assertEqual(route.model_for("agy", "review"), ("gemini-4-carbon-high", "high"))
         for (_worker, _kind), (model, _effort) in route.MODELS.items():
             self.assertIsNone(route.assert_child_model(model), model)
             raw = model.lower()
@@ -457,7 +457,7 @@ class Pick(unittest.TestCase):
         c = legacy_pick("", ["agy"], "implement", "add a header")
         self.assertEqual(c["worker"], "agy")
         self.assertEqual(c["spawn"], "run-worker")
-        self.assertEqual(c["model"], "gemini-3.8-flash-high")
+        self.assertEqual(c["model"], "gemini-4-hydrogen-high")
         self.assertEqual(c["effort"], "high")
 
     def test_omp_still_beats_pi_with_agy_present(self):
@@ -769,7 +769,7 @@ class ReviewProvenance(unittest.TestCase):
             ("claude-opus-5-5-thinking-high", "anthropic"),
             ("openrouter/anthropic/claude-sonnet-5-5", "anthropic"),
             ("xai-oauth/grok-4.6", "xai"), ("cursor-grok-4.6-high", "xai"),
-            ("google/gemini-3.1-pro-high", "google"), ("composer-2.5-fast", "cursor"),
+            ("google/gemini-4-carbon-high", "google"), ("composer-2.5-fast", "cursor"),
             ("openai/custom-v2", "openai"),
             ("opencode-go/glm-5.3-flash", "zai"), ("zai/glm-5.3-flash", "zai"),
             ("opencode-go/deepseek-v4.1-flash", "deepseek"), ("deepseek/deepseek-v4.1-flash", "deepseek"),
@@ -871,7 +871,7 @@ class ReviewProvenance(unittest.TestCase):
     def test_actual_resolved_model_provider_is_validated(self):
         choice = self.pick(
             ["opencode", "omp"], writer_job_id="writer", review_mode="independent",
-            catalogs={"opencode": ["anthropic/claude-opus-5-5"], "omp": ["google/gemini-3.1-pro-high"]},
+            catalogs={"opencode": ["anthropic/claude-opus-5-5"], "omp": ["google/gemini-4-carbon-high"]},
         )
         self.assertEqual(choice["worker"], "omp")
         self.assertEqual(choice["provider"], "google")
