@@ -79,6 +79,33 @@ class WorkflowState(unittest.TestCase):
         self.assertIn("rig_workflow_cancel", stuck)
         self.assertIn("rig_workflow_resolve", stuck)
 
+    def _accept(self, wid, *ids):
+        spec, state = wf.load_pair(self.repo, wid, required=True)
+        for nid in ids:
+            state["nodes"][nid].update(accepted=True, status="accepted")
+        wf.save_state(self.repo, state)
+
+    def test_an_accepted_node_with_nothing_downstream_releases_its_files(self):
+        wid = self.create([{"id": "w1", "role": "implement", "files": ["a.py"]}])["workflow_id"]
+        other = [{"id": "x", "role": "mini", "files": ["a.py"]}]
+        with self.assertRaisesRegex(wf.WorkflowError, "overlapping workflow writer scopes with"):
+            self.create(other)
+        self._accept(wid, "w1")
+        self.assertTrue(self.create(other)["workflow_id"])
+
+    def test_an_accepted_node_keeps_its_files_while_a_dependent_or_final_verify_is_pending(self):
+        created = self.create([
+            {"id": "w1", "role": "implement", "files": ["a.py"]},
+            {"id": "w2", "role": "mini", "files": ["b.py"], "depends_on": ["w1"]},
+        ])
+        wid = created["workflow_id"]
+        self._accept(wid, "w1")  # w2 still builds on w1
+        with self.assertRaisesRegex(wf.WorkflowError, "overlapping workflow writer scopes with"):
+            self.create([{"id": "x", "role": "mini", "files": ["a.py"]}])
+        self._accept(wid, "w2")  # the automatic final-verify node still has to verify the combined result
+        with self.assertRaisesRegex(wf.WorkflowError, "overlapping workflow writer scopes with"):
+            self.create([{"id": "y", "role": "mini", "files": ["b.py"]}])
+
     def test_max_nodes_default_and_final_verify_for_multiple_writers(self):
         nodes = [{"id": f"n{i}", "role": "implement", "files": [f"f{i}.py"]} for i in range(12)]
         with self.assertRaisesRegex(wf.WorkflowError, "max_nodes"):
