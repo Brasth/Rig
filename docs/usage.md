@@ -755,7 +755,7 @@ See [smart routing](smart-routing.md) for assessment defaults, `.rig/routing.jso
 - Codex: cheap/explore `gpt-6-luna` low. Hard Codex work can use `gpt-5.6-terra` medium. Optional `.rig/routing.json` override for exploration only: profile `codex-explorer-low` selector `gpt-5.3-codex-spark`. Spark is not a baseline and cannot be enabled for write roles.
 - OpenCode (requires OpenCode Go): exact `opencode-go/glm-5.3-flash` by default, then `opencode-go/deepseek-v4.1-flash`, then region-dependent `opencode-go/muse-spark-1.3-contributor`; explore/mini/bulk/implement/verify only, no `--variant`, no hard/review. See [OpenCode cheap-model policy](smart-routing.md#opencode-cheap-model-policy)
 - OMP / Pi: cheap `grok-4.5` `--thinking low`; implement/hard `grok-4.6` `--thinking high`; review `claude-opus-5-5` `--thinking high`
-- agy: cheap `gemini-3.8-flash-low` `--effort low`; implement `gemini-3.8-flash-high` `--effort high`; hard/review `gemini-3.1-pro-high` `--effort high`
+- agy: cheap `gemini-4-hydrogen-low` `--effort low`; implement `gemini-4-hydrogen-high` `--effort high`; hard `gemini-4-neon-high` `--effort high`, review `gemini-4-carbon-high` `--effort high`
 - Devin (child-only): `swe-2-medium` explore/mini/bulk; `swe-2-high` implement; `swe-2-max` hard/review. No `--effort` flag; never swe aliases / SWE-1.x / Fusion / default
 
 Never Fable / Sol / Astra as a child. Opus is allowed.

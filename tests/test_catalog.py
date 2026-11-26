@@ -14,7 +14,7 @@ import route  # noqa: E402
 
 OPENCODE_DEFAULT = "opencode-go/glm-5.3-flash"
 OMP_GROK = "grok-4.6"
-AGY_FLASH = "gemini-3.8-flash-high"
+AGY_FLASH = "gemini-4-hydrogen-high"
 
 
 class CatalogEnv(unittest.TestCase):
@@ -122,12 +122,12 @@ class ParseCatalog(unittest.TestCase):
     def test_agy_skips_fetching_line(self):
         text = (
             "Fetching available models...\n"
-            "gemini-3.8-flash-high\tGemini 3.8 Flash High\n"
-            "gemini-3.8-flash-low  Gemini 3.8 Flash Low\n"
+            "gemini-4-hydrogen-high\tGemini 4 Hydrogen High\n"
+            "gemini-4-hydrogen-low  Gemini 4 Hydrogen Low\n"
         )
         self.assertEqual(
             catalog.parse_agy(text),
-            ["gemini-3.8-flash-high", "gemini-3.8-flash-low"],
+            ["gemini-4-hydrogen-high", "gemini-4-hydrogen-low"],
         )
 
     def test_devin_accepts_json_model_uids_only(self):
@@ -181,7 +181,7 @@ class ResolveAgainstCatalog(unittest.TestCase):
                 "agy",
                 "implement",
                 AGY_FLASH,
-                ["gemini-3.8-flash-low", AGY_FLASH],
+                ["gemini-4-hydrogen-low", AGY_FLASH],
             ),
             AGY_FLASH,
         )
@@ -289,11 +289,11 @@ class PickAndEnvCatalog(unittest.TestCase):
             ["agy"],
             "hard",
             "multi-file architecture",
-            catalogs={"agy": ["gemini-3.1-pro-high", AGY_FLASH]},
+            catalogs={"agy": ["gemini-4-carbon-high", AGY_FLASH]},
             policy_mode="legacy",
         )
         self.assertEqual(c["effort"], "high")
-        self.assertEqual(c["model"], "gemini-3.1-pro-high")
+        self.assertEqual(c["model"], "gemini-4-carbon-high")
 
     def test_resolved_env_matches_pick(self):
         catalogs = {"omp": ["xai-oauth/grok-4.6"]}
@@ -328,10 +328,10 @@ class ProbeAndCache(CatalogEnv):
 
     def test_refresh_bypasses_ttl(self):
         catalog.cache_put("agy", [AGY_FLASH])
-        self._bin("agy", 'echo "gemini-3.8-flash-low"\n')
+        self._bin("agy", 'echo "gemini-4-hydrogen-low"\n')
         os.environ["RIG_REFRESH_MODELS"] = "1"
         ids = catalog.load_catalog("agy")
-        self.assertEqual(ids, ["gemini-3.8-flash-low"])
+        self.assertEqual(ids, ["gemini-4-hydrogen-low"])
 
     def test_skip_does_not_probe(self):
         self._bin("pi", 'echo "xai grok-4.6 1"\n')
@@ -377,10 +377,10 @@ class ProbeAndCache(CatalogEnv):
         data = json.loads(self.cache.read_text())
         data["agy"]["fetched_at"] = time.time() - catalog.TTL_SECONDS - 10
         self.cache.write_text(json.dumps(data))
-        self._bin("agy", 'echo "gemini-3.8-flash-low"\n')
+        self._bin("agy", 'echo "gemini-4-hydrogen-low"\n')
         os.environ["RIG_REFRESH_MODELS"] = "1"
         ids = catalog.load_catalog("agy")
-        self.assertEqual(ids, ["gemini-3.8-flash-low"])
+        self.assertEqual(ids, ["gemini-4-hydrogen-low"])
 
     def test_load_catalogs_probes_missing_in_parallel(self):
         def slow_probe(worker, timeout=8.0):

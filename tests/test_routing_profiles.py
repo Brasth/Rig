@@ -39,9 +39,9 @@ class BuiltinPins(unittest.TestCase):
             "pi-grok-4.5-low": ("pi", "explore"),
             "pi-grok-4.6-high": ("pi", "implement"),
             "pi-claude-opus-5-high": ("pi", "review"),
-            "agy-gemini-3.8-flash-low": ("agy", "explore"),
-            "agy-gemini-3.8-flash-high": ("agy", "implement"),
-            "agy-gemini-3.1-pro-high": ("agy", "hard"),
+            "agy-gemini-4-hydrogen-low": ("agy", "explore"),
+            "agy-gemini-4-hydrogen-high": ("agy", "implement"),
+            "agy-gemini-4-carbon-high": ("agy", "hard"),
         }
         for pid, (worker, kind) in mapping.items():
             model, effort = route.model_for(worker, kind)

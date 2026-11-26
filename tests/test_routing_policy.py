@@ -674,7 +674,7 @@ class CatalogStale(unittest.TestCase):
         self.assertIn("catalog-unavailable", codes)
 
     def test_smart_refresh_uses_probe_catalog(self):
-        self._put("agy", ["gemini-3.8-flash-high"], catalog.TTL_SECONDS + 5)
+        self._put("agy", ["gemini-4-hydrogen-high"], catalog.TTL_SECONDS + 5)
         called = []
 
         def fake_catalog(worker, timeout=8.0):

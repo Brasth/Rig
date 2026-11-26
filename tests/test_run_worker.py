@@ -528,7 +528,7 @@ class OpenCodeOmpPiWorkerArgv(unittest.TestCase):
         self.assertIn("--mode accept-edits", out)
         self.assertIn("--print-timeout 1200s", out)
         self.assertIn("--disable-slash-commands", out)
-        self.assertIn("--model gemini-3.8-flash-high", out)
+        self.assertIn("--model gemini-4-hydrogen-high", out)
         self.assertIn("--effort high", out)
         self.assertNotIn("--dangerously-skip-permissions", out)
         self.assertNotIn("gpt-5.6-sol", out)
