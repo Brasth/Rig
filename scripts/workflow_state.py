@@ -277,6 +277,7 @@ def _validate_graph(nodes):
                 raise WorkflowError(
                     "overlapping workflow writer scopes are rejected, not sequenced: "
                     + ", ".join(sorted(overlap)[:8])
+                    + "; wait for that workflow to finish, cancel it, or give this node disjoint files"
                 )
             conflict = resources_conflict(left_res, _writer_resources(right))
             if conflict:
@@ -736,7 +737,7 @@ def load_spec(repo, workflow_id, *, required=False):
     spec = _read_legacy(path)
     if spec is None:
         if required:
-            raise WorkflowError("workflow spec is missing")
+            raise WorkflowError(f"workflow spec is missing for {workflow_id}; list workflows to find a valid id")
         return None
     spec.setdefault("version", 1)
     spec.setdefault("nodes", [])
