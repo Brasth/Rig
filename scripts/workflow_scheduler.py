@@ -559,15 +559,21 @@ def resolve_node(repo, workflow_id, node_id, *, action="retry", rationale="", ow
             raise SchedulerError("resolve the failed node first")
         if action == "retry":
             if row.get("ran") and row.get("status") not in {"failed", "cancelled"}:
-                raise SchedulerError("identical retry requires a stopped/released attempt")
+                raise SchedulerError(
+                    f"identical retry requires a stopped/released attempt: node is {row.get('status')}; "
+                    "stop or cancel its job, or let it fail, before retrying")
             rid = row.get("reservation_id") or ""
             reservation = admission.get_reservation(root, rid) if rid else None
             if reservation and reservation.get("stage") not in {None, "released"} and not reservation.get("stopped"):
-                raise SchedulerError("identical retry requires a stopped/released attempt")
+                raise SchedulerError(
+                    f"identical retry requires a stopped/released attempt: reservation is {reservation.get('stage')}; "
+                    "stop or release it first")
             if row.get("job_id"):
                 meta = wf._job_row(root, row["job_id"])
                 if meta and str(meta.get("status") or "") in {"running", "ask"}:
-                    raise SchedulerError("identical retry requires a stopped/released attempt")
+                    raise SchedulerError(
+                        f"identical retry requires a stopped/released attempt: job {row['job_id']} is still {meta.get('status')}; "
+                        "stop or cancel it first")
             row.update(
                 status="pending", launched=False, ran=False, job_id="", reservation_id="", attempt_id="",
                 blocker="", skip_rationale="", parent_action=None,

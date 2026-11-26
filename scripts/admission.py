@@ -57,7 +57,9 @@ def _root(repo):
 def _id(value, label="id", optional=False):
     if optional and not value:
         return ""
-    if not isinstance(value, str) or value in {"", ".", ".."} or not _ID.fullmatch(value):
+    if value in {None, ""}:
+        raise AdmissionError(f"invalid {label}: required but empty")
+    if not isinstance(value, str) or value in {".", ".."} or not _ID.fullmatch(value):
         raise AdmissionError(f"invalid {label}")
     return value
 
@@ -527,6 +529,8 @@ def _same_initiating_owner(left, right):
 
 def match_credentials(root, reservation_id, attempt_id, owner_token, job_id=""):
     """Token/attempt/job match without requiring the initiating actor to still be alive."""
+    if not attempt_id:
+        raise AdmissionError("invalid attempt id: required but empty; pass the attempt_id from the rig_job_start/rig_job_launch result")
     _id(attempt_id, "attempt id")
     if not isinstance(owner_token, str) or not owner_token:
         raise AdmissionError("owner credentials required")

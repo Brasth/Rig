@@ -437,7 +437,10 @@ def accept(repo, job_dir, decision, snapshot_id, check_ids=None, rationale="", n
         frozen = contracts.load(root, folder, meta)
         current = _snapshot(root, folder)
         if not snapshot_id or current["snapshot_id"] != snapshot_id:
-            raise VerificationError("content_changed: acceptance requires the current subject snapshot")
+            raise VerificationError(
+                "content_changed: acceptance requires the current subject snapshot "
+                f"(given {str(snapshot_id or '')[:12] or 'none'}, current {current['snapshot_id'][:12]}); "
+                "re-read the job with rig_job_show, review the changed files, then accept with the current snapshot_id")
         selected = set(check_ids or [])
         known = {row["check_id"] for row in _check_rows(folder)}
         if selected - known:
