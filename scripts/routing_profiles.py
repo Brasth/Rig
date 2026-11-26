@@ -30,6 +30,8 @@ WRITER_ROLES = ("mini", "bulk", "implement", "hard")
 FAST_STANDARD_WORKERS = ("codex", "grok", "claude", "devin", "mimo", "opencode", "omp", "pi", "agy", "cursor")
 STRONG_REVIEW_WORKERS = ("devin", "claude", "codex", "grok", "opencode", "omp", "pi", "agy", "cursor")
 CATALOG_WORKERS = frozenset({"opencode", "omp", "pi", "agy", "devin", "mimo"})
+# Workers the scored picker treats as equals: same capability tiers, shared preference rank, tie broken per task.
+PEER_WORKERS = frozenset({"claude", "agy"})
 KNOWN_PROVIDERS = frozenset(
     {"openai", "anthropic", "xai", "google", "cursor", "cognition", "xiaomi", "zai", "deepseek", "meta"}
 )
@@ -528,36 +530,37 @@ def _builtin_capability(pid: str) -> Capability:
         security=86, performance=78, migration=80, documentation=76,
         frontend=70, data=74, general=84,
     )
+    haiku = _from(fast, documentation=72, speed=88, cost=84)
+    sonnet = _from(standard, quality=80, frontend=84, documentation=80)
+    opus = _from(strong, quality=96, architecture=96, security=94, reasoning=96, implementation=92, debugging=90)
     table = {
         "grok-4.5-low": _from(fast, debugging=66),
-        "claude-haiku-4-5-low": _from(fast, documentation=72, speed=88, cost=84),
+        "claude-haiku-4-5-low": haiku,
         "codex-explorer-low": _from(fast, implementation=22, general=72, quality=60),
         "codex-luna-low": _from(fast, implementation=70, quality=64, reasoning=48),
         "omp-grok-4.5-low": _from(fast, debugging=66),
         "pi-grok-4.5-low": _from(fast, debugging=66),
-        "agy-gemini-4-hydrogen-low": _from(fast, speed=86, cost=88, quality=54),
+        "agy-gemini-4-hydrogen-low": haiku,  # agy and claude are peers: equal capability per tier
         "devin-swe-2-medium": _from(fast, implementation=68, quality=60),
         "cursor-composer-2.5-fast": _from(fast, quality=50, speed=82),
         "grok-4.7-high": _from(standard, quality=82, debugging=84, reasoning=78),
-        "claude-sonnet-5-medium": _from(standard, quality=80, frontend=84, documentation=80),
+        "claude-sonnet-5-medium": sonnet,
         "omp-grok-4.6-high": _from(standard, quality=74, implementation=76, reasoning=72),
         "pi-grok-4.6-high": _from(standard, quality=74, implementation=76, reasoning=72),
-        "agy-gemini-4-hydrogen-high": _from(standard, quality=74, speed=70),
+        "agy-gemini-4-hydrogen-high": sonnet,
         "devin-swe-2-high": _from(standard, quality=72, implementation=74),
         "mimo-v2-flash-low": _from(fast, quality=58, implementation=66, speed=82),
         "mimo-v2-pro-high": _from(standard, quality=77, implementation=79, debugging=78),
         "cursor-composer-2.5": _from(standard, quality=70),
-        "claude-opus-5-high": _from(
-            strong, quality=96, architecture=96, security=94, reasoning=96, implementation=92, debugging=90,
-        ),
+        "claude-opus-5-high": opus,
         "omp-claude-opus-5-high": _from(
             strong, quality=96, architecture=96, security=94, reasoning=96, implementation=92,
         ),
         "pi-claude-opus-5-high": _from(
             strong, quality=96, architecture=96, security=94, reasoning=96, implementation=92,
         ),
-        "agy-gemini-4-neon-high": _from(strong, quality=92, data=88, reasoning=92),
-        "agy-gemini-4-carbon-high": _from(strong, quality=88, data=84, reasoning=88),
+        "agy-gemini-4-neon-high": opus,
+        "agy-gemini-4-carbon-high": opus,
         "devin-swe-2-max": _from(strong, quality=86, architecture=84),
         "codex-terra-medium": _from(strong, quality=84, reasoning=80, implementation=82),
         "codex-terra-high": _from(strong, quality=86, reasoning=88),

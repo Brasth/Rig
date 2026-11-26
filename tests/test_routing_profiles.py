@@ -41,7 +41,8 @@ class BuiltinPins(unittest.TestCase):
             "pi-claude-opus-5-high": ("pi", "review"),
             "agy-gemini-4-hydrogen-low": ("agy", "explore"),
             "agy-gemini-4-hydrogen-high": ("agy", "implement"),
-            "agy-gemini-4-carbon-high": ("agy", "hard"),
+            "agy-gemini-4-neon-high": ("agy", "hard"),
+            "agy-gemini-4-carbon-high": ("agy", "review"),
         }
         for pid, (worker, kind) in mapping.items():
             model, effort = route.model_for(worker, kind)
@@ -168,3 +169,25 @@ class PreferenceOrder(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PeerWorkers(unittest.TestCase):
+    def setUp(self):
+        self.rows = profiles.profiles_by_id()
+
+    def test_agy_and_claude_have_equal_capability_per_tier(self):
+        pairs = (("claude-haiku-4-5-low", "agy-gemini-4-hydrogen-low"),
+                 ("claude-sonnet-5-medium", "agy-gemini-4-hydrogen-high"),
+                 ("claude-opus-5-high", "agy-gemini-4-neon-high"),
+                 ("claude-opus-5-high", "agy-gemini-4-carbon-high"))
+        for claude, agy in pairs:
+            self.assertEqual(self.rows[claude].capability, self.rows[agy].capability, agy)
+
+    def test_peer_tiebreak_is_stable_per_task_and_splits_across_tasks(self):
+        import routing_policy
+        claude, agy = self.rows["claude-sonnet-5-medium"], self.rows["agy-gemini-4-hydrogen-high"]
+        self.assertEqual(routing_policy._peer_tiebreak(claude, "t"), routing_policy._peer_tiebreak(claude, "t"))
+        self.assertEqual(routing_policy._peer_tiebreak(self.rows["codex-luna-low"], "t"), 0)
+        firsts = {routing_policy._peer_tiebreak(claude, f"task {i}") < routing_policy._peer_tiebreak(agy, f"task {i}")
+                  for i in range(40)}
+        self.assertEqual(firsts, {True, False})

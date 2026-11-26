@@ -277,7 +277,7 @@ def _validate_graph(nodes):
                 raise WorkflowError(
                     "overlapping workflow writer scopes are rejected, not sequenced: "
                     + ", ".join(sorted(overlap)[:8])
-                    + "; wait for that workflow to finish, cancel it, or give this node disjoint files"
+                    + "; give these nodes disjoint files or merge them into one node"
                 )
             conflict = resources_conflict(left_res, _writer_resources(right))
             if conflict:
@@ -925,11 +925,20 @@ def active_writer_scopes(repo, *, skip=""):
                 continue
             scopes.append({
                 "workflow_id": wid,
+                "workflow_status": state.get("status") or "",
+                "node_status": row.get("status") or "",
                 "node_id": node["id"],
                 "files": list(_writer_files(node)),
                 "resources": _writer_resources(node),
             })
     return scopes
+
+
+def _overlap_remedy(workflow_status):
+    if workflow_status in {"failed", "attention", "blocked", "cancel-requested"}:
+        return ("that workflow is not progressing but still holds these files until it is cancelled "
+                "(rig_workflow_cancel) or its node is resolved (rig_workflow_resolve)")
+    return "wait for it to finish (rig_workflow_wait), cancel it (rig_workflow_cancel), or give this node disjoint files"
 
 
 def _reject_writer_overlap(repo, spec, *, skip=""):
@@ -941,8 +950,9 @@ def _reject_writer_overlap(repo, spec, *, skip=""):
             overlap = files & set(other["files"])
             if overlap:
                 raise WorkflowError(
-                    f"overlapping workflow writer scopes with {other['workflow_id']}/{other['node_id']}: "
-                    + ", ".join(sorted(overlap)[:8])
+                    f"overlapping workflow writer scopes with {other['workflow_id']}/{other['node_id']} "
+                    f"({other['workflow_status']} workflow, node {other['node_status']}): "
+                    + ", ".join(sorted(overlap)[:8]) + "; " + _overlap_remedy(other["workflow_status"])
                 )
             conflict = resources_conflict(resources, other["resources"])
             if conflict:

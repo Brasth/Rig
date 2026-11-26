@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import hashlib
 import catalog as rig_catalog
 import preparation_routing as prep_routing
 import routing_profiles as rig_profiles
@@ -516,7 +517,15 @@ def _select_ordered(cfg, kind: str, need: str, decisions: dict, session: Catalog
     return selected, selected_tier, selected_model, catalog_meta, []
 
 
-def _select_scored(cfg, kind: str, need: str, decisions: dict, session: CatalogSession, review_ctx, traits, worker: str = ""):
+def _peer_tiebreak(profile, seed: str) -> int:
+    """Per-task, reproducible order between peer workers; 0 for everyone else."""
+    if profile.worker not in rig_profiles.PEER_WORKERS:
+        return 0
+    return int(hashlib.sha256(f"{seed}\0{profile.worker}".encode()).hexdigest()[:8], 16)
+
+
+def _select_scored(cfg, kind: str, need: str, decisions: dict, session: CatalogSession, review_ctx, traits, worker: str = "",
+                   tiebreak_seed: str = ""):
     lists = {tier: _preference_list(cfg, kind, tier) for tier in sufficient_tiers(need)}
     pool = set()
     for order in lists.values():
@@ -554,6 +563,10 @@ def _select_scored(cfg, kind: str, need: str, decisions: dict, session: CatalogS
             "catalog": meta,
             "rank": rank_of.get(profile.id, missing_rank),
         })
+    peer_ranks = [row["rank"] for row in eligible if row["profile"].worker in rig_profiles.PEER_WORKERS]
+    for row in eligible:  # peers share their best rank so preference order never separates them
+        if peer_ranks and row["profile"].worker in rig_profiles.PEER_WORKERS:
+            row["rank"] = min(peer_ranks)
     grouped: dict[tuple, list] = {}
     for row in eligible:
         profile = row["profile"]
@@ -584,7 +597,9 @@ def _select_scored(cfg, kind: str, need: str, decisions: dict, session: CatalogS
             "best": best,
             "rows": rows,
         })
-    ranked.sort(key=lambda row: (-row["score"], row["preference_rank"], row["profile_id"]))
+    ranked.sort(key=lambda row: (
+        -row["score"], row["preference_rank"], _peer_tiebreak(cfg.profiles[row["profile_id"]], tiebreak_seed), row["profile_id"],
+    ))
     selected = None
     selected_tier = ""
     selected_model = ""
@@ -928,7 +943,7 @@ def smart_pick(
         selection_source = "ordered"
     else:
         selected, selected_tier, selected_model, catalog_meta, canonical = _select_scored(
-            cfg, kind, need, decisions, session, review_ctx, traits,
+            cfg, kind, need, decisions, session, review_ctx, traits, tiebreak_seed=case,
         )
         selection_source = "scored"
         if domain_managed:
