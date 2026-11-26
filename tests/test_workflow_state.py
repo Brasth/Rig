@@ -68,6 +68,17 @@ class WorkflowState(unittest.TestCase):
                 {"id": "b", "role": "mini", "files": ["a.py"]},
             ]})
 
+    def test_cross_workflow_overlap_names_the_blocker_and_the_remedy(self):
+        first = self.create([{"id": "w1", "role": "implement", "files": ["a.py"]}])
+        with self.assertRaises(wf.WorkflowError) as ctx:
+            self.create([{"id": "w2", "role": "mini", "files": ["a.py"]}])
+        text = str(ctx.exception)
+        self.assertIn(f"with {first['workflow_id']}/w1 (planned workflow, node pending)", text)
+        self.assertIn("rig_workflow_wait", text)
+        stuck = wf._overlap_remedy("failed")
+        self.assertIn("rig_workflow_cancel", stuck)
+        self.assertIn("rig_workflow_resolve", stuck)
+
     def test_max_nodes_default_and_final_verify_for_multiple_writers(self):
         nodes = [{"id": f"n{i}", "role": "implement", "files": [f"f{i}.py"]} for i in range(12)]
         with self.assertRaisesRegex(wf.WorkflowError, "max_nodes"):
