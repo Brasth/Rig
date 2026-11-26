@@ -909,6 +909,22 @@ def list_workflows(repo, *, include_terminal=True):
     return rows
 
 
+def _released_nodes(spec, state):
+    """Accepted writer nodes whose files no unfinished node still builds on or verifies.
+
+    Their changes already live in the base checkout, so other workflows may write those files."""
+    rows = state.get("nodes") or {}
+    done = lambda nid: (rows.get(nid) or {}).get("accepted") or (rows.get(nid) or {}).get("status") in {"skipped", "cancelled"}
+    released = set()
+    for node in spec.get("nodes") or []:
+        if not (rows.get(node["id"]) or {}).get("accepted"):
+            continue
+        downstream = [other["id"] for other in spec["nodes"] if node["id"] in _transitive(spec["nodes"], other["id"])]
+        if all(done(nid) for nid in downstream):
+            released.add(node["id"])
+    return released
+
+
 def active_writer_scopes(repo, *, skip=""):
     scopes = []
     for wid in list_ids(repo):
@@ -917,8 +933,9 @@ def active_writer_scopes(repo, *, skip=""):
         spec, state = load_pair(repo, wid)
         if spec is None or state is None or state.get("status") in TERMINAL:
             continue
+        released = _released_nodes(spec, state)
         for node in spec.get("nodes") or []:
-            if not _is_writer(node):
+            if not _is_writer(node) or node["id"] in released:
                 continue
             row = (state.get("nodes") or {}).get(node["id"]) or {}
             if row.get("status") in {"skipped", "cancelled"}:
