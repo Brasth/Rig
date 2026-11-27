@@ -101,6 +101,12 @@ class ContextPackages(unittest.TestCase):
         (self.repo / "bad.txt").write_text("\n\t")
         self.assertEqual(cp.preview(self.repo, {"files": [{"path": "bad.txt", "reason": "blank"}]})["files"][0]["bytes"], 2)
 
+    def test_php_and_other_common_source_types_are_allowed_and_unknown_ones_name_the_suffix(self):
+        for name in ("includes/Builder/PreviewContentRenderer.php", "src/a.vue", "src/b.mjs"):
+            self.assertEqual(cp._relative(name), name)
+        with self.assertRaisesRegex(cp.ContextPackageError, r"non-allowlisted-text-file: \.bin is not"):
+            cp._relative("data/blob.bin")
+
     def test_symlinks_directories_pipes_and_artifact_escape_refused(self):
         (self.repo / "alias.md").symlink_to(self.repo / "two.md")
         (self.repo / "directory.md").mkdir()

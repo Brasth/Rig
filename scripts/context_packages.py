@@ -28,7 +28,8 @@ LIMITS = {"files": MAX_FILES, "file_bytes": MAX_FILE_BYTES,
 WARNING = "Credential screening is conservative and incomplete; it cannot guarantee that text contains no secrets."
 SUFFIXES = frozenset({".md", ".txt", ".rst", ".py", ".js", ".jsx", ".ts", ".tsx", ".json", ".toml",
                      ".yaml", ".yml", ".sh", ".bash", ".css", ".scss", ".html", ".xml", ".sql", ".rs",
-                     ".go", ".java", ".c", ".h", ".cc", ".cpp", ".hpp", ".rb", ".swift", ".kt"})
+                     ".go", ".java", ".c", ".h", ".cc", ".cpp", ".hpp", ".rb", ".swift", ".kt", ".php", ".mjs", ".cjs",
+                     ".mts", ".cts", ".vue", ".svelte", ".cs", ".scala", ".dart", ".lua", ".graphql"})
 BASENAMES = frozenset({"readme", "license", "makefile", "dockerfile", "contributing", "justfile"})
 PRIVATE_PARTS = frozenset({".rig", ".git", ".ssh", ".aws", ".azure", ".gcloud", ".codex",
                            "user_notes", "dream_notes", "memories", "memories_v2"})
@@ -129,7 +130,8 @@ def _relative(value):
             or path.suffix.lower() in PRIVATE_SUFFIXES):
         raise ContextPackageError(f"context refused: {value} (prohibited-file)")
     if path.suffix.lower() not in SUFFIXES and path.name.lower() not in BASENAMES:
-        raise ContextPackageError(f"context refused: {value} (non-allowlisted-text-file)")
+        raise ContextPackageError(
+            f"context refused: {value} (non-allowlisted-text-file: {path.suffix.lower() or path.name} is not an allowed source type)")
     return value
 
 
