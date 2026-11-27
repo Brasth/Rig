@@ -73,6 +73,53 @@ class CrashLog(unittest.TestCase):
             self.assertEqual(result["content"][0]["text"], "overlapping workflow writer scopes")
             self.assertFalse((repo / ".rig" / crash_log.LOG_NAME).exists())
 
+    def test_any_rig_defined_rejection_is_not_logged_but_a_plain_value_error_is(self):
+        import context_packages
+        self.assertTrue(rig_mcp._is_rig_rejection(context_packages.ContextPackageError("context refused: x")))
+        self.assertTrue(rig_mcp._is_rig_rejection(__import__("workflow_state").WorkflowError("overlap")))
+        self.assertFalse(rig_mcp._is_rig_rejection(ValueError("a bug")))
+        self.assertFalse(rig_mcp._is_rig_rejection(_raised()))
+        import json
+        try:
+            json.loads("{")
+        except ValueError as error:
+            self.assertFalse(rig_mcp._is_rig_rejection(error))
+
+    def _serve(self, raw, handle=None):
+        import io
+        out = io.BytesIO()
+        stdin = mock.Mock(buffer=io.BytesIO(raw))
+        stdout = mock.Mock(buffer=out)
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(rig_mcp.sys, "stdin", stdin), \
+                mock.patch.object(rig_mcp.sys, "stdout", stdout), mock.patch.object(rig_mcp, "_FRAMING", "ndjson"), \
+                mock.patch.object(rig_mcp.rig_jobs, "repo_root", return_value=Path(tmp)), \
+                mock.patch.object(rig_mcp._runtime, "shutdown"):
+            if handle:
+                with mock.patch.object(rig_mcp, "handle", side_effect=handle):
+                    code = rig_mcp._serve_messages()
+            else:
+                code = rig_mcp._serve_messages()
+            log = Path(tmp, ".rig", crash_log.LOG_NAME)
+            return code, out.getvalue().decode(), log.read_text() if log.exists() else ""
+
+    def test_a_malformed_message_gets_a_parse_error_and_the_server_keeps_serving(self):
+        code, out, log = self._serve(b'{not json\n{"jsonrpc":"2.0","id":7,"method":"ping"}\n')
+        self.assertEqual(code, 0)
+        self.assertIn('"code": -32700', out)
+        self.assertIn('"id": 7', out)
+        self.assertIn("transport parse error", log)
+
+    def test_a_handler_failure_answers_that_request_and_keeps_serving(self):
+        def boom(msg):
+            if msg.get("id") == 1:
+                raise RuntimeError("handler bug")
+            return {"jsonrpc": "2.0", "id": msg.get("id"), "result": {}}
+        code, out, log = self._serve(b'{"id":1,"method":"x"}\n{"id":2,"method":"x"}\n', handle=boom)
+        self.assertEqual(code, 0)
+        self.assertIn('"code": -32603', out)
+        self.assertIn('"id": 2, "result"', out)
+        self.assertIn("transport handle failed", log)
+
     def test_the_log_keeps_only_the_newest(self):
         with tempfile.TemporaryDirectory() as tmp:
             for i in range(400):

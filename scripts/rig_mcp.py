@@ -525,8 +525,7 @@ def call_tool(name: str, args: dict, on_tick=None, *, wait_paths: list[Path] | N
     except SystemExit as exc:
         return _err(str(exc) or "rig error")
     except Exception as exc:  # noqa: BLE001 — MCP must not crash the parent
-        import admission, change_evidence, verification
-        if isinstance(exc, (admission.AdmissionError, change_evidence.EvidenceError, verification.VerificationError)):
+        if _is_rig_rejection(exc):
             return _err(str(exc))  # an expected rejection of the input, not a crash: no traceback in mcp-errors.log
         import crash_log
         try:
@@ -534,6 +533,15 @@ def call_tool(name: str, args: dict, on_tick=None, *, wait_paths: list[Path] | N
         except NameError:  # the failure came before the project was resolved
             pass
         return _err(crash_log.describe(exc))
+
+def _is_rig_rejection(exc):
+    """A deliberate rejection: a ValueError subclass one of Rig's own scripts defines (AdmissionError, ContextPackageError, ...)."""
+    cls = type(exc)
+    if not isinstance(exc, ValueError) or cls.__module__ == "builtins":
+        return False
+    path = getattr(sys.modules.get(cls.__module__), "__file__", None)
+    return bool(path) and Path(path).resolve().parent == Path(__file__).resolve().parent
+
 
 _FRAMING = "lsp"
 _out_lock = threading.Lock()
@@ -739,18 +747,47 @@ def main() -> int:
             _runtime.shutdown()
 
 
+def _log_transport(where, exc):
+    """Leave the reason the server dropped or survived a bad message in .rig/mcp-errors.log; never raise."""
+    try:
+        import crash_log
+        crash_log.record(rig_jobs.repo_root(None), where, exc)
+    except Exception:  # noqa: BLE001 — diagnostics must not take the transport down
+        pass
+
+
 def _serve_messages() -> int:
+    import crash_log
     while True:
         try:
             msg = read_message()
-        except (OSError, json.JSONDecodeError, ValueError):
+        except (json.JSONDecodeError, UnicodeDecodeError) as error:
+            # The whole message was consumed, so the stream is still in sync: answer and keep serving.
+            _log_transport("transport parse error", error)
+            reply = {"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": "parse error"}}
+            try:
+                write_message(reply)
+            except OSError:
+                return 1
+            continue
+        except (OSError, ValueError) as error:  # framing is lost: log why the transport is closing
+            _log_transport("transport read failed", error)
             return 1
         if msg is None:
             _runtime.shutdown()
             return 0
-        reply = handle(msg)
+        try:
+            reply = handle(msg)
+        except Exception as error:  # noqa: BLE001 — one bad request must not close the transport
+            _log_transport("transport handle failed", error)
+            mid = msg.get("id") if isinstance(msg, dict) else None
+            reply = None if mid is None else {
+                "jsonrpc": "2.0", "id": mid, "error": {"code": -32603, "message": crash_log.describe(error)}}
         if reply is not None:
-            write_message(reply)
+            try:
+                write_message(reply)
+            except OSError:  # the client closed the pipe
+                return 1
 
 
 if __name__ == "__main__":
